@@ -5,6 +5,7 @@
 //! same code, which is what keeps rollbacks rare.
 
 pub mod config;
+pub mod map;
 pub mod protocol;
 pub mod sim;
 

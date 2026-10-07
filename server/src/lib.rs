@@ -131,7 +131,7 @@ fn on_client_connected(
         Health(MAX_HEALTH),
         FireCooldown::default(),
         ActionState::<PlayerInput>::default(),
-        owner_predicted(id),
+        // Replication starts in `place_players`, once it has a real position.
         // Despawned automatically when this client disconnects.
         ControlledBy { owner: trigger.entity, lifetime: default() },
     ));
@@ -141,14 +141,21 @@ fn on_client_connected(
 /// joining or respawning in the same tick don't land on the same spot.
 fn place_players(
     mut commands: Commands,
-    mut players: Query<(Entity, &mut Pos, Has<NeedsSpawnPoint>), With<PlayerId>>,
+    mut players: Query<(Entity, &PlayerId, &mut Pos, Has<NeedsSpawnPoint>, Has<Replicate>)>,
 ) {
-    let mut placed: Vec<Vec2> = players.iter().filter(|(.., waiting)| !waiting).map(|(_, p, _)| p.0).collect();
-    for (entity, mut pos, waiting) in &mut players {
-        if waiting {
-            pos.0 = sim::pick_spawn_point(placed.iter().copied());
-            placed.push(pos.0);
-            commands.entity(entity).remove::<NeedsSpawnPoint>();
+    let mut placed: Vec<Vec2> =
+        players.iter().filter(|(_, _, _, waiting, _)| !waiting).map(|(_, _, pos, ..)| pos.0).collect();
+    for (entity, id, mut pos, waiting, replicated) in &mut players {
+        if !waiting {
+            continue;
+        }
+        pos.0 = sim::pick_spawn_point(placed.iter().copied());
+        placed.push(pos.0);
+        let mut player = commands.entity(entity);
+        player.remove::<NeedsSpawnPoint>();
+        // New players start replicating here, so clients never see a placeholder position.
+        if !replicated {
+            player.insert(owner_predicted(id.0));
         }
     }
 }
@@ -211,7 +218,8 @@ fn move_projectiles(
 fn resolve_hits(
     mut commands: Commands,
     projectiles: Query<(Entity, &Pos, &Projectile)>,
-    mut players: Query<(Entity, &PlayerId, &Pos, &mut Health)>,
+    // Players still waiting for a spawn point aren't in the world yet.
+    mut players: Query<(Entity, &PlayerId, &Pos, &mut Health), Without<NeedsSpawnPoint>>,
 ) {
     for (projectile_entity, projectile_pos, projectile) in &projectiles {
         for (player, player_id, player_pos, mut health) in &mut players {

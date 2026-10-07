@@ -14,8 +14,7 @@ pub const PROTOCOL_ID: u64 = 0xA4E7_0001;
 /// account service mint connect tokens instead (see README).
 pub const DEV_PRIVATE_KEY: [u8; 32] = [0; 32];
 
-// Arena and gameplay tuning, in world units (1 unit ~ 1 meter).
-pub const ARENA_HALF_EXTENTS: (f32, f32) = (20.0, 12.0);
+// Gameplay tuning, in world units (1 unit = 1 meter = 1 tile). The map is in `map.rs`.
 pub const PLAYER_RADIUS: f32 = 0.5;
 pub const PLAYER_SPEED: f32 = 6.0;
 pub const MAX_HEALTH: i32 = 100;

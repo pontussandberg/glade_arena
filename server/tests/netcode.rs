@@ -6,7 +6,7 @@
 //! - both clients connect and see each other (own player predicted, other interpolated)
 //! - client-side prediction: A's own movement shows up locally before the server could confirm it
 //! - reconciliation: after moving, A's predicted position converges to the server's
-//! - server authority: an oversized movement vector can't make a player move faster
+//! - server authority: clicks into the river go nowhere; far clicks are walked at normal speed
 //! - projectiles: A's shot appears instantly on A (prespawned); the server decides the hit and
 //!   the damage replicates to everyone
 
@@ -15,6 +15,7 @@ mod common;
 use std::time::{Duration, Instant};
 
 use arena_shared::config::*;
+use arena_shared::map::{Map, Tile, map};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use common::*;
@@ -100,35 +101,41 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     h.step(Duration::from_millis(1500));
     println!("connected; A rollbacks so far: {}", rollbacks(&h.a));
 
-    // --- Prediction: A moves; its own view reacts long before a round trip (>120ms) completes.
+    // --- Prediction: A right-clicks a tile 4 m away; its own view starts walking long before a
+    // round trip (>120ms) completes.
     let (a_start_server, _) = server_player(&mut h.server, A);
     let (a_start_local, ..) = client_view(&mut h.a, A).unwrap();
-    set_input(&mut h.a, PlayerInput { movement: Vec2::new(0.0, 1.0), ..default() });
+    let a_target = map().nearest_walkable(Map::tile_of(a_start_local) + IVec2::new(0, 4), 3).unwrap();
+    set_input(&mut h.a, PlayerInput { move_to: Some(a_target), ..default() });
     let t0 = Instant::now();
     h.step_until(Duration::from_secs(2), "A's predicted position moves", |h| {
-        client_view(&mut h.a, A).unwrap().0.y > a_start_local.y + 0.01
+        client_view(&mut h.a, A).unwrap().0.distance(a_start_local) > 0.01
     });
     let local_reaction = t0.elapsed();
     let (server_now, _) = server_player(&mut h.server, A);
-    println!("A saw its own movement after {local_reaction:?}; server had moved {:.3}", server_now.y - a_start_server.y);
+    println!("A saw its own movement after {local_reaction:?}; server had moved {:.3}", server_now.distance(a_start_server));
     assert!(local_reaction < Duration::from_millis(60), "prediction too slow: {local_reaction:?}");
 
-    h.step(Duration::from_millis(700));
-    set_input(&mut h.a, PlayerInput::default());
-
-    // --- Reconciliation: once inputs stop, predicted and authoritative positions agree.
-    h.step(Duration::from_millis(800));
+    // --- Reconciliation: after arriving, predicted, authoritative and interpolated agree.
+    h.step(Duration::from_millis(1800));
     let (a_server, _) = server_player(&mut h.server, A);
     let (a_local, ..) = client_view(&mut h.a, A).unwrap();
     let (a_seen_by_b, ..) = client_view(&mut h.b, A).unwrap();
     println!("A: server {a_server}, A's prediction {a_local}, B's interpolated view {a_seen_by_b}");
-    assert!(a_server.y - a_start_server.y > 3.0, "server should have moved A ~4.2 units");
+    assert_eq!(a_server, Map::center(a_target), "server should have walked A to the clicked tile");
     assert!(a_local.distance(a_server) < 0.01, "prediction diverged from server");
     assert!(a_seen_by_b.distance(a_server) < 0.01, "B's interpolated view diverged from server");
+    set_input(&mut h.a, PlayerInput::default());
 
-    // --- Server authority: a huge movement vector moves no faster than normal speed.
+    // --- Server authority: a click into the river goes nowhere, and a far click is walked at
+    // normal speed (the client only sends a target, never a position or speed).
     let (b_before, _) = server_player(&mut h.server, B);
-    set_input(&mut h.b, PlayerInput { movement: Vec2::new(-500.0, 0.0), ..default() });
+    let water = map().tiles().find(|(_, t)| *t == Tile::Water).unwrap().0;
+    set_input(&mut h.b, PlayerInput { move_to: Some(water), ..default() });
+    h.step(Duration::from_millis(400));
+    assert_eq!(server_player(&mut h.server, B).0, b_before, "B walked toward an unreachable tile");
+    let far = Map::tile_of(-b_before); // the mirrored spot across the river
+    set_input(&mut h.b, PlayerInput { move_to: Some(far), ..default() });
     let t0 = Instant::now();
     h.step(Duration::from_millis(500));
     set_input(&mut h.b, PlayerInput::default());
@@ -136,23 +143,21 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     h.step(Duration::from_millis(300));
     let (b_after, _) = server_player(&mut h.server, B);
     let moved = b_before.distance(b_after);
-    println!("B moved {moved:.2} units in {elapsed:.2}s with a 500x movement vector");
+    println!("B moved {moved:.2} m in {elapsed:.2}s toward a far click");
     assert!(moved > 1.0 && moved <= PLAYER_SPEED * (elapsed + 0.2), "moved {moved}");
 
-    // --- Server override: the server moves A on its own (like a knockback or anti-cheat
-    // correction). A mispredicted that, so it must roll back and end up where the server says.
-    // We put A 8 units from B, which also sets up the shot below (players spawn far apart).
+    // --- Server override: the server moves both players on its own (like a knockback or an
+    // anti-cheat correction). A mispredicted that, so it must roll back and end up where the
+    // server says. The spots are 8 m apart in the open, which also sets up the shot below.
+    let (a_spot, b_spot) = (Vec2::new(-22.5, -6.5), Vec2::new(-14.5, -6.5));
+    assert!(map().walkable_at(a_spot) && map().walkable_at(b_spot) && map().line_walkable(a_spot, b_spot));
     let rollbacks_before = rollbacks(&h.a);
-    let (b_server, _) = server_player(&mut h.server, B);
-    let forced = arena_shared::sim::arena_clamp(b_server + Vec2::new(8.0, 0.0), PLAYER_RADIUS);
     let mut q = h.server.world_mut().query::<(&PlayerId, &mut Pos)>();
     for (id, mut pos) in q.iter_mut(h.server.world_mut()) {
-        if id.0 == peer(A) {
-            pos.0 = forced;
-        }
+        pos.0 = if id.0 == peer(A) { a_spot } else { b_spot };
     }
     h.step_until(Duration::from_secs(2), "A reconciles to the server's correction", |h| {
-        client_view(&mut h.a, A).unwrap().0.distance(forced) < 0.01
+        client_view(&mut h.a, A).unwrap().0.distance(a_spot) < 0.01
     });
     println!("rollbacks: A={} (before correction {rollbacks_before})", rollbacks(&h.a));
     assert!(rollbacks(&h.a) > rollbacks_before, "the correction should have caused a rollback");
@@ -197,6 +202,23 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
 fn players_spawn_apart() {
     // Unique port: tests in this file run in parallel.
     let mut h = Harness::new(5896);
+    // Check after every single update: the very first position a client sees for itself must
+    // already be a spawn point, never the placeholder the server spawns players with.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let first_seen = loop {
+        h.server.update();
+        h.a.update();
+        h.b.update();
+        if let Some((pos, ..)) = client_view(&mut h.a, A) {
+            break pos;
+        }
+        assert!(Instant::now() < deadline, "A never saw its own player");
+        std::thread::sleep(Duration::from_millis(3));
+    };
+    assert!(
+        arena_shared::map::SPAWN_POINTS.contains(&first_seen),
+        "A first saw itself at {first_seen}, not at a spawn point"
+    );
     h.step_until(Duration::from_secs(15), "both players spawned", |h| {
         let mut q = h.server.world_mut().query_filtered::<(), With<PlayerId>>();
         q.iter(h.server.world()).count() == 2

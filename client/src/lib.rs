@@ -18,6 +18,10 @@ use lightyear::prelude::input::native::{ActionState, InputMarker};
 use lightyear::prelude::*;
 
 #[cfg(feature = "render")]
+pub mod camera;
+#[cfg(feature = "render")]
+pub mod glade;
+#[cfg(feature = "render")]
 pub mod render;
 
 #[derive(Clone)]

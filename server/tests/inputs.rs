@@ -5,6 +5,7 @@ mod common;
 use std::time::{Duration, Instant};
 
 use arena_shared::config::*;
+use arena_shared::map::Map;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use common::*;
@@ -91,7 +92,9 @@ fn frozen_client_stops_moving_on_server() {
     let frame = Some(Duration::from_secs_f64(1.0 / 60.0));
     p.run(Duration::from_secs(4), frame);
 
-    p.input(PlayerInput { movement: Vec2::X, ..default() });
+    // Click across the map, so the walk is still going when the client freezes.
+    let start = p.server_pos();
+    p.input(PlayerInput { move_to: Some(Map::tile_of(-start)), ..default() });
     p.run(Duration::from_millis(500), frame);
     let before_freeze = p.server_pos();
     p.run(Duration::from_millis(1000), None);

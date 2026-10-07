@@ -54,8 +54,8 @@ impl Projectile {
 /// Everything a client sends each tick. Clients never send positions, only intent.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Reflect)]
 pub struct PlayerInput {
-    /// Raw movement intent; the sim clamps and normalizes it.
-    pub movement: Vec2,
+    /// Tile the player right-clicked to walk to. The sim pathfinds there; `None` stands still.
+    pub move_to: Option<IVec2>,
     /// Aim direction on the gameplay plane; the sim normalizes it.
     pub aim: Vec2,
     pub fire: bool,

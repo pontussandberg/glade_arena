@@ -39,15 +39,20 @@ fn default_server_addr() -> SocketAddr {
 }
 
 /// Native dev client: `arena-client [client_id]`, no certificate validation.
+/// `ARENA_SERVER=ip:port` picks another server (like the page's `?server=`).
 #[cfg(not(target_family = "wasm"))]
 fn client_settings() -> ClientSettings {
     let client_id = std::env::args()
         .nth(1)
         .and_then(|a| a.parse().ok())
         .unwrap_or_else(random_id);
+    let server_addr = std::env::var("ARENA_SERVER")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(default_server_addr);
     ClientSettings {
         client_id,
-        server_addr: default_server_addr(),
+        server_addr,
         cert_digest: String::new(),
         conditioner: None,
     }
