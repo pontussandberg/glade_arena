@@ -1,0 +1,17 @@
+[package]
+name = "arena-shared"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bevy = { workspace = true, features = ["std", "bevy_log", "bevy_state", "serialize"] }
+lightyear = { workspace = true, features = [
+  "std",
+  "replication",
+  "prediction",
+  "interpolation",
+  "input_native",
+  "netcode",
+  "webtransport",
+] }
+serde.workspace = true

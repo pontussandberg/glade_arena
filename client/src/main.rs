@@ -1,0 +1,85 @@
+use std::net::{Ipv4Addr, SocketAddr};
+
+use arena_client::{ClientNetPlugin, ClientSettings, render::RenderPlugin};
+use arena_shared::config::*;
+use bevy::prelude::*;
+use bevy::winit::WinitSettings;
+use lightyear::prelude::client::ClientPlugins;
+
+#[cfg(target_family = "wasm")]
+mod hidden_tab;
+
+fn main() {
+    #[cfg(target_family = "wasm")]
+    console_error_panic_hook::set_once();
+
+    let settings = client_settings();
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: format!("Arena (client {})", settings.client_id),
+            canvas: Some("#game".into()),
+            fit_canvas_to_parent: true,
+            ..default()
+        }),
+        ..default()
+    }));
+    // Keep simulating at full rate when the window is unfocused (two windows side by side).
+    app.insert_resource(WinitSettings::continuous());
+    #[cfg(target_family = "wasm")]
+    app.add_plugins(hidden_tab::HiddenTabPlugin);
+    app.add_plugins(ClientPlugins { tick_duration: TICK_DURATION });
+    app.add_plugins(ClientNetPlugin { settings });
+    app.add_plugins(RenderPlugin);
+    app.run();
+}
+
+fn default_server_addr() -> SocketAddr {
+    SocketAddr::new(Ipv4Addr::LOCALHOST.into(), SERVER_PORT)
+}
+
+/// Native dev client: `arena-client [client_id]`, no certificate validation.
+#[cfg(not(target_family = "wasm"))]
+fn client_settings() -> ClientSettings {
+    let client_id = std::env::args()
+        .nth(1)
+        .and_then(|a| a.parse().ok())
+        .unwrap_or_else(random_id);
+    ClientSettings {
+        client_id,
+        server_addr: default_server_addr(),
+        cert_digest: String::new(),
+        conditioner: None,
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn random_id() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64;
+    nanos ^ ((std::process::id() as u64) << 32)
+}
+
+/// Browser client: index.html puts the server's certificate digest (and optionally a server
+/// address) on `window` before starting the wasm module.
+#[cfg(target_family = "wasm")]
+fn client_settings() -> ClientSettings {
+    let window = web_sys::window().expect("no window");
+    let get = |key: &str| {
+        js_sys::Reflect::get(&window, &key.into())
+            .ok()
+            .and_then(|v| v.as_string())
+    };
+    let cert_digest = get("ARENA_CERT_DIGEST").expect("index.html must set window.ARENA_CERT_DIGEST");
+    let server_addr = get("ARENA_SERVER")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(default_server_addr);
+    ClientSettings {
+        client_id: (js_sys::Math::random() * u32::MAX as f64) as u64,
+        server_addr,
+        cert_digest,
+        conditioner: None,
+    }
+}

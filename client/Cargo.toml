@@ -1,0 +1,34 @@
+[package]
+name = "arena-client"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["render"]
+# Window, 3D rendering and keyboard/mouse input. Off for headless test bots.
+render = ["bevy/3d", "bevy/ui"]
+
+[dependencies]
+arena-shared.workspace = true
+bevy = { workspace = true, features = ["std", "bevy_log", "bevy_state"] }
+lightyear = { workspace = true, features = [
+  "std",
+  "client",
+  "replication",
+  "prediction",
+  "interpolation",
+  "input_native",
+  "netcode",
+  "webtransport",
+] }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# Native clients (dev/test only) skip certificate validation against the self-signed cert.
+lightyear = { workspace = true, features = ["webtransport_dangerous_configuration"] }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+console_error_panic_hook = "0.1"
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Window", "Document", "EventTarget"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }

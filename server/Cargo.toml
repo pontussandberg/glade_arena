@@ -1,0 +1,23 @@
+[package]
+name = "arena-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+arena-shared.workspace = true
+bevy = { workspace = true, features = ["std", "bevy_log", "bevy_state", "multi_threaded"] }
+lightyear = { workspace = true, features = [
+  "std",
+  "server",
+  "replication",
+  "prediction",
+  "interpolation",
+  "input_native",
+  "netcode",
+  "webtransport",
+  "webtransport_self_signed",
+] }
+
+[dev-dependencies]
+# The integration test drives real headless clients against a real server.
+arena-client.workspace = true
