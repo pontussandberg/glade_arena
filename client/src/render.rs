@@ -86,8 +86,6 @@ pub(crate) enum Look {
     Telegraph,
     /// The ring under a fighter's feet, so it reads even in shadow.
     Ring,
-    /// Glowing eyes (rigged fighters).
-    Eyes,
 }
 
 impl Visuals {
@@ -98,19 +96,21 @@ impl Visuals {
         is_me: bool,
         look: Look,
     ) -> Handle<StandardMaterial> {
+        // Everything but spirit is per player: in the owner's color, or (bodies) so the hit flash
+        // brightens just that fighter.
         let key = (look != Look::Spirit).then_some(owner);
         self.materials
             .entry((key, look))
             .or_insert_with(|| {
                 let color = player_color(owner, is_me);
                 materials.add(match look {
-                    Look::Body => glade::matte(color),
+                    // Fighters wear their own colors (in the mesh); teams show in rings and bars.
+                    Look::Body => glade::matte(Color::WHITE),
                     Look::Shot => glade::glow(color, 4.0),
                     Look::Spirit => glade::glow(palette::SPIRIT, 6.0),
                     Look::Swing => glade::translucent(color, 0.45, 2.0),
                     Look::Telegraph => glade::translucent(color, 0.28, 1.2),
                     Look::Ring => glade::glow(color, 1.2),
-                    Look::Eyes => glade::glow(color, 6.0),
                 })
             })
             .clone()

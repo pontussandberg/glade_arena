@@ -135,8 +135,6 @@ drops it after 3s; the HUD then says DISCONNECTED and a page reload rejoins.
 
 - More classes, and more abilities (W/E/R); a balance pass (in bot duels the Revenant's
   dash-and-swing tends to beat the Javelinist)
-- The Revenant is one mesh (it turns and leans, but has no limb animation like the Javelinist);
-  the hit flash doesn't cover rigged parts (the Javelinist's head, arms, legs and javelin)
 - Network debug overlay (lag sliders, server ghost), room codes, switching class without rejoining
 - Visual smoothing: frame interpolation between ticks and correction blending after rollbacks
 - Accounts service issuing netcode connect tokens (currently a shared zero dev key)
