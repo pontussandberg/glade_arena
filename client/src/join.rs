@@ -8,6 +8,7 @@ use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::ClassId;
 use bevy::prelude::*;
 
+use crate::render::ui_text;
 use crate::ChosenClass;
 use crate::glade::palette;
 
@@ -48,9 +49,6 @@ fn show_join_screen(mut commands: Commands, chosen: Res<ChosenClass>) {
     if chosen.0.is_some() {
         return;
     }
-    let text = |value: String, size: f32, color: Color| {
-        (Text::new(value), TextFont { font_size: FontSize::Px(size), ..default() }, TextColor(color))
-    };
     commands
         .spawn((
             JoinScreen,
@@ -68,8 +66,8 @@ fn show_join_screen(mut commands: Commands, chosen: Res<ChosenClass>) {
             GlobalZIndex(10),
         ))
         .with_children(|screen| {
-            screen.spawn(text("Choose your class".into(), 30.0, palette::HAZE));
-            screen.spawn(text("Click a card or press its number".into(), 15.0, palette::STONE));
+            screen.spawn(ui_text("Choose your class", 30.0, palette::HAZE));
+            screen.spawn(ui_text("Click a card or press its number", 15.0, palette::STONE));
             screen
                 .spawn(Node {
                     flex_wrap: FlexWrap::Wrap,
@@ -97,13 +95,13 @@ fn show_join_screen(mut commands: Commands, chosen: Res<ChosenClass>) {
                             BackgroundColor(palette::PINE),
                         ))
                         .with_children(|card| {
-                            card.spawn(text(format!("{}  {}", n + 1, def.name), 22.0, palette::HAZE));
-                            card.spawn(text(def.role.to_uppercase(), 12.0, palette::MEADOW));
-                            card.spawn(text(format!("{} hp, {} m/s", def.max_hp, def.move_speed), 14.0, palette::HAZE));
-                            card.spawn(text(attack_summary(def), 14.0, palette::HAZE));
-                            card.spawn(text(def.blurb.clone(), 13.0, palette::STONE));
+                            card.spawn(ui_text(format!("{}  {}", n + 1, def.name), 22.0, palette::HAZE));
+                            card.spawn(ui_text(def.role.to_uppercase(), 12.0, palette::MEADOW));
+                            card.spawn(ui_text(format!("{} hp, {} m/s", def.max_hp, def.move_speed), 14.0, palette::HAZE));
+                            card.spawn(ui_text(attack_summary(def), 14.0, palette::HAZE));
+                            card.spawn(ui_text(def.blurb.clone(), 13.0, palette::STONE));
                             let ability = format!("Q  {}: {}", def.ability.name, def.ability.description);
-                            card.spawn(text(ability, 13.0, palette::SPIRIT));
+                            card.spawn(ui_text(ability, 13.0, palette::SPIRIT));
                         });
                     }
                 });

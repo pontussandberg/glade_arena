@@ -26,7 +26,7 @@
         role: "Hunter",
         blurb: "Hurls heavy javelins. The farther they fly, the harder they hit.",
         max_hp: 95,
-        move_speed: 5.4,
+        move_speed: 5.0,
         attack: (
             damage: 16,
             cooldown_ticks: 48,
@@ -46,7 +46,7 @@
         role: "Duelist",
         blurb: "A spectral blade that slips between worlds. Gets in close and keeps cutting.",
         max_hp: 140,
-        move_speed: 6.0,
+        move_speed: 5.6,
         attack: (
             damage: 20,
             cooldown_ticks: 40,

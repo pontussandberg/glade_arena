@@ -15,6 +15,7 @@ use lightyear::prelude::*;
 
 use crate::DesiredInput;
 use crate::glade::{self, palette, to_gameplay, to_world};
+use crate::rig::HeldAt;
 
 pub struct RenderPlugin;
 
@@ -26,6 +27,8 @@ impl Plugin for RenderPlugin {
             crate::join::JoinPlugin,
             crate::feedback::FeedbackPlugin,
             crate::rig::RigPlugin,
+            crate::action_bar::ActionBarPlugin,
+            crate::minimap::MinimapPlugin,
         ));
         app.add_systems(Startup, setup_scene);
         app.add_systems(
@@ -33,6 +36,7 @@ impl Plugin for RenderPlugin {
             (
                 (read_local_input.in_set(crate::PlayerControls), show_destination).chain(),
                 (add_visuals, sync_transforms).chain().before(crate::rig::Posing),
+                fly_shots.after(crate::rig::Posing),
                 (show_swings, show_dashes, fade_swings, (show_telegraphs, align_to_world).chain().after(crate::rig::Posing)),
                 update_hud,
             ),
@@ -42,6 +46,11 @@ impl Plugin for RenderPlugin {
 
 /// Shots fly at chest height; fighters stand on the floor (their feet are at the mesh origin).
 const PROJECTILE_HEIGHT: f32 = 0.9;
+/// How long a thrown spear takes to ease from the hand onto its real path (seconds).
+const SETTLE_SECONDS: f32 = 0.2;
+/// Where a thrown spear's wind starts, behind its point, and how long it gets.
+const WIND_FRONT: f32 = 1.5;
+const WIND_LENGTH: f32 = 3.0;
 /// How long a swing, and a dash streak, stay on screen.
 const SWING_SECONDS: f32 = 0.16;
 const DASH_SECONDS: f32 = 0.3;
@@ -67,7 +76,9 @@ pub(crate) struct Visuals {
     /// The ground a dash covers, for its streak.
     dash_streaks: HashMap<ClassId, Handle<Mesh>>,
     /// Per class and shot (auto-attack: false, Q: true).
-    projectiles: HashMap<(ClassId, bool), Handle<Mesh>>,
+    projectiles: HashMap<(ClassId, bool), glade::ShotLook<Handle<Mesh>>>,
+    shot_tip: Handle<Mesh>,
+    wind: Handle<Mesh>,
     ring: Handle<Mesh>,
     /// Per owner (`None` for looks that are the same for everyone) and look.
     materials: HashMap<(Option<PeerId>, Look), Handle<StandardMaterial>>,
@@ -80,6 +91,10 @@ pub(crate) enum Look {
     Shot,
     /// Spirit: abilities glow spectral blue, whoever uses them.
     Spirit,
+    /// Plain, for meshes that carry their own colors (a thrown javelin).
+    Plain,
+    /// The faint white wind behind a thrown spear.
+    Wind,
     /// Swings are see-through flashes.
     Swing,
     /// A faint marking of where an attack that's winding up will land.
@@ -98,7 +113,7 @@ impl Visuals {
     ) -> Handle<StandardMaterial> {
         // Everything but spirit is per player: in the owner's color, or (bodies) so the hit flash
         // brightens just that fighter.
-        let key = (look != Look::Spirit).then_some(owner);
+        let key = (!matches!(look, Look::Spirit | Look::Plain | Look::Wind)).then_some(owner);
         self.materials
             .entry((key, look))
             .or_insert_with(|| {
@@ -108,6 +123,8 @@ impl Visuals {
                     Look::Body => glade::matte(Color::WHITE),
                     Look::Shot => glade::glow(color, 4.0),
                     Look::Spirit => glade::glow(palette::SPIRIT, 6.0),
+                    Look::Plain => glade::matte(Color::WHITE),
+                    Look::Wind => glade::translucent(Color::WHITE, 0.35, 1.5),
                     Look::Swing => glade::translucent(color, 0.45, 2.0),
                     Look::Telegraph => glade::translucent(color, 0.28, 1.2),
                     Look::Ring => glade::glow(color, 1.2),
@@ -123,12 +140,30 @@ struct SwingFx {
     until: f32,
 }
 
+/// A thrown spear as drawn: it leaves the thrower's hand where the javelin was held, then eases
+/// onto its real path (`fly_shots`), trailing its wind (a child entity).
+#[derive(Component)]
+struct Thrown {
+    wind: Entity,
+    launch: Option<Launch>,
+}
+
+/// When (seconds) and where a thrown spear left the hand: its point, how far that is off its
+/// real path and how it was held (as a shot's rotation).
+#[derive(Clone, Copy)]
+struct Launch {
+    at: f32,
+    from: Vec3,
+    offset: Vec3,
+    held: Quat,
+}
+
 /// A fighter's windup telegraph (a child entity), shown while it winds up an attack.
 #[derive(Component)]
 struct Telegraph(Entity);
 
-/// A child that keeps this orientation in the world, this high above the ground, whatever its
-/// parent does (fighters turn, lean and crouch, see `rig.rs`): the ground ring and the telegraph
+/// A child that keeps this orientation and size in the world, this high above the ground,
+/// whatever its parent does (fighters turn, lean, crouch and are drawn bigger, see `rig.rs`): the ground ring and the telegraph
 /// stay flat on the ground.
 #[derive(Component)]
 struct WorldAligned(Quat, f32);
@@ -175,10 +210,12 @@ fn setup_scene(
         projectiles: ClassId::all()
             .flat_map(|c| [false, true].map(|ability| (c, ability)))
             .filter_map(|(c, ability)| {
-                let shot = c.def().shot(ability)?;
-                Some(((c, ability), meshes.add(glade::projectile_mesh(c.def(), shot))))
+                let look = glade::shot_look(c.def(), c.def().shot(ability)?, ability);
+                Some(((c, ability), glade::ShotLook { mesh: meshes.add(look.mesh), colored: look.colored, thrown: look.thrown }))
             })
             .collect(),
+        shot_tip: meshes.add(glade::shot_tip_mesh()),
+        wind: meshes.add(glade::wind_mesh()),
         ring: meshes.add(Annulus::new(0.58, 0.7).mesh().resolution(20).build()),
         materials: HashMap::default(),
     });
@@ -210,11 +247,7 @@ fn read_local_input(
     mut desired: ResMut<DesiredInput>,
 ) {
     let (camera, camera_transform) = *camera;
-    let cursor = window
-        .and_then(|w| w.cursor_position())
-        .and_then(|c| camera.viewport_to_world(camera_transform, c).ok())
-        .and_then(|ray| ray.plane_intersection_point(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)))
-        .map(to_gameplay);
+    let cursor = window.and_then(|w| w.cursor_position()).and_then(|c| ground_at(camera, camera_transform, c));
     let me = me.single().ok().map(|p| p.0);
 
     let mut move_to = desired.0.move_to;
@@ -245,6 +278,10 @@ fn read_local_input(
         _ => desired.0.aim,
     };
     let fire = mouse.pressed(MouseButton::Left);
+    // S stops: drops the destination (as in LoL).
+    if keys.just_pressed(KeyCode::KeyS) {
+        move_to = None;
+    }
     // Kept until it's been sent (`write_input` clears it), so a short tap isn't missed.
     let ability = desired.0.ability || keys.just_pressed(KeyCode::KeyQ);
     desired.0 = PlayerInput { move_to, aim, fire, ability };
@@ -306,15 +343,33 @@ fn add_visuals(
             ));
     }
     for (entity, projectile, pos) in &projectiles {
-        let look = if projectile.ability { Look::Spirit } else { Look::Shot };
-        let material = visuals.material(&mut materials, projectile.owner, projectile.owner == me.0, look);
-        let Some(mesh) = visuals.projectiles.get(&(projectile.class, projectile.ability)).cloned() else { continue };
-        commands.entity(entity).insert((
+        let Some(glade::ShotLook { mesh, colored, thrown }) = visuals.projectiles.get(&(projectile.class, projectile.ability)).cloned()
+        else {
+            continue;
+        };
+        let is_mine = projectile.owner == me.0;
+        // A glowing shot is drawn in its owner's color (spirit blue for abilities); one in its own
+        // colors gets a glowing tip in the owner's color, so whose it is still reads.
+        let glow = if projectile.ability { Look::Spirit } else { Look::Shot };
+        let glow = visuals.material(&mut materials, projectile.owner, is_mine, glow);
+        let body = if colored { visuals.material(&mut materials, projectile.owner, is_mine, Look::Plain) } else { glow.clone() };
+        let mut shot = commands.entity(entity);
+        shot.insert((
             Mesh3d(mesh),
-            MeshMaterial3d(material),
+            MeshMaterial3d(body),
             Transform::from_translation(to_world(pos.0, PROJECTILE_HEIGHT))
                 .with_rotation(Quat::from_rotation_y(projectile.dir.to_angle())),
         ));
+        if colored {
+            shot.with_child((Mesh3d(visuals.shot_tip.clone()), MeshMaterial3d(glow)));
+        }
+        if thrown {
+            let material = visuals.material(&mut materials, projectile.owner, is_mine, Look::Wind);
+            // No length yet: it grows as the spear flies.
+            let wind = Transform::from_xyz(-WIND_FRONT, 0.0, 0.0).with_scale(Vec3::new(0.0, 1.0, 1.0));
+            let wind = shot.commands().spawn((Mesh3d(visuals.wind.clone()), MeshMaterial3d(material), wind)).id();
+            shot.add_child(wind).insert(Thrown { wind, launch: None });
+        }
     }
 }
 
@@ -407,11 +462,25 @@ fn align_to_world(
 ) {
     for (aligned, child_of, mut transform) in &mut aligned {
         let Ok(parent) = parents.get(child_of.parent()) else { continue };
+        // Undo the parent's turn, lean, crouch and size.
         let unturn = parent.rotation.inverse();
-        let wanted = Transform::from_translation(unturn * Vec3::Y * (aligned.1 - parent.translation.y))
-            .with_rotation(unturn * aligned.0);
+        let unscale = parent.scale.recip();
+        let wanted = Transform::from_translation(unscale * (unturn * Vec3::Y * (aligned.1 - parent.translation.y)))
+            .with_rotation(unturn * aligned.0)
+            .with_scale(unscale);
         transform.set_if_neq(wanted);
     }
+}
+
+/// The point on the ground (gameplay coordinates) under a point on the screen.
+pub(crate) fn ground_at(camera: &Camera, transform: &GlobalTransform, screen: Vec2) -> Option<Vec2> {
+    let ray = camera.viewport_to_world(transform, screen).ok()?;
+    ray.plane_intersection_point(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)).map(to_gameplay)
+}
+
+/// Text in the UI's font at `size` pixels.
+pub(crate) fn ui_text(value: impl Into<String>, size: f32, color: Color) -> impl Bundle {
+    (Text::new(value), TextFont { font_size: FontSize::Px(size), ..default() }, TextColor(color))
 }
 
 /// Visible (if its parent is) or hidden.
@@ -419,9 +488,71 @@ pub(crate) fn shown(visible: bool) -> Visibility {
     if visible { Visibility::Inherited } else { Visibility::Hidden }
 }
 
-fn sync_transforms(mut q: Query<(&Pos, &mut Transform, Has<Projectile>), Changed<Pos>>) {
-    for (pos, mut transform, is_projectile) in &mut q {
-        transform.translation = to_world(pos.0, if is_projectile { PROJECTILE_HEIGHT } else { 0.0 });
+fn sync_transforms(mut q: Query<(&Pos, &mut Transform), (Changed<Pos>, Without<Projectile>)>) {
+    for (pos, mut transform) in &mut q {
+        transform.translation = to_world(pos.0, 0.0);
+    }
+}
+
+/// Places every shot each frame. Ours (predicted) move once per tick, so they're drawn as far
+/// as they've flown since (they fly straight at a constant speed), and glide instead of
+/// stepping; others' are interpolated already.
+///
+/// A thrown spear leaves the hand: the first frame it's drawn (after the thrower is posed,
+/// releasing) it takes over the held javelin's place, then eases onto its real path (which
+/// starts at the thrower's center, where hits are judged), across and up/down within
+/// `SETTLE_SECONDS`, turning from how it was held to the way it flies. A hand ahead of the real
+/// path is given back more slowly, so the spear never seems to slow below 3/4 speed. Its wind
+/// stretches back to where it left the hand, up to `WIND_LENGTH`.
+fn fly_shots(
+    time: Res<Time>,
+    fixed: Res<Time<Fixed>>,
+    holders: Query<(&PlayerId, &HeldAt)>,
+    mut shots: Query<(&Pos, &Projectile, &mut Transform, Option<&mut Thrown>, Has<Interpolated>), With<Mesh3d>>,
+    mut winds: Query<&mut Transform, Without<Projectile>>,
+) {
+    let now = time.elapsed_secs();
+    for (pos, projectile, mut transform, thrown, interpolated) in &mut shots {
+        let speed = projectile.class.def().shot(projectile.ability).map_or(0.0, |s| s.speed);
+        let flown = if interpolated { 0.0 } else { fixed.overstep().as_secs_f32() * speed };
+        let on_path = to_world(pos.0 + projectile.dir * flown, PROJECTILE_HEIGHT);
+        let along = Quat::from_rotation_y(projectile.dir.to_angle());
+        let Some(mut thrown) = thrown else {
+            transform.set_if_neq(Transform::from_translation(on_path).with_rotation(along));
+            continue;
+        };
+        let launch = match thrown.launch {
+            Some(launch) => launch,
+            None => {
+                let held = holders.iter().find(|(id, _)| id.0 == projectile.owner).map(|(_, held)| held.0);
+                *thrown.launch.insert(match held {
+                    Some(held) => {
+                        let from = held.translation + held.rotation * Vec3::Y * glade::GRIP_TO_TIP;
+                        // The held javelin points up (+Y), a shot along +X.
+                        let rotation = held.rotation * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+                        Launch { at: now, from, offset: from - on_path, held: rotation }
+                    }
+                    // No thrower to be seen: straight from its path.
+                    None => Launch { at: now, from: on_path, offset: Vec3::ZERO, held: along },
+                })
+            }
+        };
+        let since = now - launch.at;
+        let forward_dir = along * Vec3::X;
+        let ahead = launch.offset.dot(forward_dir);
+        let across = launch.offset - forward_dir * ahead;
+        // Eased out (1 to 0 over `seconds`), so the spear runs onto its path without a kink.
+        let left = |seconds: f32| (1.0 - since / seconds).max(0.0).powi(2);
+        let give_back = SETTLE_SECONDS.max(8.0 * ahead.abs() / speed.max(1.0));
+        let at = on_path + across * left(SETTLE_SECONDS) + forward_dir * ahead * left(give_back);
+        let turned = 1.0 - left(SETTLE_SECONDS);
+        transform.set_if_neq(Transform::from_translation(at).with_rotation(launch.held.slerp(along, turned)));
+        if let Ok(mut wind) = winds.get_mut(thrown.wind) {
+            let length = at.distance(launch.from).min(WIND_LENGTH);
+            if wind.scale.x != length {
+                wind.scale.x = length;
+            }
+        }
     }
 }
 
@@ -429,8 +560,7 @@ fn update_hud(
     mut hud: Single<&mut Text, With<Hud>>,
     client: Query<(&Link, Has<Connected>, Option<&Disconnected>), With<Client>>,
     metrics: Option<Res<lightyear::prediction::prelude::PredictionMetrics>>,
-    timeline: Res<LocalTimeline>,
-    players: Query<(&PlayerId, &ClassId, Option<&Health>, Option<&AbilityState>, Has<Predicted>)>,
+    players: Query<(&PlayerId, &ClassId, Option<&Health>, Has<Predicted>)>,
 ) {
     let Ok((link, connected, disconnected)) = client.single() else { return };
     let mut text = String::new();
@@ -446,21 +576,12 @@ fn update_hud(
             link.stats.jitter.as_secs_f64() * 1000.0,
             metrics.map_or(0, |m| m.rollbacks),
         );
-        if players.iter().any(|(_, _, health, _, is_me)| is_me && health.is_some_and(|h| h.0 == 0)) {
+        if players.iter().any(|(_, _, health, is_me)| is_me && health.is_some_and(|h| h.0 == 0)) {
             writeln!(text, "You died. Back in {} seconds.", RESPAWN_TICKS / TICK_HZ as u32).ok();
-        }
-        if let Some((_, class, _, Some(ability), _)) = players.iter().find(|(.., is_me)| *is_me) {
-            let name = &class.def().ability.name;
-            let wait = ability.ready_at.saturating_sub(timeline.tick().0 as u32);
-            match wait {
-                0 => writeln!(text, "Q {name}: ready"),
-                _ => writeln!(text, "Q {name}: {:.1}s", wait as f32 / TICK_HZ as f32),
-            }
-            .ok();
         }
         let mut players: Vec<_> = players.iter().collect();
         players.sort_by_key(|(id, ..)| id.0.to_bits());
-        for (id, class, health, _, is_me) in players {
+        for (id, class, health, is_me) in players {
             let you = if is_me { " (you)" } else { "" };
             let (name, max) = (&class.def().name, class.def().max_hp);
             match health {
@@ -469,7 +590,7 @@ fn update_hud(
             }
             .ok();
         }
-        text.push_str("right click: move | left click: attack | Q: ability\nhold Space: lock camera | edges/arrows: pan | wheel: zoom");
+        text.push_str("right click: move | S: stop | left click: attack | Q: ability\nhold Space: lock camera | edges/arrows: pan | wheel: zoom");
     }
     // Only touch the component when the text changed, so Bevy doesn't re-layout it every frame.
     if hud.0 != text {

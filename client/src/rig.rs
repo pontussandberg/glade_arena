@@ -1,7 +1,10 @@
-//! Fighters with moving parts (see `glade::fighter_rig`), animated OSRS-style: poses that step
-//! from frame to frame instead of gliding. Every fighter turns to face where it walks, swings or
-//! dashes (`Facing`), swings its limbs as it walks, acts out its attack windup in step with the
-//! cast bar and strikes a pose while dashing; each class has its own `Moves`.
+//! Fighters with moving parts (see `glade::fighter_rig`), animated smoothly but deliberately:
+//! eased keyframes in distinct beats (draw, hold, a fast committed strike), a walk with a light
+//! bob and sway, and every joint on a firm, nearly critically damped spring so motion is smoothed
+//! without wobbling (a tail, if the class has one, swings on a looser one).
+//! Every fighter turns to face where it walks, swings or dashes (`Facing`), acts out its attack
+//! windup in step with the cast bar and strikes a pose while dashing; each class has its own
+//! `Moves`.
 //!
 //! The javelinist always carries the javelin cocked over the shoulder, ready to throw. The
 //! windup: twist the throwing shoulder far back, lean back and sink into a wide stance, lead arm
@@ -26,7 +29,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::feedback::AttackClock;
-use crate::glade::{self, palette, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER};
+use crate::glade::{self, palette, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER, RIG_TAIL};
 use crate::render::shown;
 
 pub struct RigPlugin;
@@ -42,13 +45,23 @@ impl Plugin for RigPlugin {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Posing;
 
-/// Poses per windup and per walk cycle: the stepped, keyframe-y OSRS look.
-const WINDUP_FRAMES: f32 = 8.0;
-const WALK_FRAMES: f32 = 8.0;
-/// Walk cycles per meter walked, and how far limbs swing (radians).
-const STRIDES_PER_METER: f32 = 0.55;
-const LEG_SWING: f32 = 0.5;
+/// Walk cycles per meter walked, how far limbs swing (radians), how high the body bobs (meters)
+/// and how far it sways side to side (radians).
+const STRIDES_PER_METER: f32 = 0.4;
+const LEG_SWING: f32 = 0.6;
 const ARM_SWING: f32 = 0.4;
+const BOB: f32 = 0.025;
+const SWAY: f32 = 0.02;
+/// The joints' springs: how stiff (natural frequency, rad/s) and how damped (1 = no overshoot).
+/// Firm and nearly critically damped: motion is smoothed, not wobbly, and a strike still lands
+/// on its tick.
+const JOINT_STIFFNESS: f32 = 32.0;
+const JOINT_DAMPING: f32 = 0.95;
+/// The tail: looser, and swung by walking and turning.
+const TAIL_STIFFNESS: f32 = 11.0;
+const TAIL_DAMPING: f32 = 0.7;
+const TAIL_WALK: f32 = 0.35;
+const TAIL_TURN: f32 = 0.06;
 
 /// How a rigged class moves. Keyframes are (carrying, fully drawn back, released, dashing),
 /// radians. Limbs: positive swings forward. Twist: negative turns the weapon (right, +Z)
@@ -62,6 +75,8 @@ struct Moves {
     lean: [f32; 4],
     head_dip: [f32; 4],
     held: Held,
+    /// How big the fighter is drawn (1 = the joints in `glade`).
+    scale: f32,
 }
 
 /// How the weapon sits in the hand.
@@ -82,6 +97,7 @@ const JAVELINIST: Moves = Moves {
     lean: [0.0, 0.28, -0.38, -0.45],
     head_dip: [0.0, 0.2, -0.15, 0.0],
     held: Held::OnTarget,
+    scale: 1.12,
 };
 
 const REVENANT: Moves = Moves {
@@ -93,6 +109,7 @@ const REVENANT: Moves = Moves {
     lean: [0.0, 0.2, -0.4, -0.55],
     head_dip: [0.0, 0.15, -0.25, 0.0],
     held: Held::InHand(0.45),
+    scale: 1.0,
 };
 
 /// The moves for a class's look (every class has one: `glade::FIGHTER_LOOKS`).
@@ -104,6 +121,10 @@ fn moves(class_key: &str) -> &'static Moves {
     }
 }
 
+/// Where in the windup (0..1) the draw back ends and the strike starts: draw, a clear hold at
+/// full draw, then a fast, committed strike.
+const DRAW_END: f32 = 0.5;
+const STRIKE_START: f32 = 0.78;
 /// After the throw: how long (ticks) the follow-through is held, and when it's back to carrying.
 const FOLLOW_THROUGH: (f32, f32) = (3.0, 14.0);
 /// A thrown Q's flick: ticks after the throw until the arm starts and finishes coming back.
@@ -129,15 +150,23 @@ struct RigHandles {
     leg: Handle<Mesh>,
     held: Handle<Mesh>,
     eyes: Handle<Mesh>,
+    tail: Option<Handle<Mesh>>,
 }
 
-/// Which way a fighter faces, where it was last frame and how far it moved since.
+/// Which way a fighter faces, where it was last frame, and how far it moved and turned
+/// (radians) since.
 #[derive(Component)]
 struct Facing {
     look: Vec2,
     last_pos: Vec2,
     moved: Vec2,
+    turned: f32,
 }
+
+/// Where a fighter's held weapon is in the world as posed this frame: its grip, the weapon
+/// pointing along +Y. A thrown javelin leaves the hand from here (`render::fly_shots`).
+#[derive(Component, Default, PartialEq)]
+pub(crate) struct HeldAt(pub Transform);
 
 /// A fighter's moving parts (child entities), its moves and walk state.
 #[derive(Component)]
@@ -148,10 +177,51 @@ struct Rig {
     /// Right (back) leg and left (lead) leg.
     legs: [Entity; 2],
     held: Entity,
+    tail: Option<Entity>,
     moves: &'static Moves,
     /// Walk cycles so far, and how much the fighter is walking (0..1, eased).
     stride: f32,
     walking: f32,
+    joints: Joints,
+}
+
+/// A value on a damped spring: chases its target with a little lag and overshoot, then settles.
+#[derive(Default)]
+struct Spring {
+    at: f32,
+    speed: f32,
+}
+
+impl Spring {
+    fn follow(&mut self, target: f32, dt: f32, stiffness: f32, damping: f32) -> f32 {
+        // Semi-implicit Euler, in small enough steps to stay stable at low frame rates.
+        let steps = (dt / 0.008).ceil().max(1.0);
+        let h = dt / steps;
+        for _ in 0..steps as u32 {
+            let pull = stiffness * stiffness * (target - self.at) - 2.0 * damping * stiffness * self.speed;
+            self.speed += pull * h;
+            self.at += self.speed * h;
+        }
+        // Settled: stop, so a still fighter stops writing transforms.
+        if (target - self.at).abs() < 1e-4 && self.speed.abs() < 1e-3 {
+            *self = Spring { at: target, speed: 0.0 };
+        }
+        self.at
+    }
+}
+
+/// Every posed angle, each on its spring.
+#[derive(Default)]
+struct Joints {
+    weapon_arm: Spring,
+    lead_arm: Spring,
+    back_leg: Spring,
+    lead_leg: Spring,
+    twist: Spring,
+    lean: Spring,
+    head_dip: Spring,
+    tail_swing: Spring,
+    tail_sway: Spring,
 }
 
 fn load_rigs(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
@@ -165,6 +235,7 @@ fn load_rigs(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mater
                 leg: add(rig.leg),
                 held: add(rig.held),
                 eyes: add(rig.eyes),
+                tail: rig.tail.map(|tail| meshes.add(tail)),
             };
             (c, handles)
         })
@@ -195,15 +266,20 @@ fn add_rigs(
             arms: [part(&handles.arm, own, RIG_SHOULDER), part(&handles.arm, own, mirrored(RIG_SHOULDER))],
             legs: [part(&handles.leg, own, RIG_HIP), part(&handles.leg, own, mirrored(RIG_HIP))],
             held: part(&handles.held, own, RIG_HAND),
+            tail: handles.tail.as_ref().map(|tail| part(tail, own, RIG_TAIL)),
             moves: moves(&class.def().id),
             stride: 0.0,
             walking: 0.0,
+            joints: Joints::default(),
         };
         let eyes = part(&handles.eyes, &assets.glow, Vec3::ZERO);
         commands.entity(rig.head).add_child(eyes);
         commands.entity(rig.arms[0]).add_child(rig.held);
         commands.entity(player).add_children(&[rig.head, rig.arms[0], rig.arms[1], rig.legs[0], rig.legs[1]]);
-        commands.entity(player).insert((rig, Facing { look: Vec2::X, last_pos: pos.0, moved: Vec2::ZERO }));
+        if let Some(tail) = rig.tail {
+            commands.entity(player).add_child(tail);
+        }
+        commands.entity(player).insert((rig, Facing { look: Vec2::X, last_pos: pos.0, moved: Vec2::ZERO, turned: 0.0 }, HeldAt::default()));
     }
 }
 
@@ -226,9 +302,9 @@ fn turn_fighters(time: Res<Time>, mut fighters: Query<(&mut Facing, &Pos, &Attac
         };
         let look = facing.look.lerp(wants, turn).try_normalize().unwrap_or(wants);
         let look = if look.dot(wants) > 0.9999 { wants } else { look };
-        let changed = Facing { look, last_pos: pos.0, moved };
-        if facing.look != changed.look || facing.last_pos != changed.last_pos || facing.moved != changed.moved {
-            *facing = changed;
+        let turned = facing.look.angle_to(look);
+        if facing.look != look || facing.last_pos != pos.0 || facing.moved != moved || facing.turned != turned {
+            *facing = Facing { look, last_pos: pos.0, moved, turned };
         }
     }
 }
@@ -239,44 +315,58 @@ fn ease(from: f32, to: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// `x` (0..1) held to the start of its frame, out of `frames`.
-fn stepped(x: f32, frames: f32) -> f32 {
-    (x * frames).floor() / frames
+/// 0 below `from`, 1 above `to`: fast at first, then slowing into place. A committed strike.
+fn ease_out(from: f32, to: f32, x: f32) -> f32 {
+    let t = 1.0 - ((x - from) / (to - from)).clamp(0.0, 1.0);
+    1.0 - t * t * t
 }
 
-/// Poses each rig: facing (from `Facing`), limbs swinging as it walks, the windup's (stepped)
-/// progress driving its class's strike, and its dash pose while dashing. The parts are posed in
-/// the body's (twisted, leaning) space; the head (and a weapon held on target) undo that to stay
-/// on the aim.
+/// Poses each rig: facing (from `Facing`), a walk with bob and sway, the windup's progress
+/// driving its class's strike, and its dash pose while dashing, every joint on its spring. The
+/// parts are posed in the body's (twisted, leaning) space; the head (and a weapon held on target)
+/// undo that to stay on the aim.
 fn pose_rigs(
     time: Res<Time>,
     clock: AttackClock,
-    mut rigs: Query<(&mut Rig, &Facing, &mut Transform, &ClassId, &AttackState, &AbilityState, Has<Predicted>)>,
+    mut rigs: Query<(
+        &mut Rig,
+        &Facing,
+        &mut Transform,
+        &mut HeldAt,
+        &ClassId,
+        &AttackState,
+        &AbilityState,
+        Has<Predicted>,
+    )>,
     mut parts: Query<(&mut Transform, &mut Visibility), Without<Rig>>,
 ) {
     let ease_walk = rate(&time, WALK_RATE);
-    for (mut rig, facing, mut body, class, attack, ability, is_me) in &mut rigs {
+    let dt = time.delta_secs().min(0.1);
+    for (mut rig, facing, mut body, mut held_at, class, attack, ability, is_me) in &mut rigs {
+        let rig = &mut *rig;
         rig.stride += facing.moved.length() * STRIDES_PER_METER;
         let is_walking = if facing.moved.length() > 0.001 { 1.0 } else { 0.0 };
         let walking = rig.walking + (is_walking - rig.walking) * ease_walk;
         rig.walking = if (walking - is_walking).abs() < 1e-3 { is_walking } else { walking };
-        let step = (stepped(rig.stride.fract(), WALK_FRAMES) * TAU).sin() * rig.walking;
+        let phase = rig.stride.fract() * TAU;
+        let step = phase.sin() * rig.walking;
 
-        // Where in the strike we are: drawing (0..1) then releasing (0..1) during the windup,
-        // and the follow-through easing back to carrying after it; a thrown Q flicks through it.
+        // Where in the strike we are: drawing (0..1), holding, then striking (0..1) during the
+        // windup, and the follow-through easing back to carrying after it; a thrown Q
+        // flicks through it.
         let def = class.def();
         let now = clock.now(is_me);
         let since = |tick: Option<u32>| tick.map(|t| now - t as f32).filter(|s| *s >= 0.0);
         let (draw, mut throw) = match (attack.windup, since(attack.released_at(*class))) {
             (Some(windup), _) => {
-                let progress = stepped(windup.progress(now, *class), WINDUP_FRAMES);
-                (ease(0.0, 0.6, progress), ease(0.7, 1.0, progress))
+                let progress = windup.progress(now, *class);
+                (ease(0.0, DRAW_END, progress), ease_out(STRIKE_START, 1.0, progress))
             }
-            (None, Some(since)) => (0.0, 1.0 - ease(FOLLOW_THROUGH.0, FOLLOW_THROUGH.1, since.floor())),
+            (None, Some(since)) => (0.0, 1.0 - ease(FOLLOW_THROUGH.0, FOLLOW_THROUGH.1, since)),
             (None, None) => (0.0, 0.0),
         };
         if let (AbilityKind::Projectile { .. }, Some(since)) = (&def.ability.kind, since(ability.used_at(*class))) {
-            throw = throw.max(1.0 - ease(FLICK.0, FLICK.1, since.floor()));
+            throw = throw.max(1.0 - ease(FLICK.0, FLICK.1, since));
         }
         let dashing = if ability.dash.is_some() { 1.0 } else { 0.0 };
         let moves = rig.moves;
@@ -288,33 +378,61 @@ fn pose_rigs(
             && attack.windup.is_none()
             && since(attack.released_at(*class)).is_some_and(|s| s < rearm);
 
-        let lean = Quat::from_rotation_y(pose(moves.twist)) * Quat::from_rotation_z(pose(moves.lean));
+        // Every angle chases its pose on a spring.
+        let spring = |joint: &mut Spring, target: f32| joint.follow(target, dt, JOINT_STIFFNESS, JOINT_DAMPING);
+        let joints = &mut rig.joints;
+        let twist = spring(&mut joints.twist, pose(moves.twist));
+        let lean = spring(&mut joints.lean, pose(moves.lean));
         let legs = [
-            pose(moves.back_leg) - step * LEG_SWING * (1.0 - braced),
-            pose(moves.lead_leg) + step * LEG_SWING * (1.0 - braced),
+            spring(&mut joints.back_leg, pose(moves.back_leg) - step * LEG_SWING * (1.0 - braced)),
+            spring(&mut joints.lead_leg, pose(moves.lead_leg) + step * LEG_SWING * (1.0 - braced)),
         ];
-        // A wide stance lowers the hips (the legs are straight), so the feet stay on the ground.
+        let weapon_arm = spring(&mut joints.weapon_arm, pose(moves.weapon_arm) - step * ARM_SWING * 0.3);
+        let lead_arm = spring(&mut joints.lead_arm, pose(moves.lead_arm) + step * ARM_SWING);
+        let head_dip = spring(&mut joints.head_dip, pose(moves.head_dip));
+
+        // The body: facing, twisted and leaning into the strike, swaying with each step; the hips
+        // drop with a wide stance (the legs are straight, so the feet stay down) and bob as it
+        // walks.
+        let walk = rig.walking * (1.0 - braced);
+        let sway = phase.sin() * SWAY * walk;
+        let lean = Quat::from_rotation_y(twist) * Quat::from_rotation_z(lean) * Quat::from_rotation_x(sway);
         let spread = legs[0].abs().max(legs[1].abs());
         let mut posed = *body;
         posed.rotation = Quat::from_rotation_y(facing.look.to_angle()) * lean;
-        posed.translation.y = -RIG_HIP.y * (1.0 - spread.cos());
+        posed.scale = Vec3::splat(moves.scale);
+        posed.translation.y = (-RIG_HIP.y * (1.0 - spread.cos()) + (2.0 * phase).cos().abs() * BOB * walk) * moves.scale;
         body.set_if_neq(posed);
 
+        // The tail swings back as it walks and out to the side as it turns, loosely.
+        let turning = facing.turned / dt.max(1e-3);
+        let tail = rig.tail.map(|tail| {
+            let swing = rig.joints.tail_swing.follow(-TAIL_WALK * rig.walking, dt, TAIL_STIFFNESS, TAIL_DAMPING);
+            let sway = rig.joints.tail_sway.follow(-TAIL_TURN * turning, dt, TAIL_STIFFNESS, TAIL_DAMPING);
+            (tail, Quat::from_rotation_z(swing) * Quat::from_rotation_x(sway))
+        });
+
         let unlean = lean.inverse();
-        let weapon_arm = Quat::from_rotation_z(pose(moves.weapon_arm) - step * ARM_SWING * 0.3);
+        let weapon_arm = Quat::from_rotation_z(weapon_arm);
         let held = match moves.held {
             Held::OnTarget => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-(FRAC_PI_2 - 0.12)),
             Held::InHand(forward) => Quat::from_rotation_z(PI + forward),
         };
         let rotations = [
-            (rig.head, unlean * Quat::from_rotation_z(-pose(moves.head_dip))),
+            (rig.head, unlean * Quat::from_rotation_z(-head_dip)),
             (rig.arms[0], weapon_arm),
-            (rig.arms[1], Quat::from_rotation_z(pose(moves.lead_arm) + step * ARM_SWING)),
+            (rig.arms[1], Quat::from_rotation_z(lead_arm)),
             (rig.legs[0], Quat::from_rotation_z(legs[0])),
             (rig.legs[1], Quat::from_rotation_z(legs[1])),
             (rig.held, held),
         ];
-        for (part, rotation) in rotations {
+        // The held weapon's world pose, rebuilt from the same joints it hangs from (it's a child
+        // of the weapon arm at the hand, see `add_rigs`): child transforms aren't propagated
+        // until after this frame's shots are placed.
+        let hand = Transform::from_translation(RIG_SHOULDER).with_rotation(weapon_arm)
+            * Transform::from_translation(RIG_HAND).with_rotation(held);
+        held_at.set_if_neq(HeldAt(posed * hand));
+        for (part, rotation) in rotations.into_iter().chain(tail) {
             if let Ok((mut transform, mut visibility)) = parts.get_mut(part) {
                 if transform.rotation != rotation {
                     transform.rotation = rotation;

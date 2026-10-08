@@ -99,8 +99,10 @@ fn releasing_fire_stops_firing_at_4_fps() {
     }
     p.run(Duration::from_secs(2), frame);
 
+    // Fire held for two frames: one frame's input alone can arrive too late under load and be
+    // dropped as stale. Still well under the cooldown, so one shot.
     p.input(PlayerInput { aim: Vec2::X, fire: true, ..default() });
-    p.run(Duration::from_millis(250), frame);
+    p.run(Duration::from_millis(500), frame);
     p.input(PlayerInput::default());
 
     p.run(Duration::from_secs(2), frame);

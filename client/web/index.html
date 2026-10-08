@@ -22,6 +22,7 @@
       window.ARENA_CERT_DIGEST = (await res.text()).trim();
       const params = new URLSearchParams(location.search);
       if (params.has('server')) window.ARENA_SERVER = params.get('server');
+      if (params.has('dev')) window.ARENA_DEV = '1';
       const { default: init } = await import('./pkg/arena-client.js');
       status.remove();
       document.getElementById('game').focus();

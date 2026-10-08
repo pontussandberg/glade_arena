@@ -32,7 +32,20 @@ pub struct CameraPlugin;
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_camera);
-        app.add_systems(Update, move_camera);
+        app.add_systems(Update, move_camera.in_set(CameraControl));
+    }
+}
+
+/// The normal camera controls; dev mode's inspect camera switches them off while it's on.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CameraControl;
+
+/// How many notches the mouse wheel turned this frame. Browsers report the wheel in pixels
+/// (~100 per notch), native in lines.
+pub(crate) fn wheel_notches(scroll: &AccumulatedMouseScroll) -> f32 {
+    match scroll.unit {
+        MouseScrollUnit::Line => scroll.delta.y,
+        MouseScrollUnit::Pixel => scroll.delta.y / 100.0,
     }
 }
 
@@ -80,11 +93,7 @@ fn move_camera(
         rig.focus.z = (rig.focus.z + step.y).clamp(-limit.y, limit.y);
     }
 
-    // Browsers report the wheel in pixels (~100 per notch), native in lines.
-    let notches = match scroll.unit {
-        MouseScrollUnit::Line => scroll.delta.y,
-        MouseScrollUnit::Pixel => scroll.delta.y / 100.0,
-    };
+    let notches = wheel_notches(&scroll);
     rig.zoom = (rig.zoom - notches * 0.08).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
 
     *transform = Transform::from_translation(rig.focus + OFFSET * rig.zoom).looking_at(rig.focus, Vec3::Y);

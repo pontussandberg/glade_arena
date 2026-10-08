@@ -7,7 +7,8 @@ The fight happens in a forest clearing on a 1 m tile grid: a river through the m
 a stone bridge and two fords, with ruined walls, boulders and trees for cover. Movement is
 point-and-click like LoL or OSRS: **right click** walks to a tile (pathfinding around obstacles),
 **left click** auto-attacks toward the cursor (a skillshot), **Q** uses your class's ability
-toward the cursor.
+toward the cursor, **S** stops. Your ability's cooldown shows on an icon at the bottom of your
+screen, and a minimap in the corner shows everyone.
 
 Before joining you pick a **class**. Each has its own HP, speed, auto-attack (melee or
 projectile) and Q ability; all of it lives in `shared/assets/classes.ron`:
@@ -40,6 +41,8 @@ server/   headless authoritative server (spawning, hit decisions, lag compensati
           tests/ has the end-to-end tests
 client/   ClientNetPlugin (networking + prediction, headless-capable), bot (sparring AI);
           render (fighters, shots, swings, telegraphs, dash streaks, HUD, input), camera,
+          action_bar (your ability icon and cooldown), minimap,
+          dev (dev mode: the inspect camera),
           glade (the 3D scene and all meshes), rig (animated fighters: facing, walk cycle,
           windup and throw), join (class picker), feedback (health and cast bars, hit flash)
 client/web/  index.html for the browser build (pkg/ and digest.txt are generated)
@@ -116,14 +119,19 @@ cargo run -p arena-client
 
 # a sparring partner: a native client played by a simple bot
 ARENA_BOT=1 cargo run -p arena-client -- 99 revenant
+
+# dev mode (natively ARENA_DEV=1, in the browser add ?dev to the URL): F2 toggles an inspect
+# camera that orbits close around one fighter as it plays. Tab: next fighter, middle-drag or [ ]: orbit,
+# wheel: zoom; a panel shows what it's doing. Handy with two bots fighting:
+ARENA_DEV=1 ARENA_BOT=1 cargo run -p arena-client -- 98 javelinist
 ```
 
 The server makes a new self-signed certificate (valid 14 days) on every start. The page reads
 its hash from `digest.txt`, so after restarting the server, reload the page. Chrome and Firefox
 support WebTransport with certificate hashes.
 
-Controls: pick a class with a click or its number key, right click to move, left click to
-attack toward the cursor, Q for your ability toward the cursor, hold Space to lock the camera on
+Controls: pick a class with a click or its number key, right click to move, S to stop, left
+click to attack toward the cursor, Q for your ability toward the cursor, hold Space to lock the camera on
 yourself, push the mouse to a screen edge or use the arrow keys to pan, mouse wheel to zoom.
 
 Two tabs work: a hidden tab keeps simulating and networking without rendering (see

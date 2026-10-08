@@ -18,15 +18,21 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::input::native::{ActionState, InputMarker};
 use lightyear::prelude::*;
 
+#[cfg(feature = "render")]
+pub mod action_bar;
 pub mod bot;
 #[cfg(feature = "render")]
 pub mod camera;
+#[cfg(feature = "render")]
+pub mod dev;
 #[cfg(feature = "render")]
 pub mod feedback;
 #[cfg(feature = "render")]
 pub mod glade;
 #[cfg(feature = "render")]
 pub mod join;
+#[cfg(feature = "render")]
+pub mod minimap;
 #[cfg(feature = "render")]
 pub mod render;
 #[cfg(feature = "render")]

@@ -37,6 +37,9 @@ fn main() {
         app.add_plugins(arena_client::bot::BotPlugin);
     }
     app.add_plugins(RenderPlugin);
+    if dev_mode() {
+        app.add_plugins(arena_client::dev::DevPlugin);
+    }
     app.run();
 }
 
@@ -44,9 +47,21 @@ fn default_server_addr() -> SocketAddr {
     SocketAddr::new(Ipv4Addr::LOCALHOST.into(), SERVER_PORT)
 }
 
+/// Dev tools (`dev.rs`): `ARENA_DEV=1` natively, `?dev` on the page.
+#[cfg(not(target_family = "wasm"))]
+fn dev_mode() -> bool {
+    std::env::var_os("ARENA_DEV").is_some()
+}
+
+#[cfg(target_family = "wasm")]
+fn dev_mode() -> bool {
+    web_sys::window().is_some_and(|w| js_sys::Reflect::get(&w, &"ARENA_DEV".into()).is_ok_and(|v| v.is_truthy()))
+}
+
 /// Native dev client: `arena-client [client_id] [class]`, no certificate validation. Without a
 /// class (e.g. `javelinist`) it shows the join screen. `ARENA_SERVER=ip:port` picks another server
-/// (like the page's `?server=`); `ARENA_BOT=1` lets a simple bot play this client.
+/// (like the page's `?server=`); `ARENA_BOT=1` lets a simple bot play this client; `ARENA_DEV=1`
+/// turns on dev tools.
 #[cfg(not(target_family = "wasm"))]
 fn client_settings() -> ClientSettings {
     let client_id = std::env::args()
