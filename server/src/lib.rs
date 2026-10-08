@@ -368,7 +368,7 @@ fn resolve_projectile_hits(
                 continue;
             }
             commands.entity(projectile_entity).try_despawn();
-            let amount = projectile.class.def().attack.damage;
+            let amount = sim::projectile_damage(projectile, now.0 as u32);
             damage(&mut commands, now.0 as u32, (target, target_id.0), &mut health, amount, projectile.owner);
             break;
         }

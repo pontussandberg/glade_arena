@@ -15,7 +15,7 @@ projectile; all of it lives in `shared/assets/classes.ron`:
 |---|---|---|
 | Shade | Assassin | Fast dagger strikes, short reach |
 | Warden | Brawler | Wide, heavy hammer swings; lots of HP |
-| Sorcerer | Caster | Slow, heavy fire bolts, medium range |
+| Javelinist | Hunter | Slow, heavy javelins that hit harder the farther they fly (`far_damage`) |
 | Ranger | Sniper | Fast, thin arrows, long range |
 
 Every attack has a short windup (`windup_ticks`): you stand still with your aim locked while a
@@ -117,7 +117,7 @@ drops it after 3s; the HUD then says DISCONNECTED and a page reload rejoins.
 
 ## Not done yet (see the plan)
 
-- One ability per class on Q (planned: Shade blink, Warden charge, Sorcerer meteor, Ranger roll)
+- One ability per class on Q (planned: Shade blink, Warden charge, Javelinist to be decided, Ranger roll)
 - Network debug overlay (lag sliders, server ghost), room codes, switching class without rejoining
 - Visual smoothing: frame interpolation between ticks and correction blending after rollbacks
 - Accounts service issuing netcode connect tokens (currently a shared zero dev key)

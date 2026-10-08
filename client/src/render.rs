@@ -41,8 +41,6 @@ impl Plugin for RenderPlugin {
 
 /// Shots fly at chest height; fighters stand on the floor (their feet are at the mesh origin).
 const PROJECTILE_HEIGHT: f32 = 0.9;
-/// The projectile mesh's radius; each class's shots are scaled from it.
-const PROJECTILE_MESH_RADIUS: f32 = 0.2;
 /// How long a swing stays on screen.
 const SWING_SECONDS: f32 = 0.16;
 /// Thin shots still get a lane wide enough to see.
@@ -64,7 +62,7 @@ struct Visuals {
     /// The ground an attack covers: a melee swing's fan, or the lane a shot flies down. Drawn
     /// faintly as the windup telegraph, and (melee) brightly as the swing itself.
     attack_shapes: HashMap<ClassId, Handle<Mesh>>,
-    projectile: Handle<Mesh>,
+    projectiles: HashMap<ClassId, Handle<Mesh>>,
     ring: Handle<Mesh>,
     materials: HashMap<(PeerId, Look), Handle<StandardMaterial>>,
 }
@@ -143,7 +141,10 @@ fn setup_scene(
                 (c, meshes.add(mesh))
             })
             .collect(),
-        projectile: meshes.add(glade::projectile_mesh(PROJECTILE_MESH_RADIUS)),
+        projectiles: ClassId::all()
+            .filter(|c| c.def().attack.kind.projectile().is_some())
+            .map(|c| (c, meshes.add(glade::projectile_mesh(c.def()))))
+            .collect(),
         ring: meshes.add(Annulus::new(0.58, 0.7).mesh().resolution(20).build()),
         materials: HashMap::default(),
     });
@@ -226,8 +227,8 @@ fn show_destination(
     }
 }
 
-/// Gives players and projectiles a mesh once their position is known: each class's own figure,
-/// and shots sized to the class's projectile radius.
+/// Gives players and projectiles a mesh once their position is known: each class's own figure
+/// and shot, the shot pointing the way it flies.
 fn add_visuals(
     mut commands: Commands,
     mut visuals: ResMut<Visuals>,
@@ -268,12 +269,12 @@ fn add_visuals(
     }
     for (entity, projectile, pos) in &projectiles {
         let material = visuals.material(&mut materials, projectile.owner, projectile.owner == me.0, Look::Shot);
-        let radius = projectile.class.def().attack.kind.projectile().map_or(PROJECTILE_MESH_RADIUS, |(_, r)| r);
+        let Some(mesh) = visuals.projectiles.get(&projectile.class).cloned() else { continue };
         commands.entity(entity).insert((
-            Mesh3d(visuals.projectile.clone()),
+            Mesh3d(mesh),
             MeshMaterial3d(material),
             Transform::from_translation(to_world(pos.0, PROJECTILE_HEIGHT))
-                .with_scale(Vec3::splat(radius / PROJECTILE_MESH_RADIUS)),
+                .with_rotation(Quat::from_rotation_y(projectile.dir.to_angle())),
         ));
     }
 }

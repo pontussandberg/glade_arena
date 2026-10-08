@@ -27,6 +27,7 @@ pub struct ClassDef {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct AttackDef {
+    /// Damage on hit (for projectiles with `far_damage`: point blank).
     pub damage: i32,
     pub cooldown_ticks: u32,
     /// Ticks from starting an attack to it going off; you stand still meanwhile.
@@ -38,8 +39,25 @@ pub struct AttackDef {
 pub enum AttackKind {
     /// Hits everyone in a cone in front of the attacker.
     Melee { range: f32, arc_degrees: f32 },
-    /// Flies straight until it hits someone, a blocking tile, or runs out of range.
-    Projectile { speed: f32, radius: f32, range: f32 },
+    /// Flies straight until it hits someone, a blocking tile, or runs out of range. With
+    /// `far_damage`, damage scales linearly from the attack's `damage` (point blank) to it (after
+    /// flying the full range).
+    Projectile {
+        speed: f32,
+        radius: f32,
+        range: f32,
+        #[serde(default)]
+        far_damage: Option<i32>,
+    },
+}
+
+impl AttackDef {
+    /// Damage of a hit after the attack flew `distance`.
+    pub fn damage_at(&self, distance: f32) -> i32 {
+        let AttackKind::Projectile { range, far_damage: Some(far), .. } = self.kind else { return self.damage };
+        let t = (distance / range).clamp(0.0, 1.0);
+        (self.damage as f32 + (far - self.damage) as f32 * t).round() as i32
+    }
 }
 
 impl AttackKind {
@@ -126,7 +144,8 @@ mod tests {
                 AttackKind::Melee { range, arc_degrees } => {
                     assert!((0.5..=4.0).contains(&range) && (10.0..=360.0).contains(&arc_degrees), "{}: melee", c.id);
                 }
-                AttackKind::Projectile { speed, radius, range } => {
+                AttackKind::Projectile { speed, radius, range, far_damage } => {
+                    assert!(far_damage.is_none_or(|far| far > 0), "{}: far_damage", c.id);
                     assert!((2.0..=60.0).contains(&speed) && (0.05..=1.0).contains(&radius), "{}: projectile", c.id);
                     assert!((1.0..=30.0).contains(&range), "{}: projectile range", c.id);
                 }
@@ -143,8 +162,16 @@ mod tests {
     }
 
     #[test]
+    fn far_damage_scales_with_distance() {
+        let kind = |far_damage| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_damage };
+        let attack = |kind| AttackDef { damage: 10, cooldown_ticks: 40, windup_ticks: 10, kind };
+        assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(30))).damage_at(d)), [10, 20, 30, 30]);
+        assert_eq!(attack(kind(None)).damage_at(5.0), 10);
+    }
+
+    #[test]
     fn projectile_lifetime_covers_its_range() {
-        let kind = AttackKind::Projectile { speed: 16.0, radius: 0.2, range: 8.0 };
+        let kind = AttackKind::Projectile { speed: 16.0, radius: 0.2, range: 8.0, far_damage: None };
         assert_eq!(kind.lifetime_ticks(), 32);
     }
 }

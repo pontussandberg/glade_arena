@@ -66,12 +66,12 @@ fighter.
 | Forest ring | Terrain rising outside the clearing edge, up to about 3.5 m; trees merged into one prop mesh | ≈ 5.5k tris terrain |
 | Tree | 5-sided trunk, 2–3 stacked 7-sided cones | ≤ 60 tris |
 | Rock | Unsubdivided icosahedron, stretched unevenly | 20 tris |
-| Fighter | One silhouette per class, readable from above, ≤ 2 m tall: Shade slim and hooded, Warden broad with a shoulder bar, Sorcerer robed with a pointed hat, Ranger lean with a quiver | ≤ 400 tris |
+| Fighter | One silhouette per class, readable from above, ≤ 2 m tall: Shade slim and hooded, Warden broad with a shoulder bar, Javelinist lean and hooded with an upright javelin rising above the head (the one thing taller than 2 m: a long, thin sniper silhouette), Ranger lean with a quiver | ≤ 400 tris |
 | Fighter ring | Flat ring in the owner's color under the feet, so fighters read even in deep shade | 40 tris |
 | Melee swing | Flat translucent fan in the owner's color, showing the real reach and arc, for 0.16 s | 12 tris |
 | Windup telegraph | The attack's real shape (swing fan, or a strip down the shot's lane) in the owner's color, faint, while the attack winds up | 12 / 2 tris |
 | Cast bar | Pale sunlit fill in a thin ink frame, hanging under the health bar while winding up | UI |
-| Projectile | Glowing icosahedron, sized to the class's projectile radius | 20 tris |
+| Projectile | Glowing icosahedron sized to the class's projectile radius; the Javelinist's is a long javelin pointing the way it flies | 20 / ~30 tris |
 
 - Anything that blocks movement or shots must sit on a blocking tile in `map.rs`; decoration on
   walkable tiles stays below knee height (flowers, rubble, stepping stones).

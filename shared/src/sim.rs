@@ -113,6 +113,12 @@ pub fn melee_hits(attacker: Vec2, dir: Vec2, class: ClassId, target: Vec2) -> bo
     in_arc && map().shot_clear(attacker, target)
 }
 
+/// Damage of a projectile hitting at `tick`, by how far it has flown (see `far_damage`).
+pub fn projectile_damage(projectile: &Projectile, tick: u32) -> i32 {
+    let flown = tick.saturating_sub(projectile.spawn_tick) as f32 * TICK_DT * projectile_stats(projectile).0;
+    projectile.class.def().attack.damage_at(flown)
+}
+
 /// Same hash on client and server so the server's projectile is matched to the one the
 /// client already spawned locally (lightyear "prespawning").
 pub fn projectile_prespawn_hash(owner: PeerId, tick: u32) -> u64 {

@@ -11,7 +11,9 @@
 //     windup_ticks  from click to the attack going off; you stand still with your aim locked
 //                   meanwhile (see the README)
 //     kind: Melee(range, arc_degrees)       hits everyone in a cone in front of you
-//           Projectile(speed, radius, range) flies straight, stops at walls/rocks/trees
+//           Projectile(speed, radius, range) flies straight, stops at walls/rocks/trees;
+//             optional far_damage: damage after flying the full range, scaling linearly from
+//             `damage` (point blank) by how far the shot flew
 [
     (
         id: "shade",
@@ -42,17 +44,17 @@
         ),
     ),
     (
-        id: "sorcerer",
-        name: "Sorcerer",
-        role: "Caster",
-        blurb: "Slow, heavy bolts of fire at medium range.",
+        id: "javelinist",
+        name: "Javelinist",
+        role: "Hunter",
+        blurb: "Hurls heavy javelins. The farther they fly, the harder they hit.",
         max_hp: 95,
         move_speed: 5.4,
         attack: (
-            damage: 26,
+            damage: 16,
             cooldown_ticks: 48,
             windup_ticks: 22,
-            kind: Projectile(speed: 12.0, radius: 0.35, range: 9.0),
+            kind: Projectile(speed: 15.0, radius: 0.25, range: 15.0, far_damage: Some(36)),
         ),
     ),
     (

@@ -36,7 +36,11 @@ fn attack_summary(def: &ClassDef) -> String {
         AttackKind::Projectile { range, .. } => write!(s, "Ranged, {range} m"),
     }
     .ok();
-    write!(s, "\n{} damage, {per_second:.1} hits/s", attack.damage).ok();
+    let damage = match (attack.damage_at(0.0), attack.damage_at(f32::INFINITY)) {
+        (near, far) if near != far => format!("{near}-{far} damage (more at range)"),
+        (damage, _) => format!("{damage} damage"),
+    };
+    write!(s, "\n{damage}, {per_second:.1} hits/s").ok();
     s
 }
 

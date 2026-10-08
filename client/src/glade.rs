@@ -5,6 +5,7 @@
 //! Flat-shaded, untextured, one color per face. The world stays in a calm middle band of
 //! saturation; only fighters, projectiles and torch flames go above it.
 
+use arena_shared::classes::ClassDef;
 use arena_shared::map::{MAP_HALF_EXTENTS, Map, RIVER_HALF_WIDTH, Tile, clearing_margin, map, river_x};
 use bevy::asset::RenderAssetUsages;
 use bevy::color::Mix;
@@ -90,14 +91,43 @@ pub fn faceted(mesh: Mesh) -> Mesh {
 
 /// Class ids that have their own figure in `fighter_mesh`. A new class in `classes.ron` gets the
 /// plain pawn until it's added here (a test checks every class has one).
-pub const FIGHTER_LOOKS: [&str; 4] = ["shade", "warden", "sorcerer", "ranger"];
+pub const FIGHTER_LOOKS: [&str; 4] = ["shade", "warden", "javelinist", "ranger"];
+
+/// Class ids whose shot has its own look in `projectile_mesh` (the rest throw a round bolt).
+pub const SHOT_LOOKS: [&str; 1] = ["javelinist"];
+
+fn cylinder(r: f32, h: f32, sides: u32) -> Mesh {
+    Cylinder::new(r, h).mesh().resolution(sides).build()
+}
+
+fn cone(r: f32, h: f32, sides: u32) -> Mesh {
+    Cone::new(r, h).mesh().resolution(sides).build()
+}
+
+/// Faceted parts merged into one mesh.
+fn merge_parts(parts: Vec<Mesh>) -> Mesh {
+    parts
+        .into_iter()
+        .map(faceted)
+        .reduce(|mut all, p| {
+            all.merge(&p).expect("parts share attributes");
+            all
+        })
+        .expect("at least one part")
+}
+
+/// A javelin standing along +Y, `length` long, the point of its tip at the origin: carried by the
+/// javelinist and thrown by it.
+fn javelin(length: f32) -> Mesh {
+    const TIP: f32 = 0.38;
+    let shaft = cylinder(0.05, length - TIP, 5).translated_by(Vec3::Y * -(TIP + (length - TIP) / 2.0));
+    merge_parts(vec![shaft, cone(0.11, TIP, 5).translated_by(Vec3::Y * -TIP / 2.0)])
+}
 
 /// A fighter's low-poly figure, feet at the origin, picked by class id so each class has its own
 /// silhouette from above. Ids not in `FIGHTER_LOOKS` get a plain pawn.
 pub fn fighter_mesh(class_key: &str) -> Mesh {
     let part = |mesh: Mesh, at: f32| mesh.translated_by(Vec3::Y * at);
-    let cylinder = |r: f32, h: f32, sides: u32| Cylinder::new(r, h).mesh().resolution(sides).build();
-    let cone = |r: f32, h: f32, sides: u32| Cone::new(r, h).mesh().resolution(sides).build();
     let head = |r: f32| Sphere::new(r).mesh().ico(0).unwrap();
     let parts = match class_key {
         // Assassin: slim, hooded, pointed.
@@ -108,8 +138,13 @@ pub fn fighter_mesh(class_key: &str) -> Mesh {
             part(Cuboid::new(1.5, 0.28, 0.55).mesh().build(), 0.85),
             part(head(0.38), 1.25),
         ],
-        // Caster: robe cone and a tall pointed hat.
-        "sorcerer" => vec![part(cone(0.56, 1.15, 8), 0.575), part(head(0.32), 1.3), part(cone(0.42, 0.75, 7), 1.82)],
+        // Hunter: lean and hooded, an upright javelin rising well above the head.
+        "javelinist" => vec![
+            part(cylinder(0.36, 0.95, 7), 0.475),
+            part(head(0.33), 1.22),
+            part(cone(0.38, 0.5, 6), 1.55),
+            javelin(2.65).translated_by(Vec3::new(0.48, 2.65, -0.1)),
+        ],
         // Sniper: lean, with a quiver on the back.
         "ranger" => vec![
             part(cylinder(0.4, 0.95, 7), 0.475),
@@ -118,14 +153,7 @@ pub fn fighter_mesh(class_key: &str) -> Mesh {
         ],
         _ => vec![part(cylinder(0.48, 0.9, 8), 0.45), part(head(0.42), 1.25)],
     };
-    parts
-        .into_iter()
-        .map(faceted)
-        .reduce(|mut all, p| {
-            all.merge(&p).expect("fighter parts share attributes");
-            all
-        })
-        .expect("a fighter has parts")
+    merge_parts(parts)
 }
 
 /// A flat fan for a melee swing: `reach` long, `arc_degrees` wide, pointing along world +X.
@@ -150,7 +178,18 @@ pub fn lane_mesh(from: f32, to: f32, width: f32) -> Mesh {
     b.build()
 }
 
-pub fn projectile_mesh(radius: f32) -> Mesh {
+/// A projectile class's shot, flying along world +X, picked by class id (see `SHOT_LOOKS`): the
+/// javelinist's is a long javelin, its tip where the shot is; the rest a round bolt of the shot's
+/// radius.
+pub fn projectile_mesh(class: &ClassDef) -> Mesh {
+    match class.id.as_str() {
+        "javelinist" => javelin(2.0).rotated_by(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
+        _ => gem_mesh(class.attack.kind.projectile().map_or(0.2, |(_, radius)| radius)),
+    }
+}
+
+/// A small faceted ball: round shots, flower heads.
+pub fn gem_mesh(radius: f32) -> Mesh {
     faceted(Sphere::new(radius).mesh().ico(0).unwrap())
 }
 
@@ -333,7 +372,7 @@ impl Props {
             trunk: faceted(Cylinder::new(0.22, 1.2).mesh().resolution(5).build()),
             cones: [0, 1, 2].map(|k| faceted(Cone::new(1.5 - k as f32 * 0.35, 1.7).mesh().resolution(7).build())),
             block: faceted(Cuboid::new(1.0, 1.0, 1.0).mesh().build()),
-            flower: projectile_mesh(0.14),
+            flower: gem_mesh(0.14),
             post: faceted(Cylinder::new(0.08, 1.0).mesh().resolution(5).build()),
             out: None,
         }
@@ -570,13 +609,21 @@ fn water_mesh() -> Mesh {
 mod tests {
     use arena_shared::protocol::ClassId;
 
-    use super::FIGHTER_LOOKS;
+    use super::{FIGHTER_LOOKS, SHOT_LOOKS};
 
     #[test]
     fn every_class_has_its_own_figure() {
         for class in ClassId::all() {
             let key = &class.def().id;
             assert!(FIGHTER_LOOKS.contains(&key.as_str()), "class {key:?} has no figure in fighter_mesh");
+        }
+    }
+
+    #[test]
+    fn shot_looks_are_projectile_classes() {
+        for key in SHOT_LOOKS {
+            let class = ClassId::by_key(key).unwrap_or_else(|| panic!("{key:?} in SHOT_LOOKS isn't a class"));
+            assert!(class.def().attack.kind.projectile().is_some(), "{key:?} in SHOT_LOOKS doesn't shoot");
         }
     }
 }
