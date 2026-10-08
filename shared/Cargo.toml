@@ -14,4 +14,5 @@ lightyear = { workspace = true, features = [
   "netcode",
   "webtransport",
 ] }
+ron = "0.12.2"
 serde.workspace = true

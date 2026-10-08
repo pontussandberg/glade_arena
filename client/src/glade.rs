@@ -78,17 +78,76 @@ pub fn glow(color: Color, strength: f32) -> StandardMaterial {
     StandardMaterial { emissive: LinearRgba::from(color) * strength, unlit: true, ..matte(color) }
 }
 
+/// See-through glow: swing flashes and telegraphs.
+pub fn translucent(color: Color, alpha: f32, strength: f32) -> StandardMaterial {
+    StandardMaterial { alpha_mode: AlphaMode::Blend, ..glow(color.with_alpha(alpha), strength) }
+}
+
 /// One normal per face: the low-poly look.
 pub fn faceted(mesh: Mesh) -> Mesh {
     mesh.with_duplicated_vertices().with_computed_flat_normals()
 }
 
-/// Fighter: a chunky pawn, feet at the origin, about 1.7 m tall.
-pub fn pawn_mesh() -> Mesh {
-    let mut body = Cylinder::new(0.48, 0.9).mesh().resolution(8).build().translated_by(Vec3::Y * 0.45);
-    let head = Sphere::new(0.42).mesh().ico(0).unwrap().translated_by(Vec3::Y * 1.25);
-    body.merge(&head).unwrap();
-    faceted(body)
+/// Class ids that have their own figure in `fighter_mesh`. A new class in `classes.ron` gets the
+/// plain pawn until it's added here (a test checks every class has one).
+pub const FIGHTER_LOOKS: [&str; 4] = ["shade", "warden", "sorcerer", "ranger"];
+
+/// A fighter's low-poly figure, feet at the origin, picked by class id so each class has its own
+/// silhouette from above. Ids not in `FIGHTER_LOOKS` get a plain pawn.
+pub fn fighter_mesh(class_key: &str) -> Mesh {
+    let part = |mesh: Mesh, at: f32| mesh.translated_by(Vec3::Y * at);
+    let cylinder = |r: f32, h: f32, sides: u32| Cylinder::new(r, h).mesh().resolution(sides).build();
+    let cone = |r: f32, h: f32, sides: u32| Cone::new(r, h).mesh().resolution(sides).build();
+    let head = |r: f32| Sphere::new(r).mesh().ico(0).unwrap();
+    let parts = match class_key {
+        // Assassin: slim, hooded, pointed.
+        "shade" => vec![part(cylinder(0.34, 0.9, 6), 0.45), part(cone(0.42, 0.75, 6), 1.25)],
+        // Brawler: broad body with a shoulder bar.
+        "warden" => vec![
+            part(cylinder(0.55, 0.85, 8), 0.425),
+            part(Cuboid::new(1.5, 0.28, 0.55).mesh().build(), 0.85),
+            part(head(0.38), 1.25),
+        ],
+        // Caster: robe cone and a tall pointed hat.
+        "sorcerer" => vec![part(cone(0.56, 1.15, 8), 0.575), part(head(0.32), 1.3), part(cone(0.42, 0.75, 7), 1.82)],
+        // Sniper: lean, with a quiver on the back.
+        "ranger" => vec![
+            part(cylinder(0.4, 0.95, 7), 0.475),
+            part(head(0.36), 1.25),
+            part(Cuboid::new(0.2, 0.8, 0.2).mesh().build().translated_by(Vec3::new(-0.25, 0.0, 0.35)), 1.0),
+        ],
+        _ => vec![part(cylinder(0.48, 0.9, 8), 0.45), part(head(0.42), 1.25)],
+    };
+    parts
+        .into_iter()
+        .map(faceted)
+        .reduce(|mut all, p| {
+            all.merge(&p).expect("fighter parts share attributes");
+            all
+        })
+        .expect("a fighter has parts")
+}
+
+/// A flat fan for a melee swing: `reach` long, `arc_degrees` wide, pointing along world +X.
+pub fn swing_mesh(reach: f32, arc_degrees: f32) -> Mesh {
+    let mut b = FlatMesh::default();
+    let half = arc_degrees.to_radians() / 2.0;
+    let steps = 12;
+    let point = |t: f32| Vec3::new(t.cos() * reach, 0.0, -t.sin() * reach);
+    for i in 0..steps {
+        let (a, z) = (-half + 2.0 * half * i as f32 / steps as f32, -half + 2.0 * half * (i + 1) as f32 / steps as f32);
+        b.tri([Vec3::ZERO, point(a), point(z)], Color::WHITE);
+    }
+    b.build()
+}
+
+/// A flat strip along world +X from `from` to `to`, `width` wide: the lane a shot will fly down.
+pub fn lane_mesh(from: f32, to: f32, width: f32) -> Mesh {
+    let mut b = FlatMesh::default();
+    let side = Vec3::Z * width / 2.0;
+    let (near, far) = (Vec3::X * from, Vec3::X * to);
+    b.quad([near + side, far + side, far - side, near - side], Color::WHITE);
+    b.build()
 }
 
 pub fn projectile_mesh(radius: f32) -> Mesh {
@@ -505,4 +564,19 @@ fn water_mesh() -> Mesh {
         y = y2;
     }
     b.build()
+}
+
+#[cfg(test)]
+mod tests {
+    use arena_shared::protocol::ClassId;
+
+    use super::FIGHTER_LOOKS;
+
+    #[test]
+    fn every_class_has_its_own_figure() {
+        for class in ClassId::all() {
+            let key = &class.def().id;
+            assert!(FIGHTER_LOOKS.contains(&key.as_str()), "class {key:?} has no figure in fighter_mesh");
+        }
+    }
 }

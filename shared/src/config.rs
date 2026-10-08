@@ -9,18 +9,15 @@ pub const TICK_DT: f32 = 1.0 / TICK_HZ as f32;
 pub const SEND_INTERVAL: Duration = Duration::from_millis(50);
 
 pub const SERVER_PORT: u16 = 5888;
-pub const PROTOCOL_ID: u64 = 0xA4E7_0001;
+/// Includes the class file's hash: clients built with different class numbers can't connect.
+pub const PROTOCOL_ID: u64 = 0xA4E7_0002 ^ crate::classes::classes_hash();
 /// Netcode key shared by server and client. Fine for local dev; real auth will have the
 /// account service mint connect tokens instead (see README).
 pub const DEV_PRIVATE_KEY: [u8; 32] = [0; 32];
 
-// Gameplay tuning, in world units (1 unit = 1 meter = 1 tile). The map is in `map.rs`.
+// Gameplay tuning that isn't per class, in world units (1 unit = 1 meter = 1 tile).
+// Per-class numbers are in `assets/classes.ron`; the map is in `map.rs`.
+/// Body radius used for hits (projectiles and melee reach).
 pub const PLAYER_RADIUS: f32 = 0.5;
-pub const PLAYER_SPEED: f32 = 6.0;
-pub const MAX_HEALTH: i32 = 100;
-
-pub const PROJECTILE_RADIUS: f32 = 0.2;
-pub const PROJECTILE_SPEED: f32 = 18.0;
-pub const PROJECTILE_DAMAGE: i32 = 20;
-pub const PROJECTILE_LIFETIME_TICKS: u32 = 80;
-pub const FIRE_COOLDOWN_TICKS: u32 = 24;
+/// How long a killed player is out of the fight before respawning (3 s).
+pub const RESPAWN_TICKS: u32 = 3 * TICK_HZ as u32;

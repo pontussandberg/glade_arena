@@ -1,8 +1,8 @@
 //! Authoritative match server.
 //!
-//! Clients only send inputs. The server runs the shared sim on them, decides hits and damage,
-//! and replicates the result. A connecting client's own player and projectiles are predicted
-//! on that client; everyone else's are interpolated.
+//! Clients pick a class, then only send inputs. The server runs the shared sim on them, decides
+//! hits and damage (with lag compensation), and replicates the result. A client's own player and
+//! projectiles are predicted on that client; everyone else's are interpolated.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -12,6 +12,7 @@ use arena_shared::config::*;
 use arena_shared::protocol::*;
 use arena_shared::sim;
 use bevy::prelude::*;
+use lightyear::interpolation::plugin::InterpolationDelay;
 use lightyear::netcode::NetcodeServer;
 use lightyear::prelude::input::native::{ActionState, NativeBuffer};
 use lightyear::prelude::server::*;
@@ -77,22 +78,24 @@ impl Plugin for ServerGamePlugin {
         app.add_plugins(ProtocolPlugin);
         app.insert_resource(ReplicationMetadata::new(SEND_INTERVAL));
         app.add_observer(on_new_link);
-        app.add_observer(on_client_connected);
+        app.add_systems(Update, spawn_chosen_classes);
         app.add_systems(
             FixedUpdate,
             (
                 neutralize_stale_inputs,
                 move_players,
-                fire_projectiles,
+                record_history,
+                attack,
                 move_projectiles,
-                resolve_hits,
+                resolve_projectile_hits,
+                respawn,
                 place_players,
             )
                 .chain(),
         );
-        // Also every frame, so players who connect between fixed ticks are placed before their
+        // Also every frame, so players who join between fixed ticks are placed before their
         // first replication.
-        app.add_systems(Update, place_players);
+        app.add_systems(Update, place_players.after(spawn_chosen_classes));
     }
 }
 
@@ -105,52 +108,83 @@ fn owner_predicted(owner: PeerId) -> impl Bundle {
     )
 }
 
-/// Server-only: this player (new or just died) still needs a spawn point.
+/// Server-only: this player (new or respawning) still needs a spawn point.
 #[derive(Component)]
 struct NeedsSpawnPoint;
+
+/// Server-only: killed; out of the fight until `respawn_at` (its `Health` is 0 meanwhile, which
+/// is what clients see).
+#[derive(Component)]
+struct Dead {
+    respawn_at: u32,
+    placed: bool,
+}
+
+/// A respawning player is moved to its spawn point this long before it comes back to life:
+/// longer than other clients' interpolation delay, so they never see it slide from where it
+/// died to where it respawns (it's still hidden while that happens).
+const PLACE_BEFORE_RESPAWN_TICKS: u32 = 16;
+
+/// Players who can move, attack and be hit: placed and alive.
+type InPlay = (Without<NeedsSpawnPoint>, Without<Dead>);
 
 /// Every new link needs a `ReplicationSender` before we can replicate anything to it.
 fn on_new_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
     commands.entity(trigger.entity).insert(ReplicationSender);
 }
 
-/// Spawn a player once the connection is confirmed (not merely requested).
-fn on_client_connected(
-    trigger: On<Add, Connected>,
-    clients: Query<&RemoteId, With<ClientOf>>,
+/// A connected client picked a class on its join screen: spawn its player. Later picks from the
+/// same client are ignored (switching classes means rejoining, for now).
+fn spawn_chosen_classes(
+    mut links: Query<(Entity, &RemoteId, &mut MessageReceiver<ChooseClass>), With<ClientOf>>,
+    players: Query<&ControlledBy, With<PlayerId>>,
     mut commands: Commands,
 ) {
-    let Ok(remote) = clients.get(trigger.entity) else { return };
-    let id = remote.0;
-    info!("Client {id:?} connected, spawning player");
-    commands.spawn((
-        Name::from("Player"),
-        PlayerId(id),
-        Pos::default(),
-        NeedsSpawnPoint,
-        Health(MAX_HEALTH),
-        FireCooldown::default(),
-        ActionState::<PlayerInput>::default(),
-        // Replication starts in `place_players`, once it has a real position.
-        // Despawned automatically when this client disconnects.
-        ControlledBy { owner: trigger.entity, lifetime: default() },
-    ));
+    for (link, remote, mut receiver) in &mut links {
+        let mut has_player = players.iter().any(|c| c.owner == link);
+        for ChooseClass(class) in receiver.receive() {
+            let Some(class) = class.checked() else { continue };
+            if has_player {
+                continue;
+            }
+            has_player = true;
+            let id = remote.0;
+            info!("Client {id:?} joined as {}", class.def().name);
+            commands.spawn((
+                Name::from("Player"),
+                PlayerId(id),
+                class,
+                Pos::default(),
+                NeedsSpawnPoint,
+                Health(class.def().max_hp),
+                AttackState::default(),
+                LastSwing::default(),
+                PosHistory::default(),
+                ActionState::<PlayerInput>::default(),
+                // Replication starts in `place_players`, once it has a real position.
+                // Despawned automatically when this client disconnects.
+                ControlledBy { owner: link, lifetime: default() },
+            ));
+        }
+    }
 }
 
 /// Places waiting players one at a time, each away from everyone already placed, so players
 /// joining or respawning in the same tick don't land on the same spot.
 fn place_players(
     mut commands: Commands,
-    mut players: Query<(Entity, &PlayerId, &mut Pos, Has<NeedsSpawnPoint>, Has<Replicate>)>,
+    mut players: Query<(Entity, &PlayerId, &mut Pos, &mut PosHistory, Has<NeedsSpawnPoint>, Has<Replicate>)>,
 ) {
     let mut placed: Vec<Vec2> =
-        players.iter().filter(|(_, _, _, waiting, _)| !waiting).map(|(_, _, pos, ..)| pos.0).collect();
-    for (entity, id, mut pos, waiting, replicated) in &mut players {
+        players.iter().filter(|(.., waiting, _)| !waiting).map(|(_, _, pos, ..)| pos.0).collect();
+    for (entity, id, mut pos, mut history, waiting, replicated) in &mut players {
         if !waiting {
             continue;
         }
         pos.0 = sim::pick_spawn_point(placed.iter().copied());
         placed.push(pos.0);
+        // Hits can't be judged against where the player was before the teleport.
+        history.0.clear();
         let mut player = commands.entity(entity);
         player.remove::<NeedsSpawnPoint>();
         // New players start replicating here, so clients never see a placeholder position.
@@ -180,22 +214,121 @@ fn neutralize_stale_inputs(
     }
 }
 
-fn move_players(mut players: Query<(&mut Pos, &ActionState<PlayerInput>)>) {
-    for (mut pos, input) in &mut players {
-        pos.set_if_neq(Pos(sim::step_player(pos.0, &input.0)));
+fn move_players(mut players: Query<(&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState), InPlay>) {
+    for (mut pos, class, input, attack) in &mut players {
+        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack)));
     }
 }
 
-fn fire_projectiles(
+// --- Lag compensation -------------------------------------------------------------------------
+//
+// An attacker sees other players slightly in the past (interpolated), so judging their hits
+// against where targets are *now* makes clear hits miss at any real ping. Instead the server
+// keeps a short position history per player and checks hits against where the attacker saw
+// the target: their own interpolation delay back in time ("favor the shooter"), capped.
+
+/// How far back a hit may be judged: ~250 ms.
+const MAX_REWIND_TICKS: u32 = 16;
+
+/// Recent positions, one per consecutive tick, newest last: (tick, position after that tick's
+/// movement). Cleared on teleport.
+#[derive(Component, Default)]
+struct PosHistory(std::collections::VecDeque<(u32, Vec2)>);
+
+impl PosHistory {
+    /// Where this player was at `tick` plus `overstep` (0..1) of the next tick.
+    fn at(&self, (tick, overstep): (u32, f32)) -> Option<Vec2> {
+        let first = self.0.front()?.0;
+        let get = |t: u32| t.checked_sub(first).and_then(|i| self.0.get(i as usize)).map(|(_, p)| *p);
+        let now = get(tick)?;
+        Some(get(tick + 1).map_or(now, |next| now.lerp(next, overstep)))
+    }
+}
+
+fn record_history(timeline: Res<LocalTimeline>, mut players: Query<(&Pos, &mut PosHistory)>) {
+    let tick = timeline.tick().0 as u32;
+    for (pos, mut history) in &mut players {
+        history.0.push_back((tick, pos.0));
+        while history.0.len() > MAX_REWIND_TICKS as usize + 2 {
+            history.0.pop_front();
+        }
+    }
+}
+
+/// The (tick, overstep) at which the player behind `link` sees other players.
+fn view_time(now: Tick, link: Entity, delays: &Query<&InterpolationDelay, With<ClientOf>>) -> (u32, f32) {
+    let (tick, overstep) = delays.get(link).map_or((now, 0.0), |d| d.tick_and_overstep(now));
+    let earliest = now.0 as u32 - MAX_REWIND_TICKS.min(now.0 as u32);
+    ((tick.0 as u32).max(earliest), overstep)
+}
+
+/// Apply damage; at zero health the player is out of the fight for `RESPAWN_TICKS`.
+fn damage(commands: &mut Commands, now: u32, (player, id): (Entity, PeerId), health: &mut Health, amount: i32, by: PeerId) {
+    health.0 = (health.0 - amount).max(0);
+    info!("{by:?} hit {id:?} for {amount}, health now {}", health.0);
+    if health.0 == 0 {
+        info!("{id:?} died");
+        commands.entity(player).insert(Dead { respawn_at: now + RESPAWN_TICKS, placed: false });
+    }
+}
+
+/// Respawning: first moved to a spawn point while still hidden, then back at full health.
+fn respawn(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    mut players: Query<(&PlayerId, &Pos, &ActionState<PlayerInput>, &mut FireCooldown)>,
+    mut dead: Query<(Entity, &ClassId, &mut Health, &mut AttackState, &mut Dead)>,
 ) {
-    let tick = timeline.tick().0 as u32;
-    for (id, pos, input, mut cooldown) in &mut players {
-        if let Some((cd, spawn, projectile)) = sim::try_fire(tick, id.0, pos.0, &input.0, *cooldown) {
-            *cooldown = cd;
-            commands.spawn((projectile.bundle(spawn), owner_predicted(id.0)));
+    let now = timeline.tick().0 as u32;
+    for (player, class, mut health, mut attack, mut dead) in &mut dead {
+        if !dead.placed && now + PLACE_BEFORE_RESPAWN_TICKS >= dead.respawn_at {
+            dead.placed = true;
+            commands.entity(player).insert(NeedsSpawnPoint);
+        }
+        if now >= dead.respawn_at {
+            health.0 = class.def().max_hp;
+            *attack = AttackState::default();
+            commands.entity(player).remove::<Dead>();
+        }
+    }
+}
+
+type Targets<'w, 's> =
+    Query<'w, 's, (Entity, &'static PlayerId, &'static Pos, &'static PosHistory, &'static mut Health), InPlay>;
+
+/// Auto-attacks, as they go off after their windup: projectiles are spawned (and matched to the
+/// client's prespawned copy); melee swings are resolved right here against where the attacker
+/// saw everyone.
+fn attack(
+    mut commands: Commands,
+    timeline: Res<LocalTimeline>,
+    delays: Query<&InterpolationDelay, With<ClientOf>>,
+    mut attackers: Query<
+        (&PlayerId, &ClassId, &Pos, &ActionState<PlayerInput>, &ControlledBy, &mut AttackState, &mut LastSwing),
+        InPlay,
+    >,
+    mut targets: Targets,
+) {
+    let now = timeline.tick();
+    for (id, class, pos, input, controlled_by, mut state, mut last_swing) in &mut attackers {
+        let (next, released) = sim::step_attack(now.0 as u32, id.0, *class, pos.0, &input.0, *state);
+        // Only on change: AttackState is replicated.
+        state.set_if_neq(next);
+        let Some(attack) = released else { continue };
+        match attack {
+            sim::Attack::Projectile(spawn, projectile) => {
+                commands.spawn((projectile.bundle(spawn), owner_predicted(id.0)));
+            }
+            sim::Attack::Melee(swing) => {
+                *last_swing = swing;
+                let seen_at = view_time(now, controlled_by.owner, &delays);
+                for (target, target_id, target_pos, history, mut health) in &mut targets {
+                    let seen = history.at(seen_at).unwrap_or(target_pos.0);
+                    if target_id.0 != id.0 && sim::melee_hits(pos.0, swing.dir, *class, seen) {
+                        let amount = class.def().attack.damage;
+                        damage(&mut commands, now.0 as u32, (target, target_id.0), &mut health, amount, id.0);
+                    }
+                }
+            }
         }
     }
 }
@@ -214,26 +347,29 @@ fn move_projectiles(
     }
 }
 
-/// The server alone decides hits. Clients see the result through replicated `Health`.
-fn resolve_hits(
+/// Projectile hits, judged against where the shooter saw each target. Clients see the result
+/// through replicated `Health`.
+fn resolve_projectile_hits(
     mut commands: Commands,
+    timeline: Res<LocalTimeline>,
+    delays: Query<&InterpolationDelay, With<ClientOf>>,
+    metadata: Res<NetworkingMetadata>,
     projectiles: Query<(Entity, &Pos, &Projectile)>,
-    // Players still waiting for a spawn point aren't in the world yet.
-    mut players: Query<(Entity, &PlayerId, &Pos, &mut Health), Without<NeedsSpawnPoint>>,
+    mut targets: Targets,
 ) {
+    let now = timeline.tick();
     for (projectile_entity, projectile_pos, projectile) in &projectiles {
-        for (player, player_id, player_pos, mut health) in &mut players {
-            if player_id.0 == projectile.owner || !sim::projectile_hits(projectile_pos.0, player_pos.0) {
+        // The shooter's connection; gone if they disconnected mid-flight.
+        let Some(&shooter_link) = metadata.peer_map.get(&projectile.owner) else { continue };
+        let seen_at = view_time(now, shooter_link, &delays);
+        for (target, target_id, target_pos, history, mut health) in &mut targets {
+            let seen = history.at(seen_at).unwrap_or(target_pos.0);
+            if target_id.0 == projectile.owner || !sim::projectile_hits(projectile_pos.0, projectile, seen) {
                 continue;
             }
             commands.entity(projectile_entity).try_despawn();
-            health.0 -= PROJECTILE_DAMAGE;
-            info!("{:?} hit {:?}, health now {}", projectile.owner, player_id.0, health.0);
-            if health.0 <= 0 {
-                info!("{:?} died, respawning", player_id.0);
-                health.0 = MAX_HEALTH;
-                commands.entity(player).insert(NeedsSpawnPoint);
-            }
+            let amount = projectile.class.def().attack.damage;
+            damage(&mut commands, now.0 as u32, (target, target_id.0), &mut health, amount, projectile.owner);
             break;
         }
     }

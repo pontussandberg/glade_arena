@@ -14,66 +14,15 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use arena_shared::config::*;
 use arena_shared::map::{Map, Tile, map};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use common::*;
-use lightyear::prelude::*;
 
 const PORT: u16 = 5899;
-const A: u64 = 1;
-const B: u64 = 2;
-
-struct Harness {
-    server: App,
-    a: App,
-    b: App,
-}
-
-impl Harness {
-    fn new(port: u16) -> Self {
-        // Start the server before the clients try to connect.
-        let server = start_server(port, |_| {});
-        let lossy = LinkConditionerConfig {
-            incoming_latency: Duration::from_millis(60),
-            incoming_jitter: Duration::from_millis(10),
-            good_loss: 0.02,
-            bad_loss: 0.0,
-            good_to_bad: 0.0,
-            bad_to_good: 0.0,
-        };
-        Harness { server, a: start_client(A, port, Some(lossy)), b: start_client(B, port, None) }
-    }
-
-    fn step(&mut self, duration: Duration) {
-        let end = Instant::now() + duration;
-        while Instant::now() < end {
-            self.server.update();
-            self.a.update();
-            self.b.update();
-            std::thread::sleep(Duration::from_millis(3));
-        }
-    }
-
-    fn step_until(&mut self, timeout: Duration, what: &str, mut done: impl FnMut(&mut Self) -> bool) {
-        let end = Instant::now() + timeout;
-        while !done(self) {
-            assert!(Instant::now() < end, "timed out waiting for: {what}");
-            self.step(Duration::from_millis(10));
-        }
-    }
-}
-
-/// A player as seen by a client: (position, health, is_predicted, is_interpolated).
-fn client_view(client: &mut App, id: u64) -> Option<(Vec2, Option<i32>, bool, bool)> {
-    let mut q = client
-        .world_mut()
-        .query::<(&PlayerId, &Pos, Option<&Health>, Has<Predicted>, Has<Interpolated>)>();
-    q.iter(client.world())
-        .find(|(p, ..)| p.0 == peer(id))
-        .map(|(_, pos, h, pred, interp)| (pos.0, h.map(|h| h.0), pred, interp))
-}
+/// A shoots (a projectile class); B is a sturdy melee class.
+const A_CLASS: &str = "ranger";
+const B_CLASS: &str = "warden";
 
 fn projectile_count(app: &mut App) -> usize {
     let mut q = app.world_mut().query_filtered::<(), With<Projectile>>();
@@ -88,17 +37,17 @@ fn rollbacks(app: &App) -> u32 {
 
 #[test]
 fn prediction_reconciliation_and_server_authoritative_hits() {
-    let mut h = Harness::new(PORT);
+    let mut h = Duel::new(PORT, A_CLASS, B_CLASS);
 
     // --- Connect: each client predicts its own player and interpolates the other one.
-    h.step_until(Duration::from_secs(15), "both clients see both players", |h| {
+    h.until(Duration::from_secs(15), "both clients see both players", |h| {
         matches!(client_view(&mut h.a, A), Some((_, _, true, false)))
             && matches!(client_view(&mut h.a, B), Some((_, _, false, true)))
             && matches!(client_view(&mut h.b, B), Some((_, _, true, false)))
             && matches!(client_view(&mut h.b, A), Some((_, _, false, true)))
     });
     // Let the timelines sync before driving inputs.
-    h.step(Duration::from_millis(1500));
+    h.run(Duration::from_millis(1500));
     println!("connected; A rollbacks so far: {}", rollbacks(&h.a));
 
     // --- Prediction: A right-clicks a tile 4 m away; its own view starts walking long before a
@@ -108,7 +57,7 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     let a_target = map().nearest_walkable(Map::tile_of(a_start_local) + IVec2::new(0, 4), 3).unwrap();
     set_input(&mut h.a, PlayerInput { move_to: Some(a_target), ..default() });
     let t0 = Instant::now();
-    h.step_until(Duration::from_secs(2), "A's predicted position moves", |h| {
+    h.until(Duration::from_secs(2), "A's predicted position moves", |h| {
         client_view(&mut h.a, A).unwrap().0.distance(a_start_local) > 0.01
     });
     let local_reaction = t0.elapsed();
@@ -117,7 +66,7 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     assert!(local_reaction < Duration::from_millis(60), "prediction too slow: {local_reaction:?}");
 
     // --- Reconciliation: after arriving, predicted, authoritative and interpolated agree.
-    h.step(Duration::from_millis(1800));
+    h.run(Duration::from_millis(1800));
     let (a_server, _) = server_player(&mut h.server, A);
     let (a_local, ..) = client_view(&mut h.a, A).unwrap();
     let (a_seen_by_b, ..) = client_view(&mut h.b, A).unwrap();
@@ -132,19 +81,20 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     let (b_before, _) = server_player(&mut h.server, B);
     let water = map().tiles().find(|(_, t)| *t == Tile::Water).unwrap().0;
     set_input(&mut h.b, PlayerInput { move_to: Some(water), ..default() });
-    h.step(Duration::from_millis(400));
+    h.run(Duration::from_millis(400));
     assert_eq!(server_player(&mut h.server, B).0, b_before, "B walked toward an unreachable tile");
     let far = Map::tile_of(-b_before); // the mirrored spot across the river
     set_input(&mut h.b, PlayerInput { move_to: Some(far), ..default() });
     let t0 = Instant::now();
-    h.step(Duration::from_millis(500));
+    h.run(Duration::from_millis(500));
     set_input(&mut h.b, PlayerInput::default());
     let elapsed = t0.elapsed().as_secs_f32();
-    h.step(Duration::from_millis(300));
+    h.run(Duration::from_millis(300));
     let (b_after, _) = server_player(&mut h.server, B);
     let moved = b_before.distance(b_after);
     println!("B moved {moved:.2} m in {elapsed:.2}s toward a far click");
-    assert!(moved > 1.0 && moved <= PLAYER_SPEED * (elapsed + 0.2), "moved {moved}");
+    let speed = class_id(B_CLASS).def().move_speed;
+    assert!(moved > 1.0 && moved <= speed * (elapsed + 0.2), "moved {moved}");
 
     // --- Server override: the server moves both players on its own (like a knockback or an
     // anti-cheat correction). A mispredicted that, so it must roll back and end up where the
@@ -156,41 +106,45 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     for (id, mut pos) in q.iter_mut(h.server.world_mut()) {
         pos.0 = if id.0 == peer(A) { a_spot } else { b_spot };
     }
-    h.step_until(Duration::from_secs(2), "A reconciles to the server's correction", |h| {
+    h.until(Duration::from_secs(2), "A reconciles to the server's correction", |h| {
         client_view(&mut h.a, A).unwrap().0.distance(a_spot) < 0.01
     });
     println!("rollbacks: A={} (before correction {rollbacks_before})", rollbacks(&h.a));
     assert!(rollbacks(&h.a) > rollbacks_before, "the correction should have caused a rollback");
     // Let A's interpolated view of B settle too.
-    h.step(Duration::from_millis(300));
+    h.run(Duration::from_millis(300));
 
     // --- Projectile: A aims at where it sees B and fires once.
     let (a_pos, ..) = client_view(&mut h.a, A).unwrap();
     let (b_pos, ..) = client_view(&mut h.a, B).unwrap();
     let (_, b_health_before) = server_player(&mut h.server, B);
-    assert_eq!(b_health_before, MAX_HEALTH);
+    assert_eq!(b_health_before, class_id(B_CLASS).def().max_hp);
+    // The windup starts the moment A clicks (predicted), the shot follows when it's over.
     set_input(&mut h.a, PlayerInput { aim: b_pos - a_pos, fire: true, ..default() });
     let t0 = Instant::now();
-    h.step_until(Duration::from_secs(1), "A's projectile appears on A", |h| projectile_count(&mut h.a) > 0);
-    println!("A's projectile appeared locally after {:?}", t0.elapsed());
-    assert!(t0.elapsed() < Duration::from_millis(60), "projectile was not predicted");
-    h.step(Duration::from_millis(30));
+    h.until(Duration::from_secs(1), "A's windup starts on A", |h| attack_state(&mut h.a, A).windup.is_some());
+    println!("A's windup started locally after {:?}", t0.elapsed());
+    assert!(t0.elapsed() < Duration::from_millis(60), "windup was not predicted");
     set_input(&mut h.a, PlayerInput::default());
+    h.until(Duration::from_secs(1), "A's projectile appears on A", |h| projectile_count(&mut h.a) > 0);
+    let windup = windup(A_CLASS);
+    println!("A's projectile appeared locally after {:?} (windup {windup:?})", t0.elapsed());
+    assert!(t0.elapsed() < windup + Duration::from_millis(60), "projectile was not predicted");
 
     // B's client sees the projectile too (interpolated from the server).
-    h.step_until(Duration::from_secs(1), "B sees A's projectile", |h| projectile_count(&mut h.b) > 0);
+    h.until(Duration::from_secs(1), "B sees A's projectile", |h| projectile_count(&mut h.b) > 0);
 
     // The server decides the hit; health replicates to both clients.
-    let damaged = MAX_HEALTH - PROJECTILE_DAMAGE;
-    h.step_until(Duration::from_secs(3), "server registers the hit", |h| {
+    let damaged = class_id(B_CLASS).def().max_hp - class_id(A_CLASS).def().attack.damage;
+    h.until(Duration::from_secs(3), "server registers the hit", |h| {
         server_player(&mut h.server, B).1 == damaged
     });
-    h.step_until(Duration::from_secs(2), "damage replicated to both clients", |h| {
+    h.until(Duration::from_secs(2), "damage replicated to both clients", |h| {
         client_view(&mut h.b, B).unwrap().1 == Some(damaged)
             && client_view(&mut h.a, B).unwrap().1 == Some(damaged)
     });
     // Exactly one shot: the cooldown stopped a second projectile.
-    h.step(Duration::from_millis(1500));
+    h.run(Duration::from_millis(1500));
     assert_eq!(server_player(&mut h.server, B).1, damaged);
     assert_eq!(projectile_count(&mut h.server), 0, "projectile should be gone after hitting");
     assert_eq!(projectile_count(&mut h.a), 0, "A's predicted projectile should be gone");
@@ -201,7 +155,7 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
 #[test]
 fn players_spawn_apart() {
     // Unique port: tests in this file run in parallel.
-    let mut h = Harness::new(5896);
+    let mut h = Duel::new(5896, A_CLASS, B_CLASS);
     // Check after every single update: the very first position a client sees for itself must
     // already be a spawn point, never the placeholder the server spawns players with.
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -219,7 +173,7 @@ fn players_spawn_apart() {
         arena_shared::map::SPAWN_POINTS.contains(&first_seen),
         "A first saw itself at {first_seen}, not at a spawn point"
     );
-    h.step_until(Duration::from_secs(15), "both players spawned", |h| {
+    h.until(Duration::from_secs(15), "both players spawned", |h| {
         let mut q = h.server.world_mut().query_filtered::<(), With<PlayerId>>();
         q.iter(h.server.world()).count() == 2
     });

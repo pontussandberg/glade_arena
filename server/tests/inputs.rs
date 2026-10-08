@@ -1,16 +1,20 @@
-//! Input edge cases: one server and one client, with the client stepped at an unhealthy rate.
+//! Input edge cases: one server and one client, mostly with the client stepped at an unhealthy
+//! rate.
 
 mod common;
 
 use std::time::{Duration, Instant};
 
-use arena_shared::config::*;
-use arena_shared::map::Map;
+use arena_shared::map::{Map, map};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use common::*;
 
 const CLIENT: u64 = 7;
+/// A healthy client frame rate.
+const SMOOTH: Option<Duration> = Some(Duration::from_micros(16_667));
+/// A projectile class, so shots can be counted.
+const CLASS: &str = "ranger";
 
 #[derive(Resource, Default)]
 struct ShotsFired(usize);
@@ -30,7 +34,7 @@ impl Pair {
             app.init_resource::<ShotsFired>();
             app.add_systems(FixedPostUpdate, count_shots);
         });
-        Pair { server, client: start_client(CLIENT, port, None) }
+        Pair { server, client: start_client(CLIENT, port, CLASS, None) }
     }
 
     /// The server runs smoothly; the client only gets a frame every `client_frame`
@@ -52,6 +56,23 @@ impl Pair {
 
     fn input(&mut self, input: PlayerInput) {
         set_input(&mut self.client, input);
+    }
+
+    /// Runs smoothly until `done`, failing after `timeout`.
+    fn until(&mut self, timeout: Duration, what: &str, mut done: impl FnMut(&mut Self) -> bool) {
+        let end = Instant::now() + timeout;
+        while !done(self) {
+            assert!(Instant::now() < end, "timed out waiting for: {what}");
+            self.run(Duration::from_millis(10), SMOOTH);
+        }
+    }
+
+    /// A short left click, leaving the destination alone. Returns once the windup has started
+    /// on the client.
+    fn click_fire(&mut self) {
+        edit_input(&mut self.client, |i| (i.fire, i.aim) = (true, Vec2::X));
+        self.until(Duration::from_secs(1), "the attack starts", |p| attack_state(&mut p.client, CLIENT).windup.is_some());
+        edit_input(&mut self.client, |i| i.fire = false);
     }
 
     fn shots(&self) -> usize {
@@ -84,23 +105,55 @@ fn releasing_fire_stops_firing_at_4_fps() {
     assert_eq!(p.shots(), after_release, "server kept firing after the client released fire");
 }
 
+/// Attacking cancels the walk: after the windup you stand still until you click again. A click
+/// made during the windup is kept and walked to once the attack is off.
+#[test]
+fn attacking_cancels_the_walk_until_the_next_click() {
+    let mut p = Pair::new(5893);
+    p.until(Duration::from_secs(5), "our player is spawned", |p| client_view(&mut p.client, CLIENT).is_some_and(|v| v.2));
+
+    // Fire while walking.
+    let start = p.server_pos();
+    p.input(PlayerInput { move_to: Some(Map::tile_of(-start)), ..default() });
+    p.run(Duration::from_millis(300), SMOOTH);
+    p.click_fire();
+    p.until(Duration::from_secs(1), "the attack goes off on the server", |p| {
+        player::<AttackState>(&mut p.server, CLIENT).is_some_and(|a| a.windup.is_none())
+    });
+    p.run(Duration::from_millis(100), SMOOTH); // inputs still in flight
+    let after_attack = p.server_pos();
+    p.run(Duration::from_millis(250), SMOOTH);
+    let drift = after_attack.distance(p.server_pos());
+    println!("moved {drift:.2} units in the 0.25 s after attacking");
+    assert!(drift < 0.01, "kept walking to the old destination after attacking");
+
+    // A click during the windup is where we go once it's over.
+    let here = p.server_pos();
+    let goal = map().nearest_walkable(Map::tile_of(here) + IVec2::new(0, 4), 2).expect("open ground nearby");
+    p.click_fire();
+    edit_input(&mut p.client, |i| i.move_to = Some(goal));
+    p.until(windup(CLASS) + Duration::from_secs(1), "we walk to the click made during the windup", |p| {
+        here.distance(p.server_pos()) > 2.0
+    });
+}
+
 /// A client that stops sending inputs mid-move (frozen tab, hang) should stand still on the
 /// server instead of running on its last input until it times out.
 #[test]
 fn frozen_client_stops_moving_on_server() {
     let mut p = Pair::new(5897);
-    let frame = Some(Duration::from_secs_f64(1.0 / 60.0));
-    p.run(Duration::from_secs(4), frame);
+    p.run(Duration::from_secs(4), SMOOTH);
 
     // Click across the map, so the walk is still going when the client freezes.
     let start = p.server_pos();
     p.input(PlayerInput { move_to: Some(Map::tile_of(-start)), ..default() });
-    p.run(Duration::from_millis(500), frame);
+    p.run(Duration::from_millis(500), SMOOTH);
     let before_freeze = p.server_pos();
     p.run(Duration::from_millis(1000), None);
     let after_freeze = p.server_pos();
     let drift = before_freeze.distance(after_freeze);
-    println!("moved {drift:.2} units during a 1s freeze (full speed would be {PLAYER_SPEED})");
+    let speed = class_id(CLASS).def().move_speed;
+    println!("moved {drift:.2} units during a 1s freeze (full speed would be {speed})");
     // Input still in flight plus the stale-input grace period: well under 0.5 s of movement.
-    assert!(drift < PLAYER_SPEED * 0.5, "server kept moving a frozen client");
+    assert!(drift < speed * 0.5, "server kept moving a frozen client");
 }

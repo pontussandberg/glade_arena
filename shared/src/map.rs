@@ -262,6 +262,13 @@ impl Map {
         true
     }
 
+    /// True if no wall, rock or tree lies on the line from `a` to `b` (water doesn't block).
+    /// Sampled, which is fine for its uses: melee hits on the server, and the bot.
+    pub fn shot_clear(&self, a: Vec2, b: Vec2) -> bool {
+        let steps = ((b - a).length() / 0.25).ceil().max(1.0) as i32;
+        (0..=steps).all(|s| !self.get(Map::tile_of(a.lerp(b, s as f32 / steps as f32))).blocks_shots())
+    }
+
     /// The walkable tile closest to `t` (searching outward up to `max_radius` tiles).
     pub fn nearest_walkable(&self, t: IVec2, max_radius: i32) -> Option<IVec2> {
         (0..=max_radius).find_map(|r| {

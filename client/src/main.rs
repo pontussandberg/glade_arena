@@ -2,6 +2,8 @@ use std::net::{Ipv4Addr, SocketAddr};
 
 use arena_client::{ClientNetPlugin, ClientSettings, render::RenderPlugin};
 use arena_shared::config::*;
+#[cfg(not(target_family = "wasm"))]
+use arena_shared::protocol::ClassId;
 use bevy::prelude::*;
 use bevy::winit::WinitSettings;
 use lightyear::prelude::client::ClientPlugins;
@@ -30,6 +32,10 @@ fn main() {
     app.add_plugins(hidden_tab::HiddenTabPlugin);
     app.add_plugins(ClientPlugins { tick_duration: TICK_DURATION });
     app.add_plugins(ClientNetPlugin { settings });
+    #[cfg(not(target_family = "wasm"))]
+    if std::env::var_os("ARENA_BOT").is_some() {
+        app.add_plugins(arena_client::bot::BotPlugin);
+    }
     app.add_plugins(RenderPlugin);
     app.run();
 }
@@ -38,8 +44,9 @@ fn default_server_addr() -> SocketAddr {
     SocketAddr::new(Ipv4Addr::LOCALHOST.into(), SERVER_PORT)
 }
 
-/// Native dev client: `arena-client [client_id]`, no certificate validation.
-/// `ARENA_SERVER=ip:port` picks another server (like the page's `?server=`).
+/// Native dev client: `arena-client [client_id] [class]`, no certificate validation. Without a
+/// class (e.g. `shade`) it shows the join screen. `ARENA_SERVER=ip:port` picks another server
+/// (like the page's `?server=`); `ARENA_BOT=1` lets a simple bot play this client.
 #[cfg(not(target_family = "wasm"))]
 fn client_settings() -> ClientSettings {
     let client_id = std::env::args()
@@ -50,11 +57,13 @@ fn client_settings() -> ClientSettings {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(default_server_addr);
+    let class = std::env::args().nth(2).and_then(|key| ClassId::by_key(&key));
     ClientSettings {
         client_id,
         server_addr,
         cert_digest: String::new(),
         conditioner: None,
+        class,
     }
 }
 
@@ -86,5 +95,6 @@ fn client_settings() -> ClientSettings {
         server_addr,
         cert_digest,
         conditioner: None,
+        class: None,
     }
 }

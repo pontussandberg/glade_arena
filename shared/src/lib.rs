@@ -4,6 +4,7 @@
 //! functions, so the server (authoritative) and the client (prediction) run the exact
 //! same code, which is what keeps rollbacks rare.
 
+pub mod classes;
 pub mod config;
 pub mod map;
 pub mod protocol;
