@@ -45,7 +45,7 @@ fn default_server_addr() -> SocketAddr {
 }
 
 /// Native dev client: `arena-client [client_id] [class]`, no certificate validation. Without a
-/// class (e.g. `shade`) it shows the join screen. `ARENA_SERVER=ip:port` picks another server
+/// class (e.g. `javelinist`) it shows the join screen. `ARENA_SERVER=ip:port` picks another server
 /// (like the page's `?server=`); `ARENA_BOT=1` lets a simple bot play this client.
 #[cfg(not(target_family = "wasm"))]
 fn client_settings() -> ClientSettings {

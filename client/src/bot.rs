@@ -2,7 +2,7 @@
 //! nearest enemy and swing; ranged classes keep their distance and shoot. Turn it on with
 //! `ARENA_BOT=1` (native client) to have someone to fight when testing alone.
 
-use arena_shared::classes::AttackKind;
+use arena_shared::classes::{AbilityKind, AttackKind};
 use arena_shared::map::{Map, map};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
@@ -64,6 +64,13 @@ fn think(
         (Some(current), Some(new)) if (new - current).abs().max_element() < 2 => Some(current),
         _ => wanted,
     };
-    let fire = distance <= attack_within && map().shot_clear(me.0, target);
-    desired.0 = PlayerInput { move_to, aim: to_target, fire };
+    let clear = map().shot_clear(me.0, target);
+    let fire = distance <= attack_within && clear;
+    // Q whenever it would land: a dash to close in from just out of reach, a throw in range.
+    let ability = clear
+        && match class.def().ability.kind {
+            AbilityKind::Dash { distance: dash, .. } => distance > attack_within && distance < dash * 0.9,
+            AbilityKind::Projectile { range, .. } => distance < range * 0.9,
+        };
+    desired.0 = PlayerInput { move_to, aim: to_target, fire, ability };
 }

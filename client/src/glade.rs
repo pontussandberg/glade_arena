@@ -5,12 +5,12 @@
 //! Flat-shaded, untextured, one color per face. The world stays in a calm middle band of
 //! saturation; only fighters, projectiles and torch flames go above it.
 
-use arena_shared::classes::ClassDef;
+use arena_shared::classes::{ClassDef, Shot};
 use arena_shared::map::{MAP_HALF_EXTENTS, Map, RIVER_HALF_WIDTH, Tile, clearing_margin, map, river_x};
 use bevy::asset::RenderAssetUsages;
 use bevy::color::Mix;
 use bevy::light::CascadeShadowConfigBuilder;
-use bevy::mesh::PrimitiveTopology;
+use bevy::mesh::{PrimitiveTopology, VertexAttributeValues};
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -32,12 +32,24 @@ pub mod palette {
     pub const RIVERBED: Color = Color::srgb_u8(0x3D, 0x4A, 0x44);
     pub const POND: Color = Color::srgb_u8(0x4F, 0x86, 0x82);
     pub const HEATHER: Color = Color::srgb_u8(0x9A, 0x86, 0xB6);
+    /// Antlers, skulls, bindings.
+    /// Pale and cold, like old bone in moonlight.
+    pub const BONE: Color = Color::srgb_u8(0xB9, 0xC2, 0xC0);
+    /// Near-black leathers: trousers and hoods; boots, eye sockets and crow feathers.
+    pub const LEATHER: Color = Color::srgb_u8(0x2E, 0x27, 0x24);
+    pub const DARK_LEATHER: Color = Color::srgb_u8(0x17, 0x14, 0x14);
+    /// Ashen fur trim (boot cuffs, feathers).
+    pub const FUR: Color = Color::srgb_u8(0x55, 0x55, 0x52);
+    /// Charred, ash-black antlers.
+    pub const ASH: Color = Color::srgb_u8(0x2B, 0x2A, 0x2E);
     pub const HAZE: Color = Color::srgb_u8(0xA9, 0xB8, 0xB6);
     /// HUD text.
     pub const INK: Color = Color::srgb_u8(0x1E, 0x2A, 0x23);
 
     // Fighters: the only saturated colors. You are the only blue; rivals are warm.
     pub const YOU: Color = Color::srgb_u8(0x4C, 0x9E, 0xE0);
+    /// Spectral blue: spirit spears (whoever throws them) and rift-step streaks glow with it.
+    pub const SPIRIT: Color = Color::srgb_u8(0x8F, 0xD8, 0xFF);
     pub const RIVALS: [Color; 3] = [
         Color::srgb_u8(0xE8, 0x80, 0x3A), // ember
         Color::srgb_u8(0xE6, 0xB2, 0x3A), // marigold
@@ -91,7 +103,7 @@ pub fn faceted(mesh: Mesh) -> Mesh {
 
 /// Class ids that have their own figure in `fighter_mesh`. A new class in `classes.ron` gets the
 /// plain pawn until it's added here (a test checks every class has one).
-pub const FIGHTER_LOOKS: [&str; 4] = ["shade", "warden", "javelinist", "ranger"];
+pub const FIGHTER_LOOKS: [&str; 2] = ["javelinist", "revenant"];
 
 /// Class ids whose shot has its own look in `projectile_mesh` (the rest throw a round bolt).
 pub const SHOT_LOOKS: [&str; 1] = ["javelinist"];
@@ -116,44 +128,216 @@ fn merge_parts(parts: Vec<Mesh>) -> Mesh {
         .expect("at least one part")
 }
 
+/// Gives every vertex `color`, so one material can carry several colors: vertex colors multiply
+/// the material's base color (the team color on a body, white on bone-and-wood trim). All parts
+/// merged together need it, or none.
+fn tinted(mut mesh: Mesh, color: Color) -> Mesh {
+    let count = mesh.count_vertices();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![color.to_linear().to_f32_array(); count]);
+    mesh
+}
+
 /// A javelin standing along +Y, `length` long, the point of its tip at the origin: carried by the
 /// javelinist and thrown by it.
-fn javelin(length: f32) -> Mesh {
+fn javelin(length: f32, shaft: Color, tip: Color) -> Mesh {
     const TIP: f32 = 0.38;
-    let shaft = cylinder(0.05, length - TIP, 5).translated_by(Vec3::Y * -(TIP + (length - TIP) / 2.0));
-    merge_parts(vec![shaft, cone(0.11, TIP, 5).translated_by(Vec3::Y * -TIP / 2.0)])
+    let pole = cylinder(0.05, length - TIP, 5).translated_by(Vec3::Y * -(TIP + (length - TIP) / 2.0));
+    merge_parts(vec![tinted(pole, shaft), tinted(cone(0.11, TIP, 5).translated_by(Vec3::Y * -TIP / 2.0), tip)])
+}
+
+/// A box of `size` centered at `at`, in one color.
+fn block(size: Vec3, at: Vec3, color: Color) -> Mesh {
+    tinted(Cuboid::from_size(size).mesh().build().translated_by(at), color)
+}
+
+/// A tapered, faceted prism (`sides` sides) standing on Y, centered at `at`, in one color: what
+/// OSRS-style figures are made of (limbs narrowing to wrists and ankles, a chest wider than the
+/// waist).
+fn taper(bottom: f32, top: f32, height: f32, sides: u32, at: Vec3, color: Color) -> Mesh {
+    let mesh = ConicalFrustum { radius_top: top, radius_bottom: bottom, height }.mesh().resolution(sides).build();
+    tinted(mesh.translated_by(at), color)
+}
+
+/// Faceted parts merged into one mesh, each face's color nudged a little lighter or darker: the
+/// hand-shaded polygon look of OSRS models instead of perfectly flat colors.
+fn painted(parts: Vec<Mesh>) -> Mesh {
+    let mut mesh = merge_parts(parts);
+    if let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR) {
+        for (face, vertices) in colors.chunks_mut(3).enumerate() {
+            let jitter = 0.92 + 0.16 * ((face as u32).wrapping_mul(2_654_435_761) >> 22) as f32 / 1024.0;
+            for color in vertices {
+                color[..3].iter_mut().for_each(|c| *c *= jitter);
+            }
+        }
+    }
+    mesh
+}
+
+/// A fighter's parts that move on their own (posed by `rig.rs`), for classes that have them.
+/// Each hangs from its joint at the origin; the fighter faces +X, its right (throwing) side is +Z.
+pub struct RigMeshes {
+    /// Turns to look where the fighter walks or aims. Bone-and-wood trim (white material).
+    pub head: Mesh,
+    /// An arm, hanging down (-Y) from the shoulder. Drawn in the body's (team) material.
+    pub arm: Mesh,
+    /// A leg, hanging down from the hip. Trim.
+    pub leg: Mesh,
+    /// The weapon in the right hand, pointing up (+Y) from the grip. Trim.
+    pub held: Mesh,
+    /// Eyes in the head's space, drawn glowing in the team color.
+    pub eyes: Mesh,
+}
+
+/// Where a rig's parts attach, in the fighter's space (feet at the origin). Hips and shoulders
+/// are given for the right side; the left mirrors them in Z.
+pub const RIG_NECK: Vec3 = Vec3::new(0.0, 1.42, 0.0);
+pub const RIG_SHOULDER: Vec3 = Vec3::new(0.0, 1.32, 0.3);
+pub const RIG_HIP: Vec3 = Vec3::new(0.0, 0.8, 0.11);
+/// Where the hand is, in the arm's space.
+pub const RIG_HAND: Vec3 = Vec3::new(0.0, -0.52, 0.0);
+
+/// The javelinist's moving parts: hooded deer-skull head, sleeved arms with bracers, leather
+/// legs with fur-cuffed boots, and the feathered javelin.
+pub fn fighter_rig(class_key: &str) -> Option<RigMeshes> {
+    // Sleeves near black with a faint team tint; bracers and hands black.
+    let (sleeve, dark) = (Color::srgb(0.16, 0.16, 0.16), Color::srgb(0.06, 0.06, 0.06));
+    (class_key == "javelinist").then(|| RigMeshes {
+        head: antlered_skull(),
+        arm: painted(vec![
+            taper(0.065, 0.088, 0.32, 5, Vec3::Y * -0.15, sleeve),
+            taper(0.06, 0.075, 0.18, 5, Vec3::Y * -0.39, dark),
+            tinted(Sphere::new(0.062).mesh().ico(0).unwrap().translated_by(RIG_HAND), dark),
+        ]),
+        leg: painted(vec![
+            taper(0.072, 0.105, 0.44, 6, Vec3::Y * -0.22, palette::LEATHER),
+            taper(0.084, 0.1, 0.07, 6, Vec3::Y * -0.46, palette::FUR),
+            taper(0.078, 0.086, 0.22, 6, Vec3::Y * -0.6, palette::DARK_LEATHER),
+            block(Vec3::new(0.27, 0.09, 0.14), Vec3::new(0.06, -0.755, 0.0), palette::DARK_LEATHER),
+        ]),
+        held: feathered_javelin(),
+        // Narrow, slanted slits (a scowl), raised enough to glow from above.
+        eyes: merge_parts(
+            [1.0, -1.0]
+                .map(|side| {
+                    let slit = Sphere::new(0.032).mesh().ico(1).unwrap().scaled_by(Vec3::new(0.7, 0.55, 1.5));
+                    let slant = Quat::from_rotation_x(side * 0.4);
+                    tinted(slit.rotated_by(slant).translated_by(Vec3::new(0.235, 0.285, side * 0.072)), Color::WHITE)
+                })
+                .to_vec(),
+        ),
+    })
+}
+
+/// A pointed leather hood with a pale deer-skull mask and a charred, branching antler crown, so
+/// the javelinist reads from above.
+fn antlered_skull() -> Mesh {
+    use std::f32::consts::FRAC_PI_2;
+    let snout = taper(0.1, 0.055, 0.24, 4, Vec3::ZERO, palette::BONE);
+    let skull = Sphere::new(0.17).mesh().ico(0).unwrap().scaled_by(Vec3::new(1.25, 0.95, 0.95));
+    let mut parts = vec![
+        taper(0.21, 0.07, 0.46, 6, Vec3::new(-0.06, 0.22, 0.0), palette::DARK_LEATHER),
+        tinted(skull.translated_by(Vec3::new(0.08, 0.2, 0.0)), palette::BONE),
+        snout.rotated_by(Quat::from_rotation_z(-FRAC_PI_2)).translated_by(Vec3::new(0.3, 0.13, 0.0)),
+    ];
+    for side in [1.0, -1.0] {
+        // Eye socket, sunk around the glowing eye.
+        let socket = Sphere::new(0.045).mesh().ico(1).unwrap().scaled_by(Vec3::new(0.6, 0.8, 1.3));
+        parts.push(tinted(socket.translated_by(Vec3::new(0.225, 0.28, side * 0.075)), palette::DARK_LEATHER));
+        // Main beam: three segments narrowing to a point, rising and curving out wide to the
+        // side (a crown from above) and sweeping back, the tip hooking forward; pointed tines
+        // rise off its joints, and a brow tine juts forward from the base.
+        let mut at = Vec3::new(-0.02, 0.36, side * 0.11);
+        let radii = [0.055, 0.042, 0.03, 0.012];
+        let bends = [(0.7, 0.35), (1.0, 0.18), (1.25, -0.08)];
+        let lengths = [0.32, 0.3, 0.26];
+        let mut joints = Vec::new();
+        for (i, ((out, back), length)) in bends.into_iter().zip(lengths).enumerate() {
+            let tilt = Quat::from_rotation_x(side * out) * Quat::from_rotation_z(back);
+            let segment = taper(radii[i], radii[i + 1], length, 6, Vec3::Y * length / 2.0, palette::ASH);
+            parts.push(segment.rotated_by(tilt).translated_by(at));
+            at += tilt * Vec3::Y * length;
+            joints.push(at);
+        }
+        let tine = |length: f32, tilt: Quat, from: Vec3| {
+            let point = taper(0.026, 0.004, length, 5, Vec3::Y * length / 2.0, palette::ASH);
+            point.rotated_by(tilt).translated_by(from)
+        };
+        let upward = Quat::from_rotation_x(side * 0.3) * Quat::from_rotation_z(-0.5);
+        parts.push(tine(0.3, upward, joints[0]));
+        parts.push(tine(0.26, upward, joints[1]));
+        let brow = Quat::from_rotation_x(side * 0.45) * Quat::from_rotation_z(-1.15);
+        parts.push(tine(0.2, brow, Vec3::new(-0.0, 0.42, side * 0.14)));
+    }
+    painted(parts)
+}
+
+/// The javelin in hand, gripped a little behind its middle, with feathers bound under the head.
+fn feathered_javelin() -> Mesh {
+    let mut parts = vec![
+        javelin(2.0, palette::LEATHER, palette::BONE).translated_by(Vec3::Y * 1.2),
+        tinted(cylinder(0.07, 0.1, 5).translated_by(Vec3::Y * 0.8), palette::BONE),
+    ];
+    // Crow feathers, black and ash.
+    for (i, color) in [palette::DARK_LEATHER, palette::FUR, palette::DARK_LEATHER].into_iter().enumerate() {
+        let around = Quat::from_rotation_y(i as f32 * 2.1);
+        let feather = Cuboid::new(0.03, 0.26, 0.09).mesh().build().rotated_by(Quat::from_rotation_x(0.25));
+        parts.push(tinted(feather.translated_by(Vec3::new(0.0, 0.62, 0.08)).rotated_by(around), color));
+    }
+    merge_parts(parts)
 }
 
 /// A fighter's low-poly figure, feet at the origin, picked by class id so each class has its own
 /// silhouette from above. Ids not in `FIGHTER_LOOKS` get a plain pawn.
 pub fn fighter_mesh(class_key: &str) -> Mesh {
-    let part = |mesh: Mesh, at: f32| mesh.translated_by(Vec3::Y * at);
-    let head = |r: f32| Sphere::new(r).mesh().ico(0).unwrap();
-    let parts = match class_key {
-        // Assassin: slim, hooded, pointed.
-        "shade" => vec![part(cylinder(0.34, 0.9, 6), 0.45), part(cone(0.42, 0.75, 6), 1.25)],
-        // Brawler: broad body with a shoulder bar.
-        "warden" => vec![
-            part(cylinder(0.55, 0.85, 8), 0.425),
-            part(Cuboid::new(1.5, 0.28, 0.55).mesh().build(), 0.85),
-            part(head(0.38), 1.25),
-        ],
-        // Hunter: lean and hooded, an upright javelin rising well above the head.
-        "javelinist" => vec![
-            part(cylinder(0.36, 0.95, 7), 0.475),
-            part(head(0.33), 1.22),
-            part(cone(0.38, 0.5, 6), 1.55),
-            javelin(2.65).translated_by(Vec3::new(0.48, 2.65, -0.1)),
-        ],
-        // Sniper: lean, with a quiver on the back.
-        "ranger" => vec![
-            part(cylinder(0.4, 0.95, 7), 0.475),
-            part(head(0.36), 1.25),
-            part(Cuboid::new(0.2, 0.8, 0.2).mesh().build().translated_by(Vec3::new(-0.25, 0.0, 0.35)), 1.0),
-        ],
-        _ => vec![part(cylinder(0.48, 0.9, 8), 0.45), part(head(0.42), 1.25)],
-    };
-    merge_parts(parts)
+    let shade = |v: f32| Color::srgb(v, v, v);
+    match class_key {
+        // Hunter, OSRS-style: a tunic tapering from the chest to the belt over a flared skirt, a
+        // fur pelt across the shoulders and a fur tail down the back, all in the team color. Head,
+        // arms, legs and javelin are separate, animated parts (`fighter_rig`).
+        "javelinist" => {
+            // Near black: the team color is only a faint tint (eyes, ring and bars carry it).
+            let deep = Vec3::new(0.62, 1.0, 1.0);
+            let tail = cone(0.17, 0.62, 5).rotated_by(Quat::from_rotation_x(std::f32::consts::PI));
+            painted(vec![
+                taper(0.28, 0.19, 0.3, 7, Vec3::Y * 0.8, shade(0.09)).scaled_by(deep),
+                taper(0.19, 0.27, 0.56, 6, Vec3::Y * 1.1, shade(0.13)).scaled_by(deep),
+                taper(0.21, 0.21, 0.07, 7, Vec3::Y * 0.9, shade(0.04)).scaled_by(deep),
+                block(Vec3::new(0.05, 0.07, 0.08), Vec3::new(0.14, 0.9, 0.0), palette::BONE),
+                taper(0.37, 0.16, 0.2, 7, Vec3::Y * 1.38, shade(0.22)).scaled_by(Vec3::new(0.8, 1.0, 1.0)),
+                tinted(tail.scaled_by(Vec3::new(0.5, 1.0, 1.1)).translated_by(Vec3::new(-0.16, 1.08, 0.0)), shade(0.18)),
+            ])
+        }
+        // Duelist: a spectral revenant. A long, near-black hooded robe fraying into shards at the
+        // hem, hunched shoulders, an empty hood, and one long blade held low and forward: the only
+        // bright thing on it, in the team color. Faces +X (turned by `rig.rs`).
+        "revenant" => {
+            let mut parts = vec![
+                taper(0.4, 0.2, 1.0, 7, Vec3::Y * 0.55, shade(0.08)),
+                taper(0.2, 0.29, 0.45, 6, Vec3::Y * 1.22, shade(0.12)).scaled_by(Vec3::new(0.66, 1.0, 1.0)),
+                taper(0.23, 0.06, 0.55, 6, Vec3::new(-0.05, 1.68, 0.0), shade(0.1)),
+                block(Vec3::new(0.06, 0.2, 0.17), Vec3::new(0.11, 1.62, 0.0), shade(0.0)),
+                // Arm reaching forward and down to the blade.
+                taper(0.055, 0.075, 0.5, 5, Vec3::ZERO, shade(0.12))
+                    .rotated_by(Quat::from_rotation_z(-1.0))
+                    .translated_by(Vec3::new(0.2, 1.25, 0.3)),
+                block(Vec3::new(1.05, 0.04, 0.11), Vec3::ZERO, Color::WHITE)
+                    .rotated_by(Quat::from_rotation_z(-0.35))
+                    .translated_by(Vec3::new(0.82, 0.9, 0.32)),
+                block(Vec3::new(0.06, 0.06, 0.26), Vec3::new(0.38, 1.05, 0.32), shade(0.3)),
+            ];
+            for side in [1.0, -1.0] {
+                let pauldron = Sphere::new(0.15).mesh().ico(0).unwrap().scaled_by(Vec3::new(1.0, 0.7, 1.0));
+                parts.push(tinted(pauldron.translated_by(Vec3::new(0.0, 1.44, side * 0.26)), shade(0.18)));
+            }
+            for i in 0..8 {
+                let around = Quat::from_rotation_y(i as f32 * std::f32::consts::TAU / 8.0 + 0.2);
+                let shard = cone(0.07, 0.24 + 0.08 * (i % 3) as f32, 4).rotated_by(Quat::from_rotation_x(std::f32::consts::PI));
+                parts.push(tinted(shard.translated_by(Vec3::new(0.36, 0.06, 0.0)).rotated_by(around), shade(0.06)));
+            }
+            painted(parts)
+        }
+        _ => merge_parts(vec![cylinder(0.48, 0.9, 8).translated_by(Vec3::Y * 0.45), Sphere::new(0.42).mesh().ico(0).unwrap().translated_by(Vec3::Y * 1.25)]),
+    }
 }
 
 /// A flat fan for a melee swing: `reach` long, `arc_degrees` wide, pointing along world +X.
@@ -178,13 +362,15 @@ pub fn lane_mesh(from: f32, to: f32, width: f32) -> Mesh {
     b.build()
 }
 
-/// A projectile class's shot, flying along world +X, picked by class id (see `SHOT_LOOKS`): the
-/// javelinist's is a long javelin, its tip where the shot is; the rest a round bolt of the shot's
-/// radius.
-pub fn projectile_mesh(class: &ClassDef) -> Mesh {
+/// A class's shot (auto-attack or Q), flying along world +X, picked by class id (see
+/// `SHOT_LOOKS`): the javelinist's are long javelins, the tip where the shot is; the rest round
+/// bolts of the shot's radius.
+pub fn projectile_mesh(class: &ClassDef, shot: Shot) -> Mesh {
     match class.id.as_str() {
-        "javelinist" => javelin(2.0).rotated_by(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
-        _ => gem_mesh(class.attack.kind.projectile().map_or(0.2, |(_, radius)| radius)),
+        "javelinist" => {
+            javelin(2.0, Color::WHITE, Color::WHITE).rotated_by(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2))
+        }
+        _ => gem_mesh(shot.radius),
     }
 }
 
@@ -623,7 +809,8 @@ mod tests {
     fn shot_looks_are_projectile_classes() {
         for key in SHOT_LOOKS {
             let class = ClassId::by_key(key).unwrap_or_else(|| panic!("{key:?} in SHOT_LOOKS isn't a class"));
-            assert!(class.def().attack.kind.projectile().is_some(), "{key:?} in SHOT_LOOKS doesn't shoot");
+            let shoots = class.def().shot(false).or(class.def().shot(true)).is_some();
+            assert!(shoots, "{key:?} in SHOT_LOOKS doesn't shoot");
         }
     }
 }

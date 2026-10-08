@@ -102,6 +102,8 @@ fn show_join_screen(mut commands: Commands, chosen: Res<ChosenClass>) {
                             card.spawn(text(format!("{} hp, {} m/s", def.max_hp, def.move_speed), 14.0, palette::HAZE));
                             card.spawn(text(attack_summary(def), 14.0, palette::HAZE));
                             card.spawn(text(def.blurb.clone(), 13.0, palette::STONE));
+                            let ability = format!("Q  {}: {}", def.ability.name, def.ability.description);
+                            card.spawn(text(ability, 13.0, palette::SPIRIT));
                         });
                     }
                 });

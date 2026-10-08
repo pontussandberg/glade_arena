@@ -14,35 +14,12 @@
 //           Projectile(speed, radius, range) flies straight, stops at walls/rocks/trees;
 //             optional far_damage: damage after flying the full range, scaling linearly from
 //             `damage` (point blank) by how far the shot flew
+//   ability       the Q ability, aimed at the cursor: name, description, cooldown_ticks, and
+//     kind: Projectile(speed, radius, range, damage)  thrown instantly: no windup, no root
+//           Dash(distance, ticks, damage)  dash toward the aim over `ticks`, through fighters,
+//             cutting each one crossed for `damage`; stops at walls. With resets_attack, landing
+//             a hit readies the auto-attack at once.
 [
-    (
-        id: "shade",
-        name: "Shade",
-        role: "Assassin",
-        blurb: "Fast and fragile. Quick dagger strikes up close.",
-        max_hp: 90,
-        move_speed: 7.0,
-        attack: (
-            damage: 15,
-            cooldown_ticks: 22,
-            windup_ticks: 6,
-            kind: Melee(range: 1.6, arc_degrees: 90.0),
-        ),
-    ),
-    (
-        id: "warden",
-        name: "Warden",
-        role: "Brawler",
-        blurb: "Slow and sturdy. Wide, heavy hammer swings.",
-        max_hp: 170,
-        move_speed: 5.6,
-        attack: (
-            damage: 24,
-            cooldown_ticks: 52,
-            windup_ticks: 12,
-            kind: Melee(range: 2.0, arc_degrees: 140.0),
-        ),
-    ),
     (
         id: "javelinist",
         name: "Javelinist",
@@ -56,19 +33,31 @@
             windup_ticks: 22,
             kind: Projectile(speed: 15.0, radius: 0.25, range: 15.0, far_damage: Some(36)),
         ),
+        ability: (
+            name: "Spirit Spear",
+            description: "Instantly hurl a fast spectral spear. No windup: throw on the move.",
+            cooldown_ticks: 384,
+            kind: Projectile(speed: 32.0, radius: 0.2, range: 13.0, damage: 22),
+        ),
     ),
     (
-        id: "ranger",
-        name: "Ranger",
-        role: "Sniper",
-        blurb: "Long-range arrows that are fast but thin. Keep your distance.",
-        max_hp: 80,
-        move_speed: 5.6,
+        id: "revenant",
+        name: "Revenant",
+        role: "Duelist",
+        blurb: "A spectral blade that slips between worlds. Gets in close and keeps cutting.",
+        max_hp: 140,
+        move_speed: 6.0,
         attack: (
-            damage: 18,
+            damage: 20,
             cooldown_ticks: 40,
-            windup_ticks: 16,
-            kind: Projectile(speed: 30.0, radius: 0.15, range: 16.0),
+            windup_ticks: 8,
+            kind: Melee(range: 1.8, arc_degrees: 120.0),
+        ),
+        ability: (
+            name: "Rift Step",
+            description: "Dash through enemies, cutting each one. A hit readies your blade at once.",
+            cooldown_ticks: 320,
+            kind: Dash(distance: 6.0, ticks: 10, damage: 18, resets_attack: true),
         ),
     ),
 ]

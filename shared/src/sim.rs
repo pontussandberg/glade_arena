@@ -6,10 +6,10 @@
 use bevy::prelude::*;
 use lightyear::prelude::PeerId;
 
-use crate::classes::{AttackKind, ClassId};
+use crate::classes::{AbilityKind, AttackKind, ClassId, Shot};
 use crate::config::*;
 use crate::map::{Map, SPAWN_POINTS, map};
-use crate::protocol::{AttackState, LastSwing, PlayerInput, Projectile, Windup};
+use crate::protocol::{AbilityState, AttackState, Dash, LastSwing, PlayerInput, Projectile, Windup};
 
 /// Advance a player one tick toward the tile it was told to walk to (point-and-click).
 /// Pathfinding runs here, in the shared sim, so the client predicts exactly the route the
@@ -22,10 +22,23 @@ pub fn step_player(pos: Vec2, input: &PlayerInput, speed: f32) -> Vec2 {
     if to_waypoint.length() <= step { waypoint } else { pos + to_waypoint.normalize() * step }
 }
 
-/// One tick of a player's movement: stands still while winding up an attack, otherwise walks at
-/// its class's speed. What both the server and the predicting client run.
-pub fn move_player(pos: Vec2, input: &PlayerInput, class: ClassId, attack: &AttackState) -> Vec2 {
-    if attack.windup.is_some() { pos } else { step_player(pos, input, class.def().move_speed) }
+/// One tick of a player's movement: dashing, standing still while winding up an attack, or
+/// walking at its class's speed. What both the server and the predicting client run.
+pub fn move_player(pos: Vec2, input: &PlayerInput, class: ClassId, attack: &AttackState, ability: &AbilityState) -> Vec2 {
+    if let Some(dash) = ability.dash {
+        dash_step(pos, dash.dir, class)
+    } else if attack.windup.is_some() {
+        pos
+    } else {
+        step_player(pos, input, class.def().move_speed)
+    }
+}
+
+/// One tick of a dash; a wall (or water's edge, anything unwalkable) stops it.
+fn dash_step(pos: Vec2, dir: Vec2, class: ClassId) -> Vec2 {
+    let AbilityKind::Dash { distance, ticks, .. } = class.def().ability.kind else { return pos };
+    let next = pos + dir * (distance / ticks as f32);
+    if map().line_walkable(pos, next) { next } else { pos }
 }
 
 /// True once a player stands on the clicked tile. Exact: `step_player` snaps onto it.
@@ -69,32 +82,76 @@ pub fn step_attack(
     state.windup = None;
     let released = match attack.kind {
         AttackKind::Projectile { radius, .. } => {
-            // Spawn at the edge of the player so it doesn't start inside them.
-            let spawn = pos + dir * (PLAYER_RADIUS + radius);
-            Attack::Projectile(spawn, Projectile { owner, class, dir, spawn_tick: tick })
+            let projectile = Projectile { owner, class, dir, spawn_tick: tick, ability: false };
+            Attack::Projectile(shot_spawn(pos, dir, radius), projectile)
         }
         AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir }),
     };
     (state, Some(released))
 }
 
-/// (speed, radius) of a projectile, from its shooter's class (only projectile classes shoot).
-fn projectile_stats(projectile: &Projectile) -> (f32, f32) {
-    projectile.class.def().attack.kind.projectile().unwrap_or_default()
+/// Where a shot starts: at the edge of the shooter, so it doesn't start inside them.
+fn shot_spawn(pos: Vec2, dir: Vec2, radius: f32) -> Vec2 {
+    pos + dir * (PLAYER_RADIUS + radius)
+}
+
+/// One tick of the Q ability. Pressing it while it's ready uses it toward the aim: a projectile
+/// ability throws at once (returned here, to spawn); a dash starts (not while winding up an
+/// attack) and runs for its ticks, moved by `move_player`.
+pub fn step_ability(
+    tick: u32,
+    owner: PeerId,
+    class: ClassId,
+    pos: Vec2,
+    input: &PlayerInput,
+    attack: &AttackState,
+    mut state: AbilityState,
+) -> (AbilityState, Option<(Vec2, Projectile)>) {
+    let ability = &class.def().ability;
+    if let (Some(dash), AbilityKind::Dash { ticks, .. }) = (state.dash, &ability.kind)
+        && tick >= dash.started_at + ticks
+    {
+        state.dash = None;
+    }
+    let Some(dir) = input.aim.try_normalize().filter(|_| input.ability && tick >= state.ready_at) else {
+        return (state, None);
+    };
+    let thrown = match ability.kind {
+        AbilityKind::Projectile { radius, .. } => {
+            Some((shot_spawn(pos, dir, radius), Projectile { owner, class, dir, spawn_tick: tick, ability: true }))
+        }
+        AbilityKind::Dash { .. } if attack.windup.is_none() => {
+            state.dash = Some(Dash { started_at: tick, dir });
+            None
+        }
+        AbilityKind::Dash { .. } => return (state, None),
+    };
+    state.ready_at = tick + ability.cooldown_ticks;
+    (state, thrown)
+}
+
+/// Does a dash at `dasher` cut `target`? Bodies touching, and not through a wall.
+pub fn dash_hits(dasher: Vec2, target: Vec2) -> bool {
+    dasher.distance(target) <= 2.0 * PLAYER_RADIUS && map().shot_clear(dasher, target)
+}
+
+/// How a projectile flies, from its shooter's class (only classes that shoot fire them).
+fn shot(projectile: &Projectile) -> Shot {
+    projectile.class.def().shot(projectile.ability).unwrap_or_default()
 }
 
 pub fn step_projectile(pos: Vec2, projectile: &Projectile) -> Vec2 {
-    pos + projectile.dir * projectile_stats(projectile).0 * TICK_DT
+    pos + projectile.dir * shot(projectile).speed * TICK_DT
 }
 
 /// Out of range, or into a wall, rock or tree (water doesn't stop shots).
 pub fn projectile_expired(pos: Vec2, projectile: &Projectile, tick: u32) -> bool {
-    tick.saturating_sub(projectile.spawn_tick) >= projectile.class.def().attack.kind.lifetime_ticks()
+    tick.saturating_sub(projectile.spawn_tick) >= shot(projectile).lifetime_ticks()
         || map().get(Map::tile_of(pos)).blocks_shots()
 }
 
 pub fn projectile_hits(projectile_pos: Vec2, projectile: &Projectile, player_pos: Vec2) -> bool {
-    projectile_pos.distance(player_pos) <= PLAYER_RADIUS + projectile_stats(projectile).1
+    projectile_pos.distance(player_pos) <= PLAYER_RADIUS + shot(projectile).radius
 }
 
 /// Does a swing from `attacker` toward `dir` reach `target`? In range, inside the arc, and not
@@ -113,16 +170,22 @@ pub fn melee_hits(attacker: Vec2, dir: Vec2, class: ClassId, target: Vec2) -> bo
     in_arc && map().shot_clear(attacker, target)
 }
 
-/// Damage of a projectile hitting at `tick`, by how far it has flown (see `far_damage`).
+/// Damage of a projectile hitting at `tick`: the ability's, or the auto-attack's by how far it
+/// has flown (see `far_damage`).
 pub fn projectile_damage(projectile: &Projectile, tick: u32) -> i32 {
-    let flown = tick.saturating_sub(projectile.spawn_tick) as f32 * TICK_DT * projectile_stats(projectile).0;
-    projectile.class.def().attack.damage_at(flown)
+    let def = projectile.class.def();
+    if let (true, AbilityKind::Projectile { damage, .. }) = (projectile.ability, &def.ability.kind) {
+        return *damage;
+    }
+    let flown = tick.saturating_sub(projectile.spawn_tick) as f32 * TICK_DT * shot(projectile).speed;
+    def.attack.damage_at(flown)
 }
 
 /// Same hash on client and server so the server's projectile is matched to the one the
-/// client already spawned locally (lightyear "prespawning").
-pub fn projectile_prespawn_hash(owner: PeerId, tick: u32) -> u64 {
-    owner.to_bits().wrapping_mul(1_000_003) ^ (tick as u64)
+/// client already spawned locally (lightyear "prespawning"). An auto-attack and a Q thrown in
+/// the same tick get different hashes.
+pub fn projectile_prespawn_hash(projectile: &Projectile) -> u64 {
+    projectile.owner.to_bits().wrapping_mul(1_000_003) ^ (projectile.spawn_tick as u64) ^ ((projectile.ability as u64) << 40)
 }
 
 /// The spawn point farthest from every other player (server-side; the result is replicated).
@@ -141,7 +204,7 @@ mod tests {
     const SPEED: f32 = 6.0;
 
     fn aim(aim: Vec2, fire: bool) -> PlayerInput {
-        PlayerInput { move_to: None, aim, fire }
+        PlayerInput { move_to: None, aim, fire, ability: false }
     }
 
     fn walk_to(t: IVec2) -> PlayerInput {
@@ -253,8 +316,9 @@ mod tests {
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let (_, winding) = attack_ticks(class, &aim(Vec2::X, true), 10, 10);
         assert!(winding.windup.is_some());
-        assert_eq!(move_player(from, &walk, class, &winding), from, "moved during the windup");
-        assert_ne!(move_player(from, &walk, class, &AttackState::default()), from, "rooted without attacking");
+        let idle = AbilityState::default();
+        assert_eq!(move_player(from, &walk, class, &winding, &idle), from, "moved during the windup");
+        assert_ne!(move_player(from, &walk, class, &AttackState::default(), &idle), from, "rooted without attacking");
     }
 
     #[test]
@@ -276,7 +340,7 @@ mod tests {
         else {
             panic!("a projectile class should shoot after its windup");
         };
-        let hit_tick = (1..=proj.class.def().attack.kind.lifetime_ticks()).find(|_| {
+        let hit_tick = (1..=proj.class.def().shot(false).unwrap().lifetime_ticks()).find(|_| {
             pos = step_projectile(pos, &proj);
             projectile_hits(pos, &proj, target)
         });
@@ -285,13 +349,73 @@ mod tests {
 
     #[test]
     fn projectile_expires_at_its_range_and_at_walls() {
-        let proj = Projectile { owner: PeerId::Netcode(1), class: shooter(), dir: Vec2::X, spawn_tick: 5 };
-        let lifetime = shooter().def().attack.kind.lifetime_ticks();
+        let proj = Projectile { owner: PeerId::Netcode(1), class: shooter(), dir: Vec2::X, spawn_tick: 5, ability: false };
+        let lifetime = shooter().def().shot(false).unwrap().lifetime_ticks();
         assert!(!projectile_expired(Vec2::ZERO, &proj, 5 + lifetime - 1));
         assert!(projectile_expired(Vec2::ZERO, &proj, 5 + lifetime));
         assert!(projectile_expired(Vec2::new(100.0, 0.0), &proj, 6), "left the map");
         let wall = map().tiles().find(|(_, t)| *t == crate::map::Tile::Wall).unwrap().0;
         assert!(projectile_expired(Map::center(wall), &proj, 6), "hit a wall");
+    }
+
+    /// The first class whose Q is a thrown projectile / a dash.
+    fn thrower() -> ClassId {
+        ClassId::all().find(|c| matches!(c.def().ability.kind, AbilityKind::Projectile { .. })).unwrap()
+    }
+    fn dasher() -> ClassId {
+        ClassId::all().find(|c| matches!(c.def().ability.kind, AbilityKind::Dash { .. })).unwrap()
+    }
+
+    fn press_q(aim: Vec2) -> PlayerInput {
+        PlayerInput { aim, ability: true, ..default() }
+    }
+
+    #[test]
+    fn thrown_ability_goes_off_at_once_then_waits_for_its_cooldown() {
+        let class = thrower();
+        let me = PeerId::Netcode(1);
+        let (state, thrown) = step_ability(10, me, class, Vec2::ZERO, &press_q(Vec2::X), &AttackState::default(), default());
+        let (_, projectile) = thrown.expect("thrown the tick Q is pressed");
+        assert!(projectile.ability && projectile.spawn_tick == 10);
+        let cooldown = class.def().ability.cooldown_ticks;
+        let again = |tick| step_ability(tick, me, class, Vec2::ZERO, &press_q(Vec2::X), &AttackState::default(), state).1;
+        assert!(again(10 + cooldown - 1).is_none(), "used again during its cooldown");
+        assert!(again(10 + cooldown).is_some());
+        // Its own speed, separate from the auto-attack's (and the same tick gets another hash).
+        let auto = Projectile { ability: false, ..projectile };
+        assert_ne!(class.def().shot(true), class.def().shot(false));
+        assert_ne!(projectile_prespawn_hash(&projectile), projectile_prespawn_hash(&auto));
+    }
+
+    #[test]
+    fn dashes_cover_their_distance_and_never_end_up_in_a_wall() {
+        let class = dasher();
+        let AbilityKind::Dash { distance, ticks, .. } = class.def().ability.kind else { unreachable!() };
+        let mut longest: f32 = 0.0;
+        for from in SPAWN_POINTS {
+            for i in 0..8 {
+                let dir = Vec2::from_angle(i as f32 * std::f32::consts::FRAC_PI_4);
+                let (mut state, _) = step_ability(1, PeerId::Netcode(1), class, from, &press_q(dir), &AttackState::default(), default());
+                let mut pos = from;
+                for tick in 2..=1 + ticks + 3 {
+                    pos = move_player(pos, &PlayerInput::default(), class, &AttackState::default(), &state);
+                    assert!(map().walkable_at(pos), "dashed into a wall at {pos}");
+                    state = step_ability(tick, PeerId::Netcode(1), class, pos, &PlayerInput::default(), &AttackState::default(), state).0;
+                }
+                assert!(state.dash.is_none(), "the dash should be over");
+                longest = longest.max(from.distance(pos));
+                assert!(from.distance(pos) <= distance + 1e-3, "dashed too far");
+            }
+        }
+        assert!((longest - distance).abs() < 1e-3, "no open dash went its full distance ({longest})");
+    }
+
+    #[test]
+    fn no_dash_while_winding_up_an_attack() {
+        let class = dasher();
+        let (_, winding) = attack_ticks(class, &aim(Vec2::X, true), 10, 10);
+        let (state, _) = step_ability(11, PeerId::Netcode(1), class, Vec2::ZERO, &press_q(Vec2::X), &winding, default());
+        assert!(state.dash.is_none() && state.ready_at == 0, "dashed (or spent the cooldown) mid-windup");
     }
 
     #[test]
@@ -323,9 +447,11 @@ mod tests {
     }
 
     #[test]
-    fn prespawn_hash_differs_per_owner_and_tick() {
-        let a = projectile_prespawn_hash(PeerId::Netcode(1), 100);
-        assert_ne!(a, projectile_prespawn_hash(PeerId::Netcode(2), 100));
-        assert_ne!(a, projectile_prespawn_hash(PeerId::Netcode(1), 101));
+    fn prespawn_hash_differs_per_owner_tick_and_kind() {
+        let shot = Projectile { owner: PeerId::Netcode(1), class: shooter(), dir: Vec2::X, spawn_tick: 100, ability: false };
+        let a = projectile_prespawn_hash(&shot);
+        assert_ne!(a, projectile_prespawn_hash(&Projectile { owner: PeerId::Netcode(2), ..shot }));
+        assert_ne!(a, projectile_prespawn_hash(&Projectile { spawn_tick: 101, ..shot }));
+        assert_ne!(a, projectile_prespawn_hash(&Projectile { ability: true, ..shot }));
     }
 }

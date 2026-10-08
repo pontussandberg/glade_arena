@@ -3,6 +3,7 @@
 //! respawn.
 
 use arena_shared::protocol::*;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use lightyear::core::time::TickInstant;
 use lightyear::interpolation::timeline::InterpolationTimeline;
@@ -82,26 +83,37 @@ fn spawn_bars(mut commands: Commands, new: Query<(Entity, &PlayerId, Has<Predict
     }
 }
 
-/// Keep each fighter's bars over it and filled. Only writes what changed, so a still scene doesn't
-/// make Bevy lay out the UI again every frame.
-///
-/// The cast bar fills by ticks, on the timeline the fighter is shown on: ours is predicted (our
-/// own windup starts at the click), others' are interpolated (their windup plays out in step with
-/// their delayed position).
+/// "Now" in fractional ticks, on the timeline a fighter is shown on, to compare with its
+/// `AttackState`: ours is predicted (our own windup starts at the click), others' are
+/// interpolated (their windup plays out in step with their delayed position).
+#[derive(SystemParam)]
+pub(crate) struct AttackClock<'w, 's> {
+    local: SyncedLocalTimeline<'w, 's>,
+    fixed: Res<'w, Time<Fixed>>,
+    interpolation: Option<Res<'w, InterpolationTimeline>>,
+}
+
+impl AttackClock<'_, '_> {
+    pub(crate) fn now(&self, predicted: bool) -> f32 {
+        let ticks = |t: TickInstant| t.tick().0 as f32 + t.overstep().to_f32();
+        match &self.interpolation {
+            Some(timeline) if !predicted => ticks(timeline.now),
+            _ => ticks(self.local.instant(&self.fixed)),
+        }
+    }
+}
+
+/// Keep each fighter's bars over it and filled (the cast bar by `AttackClock`). Only writes what
+/// changed, so a still scene doesn't make Bevy lay out the UI again every frame.
 fn place_bars(
     mut commands: Commands,
-    local: SyncedLocalTimeline,
-    fixed: Res<Time<Fixed>>,
-    interpolation: Option<Res<InterpolationTimeline>>,
+    clock: AttackClock,
     camera: Single<(&Camera, &GlobalTransform)>,
     players: Query<(&Pos, &ClassId, Option<&Health>, &AttackState, Has<Predicted>)>,
     mut bars: Query<(Entity, &Bars, &mut Node, &mut Visibility)>,
     mut parts: Query<(&mut Node, &mut Visibility), Without<Bars>>,
 ) {
     let (camera, camera_transform) = *camera;
-    let ticks = |t: TickInstant| t.tick().0 as f32 + t.overstep().to_f32();
-    let local_now = ticks(local.instant(&fixed));
-    let remote_now = interpolation.map_or(local_now, |t| ticks(t.now));
     for (bar, ids, mut node, mut visibility) in &mut bars {
         let Ok((pos, class, health, attack, is_me)) = players.get(ids.player) else {
             commands.entity(bar).despawn();
@@ -130,7 +142,7 @@ fn place_bars(
         };
         fill_to(ids.health_fill, health.map_or(1.0, |h| h.0 as f32 / class.def().max_hp as f32));
         if let Some(windup) = attack.windup {
-            fill_to(ids.cast_fill, windup.progress(if is_me { local_now } else { remote_now }, *class));
+            fill_to(ids.cast_fill, windup.progress(clock.now(is_me), *class));
         }
         if let Ok((_, mut cast_visibility)) = parts.get_mut(ids.cast) {
             cast_visibility.set_if_neq(shown(attack.windup.is_some()));

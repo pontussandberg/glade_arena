@@ -11,24 +11,15 @@ use bevy::prelude::*;
 use common::*;
 
 /// Melee attacker and its target.
-const A_CLASS: &str = "shade";
-const B_CLASS: &str = "ranger";
+const A_CLASS: &str = "revenant";
+const B_CLASS: &str = "javelinist";
 
 /// Open ground, B one step in front of A.
 const A_SPOT: Vec2 = Vec2::new(-22.5, -6.5);
 const B_SPOT: Vec2 = Vec2::new(-21.5, -6.5);
 
-/// Both players joined and placed at `A_SPOT` / `B_SPOT`, as A sees it.
 fn duel_at_close_range(port: u16) -> Duel {
-    let mut d = Duel::new(port, A_CLASS, B_CLASS);
-    d.until(Duration::from_secs(15), "both players joined", |d| sees(&mut d.a, A).is_some() && sees(&mut d.a, B).is_some());
-    d.run(Duration::from_millis(1500));
-    place(&mut d.server, A, A_SPOT);
-    place(&mut d.server, B, B_SPOT);
-    d.until(Duration::from_secs(2), "A sees the setup", |d| {
-        sees(&mut d.a, A) == Some(A_SPOT) && sees(&mut d.a, B).is_some_and(|p| p.distance(B_SPOT) < 0.01)
-    });
-    d
+    Duel::placed(port, (A_CLASS, A_SPOT), (B_CLASS, B_SPOT))
 }
 
 fn b_health(d: &mut Duel) -> i32 {

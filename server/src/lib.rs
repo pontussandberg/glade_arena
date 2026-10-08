@@ -8,6 +8,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use arena_shared::classes::AbilityKind;
 use arena_shared::config::*;
 use arena_shared::protocol::*;
 use arena_shared::sim;
@@ -86,6 +87,7 @@ impl Plugin for ServerGamePlugin {
                 move_players,
                 record_history,
                 attack,
+                use_abilities,
                 move_projectiles,
                 resolve_projectile_hits,
                 respawn,
@@ -158,6 +160,8 @@ fn spawn_chosen_classes(
                 NeedsSpawnPoint,
                 Health(class.def().max_hp),
                 AttackState::default(),
+                AbilityState::default(),
+                DashHits::default(),
                 LastSwing::default(),
                 PosHistory::default(),
                 ActionState::<PlayerInput>::default(),
@@ -214,9 +218,11 @@ fn neutralize_stale_inputs(
     }
 }
 
-fn move_players(mut players: Query<(&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState), InPlay>) {
-    for (mut pos, class, input, attack) in &mut players {
-        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack)));
+fn move_players(
+    mut players: Query<(&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &AbilityState), InPlay>,
+) {
+    for (mut pos, class, input, attack, ability) in &mut players {
+        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, ability)));
     }
 }
 
@@ -276,10 +282,10 @@ fn damage(commands: &mut Commands, now: u32, (player, id): (Entity, PeerId), hea
 fn respawn(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    mut dead: Query<(Entity, &ClassId, &mut Health, &mut AttackState, &mut Dead)>,
+    mut dead: Query<(Entity, &ClassId, &mut Health, &mut AttackState, &mut AbilityState, &mut Dead)>,
 ) {
     let now = timeline.tick().0 as u32;
-    for (player, class, mut health, mut attack, mut dead) in &mut dead {
+    for (player, class, mut health, mut attack, mut ability, mut dead) in &mut dead {
         if !dead.placed && now + PLACE_BEFORE_RESPAWN_TICKS >= dead.respawn_at {
             dead.placed = true;
             commands.entity(player).insert(NeedsSpawnPoint);
@@ -287,6 +293,7 @@ fn respawn(
         if now >= dead.respawn_at {
             health.0 = class.def().max_hp;
             *attack = AttackState::default();
+            *ability = AbilityState::default();
             commands.entity(player).remove::<Dead>();
         }
     }
@@ -294,6 +301,27 @@ fn respawn(
 
 type Targets<'w, 's> =
     Query<'w, 's, (Entity, &'static PlayerId, &'static Pos, &'static PosHistory, &'static mut Health), InPlay>;
+
+/// Lag-compensated hits: deals `amount` to everyone but `attacker` that `hits` says is hit,
+/// judged at where they were at `seen_at` (where the attacker saw them). Returns how many.
+fn hit_where_seen(
+    commands: &mut Commands,
+    now: u32,
+    targets: &mut Targets,
+    seen_at: (u32, f32),
+    attacker: PeerId,
+    amount: i32,
+    mut hits: impl FnMut(PeerId, Vec2) -> bool,
+) -> usize {
+    let mut count = 0;
+    for (target, target_id, target_pos, history, mut health) in targets {
+        if target_id.0 != attacker && hits(target_id.0, history.at(seen_at).unwrap_or(target_pos.0)) {
+            damage(commands, now, (target, target_id.0), &mut health, amount, attacker);
+            count += 1;
+        }
+    }
+    count
+}
 
 /// Auto-attacks, as they go off after their windup: projectiles are spawned (and matched to the
 /// client's prespawned copy); melee swings are resolved right here against where the attacker
@@ -321,14 +349,68 @@ fn attack(
             sim::Attack::Melee(swing) => {
                 *last_swing = swing;
                 let seen_at = view_time(now, controlled_by.owner, &delays);
-                for (target, target_id, target_pos, history, mut health) in &mut targets {
-                    let seen = history.at(seen_at).unwrap_or(target_pos.0);
-                    if target_id.0 != id.0 && sim::melee_hits(pos.0, swing.dir, *class, seen) {
-                        let amount = class.def().attack.damage;
-                        damage(&mut commands, now.0 as u32, (target, target_id.0), &mut health, amount, id.0);
-                    }
-                }
+                let amount = class.def().attack.damage;
+                hit_where_seen(&mut commands, now.0 as u32, &mut targets, seen_at, id.0, amount, |_, seen| {
+                    sim::melee_hits(pos.0, swing.dir, *class, seen)
+                });
             }
+        }
+    }
+}
+
+/// Server-only: who the current dash (started at `.0`) has already cut, so each target is cut
+/// once per dash.
+#[derive(Component, Default)]
+struct DashHits(u32, Vec<PeerId>);
+
+/// Q abilities. Thrown ones are spawned (and matched to the client's prespawned copy). Dashes
+/// cut whoever the dasher passes through, judged against where the dasher saw them, each target
+/// once per dash; with `resets_attack`, a hit readies the auto-attack (the client predicted it
+/// still cooling down and is corrected by a rollback).
+fn use_abilities(
+    mut commands: Commands,
+    timeline: Res<LocalTimeline>,
+    delays: Query<&InterpolationDelay, With<ClientOf>>,
+    mut users: Query<
+        (
+            &PlayerId,
+            &ClassId,
+            &Pos,
+            &ActionState<PlayerInput>,
+            &ControlledBy,
+            &mut AttackState,
+            &mut AbilityState,
+            &mut DashHits,
+        ),
+        InPlay,
+    >,
+    mut targets: Targets,
+) {
+    let now = timeline.tick();
+    for (id, class, pos, input, controlled_by, mut attack, mut state, mut hits) in &mut users {
+        let (next, thrown) = sim::step_ability(now.0 as u32, id.0, *class, pos.0, &input.0, &attack, *state);
+        state.set_if_neq(next);
+        if let Some((spawn, projectile)) = thrown {
+            commands.spawn((projectile.bundle(spawn), owner_predicted(id.0)));
+        }
+        let (Some(dash), AbilityKind::Dash { damage: cut, resets_attack, .. }) = (state.dash, &class.def().ability.kind)
+        else {
+            continue;
+        };
+        if hits.0 != dash.started_at {
+            hits.0 = dash.started_at;
+            hits.1.clear();
+        }
+        let seen_at = view_time(now, controlled_by.owner, &delays);
+        let cut_now = hit_where_seen(&mut commands, now.0 as u32, &mut targets, seen_at, id.0, *cut, |target, seen| {
+            let fresh = !hits.1.contains(&target) && sim::dash_hits(pos.0, seen);
+            if fresh {
+                hits.1.push(target);
+            }
+            fresh
+        });
+        if cut_now > 0 && *resets_attack && attack.windup.is_none() && attack.ready_at > now.0 as u32 {
+            attack.ready_at = now.0 as u32;
         }
     }
 }

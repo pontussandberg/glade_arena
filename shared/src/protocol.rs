@@ -72,6 +72,38 @@ fn hold<C>(start: C, _end: C, _t: f32) -> C {
     start
 }
 
+/// The Q ability's state: when it may be used again, and a dash in progress. Predicted (your
+/// own Q happens at the press), replicated and shown on the same delayed timeline as others'
+/// positions, like `AttackState`.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
+pub struct AbilityState {
+    pub ready_at: u32,
+    pub dash: Option<Dash>,
+}
+
+impl AbilityState {
+    /// When the ability was last used (`None`: never).
+    pub fn used_at(&self, class: ClassId) -> Option<u32> {
+        (self.ready_at > 0).then(|| self.ready_at.saturating_sub(class.def().ability.cooldown_ticks))
+    }
+}
+
+impl AttackState {
+    /// When the last attack went off (`None`: never): its windup after it started, which is a
+    /// cooldown before it's ready again.
+    pub fn released_at(&self, class: ClassId) -> Option<u32> {
+        let attack = &class.def().attack;
+        (self.ready_at > 0).then(|| (self.ready_at + attack.windup_ticks).saturating_sub(attack.cooldown_ticks))
+    }
+}
+
+/// A dash: moving toward `dir` for the class's dash ticks after `started_at`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct Dash {
+    pub started_at: u32,
+    pub dir: Vec2,
+}
+
 /// The player's most recent melee swing, for drawing it. Predicted, so your own swing shows
 /// instantly, and replicated, so others see it too.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
@@ -83,10 +115,12 @@ pub struct LastSwing {
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Projectile {
     pub owner: PeerId,
-    /// The shooter's class: speed, size, range and damage come from its attack.
+    /// The shooter's class: speed, size, range and damage come from its attack (or ability).
     pub class: ClassId,
     pub dir: Vec2,
     pub spawn_tick: u32,
+    /// Thrown with the Q ability rather than the auto-attack.
+    pub ability: bool,
 }
 
 impl Projectile {
@@ -97,7 +131,7 @@ impl Projectile {
             Name::from("Projectile"),
             Pos(pos),
             self,
-            PreSpawned::new(crate::sim::projectile_prespawn_hash(self.owner, self.spawn_tick)),
+            PreSpawned::new(crate::sim::projectile_prespawn_hash(&self)),
         )
     }
 }
@@ -111,6 +145,8 @@ pub struct PlayerInput {
     pub aim: Vec2,
     /// Left mouse held: auto-attack toward `aim`.
     pub fire: bool,
+    /// Q pressed: use the ability toward `aim`. Sent for one tick per press.
+    pub ability: bool,
 }
 
 impl MapEntities for PlayerInput {
@@ -151,6 +187,7 @@ impl Plugin for ProtocolPlugin {
             .add_linear_interpolation();
         app.component::<AttackState>().replicate().predict().add_interpolation_with(hold);
         app.component::<LastSwing>().replicate().predict().add_interpolation_with(hold);
+        app.component::<AbilityState>().replicate().predict().add_interpolation_with(hold);
         app.component::<Projectile>().replicate().predict();
     }
 }

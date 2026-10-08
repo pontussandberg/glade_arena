@@ -29,6 +29,8 @@ pub mod glade;
 pub mod join;
 #[cfg(feature = "render")]
 pub mod render;
+#[cfg(feature = "render")]
+pub mod rig;
 
 #[derive(Clone)]
 pub struct ClientSettings {
@@ -96,7 +98,7 @@ impl Plugin for ClientNetPlugin {
         // Same rules, same order as the server, but only for what this client predicts.
         app.add_systems(
             FixedUpdate,
-            (predict_player_movement, predict_attack, cancel_walk_on_attack, predict_projectiles).chain(),
+            (predict_player_movement, predict_attack, predict_ability, cancel_walk_on_attack, predict_projectiles).chain(),
         );
     }
 }
@@ -151,49 +153,52 @@ fn mark_controlled_player(
     }
 }
 
+/// Copies `DesiredInput` into the networked input. A Q press is sent for one tick.
 fn write_input(
-    desired: Res<DesiredInput>,
+    mut desired: ResMut<DesiredInput>,
     mut query: Query<&mut ActionState<PlayerInput>, With<InputMarker<PlayerInput>>>,
 ) {
     if let Ok(mut action) = query.single_mut() {
         action.0 = desired.0;
+        desired.0.ability = false;
     }
 }
 
-/// Starting an attack drops the destination: after the attack you stand still, unless you
-/// clicked somewhere new during the windup, which is then where you walk. Runs in the tick the
-/// windup starts, so a click read later that frame counts as the new one; once per windup, so
-/// rollbacks replaying that tick don't drop it. (Arriving or being moved also forgets the
-/// destination; that's in `render::read_local_input`.)
+/// Starting an attack or a dash drops the destination: afterwards you stand still, unless you
+/// clicked somewhere new meanwhile, which is then where you walk. Runs in the tick it starts, so
+/// a click read later that frame counts as the new one; once per attack or dash (by its start
+/// tick), so rollbacks replaying that tick don't drop it. (Arriving or being moved also forgets
+/// the destination; that's in `render::read_local_input`.)
 fn cancel_walk_on_attack(
     mut desired: ResMut<DesiredInput>,
-    me: Query<&AttackState, With<InputMarker<PlayerInput>>>,
-    mut cancelled_for: Local<Option<u32>>,
+    me: Query<(&AttackState, &AbilityState), With<InputMarker<PlayerInput>>>,
+    mut cancelled_for: Local<[Option<u32>; 2]>,
 ) {
-    if let Ok(attack) = me.single()
-        && let Some(windup) = attack.windup
-        && *cancelled_for != Some(windup.started_at)
-    {
-        *cancelled_for = Some(windup.started_at);
-        desired.0.move_to = None;
+    let Ok((attack, ability)) = me.single() else { return };
+    let started = [attack.windup.map(|w| w.started_at), ability.dash.map(|d| d.started_at)];
+    for (started, cancelled) in started.into_iter().zip(cancelled_for.iter_mut()) {
+        if started.is_some() && *cancelled != started {
+            *cancelled = started;
+            desired.0.move_to = None;
+        }
     }
 }
 
-// The three systems below only run once the client's timeline is synced with the server
+// The four systems below only run once the client's timeline is synced with the server
 // (`SyncedLocalTimeline` makes Bevy skip them until then).
 
 fn predict_player_movement(
     _synced: SyncedLocalTimeline,
     mut players: Query<
-        (&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &Health),
+        (&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &AbilityState, &Health),
         (With<Predicted>, With<PlayerId>),
     >,
 ) {
-    for (mut pos, class, input, attack, health) in &mut players {
+    for (mut pos, class, input, attack, ability, health) in &mut players {
         if !health.alive() {
             continue;
         }
-        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack)));
+        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, ability)));
     }
 }
 
@@ -221,6 +226,29 @@ fn predict_attack(
                 commands.spawn(projectile.bundle(spawn));
             }
             sim::Attack::Melee(swing) => *last_swing = swing,
+        }
+    }
+}
+
+/// Our Q, right away: a thrown ability is spawned locally, a dash starts moving us. Who gets hit
+/// (and a dash readying the auto-attack) is up to the server.
+fn predict_ability(
+    synced: SyncedLocalTimeline,
+    mut commands: Commands,
+    mut players: Query<
+        (&PlayerId, &ClassId, &Pos, &ActionState<PlayerInput>, &AttackState, &mut AbilityState, &Health),
+        With<Predicted>,
+    >,
+) {
+    let tick = synced.current_tick().0 as u32;
+    for (id, class, pos, input, attack, mut state, health) in &mut players {
+        if !health.alive() {
+            continue;
+        }
+        let (next, thrown) = sim::step_ability(tick, id.0, *class, pos.0, &input.0, attack, *state);
+        state.set_if_neq(next);
+        if let Some((spawn, projectile)) = thrown {
+            commands.spawn(projectile.bundle(spawn));
         }
     }
 }

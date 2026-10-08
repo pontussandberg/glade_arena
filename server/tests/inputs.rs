@@ -14,7 +14,7 @@ const CLIENT: u64 = 7;
 /// A healthy client frame rate.
 const SMOOTH: Option<Duration> = Some(Duration::from_micros(16_667));
 /// A projectile class, so shots can be counted.
-const CLASS: &str = "ranger";
+const CLASS: &str = "javelinist";
 
 #[derive(Resource, Default)]
 struct ShotsFired(usize);
@@ -91,7 +91,13 @@ impl Pair {
 fn releasing_fire_stops_firing_at_4_fps() {
     let mut p = Pair::new(5898);
     let frame = Some(Duration::from_millis(250));
-    p.run(Duration::from_secs(5), frame);
+    // Until our player is predicted (slow under load at 4 fps), then a little longer to settle.
+    let end = Instant::now() + Duration::from_secs(20);
+    while !client_view(&mut p.client, CLIENT).is_some_and(|v| v.2) {
+        assert!(Instant::now() < end, "never got our player at 4 fps");
+        p.run(Duration::from_millis(250), frame);
+    }
+    p.run(Duration::from_secs(2), frame);
 
     p.input(PlayerInput { aim: Vec2::X, fire: true, ..default() });
     p.run(Duration::from_millis(250), frame);

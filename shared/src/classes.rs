@@ -1,7 +1,7 @@
 //! Playable classes, loaded from `assets/classes.ron`.
 //!
-//! Gameplay code never names a class: it reads a `ClassDef` (HP, speed, auto-attack) through
-//! the player's `ClassId`. Adding or retuning a class is a data change.
+//! Gameplay code never names a class: it reads a `ClassDef` (HP, speed, auto-attack, Q ability)
+//! through the player's `ClassId`. Adding or retuning a class is a data change.
 
 use std::sync::LazyLock;
 
@@ -23,6 +23,7 @@ pub struct ClassDef {
     pub max_hp: i32,
     pub move_speed: f32,
     pub attack: AttackDef,
+    pub ability: AbilityDef,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -51,6 +52,60 @@ pub enum AttackKind {
     },
 }
 
+/// The Q ability.
+#[derive(Deserialize, Debug, Clone)]
+pub struct AbilityDef {
+    pub name: String,
+    pub description: String,
+    pub cooldown_ticks: u32,
+    pub kind: AbilityKind,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub enum AbilityKind {
+    /// Thrown instantly toward the aim (no windup, no root), fixed damage.
+    Projectile { speed: f32, radius: f32, range: f32, damage: i32 },
+    /// A dash toward the aim over `ticks`, through fighters, cutting each one crossed for
+    /// `damage`; stops at walls. With `resets_attack`, landing a hit readies the auto-attack.
+    Dash {
+        distance: f32,
+        ticks: u32,
+        damage: i32,
+        #[serde(default)]
+        resets_attack: bool,
+    },
+}
+
+/// How a projectile flies: the auto-attack's or the ability's.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Shot {
+    pub speed: f32,
+    pub radius: f32,
+    pub range: f32,
+}
+
+impl Shot {
+    /// How many ticks it flies before it's out of range.
+    pub fn lifetime_ticks(&self) -> u32 {
+        (self.range / self.speed * TICK_HZ as f32).ceil() as u32
+    }
+}
+
+impl ClassDef {
+    /// The projectile this class fires with its auto-attack, or (`ability`) with its Q.
+    pub fn shot(&self, ability: bool) -> Option<Shot> {
+        if ability { self.ability.kind.shot() } else { self.attack.kind.shot() }
+    }
+}
+
+impl AbilityKind {
+    /// How a thrown ability flies (`None` for a dash).
+    pub fn shot(&self) -> Option<Shot> {
+        let AbilityKind::Projectile { speed, radius, range, .. } = *self else { return None };
+        Some(Shot { speed, radius, range })
+    }
+}
+
 impl AttackDef {
     /// Damage of a hit after the attack flew `distance`.
     pub fn damage_at(&self, distance: f32) -> i32 {
@@ -70,17 +125,10 @@ impl AttackKind {
         }
     }
 
-    /// (speed, radius) for projectile attacks.
-    pub fn projectile(&self) -> Option<(f32, f32)> {
-        match *self {
-            AttackKind::Projectile { speed, radius, .. } => Some((speed, radius)),
-            AttackKind::Melee { .. } => None,
-        }
-    }
-
-    /// How many ticks a projectile flies before it's out of range (0 for melee).
-    pub fn lifetime_ticks(&self) -> u32 {
-        self.projectile().map_or(0, |(speed, _)| (self.reach() / speed * TICK_HZ as f32).ceil() as u32)
+    /// How a projectile attack flies (`None` for melee).
+    pub fn shot(&self) -> Option<Shot> {
+        let AttackKind::Projectile { speed, radius, range, .. } = *self else { return None };
+        Some(Shot { speed, radius, range })
     }
 }
 
@@ -150,6 +198,17 @@ mod tests {
                     assert!((1.0..=30.0).contains(&range), "{}: projectile range", c.id);
                 }
             }
+            assert!(c.ability.cooldown_ticks > 0, "{}: ability cooldown", c.id);
+            match c.ability.kind {
+                AbilityKind::Projectile { speed, radius, range, damage } => {
+                    assert!(damage > 0 && (2.0..=60.0).contains(&speed) && (0.05..=1.0).contains(&radius), "{}: Q", c.id);
+                    assert!((1.0..=30.0).contains(&range), "{}: Q range", c.id);
+                }
+                AbilityKind::Dash { distance, ticks, damage, .. } => {
+                    assert!(damage >= 0 && (0.5..=15.0).contains(&distance) && (1..=64).contains(&ticks), "{}: dash", c.id);
+                    assert!(ticks < c.ability.cooldown_ticks, "{}: dash longer than its cooldown", c.id);
+                }
+            }
         }
     }
 
@@ -172,6 +231,6 @@ mod tests {
     #[test]
     fn projectile_lifetime_covers_its_range() {
         let kind = AttackKind::Projectile { speed: 16.0, radius: 0.2, range: 8.0, far_damage: None };
-        assert_eq!(kind.lifetime_ticks(), 32);
+        assert_eq!(kind.shot().unwrap().lifetime_ticks(), 32);
     }
 }

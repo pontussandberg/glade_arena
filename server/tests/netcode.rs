@@ -21,8 +21,8 @@ use common::*;
 
 const PORT: u16 = 5899;
 /// A shoots (a projectile class); B is a sturdy melee class.
-const A_CLASS: &str = "ranger";
-const B_CLASS: &str = "warden";
+const A_CLASS: &str = "javelinist";
+const B_CLASS: &str = "revenant";
 
 fn projectile_count(app: &mut App) -> usize {
     let mut q = app.world_mut().query_filtered::<(), With<Projectile>>();
@@ -134,11 +134,14 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     // B's client sees the projectile too (interpolated from the server).
     h.until(Duration::from_secs(1), "B sees A's projectile", |h| projectile_count(&mut h.b) > 0);
 
-    // The server decides the hit; health replicates to both clients.
-    let damaged = class_id(B_CLASS).def().max_hp - class_id(A_CLASS).def().attack.damage;
-    h.until(Duration::from_secs(3), "server registers the hit", |h| {
-        server_player(&mut h.server, B).1 == damaged
-    });
+    // The server decides the hit (damage depends on how far the shot flew); health replicates to
+    // both clients.
+    let max = class_id(B_CLASS).def().max_hp;
+    h.until(Duration::from_secs(3), "server registers the hit", |h| server_player(&mut h.server, B).1 < max);
+    let damaged = server_player(&mut h.server, B).1;
+    let attack = &class_id(A_CLASS).def().attack;
+    let (near, far) = (attack.damage_at(0.0), attack.damage_at(f32::INFINITY));
+    assert!((near..=far).contains(&(max - damaged)), "dealt {} (expected {near}..={far})", max - damaged);
     h.until(Duration::from_secs(2), "damage replicated to both clients", |h| {
         client_view(&mut h.b, B).unwrap().1 == Some(damaged)
             && client_view(&mut h.a, B).unwrap().1 == Some(damaged)

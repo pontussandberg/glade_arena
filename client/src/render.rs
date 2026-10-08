@@ -1,10 +1,10 @@
-//! Fighters, projectiles, melee swings and windup telegraphs, the destination marker and the
-//! HUD, plus mouse input.
+//! Fighters, projectiles, melee swings, dash streaks and windup telegraphs, the destination
+//! marker and the HUD, plus mouse and keyboard input.
 //! The scene itself is in `glade.rs`, the camera in `camera.rs`, the join screen in `join.rs`.
 
 use std::fmt::Write;
 
-use arena_shared::classes::AttackKind;
+use arena_shared::classes::{AbilityKind, AttackKind};
 use arena_shared::config::*;
 use arena_shared::map::{Map, map};
 use arena_shared::protocol::*;
@@ -25,14 +25,15 @@ impl Plugin for RenderPlugin {
             crate::camera::CameraPlugin,
             crate::join::JoinPlugin,
             crate::feedback::FeedbackPlugin,
+            crate::rig::RigPlugin,
         ));
         app.add_systems(Startup, setup_scene);
         app.add_systems(
             Update,
             (
                 (read_local_input.in_set(crate::PlayerControls), show_destination).chain(),
-                (add_visuals, sync_transforms).chain(),
-                (show_swings, fade_swings, show_telegraphs),
+                (add_visuals, sync_transforms).chain().before(crate::rig::Posing),
+                (show_swings, show_dashes, fade_swings, (show_telegraphs, align_to_world).chain().after(crate::rig::Posing)),
                 update_hud,
             ),
         );
@@ -41,8 +42,9 @@ impl Plugin for RenderPlugin {
 
 /// Shots fly at chest height; fighters stand on the floor (their feet are at the mesh origin).
 const PROJECTILE_HEIGHT: f32 = 0.9;
-/// How long a swing stays on screen.
+/// How long a swing, and a dash streak, stay on screen.
 const SWING_SECONDS: f32 = 0.16;
+const DASH_SECONDS: f32 = 0.3;
 /// Thin shots still get a lane wide enough to see.
 const TELEGRAPH_MIN_WIDTH: f32 = 0.45;
 
@@ -57,41 +59,58 @@ pub(crate) fn player_color(id: PeerId, is_me: bool) -> Color {
 /// Meshes shared by every player/projectile/swing (one figure and one attack shape per class),
 /// and materials per player, so attacking doesn't create and upload new GPU assets.
 #[derive(Resource)]
-struct Visuals {
+pub(crate) struct Visuals {
     fighters: HashMap<ClassId, Handle<Mesh>>,
     /// The ground an attack covers: a melee swing's fan, or the lane a shot flies down. Drawn
     /// faintly as the windup telegraph, and (melee) brightly as the swing itself.
     attack_shapes: HashMap<ClassId, Handle<Mesh>>,
-    projectiles: HashMap<ClassId, Handle<Mesh>>,
+    /// The ground a dash covers, for its streak.
+    dash_streaks: HashMap<ClassId, Handle<Mesh>>,
+    /// Per class and shot (auto-attack: false, Q: true).
+    projectiles: HashMap<(ClassId, bool), Handle<Mesh>>,
     ring: Handle<Mesh>,
-    materials: HashMap<(PeerId, Look), Handle<StandardMaterial>>,
+    /// Per owner (`None` for looks that are the same for everyone) and look.
+    materials: HashMap<(Option<PeerId>, Look), Handle<StandardMaterial>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum Look {
+pub(crate) enum Look {
     Body,
     /// Projectiles glow, so a shot in flight is the easiest thing to spot.
     Shot,
+    /// Spirit: abilities glow spectral blue, whoever uses them.
+    Spirit,
     /// Swings are see-through flashes.
     Swing,
     /// A faint marking of where an attack that's winding up will land.
     Telegraph,
     /// The ring under a fighter's feet, so it reads even in shadow.
     Ring,
+    /// Glowing eyes (rigged fighters).
+    Eyes,
 }
 
 impl Visuals {
-    fn material(&mut self, materials: &mut Assets<StandardMaterial>, owner: PeerId, is_me: bool, look: Look) -> Handle<StandardMaterial> {
+    pub(crate) fn material(
+        &mut self,
+        materials: &mut Assets<StandardMaterial>,
+        owner: PeerId,
+        is_me: bool,
+        look: Look,
+    ) -> Handle<StandardMaterial> {
+        let key = (look != Look::Spirit).then_some(owner);
         self.materials
-            .entry((owner, look))
+            .entry((key, look))
             .or_insert_with(|| {
                 let color = player_color(owner, is_me);
                 materials.add(match look {
                     Look::Body => glade::matte(color),
                     Look::Shot => glade::glow(color, 4.0),
+                    Look::Spirit => glade::glow(palette::SPIRIT, 6.0),
                     Look::Swing => glade::translucent(color, 0.45, 2.0),
                     Look::Telegraph => glade::translucent(color, 0.28, 1.2),
                     Look::Ring => glade::glow(color, 1.2),
+                    Look::Eyes => glade::glow(color, 6.0),
                 })
             })
             .clone()
@@ -107,6 +126,12 @@ struct SwingFx {
 /// A fighter's windup telegraph (a child entity), shown while it winds up an attack.
 #[derive(Component)]
 struct Telegraph(Entity);
+
+/// A child that keeps this orientation in the world, this high above the ground, whatever its
+/// parent does (fighters turn, lean and crouch, see `rig.rs`): the ground ring and the telegraph
+/// stay flat on the ground.
+#[derive(Component)]
+struct WorldAligned(Quat, f32);
 
 #[derive(Component)]
 struct Hud;
@@ -141,9 +166,18 @@ fn setup_scene(
                 (c, meshes.add(mesh))
             })
             .collect(),
+        dash_streaks: ClassId::all()
+            .filter_map(|c| match c.def().ability.kind {
+                AbilityKind::Dash { distance, .. } => Some((c, meshes.add(glade::lane_mesh(0.0, distance, 0.9)))),
+                AbilityKind::Projectile { .. } => None,
+            })
+            .collect(),
         projectiles: ClassId::all()
-            .filter(|c| c.def().attack.kind.projectile().is_some())
-            .map(|c| (c, meshes.add(glade::projectile_mesh(c.def()))))
+            .flat_map(|c| [false, true].map(|ability| (c, ability)))
+            .filter_map(|(c, ability)| {
+                let shot = c.def().shot(ability)?;
+                Some(((c, ability), meshes.add(glade::projectile_mesh(c.def(), shot))))
+            })
             .collect(),
         ring: meshes.add(Annulus::new(0.58, 0.7).mesh().resolution(20).build()),
         materials: HashMap::default(),
@@ -168,6 +202,7 @@ fn setup_scene(
 /// attacks toward the cursor.
 fn read_local_input(
     mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
     window: Option<Single<&Window>>,
     camera: Single<(&Camera, &GlobalTransform)>,
     me: Query<&Pos, (With<Predicted>, With<PlayerId>)>,
@@ -210,7 +245,9 @@ fn read_local_input(
         _ => desired.0.aim,
     };
     let fire = mouse.pressed(MouseButton::Left);
-    desired.0 = PlayerInput { move_to, aim, fire };
+    // Kept until it's been sent (`write_input` clears it), so a short tap isn't missed.
+    let ability = desired.0.ability || keys.just_pressed(KeyCode::KeyQ);
+    desired.0 = PlayerInput { move_to, aim, fire, ability };
 }
 
 fn show_destination(
@@ -247,7 +284,7 @@ fn add_visuals(
             .spawn((
                 Mesh3d(visuals.attack_shapes[class].clone()),
                 MeshMaterial3d(visuals.material(&mut materials, id.0, is_me, Look::Telegraph)),
-                Transform::from_xyz(0.0, 0.05, 0.0),
+                WorldAligned(Quat::IDENTITY, 0.05),
                 Visibility::Hidden,
             ))
             .id();
@@ -258,18 +295,20 @@ fn add_visuals(
                 MeshMaterial3d(material),
                 Transform::from_translation(to_world(pos.0, 0.0)),
                 ShownSwing::default(),
+                ShownDash::default(),
                 Telegraph(telegraph),
             ))
             .add_child(telegraph)
             .with_child((
                 Mesh3d(visuals.ring.clone()),
                 MeshMaterial3d(ring),
-                Transform::from_xyz(0.0, 0.03, 0.0).with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+                WorldAligned(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2), 0.03),
             ));
     }
     for (entity, projectile, pos) in &projectiles {
-        let material = visuals.material(&mut materials, projectile.owner, projectile.owner == me.0, Look::Shot);
-        let Some(mesh) = visuals.projectiles.get(&projectile.class).cloned() else { continue };
+        let look = if projectile.ability { Look::Spirit } else { Look::Shot };
+        let material = visuals.material(&mut materials, projectile.owner, projectile.owner == me.0, look);
+        let Some(mesh) = visuals.projectiles.get(&(projectile.class, projectile.ability)).cloned() else { continue };
         commands.entity(entity).insert((
             Mesh3d(mesh),
             MeshMaterial3d(material),
@@ -301,12 +340,41 @@ fn show_swings(
         let AttackKind::Melee { .. } = class.def().attack.kind else { continue };
         let fan = visuals.attack_shapes[class].clone();
         let material = visuals.material(&mut materials, id.0, is_me, Look::Swing);
-        commands.spawn((
-            SwingFx { until: time.elapsed_secs() + SWING_SECONDS },
-            Mesh3d(fan),
-            MeshMaterial3d(material),
-            Transform::from_translation(to_world(pos.0, 0.08)).with_rotation(Quat::from_rotation_y(swing.dir.to_angle())),
-        ));
+        let until = time.elapsed_secs() + SWING_SECONDS;
+        commands.spawn(flash(fan, material, to_world(pos.0, 0.08), swing.dir, until));
+    }
+}
+
+/// A brief flat flash on the ground (a swing, a dash streak) pointing along `dir`, gone `until`.
+fn flash(mesh: Handle<Mesh>, material: Handle<StandardMaterial>, at: Vec3, dir: Vec2, until: f32) -> impl Bundle {
+    (
+        SwingFx { until },
+        Mesh3d(mesh),
+        MeshMaterial3d(material),
+        Transform::from_translation(at).with_rotation(Quat::from_rotation_y(dir.to_angle())),
+    )
+}
+
+/// The start tick of the last dash drawn for this player.
+#[derive(Component, Default)]
+struct ShownDash(u32);
+
+/// A fading spectral streak along each new dash (once per dash, though rollbacks may rewrite
+/// `AbilityState`).
+fn show_dashes(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut visuals: ResMut<Visuals>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut dashes: Query<(&PlayerId, &ClassId, &Pos, &AbilityState, Has<Predicted>, &mut ShownDash), Changed<AbilityState>>,
+) {
+    for (id, class, pos, ability, is_me, mut shown) in &mut dashes {
+        let Some(dash) = ability.dash.filter(|d| d.started_at > shown.0) else { continue };
+        shown.0 = dash.started_at;
+        let Some(streak) = visuals.dash_streaks.get(class).cloned() else { continue };
+        let material = visuals.material(&mut materials, id.0, is_me, Look::Spirit);
+        let until = time.elapsed_secs() + DASH_SECONDS;
+        commands.spawn(flash(streak, material, to_world(pos.0, 0.1), dash.dir, until));
     }
 }
 
@@ -322,17 +390,27 @@ fn fade_swings(mut commands: Commands, time: Res<Time>, swings: Query<(Entity, &
 /// `AttackState` is predicted for us (shown the moment we click) and interpolated for others.
 fn show_telegraphs(
     players: Query<(&AttackState, &Telegraph), Changed<AttackState>>,
-    mut telegraphs: Query<(&mut Transform, &mut Visibility)>,
+    mut telegraphs: Query<(&mut WorldAligned, &mut Visibility)>,
 ) {
     for (attack, telegraph) in &players {
-        let Ok((mut transform, mut visibility)) = telegraphs.get_mut(telegraph.0) else { continue };
+        let Ok((mut aligned, mut visibility)) = telegraphs.get_mut(telegraph.0) else { continue };
         if let Some(windup) = attack.windup {
-            let rotation = Quat::from_rotation_y(windup.dir.to_angle());
-            if transform.rotation != rotation {
-                transform.rotation = rotation;
-            }
+            aligned.0 = Quat::from_rotation_y(windup.dir.to_angle());
         }
         visibility.set_if_neq(shown(attack.windup.is_some()));
+    }
+}
+
+fn align_to_world(
+    parents: Query<&Transform, Without<WorldAligned>>,
+    mut aligned: Query<(&WorldAligned, &ChildOf, &mut Transform)>,
+) {
+    for (aligned, child_of, mut transform) in &mut aligned {
+        let Ok(parent) = parents.get(child_of.parent()) else { continue };
+        let unturn = parent.rotation.inverse();
+        let wanted = Transform::from_translation(unturn * Vec3::Y * (aligned.1 - parent.translation.y))
+            .with_rotation(unturn * aligned.0);
+        transform.set_if_neq(wanted);
     }
 }
 
@@ -351,7 +429,8 @@ fn update_hud(
     mut hud: Single<&mut Text, With<Hud>>,
     client: Query<(&Link, Has<Connected>, Option<&Disconnected>), With<Client>>,
     metrics: Option<Res<lightyear::prediction::prelude::PredictionMetrics>>,
-    players: Query<(&PlayerId, &ClassId, Option<&Health>, Has<Predicted>)>,
+    timeline: Res<LocalTimeline>,
+    players: Query<(&PlayerId, &ClassId, Option<&Health>, Option<&AbilityState>, Has<Predicted>)>,
 ) {
     let Ok((link, connected, disconnected)) = client.single() else { return };
     let mut text = String::new();
@@ -367,12 +446,21 @@ fn update_hud(
             link.stats.jitter.as_secs_f64() * 1000.0,
             metrics.map_or(0, |m| m.rollbacks),
         );
-        if players.iter().any(|(_, _, health, is_me)| is_me && health.is_some_and(|h| h.0 == 0)) {
+        if players.iter().any(|(_, _, health, _, is_me)| is_me && health.is_some_and(|h| h.0 == 0)) {
             writeln!(text, "You died. Back in {} seconds.", RESPAWN_TICKS / TICK_HZ as u32).ok();
+        }
+        if let Some((_, class, _, Some(ability), _)) = players.iter().find(|(.., is_me)| *is_me) {
+            let name = &class.def().ability.name;
+            let wait = ability.ready_at.saturating_sub(timeline.tick().0 as u32);
+            match wait {
+                0 => writeln!(text, "Q {name}: ready"),
+                _ => writeln!(text, "Q {name}: {:.1}s", wait as f32 / TICK_HZ as f32),
+            }
+            .ok();
         }
         let mut players: Vec<_> = players.iter().collect();
         players.sort_by_key(|(id, ..)| id.0.to_bits());
-        for (id, class, health, is_me) in players {
+        for (id, class, health, _, is_me) in players {
             let you = if is_me { " (you)" } else { "" };
             let (name, max) = (&class.def().name, class.def().max_hp);
             match health {
@@ -381,7 +469,7 @@ fn update_hud(
             }
             .ok();
         }
-        text.push_str("right click: move | left click: attack\nhold Space: lock camera | edges/arrows: pan | wheel: zoom");
+        text.push_str("right click: move | left click: attack | Q: ability\nhold Space: lock camera | edges/arrows: pan | wheel: zoom");
     }
     // Only touch the component when the text changed, so Bevy doesn't re-layout it every frame.
     if hud.0 != text {

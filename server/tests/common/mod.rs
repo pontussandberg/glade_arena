@@ -80,6 +80,19 @@ impl Duel {
         Duel { server, a: start_client(A, port, a_class, Some(lossy())), b: start_client(B, port, b_class, None) }
     }
 
+    /// Both players joined, then placed at `a_spot` / `b_spot`, as A sees it.
+    pub fn placed(port: u16, (a_class, a_spot): (&str, Vec2), (b_class, b_spot): (&str, Vec2)) -> Self {
+        let mut d = Duel::new(port, a_class, b_class);
+        d.until(Duration::from_secs(15), "both players joined", |d| sees(&mut d.a, A).is_some() && sees(&mut d.a, B).is_some());
+        d.run(Duration::from_millis(1500));
+        place(&mut d.server, A, a_spot);
+        place(&mut d.server, B, b_spot);
+        d.until(Duration::from_secs(2), "A sees the setup", |d| {
+            sees(&mut d.a, A) == Some(a_spot) && sees(&mut d.a, B).is_some_and(|p| p.distance(b_spot) < 0.01)
+        });
+        d
+    }
+
     /// One frame for every app.
     pub fn update(&mut self) {
         self.server.update();
