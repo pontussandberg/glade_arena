@@ -58,7 +58,7 @@ fn rift_step_cuts_through_and_readies_the_blade() {
     d.until(Duration::from_secs(1), "A's swing starts", |d| attack_state(&mut d.a, A).windup.is_some());
     edit_input(&mut d.a, |i| i.fire = false);
     d.until(Duration::from_secs(1), "A's swing goes off", |d| attack_state(&mut d.a, A).windup.is_none());
-    let server_tick = |d: &mut Duel| d.server.world().resource::<LocalTimeline>().tick().0 as u32;
+    let server_tick = |d: &mut Duel| d.server.world().resource::<LocalTimeline>().tick().0;
     assert!(attack_state(&mut d.server, A).ready_at > server_tick(&mut d), "the blade should be cooling down");
 
     a_uses_q_at_b(&mut d);
@@ -98,7 +98,7 @@ fn rift_step_cuts_where_it_ends_not_who_it_leaves_behind() {
 }
 
 fn server_tick(d: &mut Duel) -> u32 {
-    d.server.world().resource::<LocalTimeline>().tick().0 as u32
+    d.server.world().resource::<LocalTimeline>().tick().0
 }
 
 fn chilled(app: &mut App, id: u64) -> Chilled {

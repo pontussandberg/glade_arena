@@ -42,12 +42,11 @@ impl Pair {
         let mut next_client_frame = Instant::now();
         while Instant::now() < end {
             self.server.update();
-            if let Some(frame) = client_frame {
-                if Instant::now() >= next_client_frame {
+            if let Some(frame) = client_frame
+                && Instant::now() >= next_client_frame {
                     self.client.update();
                     next_client_frame += frame;
                 }
-            }
             std::thread::sleep(Duration::from_millis(3));
         }
     }
