@@ -380,6 +380,11 @@ fn attack_summary(def: &ClassDef) -> String {
     }
     .ok();
     write!(s, ", {per_second:.1} hits/s.").ok();
+    let chill = attack.chill;
+    if chill.slow > 0.0 && chill.slow_ticks > 0 {
+        let seconds = chill.slow_ticks as f32 / TICK_HZ as f32;
+        write!(s, " Slows {:.0}% for {seconds:.1} s.", chill.slow * 100.0).ok();
+    }
     s
 }
 

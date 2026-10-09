@@ -1,7 +1,8 @@
 //! Authoritative match server.
 //!
 //! Clients pick a class, then only send inputs. The server runs the shared sim on them, decides
-//! hits and damage (melee and dashes with lag compensation), and replicates the result. A
+//! hits, damage and crowd control (melee, dashes and novas with lag compensation), and
+//! replicates the result. A
 //! client's own player is predicted on that client, other players are interpolated; every
 //! client predicts every projectile.
 
@@ -9,7 +10,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use arena_shared::classes::AbilityKind;
+use arena_shared::classes::{AbilityKind, Chill};
 use arena_shared::config::*;
 use arena_shared::protocol::*;
 use arena_shared::sim;
@@ -259,6 +260,7 @@ fn spawn_chosen_classes(
                 Pos::default(),
                 NeedsSpawnPoint,
                 Health(class.def().max_hp),
+                Chilled::default(),
                 AttackState::default(),
                 AbilityState::default(),
                 DashHits::default(),
@@ -323,10 +325,12 @@ fn neutralize_stale_inputs(
 }
 
 fn move_players(
-    mut players: Query<(&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &AbilityState), InPlay>,
+    timeline: Res<LocalTimeline>,
+    mut players: Query<(&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &AbilityState, &Chilled), InPlay>,
 ) {
-    for (mut pos, class, input, attack, ability) in &mut players {
-        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, ability)));
+    let now = timeline.tick().0 as u32;
+    for (mut pos, class, input, attack, ability, chilled) in &mut players {
+        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, ability, chilled, now)));
     }
 }
 
@@ -336,8 +340,8 @@ fn move_players(
 // against where targets are *now* makes clear hits miss at any real ping. Instead the server
 // keeps a short position history per player and checks hits against where the attacker saw
 // the target: their own interpolation delay back in time ("favor the shooter"), capped. Only
-// for melee and dashes, which land the instant they're made; projectiles are judged in the
-// present (`resolve_projectile_hits`).
+// for melee, dashes and novas, which land the instant they're made; projectiles are judged in
+// the present (`resolve_projectile_hits`).
 
 /// How far back a hit may be judged: ~250 ms.
 const MAX_REWIND_TICKS: u32 = 16;
@@ -374,10 +378,28 @@ fn view_time(now: Tick, link: Entity, delays: &Query<&InterpolationDelay, With<C
     ((tick.0 as u32).max(earliest), overstep)
 }
 
-/// Apply damage dealt `by` someone `with` an attack (named, for the log); at zero health the
+/// What a hit does: damage, and crowd control on top.
+#[derive(Clone, Copy)]
+struct Blow {
+    amount: i32,
+    chill: Chill,
+}
+
+/// Apply a hit dealt `by` someone `with` an attack (named, for the log); at zero health the
 /// player is out of the fight for `RESPAWN_TICKS`.
-fn damage(commands: &mut Commands, now: u32, (player, id): (Entity, PeerId), health: &mut Health, amount: i32, (by, with): (PeerId, &str)) {
+fn damage(
+    commands: &mut Commands,
+    now: u32,
+    (player, id): (Entity, PeerId),
+    (health, chilled): (&mut Health, &mut Chilled),
+    blow: Blow,
+    (by, with): (PeerId, &str),
+) {
+    let amount = blow.amount;
     health.0 = (health.0 - amount).max(0);
+    if !blow.chill.is_none() {
+        chilled.apply(blow.chill, now);
+    }
     debug!(attacker = ?by, target = ?id, with, amount, health = health.0, "hit");
     if health.0 == 0 {
         info!(killer = ?by, victim = ?id, with, "kill");
@@ -389,16 +411,17 @@ fn damage(commands: &mut Commands, now: u32, (player, id): (Entity, PeerId), hea
 fn respawn(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    mut dead: Query<(Entity, &ClassId, &mut Health, &mut AttackState, &mut AbilityState, &mut Dead)>,
+    mut dead: Query<(Entity, &ClassId, &mut Health, &mut Chilled, &mut AttackState, &mut AbilityState, &mut Dead)>,
 ) {
     let now = timeline.tick().0 as u32;
-    for (player, class, mut health, mut attack, mut ability, mut dead) in &mut dead {
+    for (player, class, mut health, mut chilled, mut attack, mut ability, mut dead) in &mut dead {
         if !dead.placed && now + PLACE_BEFORE_RESPAWN_TICKS >= dead.respawn_at {
             dead.placed = true;
             commands.entity(player).insert(NeedsSpawnPoint);
         }
         if now >= dead.respawn_at {
             health.0 = class.def().max_hp;
+            chilled.set_if_neq(Chilled::default());
             *attack = AttackState::default();
             *ability = AbilityState::default();
             commands.entity(player).remove::<Dead>();
@@ -407,10 +430,14 @@ fn respawn(
     }
 }
 
-type Targets<'w, 's> =
-    Query<'w, 's, (Entity, &'static PlayerId, &'static Pos, &'static PosHistory, &'static mut Health), InPlay>;
+type Targets<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static PlayerId, &'static Pos, &'static PosHistory, &'static mut Health, &'static mut Chilled),
+    InPlay,
+>;
 
-/// Lag-compensated hits: deals `amount` to everyone but `attacker` that `hits` says is hit,
+/// Lag-compensated hits: deals `blow` to everyone but `attacker` that `hits` says is hit,
 /// judged at where they were at `seen_at` (where the attacker saw them). Returns how many.
 fn hit_where_seen(
     commands: &mut Commands,
@@ -418,13 +445,13 @@ fn hit_where_seen(
     targets: &mut Targets,
     seen_at: (u32, f32),
     attacker: (PeerId, &str),
-    amount: i32,
+    blow: Blow,
     mut hits: impl FnMut(PeerId, Vec2) -> bool,
 ) -> usize {
     let mut count = 0;
-    for (target, target_id, target_pos, history, mut health) in targets {
+    for (target, target_id, target_pos, history, mut health, mut chilled) in targets {
         if target_id.0 != attacker.0 && hits(target_id.0, history.at(seen_at).unwrap_or(target_pos.0)) {
-            damage(commands, now, (target, target_id.0), &mut health, amount, attacker);
+            damage(commands, now, (target, target_id.0), (&mut health, &mut chilled), blow, attacker);
             count += 1;
         }
     }
@@ -455,8 +482,8 @@ fn attack(
             sim::Attack::Melee(swing) => {
                 *last_swing = swing;
                 let seen_at = view_time(now, controlled_by.owner, &delays);
-                let amount = class.def().attack.damage;
-                hit_where_seen(&mut commands, now.0 as u32, &mut targets, seen_at, (id.0, "auto-attack"), amount, |_, seen| {
+                let blow = Blow { amount: class.def().attack.damage, chill: class.def().attack.chill };
+                hit_where_seen(&mut commands, now.0 as u32, &mut targets, seen_at, (id.0, "auto-attack"), blow, |_, seen| {
                     sim::melee_hits(pos.0, swing.dir, *class, seen)
                 });
             }
@@ -472,7 +499,8 @@ struct DashHits(u32, Vec<PeerId>);
 /// Q abilities. Thrown ones are spawned (and matched to the client's prespawned copy). Dashes
 /// cut whoever the dasher passes through, judged against where the dasher saw them, each target
 /// once per dash; with `resets_attack`, a hit readies the auto-attack (the client predicted it
-/// still cooling down and is corrected by a rollback).
+/// still cooling down and is corrected by a rollback). A rooted dasher cuts no one (its dash
+/// stops). Novas hit everyone around the caster, judged against where the caster saw them.
 fn use_abilities(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
@@ -493,18 +521,25 @@ fn use_abilities(
     mut targets: Targets,
 ) {
     let now = timeline.tick();
+    // Read up front: `targets` holds every player's `Chilled` mutably. A root or slow landing
+    // during this loop starts next tick anyway.
+    let chills: Vec<(PeerId, Chilled)> = targets.iter().map(|(_, id, .., chilled)| (id.0, *chilled)).collect();
     for (id, class, pos, input, controlled_by, mut attack, mut state, mut hits) in &mut users {
+        let chilled = chills.iter().find(|(p, _)| *p == id.0).map(|(_, c)| *c).unwrap_or_default();
         // Cut whoever this tick's dash step reached (`move_players` just made it). Checked before
         // the ability steps, which ends the dash on its last tick: so every step is checked, the
         // last one included, and the spot the dash started from isn't.
-        if let (Some(dash), AbilityKind::Dash { damage: cut, resets_attack, .. }) = (state.dash, &class.def().ability.kind) {
+        if let (Some(dash), AbilityKind::Dash { damage: cut, resets_attack, .. }) = (state.dash, &class.def().ability.kind)
+            && !chilled.rooted_at(now.0 as u32)
+        {
             if hits.0 != dash.started_at {
                 hits.0 = dash.started_at;
                 hits.1.clear();
             }
             let seen_at = view_time(now, controlled_by.owner, &delays);
             let with = (id.0, class.def().ability.name.as_str());
-            let cut_now = hit_where_seen(&mut commands, now.0 as u32, &mut targets, seen_at, with, *cut, |target, seen| {
+            let blow = Blow { amount: *cut, chill: Chill::default() };
+            let cut_now = hit_where_seen(&mut commands, now.0 as u32, &mut targets, seen_at, with, blow, |target, seen| {
                 let fresh = !hits.1.contains(&target) && sim::dash_hits(pos.0, seen);
                 if fresh {
                     hits.1.push(target);
@@ -515,10 +550,20 @@ fn use_abilities(
                 attack.ready_at = now.0 as u32;
             }
         }
-        let (next, thrown) = sim::step_ability(now.0 as u32, id.0, *class, pos.0, &input.0, &attack, *state);
+        let (next, cast) = sim::step_ability(now.0 as u32, id.0, *class, pos.0, &input.0, &attack, &chilled, *state);
         state.set_if_neq(next);
-        if let Some(projectile) = thrown {
-            spawn_projectile(&mut commands, projectile);
+        match cast {
+            Some(sim::Cast::Throw(projectile)) => spawn_projectile(&mut commands, projectile),
+            Some(sim::Cast::Nova) => {
+                let AbilityKind::Nova { damage, chill, .. } = class.def().ability.kind else { continue };
+                let seen_at = view_time(now, controlled_by.owner, &delays);
+                let with = (id.0, class.def().ability.name.as_str());
+                let blow = Blow { amount: damage, chill };
+                hit_where_seen(&mut commands, now.0 as u32, &mut targets, seen_at, with, blow, |_, seen| {
+                    sim::nova_hits(pos.0, *class, seen)
+                });
+            }
+            None => {}
         }
     }
 }
@@ -541,7 +586,8 @@ fn move_projectiles(
 /// dashes. Projectiles can be dodged, and every client draws them on its own player's clock, so
 /// what the target sees is exactly what's judged here ("favor the target"). The price is paid by
 /// the shooter, who sees others a little in the past and may watch a shot pass through someone
-/// who had already stepped aside. Clients see the result through replicated `Health`.
+/// who had already stepped aside. Clients see the result through replicated `Health` (and
+/// `Chilled`).
 fn resolve_projectile_hits(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
@@ -550,15 +596,16 @@ fn resolve_projectile_hits(
 ) {
     let now = timeline.tick();
     for (projectile_entity, projectile_pos, projectile) in &projectiles {
-        for (target, target_id, target_pos, _, mut health) in &mut targets {
+        for (target, target_id, target_pos, _, mut health, mut chilled) in &mut targets {
             if target_id.0 == projectile.owner || !sim::projectile_hits(projectile_pos.0, projectile, target_pos.0) {
                 continue;
             }
             commands.entity(projectile_entity).try_despawn();
-            let amount = sim::projectile_damage(projectile, now.0 as u32);
+            let blow = Blow { amount: sim::projectile_damage(projectile, now.0 as u32), chill: sim::projectile_chill(projectile) };
             let def = projectile.class.def();
             let with = if projectile.ability { def.ability.name.as_str() } else { "auto-attack" };
-            damage(&mut commands, now.0 as u32, (target, target_id.0), &mut health, amount, (projectile.owner, with));
+            let hit = (&mut *health, &mut *chilled);
+            damage(&mut commands, now.0 as u32, (target, target_id.0), hit, blow, (projectile.owner, with));
             break;
         }
     }

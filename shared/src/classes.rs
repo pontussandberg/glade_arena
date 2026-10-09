@@ -35,6 +35,28 @@ pub struct AttackDef {
     /// Ticks from starting an attack to it going off; you stand still meanwhile.
     pub windup_ticks: u32,
     pub kind: AttackKind,
+    /// Crowd control each hit applies (none by default).
+    #[serde(default)]
+    pub chill: Chill,
+}
+
+/// Crowd control a hit applies on top of its damage: a slow (`slow` is the fraction of speed
+/// taken away, for `slow_ticks`) and a root (frozen in place for `root_ticks`: no walking, no
+/// dashing). Both start the tick after the hit.
+#[derive(Deserialize, Debug, Clone, Copy, Default, PartialEq)]
+pub struct Chill {
+    #[serde(default)]
+    pub slow: f32,
+    #[serde(default)]
+    pub slow_ticks: u32,
+    #[serde(default)]
+    pub root_ticks: u32,
+}
+
+impl Chill {
+    pub fn is_none(&self) -> bool {
+        (self.slow == 0.0 || self.slow_ticks == 0) && self.root_ticks == 0
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -75,6 +97,14 @@ pub enum AbilityKind {
         #[serde(default)]
         resets_attack: bool,
     },
+    /// A burst around the user, at once: everyone within `radius` (center to body, not behind a
+    /// wall) takes `damage` and `chill`.
+    Nova {
+        radius: f32,
+        damage: i32,
+        #[serde(default)]
+        chill: Chill,
+    },
 }
 
 /// How a projectile flies: the auto-attack's or the ability's.
@@ -100,7 +130,7 @@ impl ClassDef {
 }
 
 impl AbilityKind {
-    /// How a thrown ability flies (`None` for a dash).
+    /// How a thrown ability flies (`None` for a dash or a nova).
     pub fn shot(&self) -> Option<Shot> {
         let AbilityKind::Projectile { speed, radius, range, .. } = *self else { return None };
         Some(Shot { speed, radius, range })
@@ -217,8 +247,20 @@ mod tests {
                     assert!(damage >= 0 && (0.5..=15.0).contains(&distance) && (1..=64).contains(&ticks), "{}: dash", c.id);
                     assert!(ticks < c.ability.cooldown_ticks, "{}: dash longer than its cooldown", c.id);
                 }
+                AbilityKind::Nova { radius, damage, chill } => {
+                    assert!(damage >= 0 && (0.5..=10.0).contains(&radius), "{}: nova", c.id);
+                    assert!(damage > 0 || !chill.is_none(), "{}: a nova that does nothing", c.id);
+                    chill_is_sane(&c.id, chill);
+                }
             }
+            chill_is_sane(&c.id, c.attack.chill);
         }
+    }
+
+    fn chill_is_sane(id: &str, chill: Chill) {
+        assert!((0.0..1.0).contains(&chill.slow), "{id}: slow must leave some speed");
+        // Long enough to matter, short enough to fight back: at most 5 s slowed, 2 s rooted.
+        assert!(chill.slow_ticks <= 5 * TICK_HZ as u32 && chill.root_ticks <= 2 * TICK_HZ as u32, "{id}: chill too long");
     }
 
     #[test]
@@ -232,7 +274,7 @@ mod tests {
     #[test]
     fn far_damage_scales_with_distance() {
         let kind = |far_damage| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_damage };
-        let attack = |kind| AttackDef { damage: 10, cooldown_ticks: 40, windup_ticks: 10, kind };
+        let attack = |kind| AttackDef { damage: 10, cooldown_ticks: 40, windup_ticks: 10, kind, chill: Chill::default() };
         assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(30))).damage_at(d)), [10, 20, 30, 30]);
         assert_eq!(attack(kind(None)).damage_at(5.0), 10);
     }

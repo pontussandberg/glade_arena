@@ -6,10 +6,10 @@
 use bevy::prelude::*;
 use lightyear::prelude::PeerId;
 
-use crate::classes::{AbilityKind, AttackKind, ClassId, Shot};
+use crate::classes::{AbilityKind, AttackKind, Chill, ClassId, Shot};
 use crate::config::*;
 use crate::map::{Map, SPAWN_POINTS, map};
-use crate::protocol::{AbilityState, AttackState, Dash, LastSwing, PlayerInput, Projectile, Windup};
+use crate::protocol::{AbilityState, AttackState, Chilled, Dash, LastSwing, PlayerInput, Projectile, Windup};
 
 /// Advance a player one tick: straight the way its keys walk it, or else toward the tile it
 /// was told to walk to (point-and-click). Pathfinding runs here, in the shared sim, so the
@@ -36,22 +36,35 @@ fn walk_step(pos: Vec2, step: Vec2) -> Vec2 {
         .unwrap_or(pos)
 }
 
-/// One tick of a player's movement: dashing, standing still while winding up an attack, or
-/// walking at its class's speed. What both the server and the predicting client run.
-pub fn move_player(pos: Vec2, input: &PlayerInput, class: ClassId, attack: &AttackState, ability: &AbilityState) -> Vec2 {
-    if let Some(dash) = ability.dash {
-        dash_step(pos, dash.dir, class)
+/// One tick (`tick`) of a player's movement: frozen in place while rooted, dashing, standing
+/// still while winding up an attack, or walking at its class's speed. A slow takes its share off
+/// walking and dashing alike. What both the server and the predicting client run.
+pub fn move_player(
+    pos: Vec2,
+    input: &PlayerInput,
+    class: ClassId,
+    attack: &AttackState,
+    ability: &AbilityState,
+    chilled: &Chilled,
+    tick: u32,
+) -> Vec2 {
+    let speed = chilled.speed_factor(tick);
+    if chilled.rooted_at(tick) {
+        pos
+    } else if let Some(dash) = ability.dash {
+        dash_step(pos, dash.dir, class, speed)
     } else if attack.windup.is_some() {
         pos
     } else {
-        step_player(pos, input, class.def().move_speed)
+        step_player(pos, input, class.def().move_speed * speed)
     }
 }
 
-/// One tick of a dash; a wall (or water's edge, anything unwalkable) stops it.
-fn dash_step(pos: Vec2, dir: Vec2, class: ClassId) -> Vec2 {
+/// One tick of a dash, at `speed` of its full pace; a wall (or water's edge, anything
+/// unwalkable) stops it.
+fn dash_step(pos: Vec2, dir: Vec2, class: ClassId, speed: f32) -> Vec2 {
     let AbilityKind::Dash { distance, ticks, .. } = class.def().ability.kind else { return pos };
-    let next = pos + dir * (distance / ticks as f32);
+    let next = pos + dir * (distance / ticks as f32 * speed);
     if map().line_walkable(pos, next) { next } else { pos }
 }
 
@@ -110,9 +123,19 @@ fn shot_spawn(pos: Vec2, dir: Vec2, radius: f32) -> Vec2 {
     pos + dir * (PLAYER_RADIUS + radius)
 }
 
+/// What a Q produces the tick it's pressed.
+pub enum Cast {
+    /// Spawn this projectile.
+    Throw(Projectile),
+    /// A nova bursts around the caster; the server resolves who it hits (`nova_hits`).
+    Nova,
+}
+
 /// One tick of the Q ability. Pressing it while it's ready uses it toward the aim: a projectile
-/// ability throws at once (returned here, to spawn); a dash starts (not while winding up an
-/// attack) and runs for its ticks, moved by `move_player`.
+/// ability throws and a nova bursts at once (returned here); a dash starts (not while winding up
+/// an attack, nor while rooted) and runs for its ticks, moved by `move_player`. A root stops a
+/// dash in progress.
+#[allow(clippy::too_many_arguments)]
 pub fn step_ability(
     tick: u32,
     owner: PeerId,
@@ -120,30 +143,40 @@ pub fn step_ability(
     pos: Vec2,
     input: &PlayerInput,
     attack: &AttackState,
+    chilled: &Chilled,
     mut state: AbilityState,
-) -> (AbilityState, Option<Projectile>) {
+) -> (AbilityState, Option<Cast>) {
     let ability = &class.def().ability;
+    let rooted = chilled.rooted_at(tick);
     if let (Some(dash), AbilityKind::Dash { ticks, .. }) = (state.dash, &ability.kind)
-        && tick >= dash.started_at + ticks
+        && (tick >= dash.started_at + ticks || rooted)
     {
         state.dash = None;
     }
     let Some(dir) = input.aim.try_normalize().filter(|_| input.ability && tick >= state.ready_at) else {
         return (state, None);
     };
-    let thrown = match ability.kind {
+    let cast = match ability.kind {
         AbilityKind::Projectile { radius, .. } => {
             let origin = shot_spawn(pos, dir, radius);
-            Some(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: true })
+            Some(Cast::Throw(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: true }))
         }
-        AbilityKind::Dash { .. } if attack.windup.is_none() => {
+        AbilityKind::Dash { .. } if attack.windup.is_none() && !rooted => {
             state.dash = Some(Dash { started_at: tick, dir });
             None
         }
         AbilityKind::Dash { .. } => return (state, None),
+        AbilityKind::Nova { .. } => Some(Cast::Nova),
     };
     state.ready_at = tick + ability.cooldown_ticks;
-    (state, thrown)
+    (state, cast)
+}
+
+/// Does a nova from `caster` reach `target`? Its radius out to the target's body, and not
+/// through a wall. Only the server decides this.
+pub fn nova_hits(caster: Vec2, class: ClassId, target: Vec2) -> bool {
+    let AbilityKind::Nova { radius, .. } = class.def().ability.kind else { return false };
+    caster.distance(target) <= radius + PLAYER_RADIUS && map().shot_clear(caster, target)
 }
 
 /// Does a dash at `dasher` cut `target`? Bodies touching, and not through a wall.
@@ -199,6 +232,12 @@ pub fn projectile_damage(projectile: &Projectile, tick: u32) -> i32 {
     }
     let flown = tick.saturating_sub(projectile.spawn_tick) as f32 * TICK_DT * shot(projectile).speed;
     def.attack.damage_at(flown)
+}
+
+/// The crowd control a projectile's hit applies: its auto-attack's chill (thrown abilities have
+/// none).
+pub fn projectile_chill(projectile: &Projectile) -> Chill {
+    if projectile.ability { Chill::default() } else { projectile.class.def().attack.chill }
 }
 
 /// Same hash on client and server so the server's projectile is matched to the one the
@@ -358,9 +397,9 @@ mod tests {
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let (_, winding) = attack_ticks(class, &aim(Vec2::X, true), 10, 10);
         assert!(winding.windup.is_some());
-        let idle = AbilityState::default();
-        assert_eq!(move_player(from, &walk, class, &winding, &idle), from, "moved during the windup");
-        assert_ne!(move_player(from, &walk, class, &AttackState::default(), &idle), from, "rooted without attacking");
+        let (idle, warm) = (AbilityState::default(), Chilled::default());
+        assert_eq!(move_player(from, &walk, class, &winding, &idle, &warm, 11), from, "moved during the windup");
+        assert_ne!(move_player(from, &walk, class, &AttackState::default(), &idle, &warm, 11), from, "rooted without attacking");
     }
 
     #[test]
@@ -413,11 +452,11 @@ mod tests {
     fn thrown_ability_goes_off_at_once_then_waits_for_its_cooldown() {
         let class = thrower();
         let me = PeerId::Netcode(1);
-        let (state, thrown) = step_ability(10, me, class, Vec2::ZERO, &press_q(Vec2::X), &AttackState::default(), default());
-        let projectile = thrown.expect("thrown the tick Q is pressed");
+        let (state, thrown) = step_ability(10, me, class, Vec2::ZERO, &press_q(Vec2::X), &AttackState::default(), &default(), default());
+        let Some(Cast::Throw(projectile)) = thrown else { panic!("thrown the tick Q is pressed") };
         assert!(projectile.ability && projectile.spawn_tick == 10);
         let cooldown = class.def().ability.cooldown_ticks;
-        let again = |tick| step_ability(tick, me, class, Vec2::ZERO, &press_q(Vec2::X), &AttackState::default(), state).1;
+        let again = |tick| step_ability(tick, me, class, Vec2::ZERO, &press_q(Vec2::X), &AttackState::default(), &default(), state).1;
         assert!(again(10 + cooldown - 1).is_none(), "used again during its cooldown");
         assert!(again(10 + cooldown).is_some());
         // Its own speed, separate from the auto-attack's (and the same tick gets another hash).
@@ -434,12 +473,12 @@ mod tests {
         for from in SPAWN_POINTS {
             for i in 0..8 {
                 let dir = Vec2::from_angle(i as f32 * std::f32::consts::FRAC_PI_4);
-                let (mut state, _) = step_ability(1, PeerId::Netcode(1), class, from, &press_q(dir), &AttackState::default(), default());
+                let (mut state, _) = step_ability(1, PeerId::Netcode(1), class, from, &press_q(dir), &AttackState::default(), &default(), default());
                 let mut pos = from;
                 for tick in 2..=1 + ticks + 3 {
-                    pos = move_player(pos, &PlayerInput::default(), class, &AttackState::default(), &state);
+                    pos = move_player(pos, &PlayerInput::default(), class, &AttackState::default(), &state, &default(), tick);
                     assert!(map().walkable_at(pos), "dashed into a wall at {pos}");
-                    state = step_ability(tick, PeerId::Netcode(1), class, pos, &PlayerInput::default(), &AttackState::default(), state).0;
+                    state = step_ability(tick, PeerId::Netcode(1), class, pos, &PlayerInput::default(), &AttackState::default(), &default(), state).0;
                 }
                 assert!(state.dash.is_none(), "the dash should be over");
                 longest = longest.max(from.distance(pos));
@@ -453,8 +492,90 @@ mod tests {
     fn no_dash_while_winding_up_an_attack() {
         let class = dasher();
         let (_, winding) = attack_ticks(class, &aim(Vec2::X, true), 10, 10);
-        let (state, _) = step_ability(11, PeerId::Netcode(1), class, Vec2::ZERO, &press_q(Vec2::X), &winding, default());
+        let (state, _) = step_ability(11, PeerId::Netcode(1), class, Vec2::ZERO, &press_q(Vec2::X), &winding, &default(), default());
         assert!(state.dash.is_none() && state.ready_at == 0, "dashed (or spent the cooldown) mid-windup");
+    }
+
+    /// The first class whose auto-attack chills / whose Q is a nova.
+    fn chiller() -> ClassId {
+        ClassId::all().find(|c| !c.def().attack.chill.is_none()).unwrap()
+    }
+    fn novaer() -> ClassId {
+        ClassId::all().find(|c| matches!(c.def().ability.kind, AbilityKind::Nova { .. })).unwrap()
+    }
+
+    #[test]
+    fn a_slow_starts_the_tick_after_the_hit_and_wears_off() {
+        let chill = chiller().def().attack.chill;
+        let mut chilled = Chilled::default();
+        chilled.apply(chill, 100);
+        assert_eq!(chilled.speed_factor(100), 1.0, "slowed on the tick of the hit");
+        assert_eq!(chilled.speed_factor(101), 1.0 - chill.slow);
+        assert_eq!(chilled.speed_factor(100 + chill.slow_ticks), 1.0 - chill.slow);
+        assert_eq!(chilled.speed_factor(101 + chill.slow_ticks), 1.0, "still slowed after it wore off");
+
+        // Slowed, a step covers that much less ground.
+        let from = SPAWN_POINTS[0];
+        let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
+        let (attack, ability) = (AttackState::default(), AbilityState::default());
+        let step = |chilled: &Chilled| move_player(from, &walk, chiller(), &attack, &ability, chilled, 101).distance(from);
+        assert!((step(&chilled) - step(&Chilled::default()) * (1.0 - chill.slow)).abs() < 1e-5);
+
+        // A weaker slow doesn't replace a stronger one; the same one again renews it.
+        let mut again = chilled;
+        again.apply(Chill { slow: chill.slow / 2.0, slow_ticks: 1000, root_ticks: 0 }, 110);
+        assert_eq!(again, chilled);
+        again.apply(chill, 110);
+        assert_eq!(again.slowed, crate::protocol::Span { from: 111, until: 111 + chill.slow_ticks });
+    }
+
+    #[test]
+    fn rooted_means_no_walking_no_dashing_and_a_dash_stops() {
+        let mut chilled = Chilled::default();
+        chilled.apply(Chill { root_ticks: 64, ..default() }, 10);
+        let from = SPAWN_POINTS[0];
+        let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
+        let class = dasher();
+        let (attack, idle) = (AttackState::default(), AbilityState::default());
+        assert_eq!(move_player(from, &walk, class, &attack, &idle, &chilled, 11), from, "walked while rooted");
+        assert_ne!(move_player(from, &walk, class, &attack, &idle, &chilled, 75), from, "still rooted after it wore off");
+
+        let (state, _) = step_ability(11, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &attack, &chilled, idle);
+        assert!(state.dash.is_none() && state.ready_at == 0, "dashed (or spent the cooldown) while rooted");
+
+        // A dash in progress when the root lands goes no further, and ends.
+        let (dashing, _) = step_ability(9, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &attack, &default(), idle);
+        assert!(dashing.dash.is_some());
+        assert_eq!(move_player(from, &walk, class, &attack, &dashing, &chilled, 11), from, "dashed on while rooted");
+        let (stopped, _) = step_ability(11, PeerId::Netcode(1), class, from, &PlayerInput::default(), &attack, &chilled, dashing);
+        assert!(stopped.dash.is_none(), "the dash should stop");
+    }
+
+    #[test]
+    fn nova_bursts_at_once_around_the_caster_only() {
+        let class = novaer();
+        let AbilityKind::Nova { radius, .. } = class.def().ability.kind else { unreachable!() };
+        let idle = AttackState::default();
+        let (state, cast) = step_ability(10, PeerId::Netcode(1), class, Vec2::ZERO, &press_q(Vec2::X), &idle, &default(), default());
+        assert!(matches!(cast, Some(Cast::Nova)), "no nova the tick Q is pressed");
+        assert_eq!(state.ready_at, 10 + class.def().ability.cooldown_ticks);
+        let dirs = [Vec2::X, Vec2::Y, -Vec2::X, Vec2::new(0.6, -0.8)];
+        // Open ground all around (walls stop novas too).
+        let open = |p: Vec2| dirs.iter().all(|d| map().shot_clear(p, p + *d * (radius + 1.5)));
+        let at = map().tiles().map(|(tile, _)| Map::center(tile)).find(|&p| open(p)).unwrap();
+        for dir in dirs {
+            assert!(nova_hits(at, class, at + dir * (radius + PLAYER_RADIUS - 0.05)), "inside, toward {dir}");
+            assert!(!nova_hits(at, class, at + dir * (radius + PLAYER_RADIUS + 0.05)), "outside, toward {dir}");
+        }
+        assert!(!nova_hits(at, dasher(), at + Vec2::X), "only novas burst");
+    }
+
+    #[test]
+    fn only_auto_attacks_chill() {
+        let class = chiller();
+        let shot = Projectile { owner: PeerId::Netcode(1), class, origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 1, ability: false };
+        assert_eq!(projectile_chill(&shot), class.def().attack.chill);
+        assert!(projectile_chill(&Projectile { class: thrower(), ability: true, ..shot }).is_none());
     }
 
     #[test]

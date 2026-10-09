@@ -18,6 +18,11 @@
 //! shoulder, turning away; the strike chops it down through the target, stepping into it. A
 //! dash is a forward lunge with the blade swept back.
 //!
+//! The frost mage carries its staff upright at its side. The windup raises it high toward the
+//! target, the off hand reaching out to gather the cold; the cast thrusts the crystal forward at
+//! the target. A nova slams the staff down into the ground in a deep crouch, the off hand flung
+//! back.
+//!
 //! Transforms are only written when they change, so a fighter standing still costs nothing.
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
@@ -29,7 +34,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::feedback::AttackClock;
-use crate::glade::{self, palette, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER, RIG_TAIL};
+use crate::glade::{self, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER, RIG_TAIL};
 use crate::render::shown;
 
 pub struct RigPlugin;
@@ -105,6 +110,9 @@ struct Moves {
     lean: [f32; 4],
     head_dip: [f32; 4],
     held: Held,
+    // (The fourth keyframe of each is the class's Q pose: a dash, or a nova's slam.)
+    /// Throws its weapon with the auto-attack: the hand is empty until a new one is drawn.
+    throws: bool,
     /// How big the fighter is drawn (1 = the joints in `glade`).
     scale: f32,
 }
@@ -116,6 +124,9 @@ enum Held {
     OnTarget,
     /// Fixed in the fist, along the arm and this far (radians) forward of it: a sword.
     InHand(f32),
+    /// Kept standing up, whatever the arm and body do, tipped this far (radians, keyframes like
+    /// the joints') toward the facing: a staff.
+    Upright([f32; 4]),
 }
 
 const JAVELINIST: Moves = Moves {
@@ -127,6 +138,7 @@ const JAVELINIST: Moves = Moves {
     lean: [0.0, 0.28, -0.38, -0.45],
     head_dip: [0.0, 0.2, -0.15, 0.0],
     held: Held::OnTarget,
+    throws: true,
     scale: 1.12,
 };
 
@@ -139,7 +151,21 @@ const REVENANT: Moves = Moves {
     lean: [0.0, 0.2, -0.4, -0.55],
     head_dip: [0.0, 0.15, -0.25, 0.0],
     held: Held::InHand(0.45),
+    throws: false,
     scale: 1.0,
+};
+
+const FROST_MAGE: Moves = Moves {
+    weapon_arm: [0.3, 1.9, 1.25, 0.75],
+    lead_arm: [-0.1, 1.25, 0.8, -1.0],
+    lead_leg: [0.1, 0.3, 0.5, 0.55],
+    back_leg: [-0.1, -0.3, -0.5, -0.5],
+    twist: [0.0, -0.4, 0.35, 0.15],
+    lean: [0.0, 0.12, -0.25, -0.35],
+    head_dip: [0.0, 0.1, -0.15, -0.2],
+    held: Held::Upright([0.08, -0.25, 1.0, -0.05]),
+    throws: false,
+    scale: 1.05,
 };
 
 /// The moves for a class's look (every class has one: `glade::FIGHTER_LOOKS`).
@@ -147,6 +173,7 @@ fn moves(class_key: &str) -> &'static Moves {
     match class_key {
         "javelinist" => &JAVELINIST,
         "revenant" => &REVENANT,
+        "frost_mage" => &FROST_MAGE,
         _ => unreachable!("no moves for class {class_key:?}"),
     }
 }
@@ -159,19 +186,21 @@ const STRIKE_START: f32 = 0.78;
 const FOLLOW_THROUGH: (f32, f32) = (3.0, 14.0);
 /// A thrown Q's flick: ticks after the throw until the arm starts and finishes coming back.
 const FLICK: (f32, f32) = (1.0, 10.0);
+/// A nova's slam: ticks after the cast until it starts and finishes rising out of it.
+const SLAM: (f32, f32) = (8.0, 24.0);
 /// How quickly a fighter turns toward where it wants to face, and eases in and out of its walk
 /// (per second, exponential).
 const TURN_RATE: f32 = 28.0;
 const WALK_RATE: f32 = 10.0;
-/// How brightly the eyes glow.
+/// How brightly the eyes (and other glowing parts) glow.
 const EYE_GLOW: f32 = 6.0;
 
-/// Rig meshes for each class, and the eyes' glow (the same for everyone). Every other part is
-/// drawn in the fighter's own material (colors in the vertices), so a hit flashes all of it.
+/// Rig meshes for each class, and its glow (eyes, crystals: the same for everyone of a class).
+/// Every other part is drawn in the fighter's own material (colors in the vertices), so a hit
+/// flashes all of it.
 #[derive(Resource)]
 struct RigAssets {
     meshes: HashMap<ClassId, RigHandles>,
-    glow: Handle<StandardMaterial>,
 }
 
 struct RigHandles {
@@ -180,6 +209,9 @@ struct RigHandles {
     leg: Handle<Mesh>,
     held: Handle<Mesh>,
     eyes: Handle<Mesh>,
+    glow: Handle<StandardMaterial>,
+    held_glow: Option<Handle<Mesh>>,
+    body_glow: Option<Handle<Mesh>>,
     tail: Option<Handle<Mesh>>,
 }
 
@@ -265,13 +297,15 @@ fn load_rigs(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mater
                 leg: add(rig.leg),
                 held: add(rig.held),
                 eyes: add(rig.eyes),
+                glow: materials.add(glade::glow(rig.glow, EYE_GLOW)),
+                held_glow: rig.held_glow.map(|mesh| meshes.add(mesh)),
+                body_glow: rig.body_glow.map(|mesh| meshes.add(mesh)),
                 tail: rig.tail.map(|tail| meshes.add(tail)),
             };
             (c, handles)
         })
         .collect();
-    let glow = materials.add(glade::glow(palette::WISP, EYE_GLOW));
-    commands.insert_resource(RigAssets { meshes: rigs, glow });
+    commands.insert_resource(RigAssets { meshes: rigs });
 }
 
 fn mirrored(right: Vec3) -> Vec3 {
@@ -302,9 +336,17 @@ fn add_rigs(
             walking: 0.0,
             joints: Joints::default(),
         };
-        let eyes = part(&handles.eyes, &assets.glow, Vec3::ZERO);
+        let eyes = part(&handles.eyes, &handles.glow, Vec3::ZERO);
+        let held_glow = handles.held_glow.as_ref().map(|mesh| part(mesh, &handles.glow, Vec3::ZERO));
+        let body_glow = handles.body_glow.as_ref().map(|mesh| part(mesh, &handles.glow, Vec3::ZERO));
         commands.entity(rig.head).add_child(eyes);
         commands.entity(rig.arms[0]).add_child(rig.held);
+        if let Some(glow) = held_glow {
+            commands.entity(rig.held).add_child(glow);
+        }
+        if let Some(glow) = body_glow {
+            commands.entity(player).add_child(glow);
+        }
         commands.entity(player).add_children(&[rig.head, rig.arms[0], rig.arms[1], rig.legs[0], rig.legs[1]]);
         if let Some(tail) = rig.tail {
             commands.entity(player).add_child(tail);
@@ -411,16 +453,20 @@ fn pose_rigs(
             (None, None) => (0.0, 0.0),
         };
         let flicked = since_throw(ability.used_at(*class), seen.and_then(|seen| seen.ability));
-        if let (AbilityKind::Projectile { .. }, Some(since)) = (&def.ability.kind, flicked) {
-            throw = throw.max(1.0 - ease(FLICK.0, FLICK.1, since));
+        let mut dashing = if ability.dash.is_some() { 1.0 } else { 0.0 };
+        match (&def.ability.kind, flicked) {
+            (AbilityKind::Projectile { .. }, Some(since)) => throw = throw.max(1.0 - ease(FLICK.0, FLICK.1, since)),
+            // A nova's slam is its Q pose, like a dash's.
+            (AbilityKind::Nova { .. }, Some(since)) => dashing = 1.0 - ease(SLAM.0, SLAM.1, since),
+            _ => {}
         }
-        let dashing = if ability.dash.is_some() { 1.0 } else { 0.0 };
         let moves = rig.moves;
         let pose = |[carry, drawn, released, dash]: [f32; 4]| carry.lerp(drawn, draw).lerp(released, throw).lerp(dash, dashing);
         let braced = draw.max(throw).max(dashing);
         // A thrown weapon: the hand is empty until a new one is drawn, halfway through the cooldown.
         let rearm = (def.attack.cooldown_ticks - def.attack.windup_ticks) as f32 / 2.0;
-        let empty_handed = matches!(def.attack.kind, AttackKind::Projectile { .. })
+        let empty_handed = rig.moves.throws
+            && matches!(def.attack.kind, AttackKind::Projectile { .. })
             && windup.is_none()
             && released.is_some_and(|s| s < rearm);
 
@@ -463,6 +509,7 @@ fn pose_rigs(
         let held = match moves.held {
             Held::OnTarget => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-(FRAC_PI_2 - 0.12)),
             Held::InHand(forward) => Quat::from_rotation_z(PI + forward),
+            Held::Upright(tip) => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-pose(tip)),
         };
         let rotations = [
             (rig.head, unlean * Quat::from_rotation_z(-head_dip)),

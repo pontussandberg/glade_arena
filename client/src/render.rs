@@ -1,5 +1,5 @@
-//! Fighters, projectiles, melee swings, dash streaks and windup telegraphs, the destination
-//! marker and the HUD, plus mouse and keyboard input.
+//! Fighters, projectiles, melee swings, dash streaks, nova bursts and windup telegraphs, frost on
+//! slowed and frozen fighters, the destination marker and the HUD, plus mouse and keyboard input.
 //! The scene itself is in `glade.rs`, the camera in `camera.rs`, the lobby in `lobby.rs`.
 
 use std::fmt::Write;
@@ -39,7 +39,8 @@ impl Plugin for RenderPlugin {
                 (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
                 (add_visuals, sync_transforms).chain().before(crate::rig::Posing),
                 fly_shots.after(crate::rig::Posing),
-                (show_swings, show_dashes, fade_swings, (show_telegraphs, align_to_world).chain().after(crate::rig::Posing)),
+                (show_swings, show_dashes, show_novas, grow_bursts, fade_swings, show_frost),
+                (show_telegraphs, align_to_world).chain().after(crate::rig::Posing),
                 update_hud,
             ),
         );
@@ -67,6 +68,14 @@ const RUBBER_RATE: f32 = 3.5;
 /// How long a swing, and a dash streak, stay on screen.
 const SWING_SECONDS: f32 = 0.16;
 const DASH_SECONDS: f32 = 0.3;
+/// A nova: its shockwave races out to the edge in `NOVA_WAVE_SECONDS`, raising shards as it
+/// passes (each takes `NOVA_GROW_SECONDS` to burst up); the frost on the ground and the shards
+/// stay until `NOVA_SECONDS`, then sink.
+const NOVA_WAVE_SECONDS: f32 = 0.22;
+const NOVA_GROW_SECONDS: f32 = 0.1;
+const NOVA_SECONDS: f32 = 0.75;
+/// How fast (radians per second) the frost under a slowed fighter turns.
+const RUNE_TURN_RATE: f32 = 0.8;
 /// Thin shots still get a lane wide enough to see.
 const TELEGRAPH_MIN_WIDTH: f32 = 0.45;
 
@@ -88,6 +97,11 @@ pub(crate) struct Visuals {
     attack_shapes: HashMap<ClassId, Handle<Mesh>>,
     /// The ground a dash covers, for its streak.
     dash_streaks: HashMap<ClassId, Handle<Mesh>>,
+    /// A nova's burst (see `glade::NovaMeshes`).
+    novas: HashMap<ClassId, glade::NovaMeshes<Handle<Mesh>>>,
+    /// The ice around a frozen (rooted) fighter's feet, and the frost under a slowed one's.
+    ice_prison: Handle<Mesh>,
+    frost_rune: Handle<Mesh>,
     /// Per class and shot (auto-attack: false, Q: true).
     projectiles: HashMap<(ClassId, bool), glade::ShotLook<Handle<Mesh>>>,
     shot_tip: Handle<Mesh>,
@@ -116,6 +130,10 @@ pub(crate) enum Look {
     Telegraph,
     /// The ring under a fighter's feet, so it reads even in shadow.
     Ring,
+    /// See-through, glowing ice: novas and frozen fighters, whoever's.
+    Frost,
+    /// Brighter, bluer see-through glow: the frost under a slowed fighter's feet.
+    Chill,
 }
 
 impl Visuals {
@@ -133,7 +151,7 @@ impl Visuals {
     ) -> Handle<StandardMaterial> {
         // Everything but spirit is per player: in the owner's color, or (bodies) so the hit flash
         // brightens just that fighter.
-        let key = (!matches!(look, Look::Spirit | Look::Plain | Look::Wind | Look::Spark)).then_some(owner);
+        let key = (!matches!(look, Look::Spirit | Look::Plain | Look::Wind | Look::Spark | Look::Frost | Look::Chill)).then_some(owner);
         self.materials
             .entry((key, look))
             .or_insert_with(|| {
@@ -149,6 +167,8 @@ impl Visuals {
                     Look::Swing => glade::translucent(color, 0.45, 2.0),
                     Look::Telegraph => glade::translucent(color, 0.28, 1.2),
                     Look::Ring => glade::glow(color, 1.2),
+                    Look::Frost => glade::translucent(palette::ICE, 0.45, 1.6),
+                    Look::Chill => glade::translucent(palette::FROST_GLOW, 0.75, 2.5),
                 })
             })
             .clone()
@@ -159,6 +179,25 @@ impl Visuals {
 #[derive(Component)]
 struct SwingFx {
     until: f32,
+}
+
+/// Something that bursts out from nothing: scaled up to `size` over `grow` seconds from `started`
+/// (seconds; nothing shows before), and sinking back into the ground over its last
+/// `NOVA_GROW_SECONDS` before it's gone (`SwingFx`).
+#[derive(Component)]
+struct Burst {
+    started: f32,
+    grow: f32,
+    size: Vec3,
+}
+
+/// Frost on a fighter (child entities): the ice prison shown while it's rooted, the frost under
+/// its feet while it's slowed; and what's shown now (slowed, rooted).
+#[derive(Component)]
+struct Frost {
+    prison: Entity,
+    rune: Entity,
+    shown: (bool, bool),
 }
 
 /// A thrown spear as drawn: it leaves the thrower's hand where the javelin was held, then eases
@@ -232,9 +271,21 @@ fn setup_scene(
         dash_streaks: ClassId::all()
             .filter_map(|c| match c.def().ability.kind {
                 AbilityKind::Dash { distance, .. } => Some((c, meshes.add(glade::lane_mesh(0.0, distance, 0.9)))),
-                AbilityKind::Projectile { .. } => None,
+                AbilityKind::Projectile { .. } | AbilityKind::Nova { .. } => None,
             })
             .collect(),
+        novas: ClassId::all()
+            .filter_map(|c| match c.def().ability.kind {
+                AbilityKind::Nova { radius, .. } => {
+                    let glade::NovaMeshes { disc, ring, shard, eruption } = glade::nova_meshes(radius);
+                    let mut add = |mesh| meshes.add(mesh);
+                    Some((c, glade::NovaMeshes { disc: add(disc), ring: add(ring), shard: add(shard), eruption: add(eruption) }))
+                }
+                AbilityKind::Projectile { .. } | AbilityKind::Dash { .. } => None,
+            })
+            .collect(),
+        ice_prison: meshes.add(glade::ice_prison_mesh()),
+        frost_rune: meshes.add(glade::frost_rune_mesh()),
         projectiles: ClassId::all()
             .flat_map(|c| [false, true].map(|ability| (c, ability)))
             .filter_map(|(c, ability)| {
@@ -368,6 +419,22 @@ fn add_visuals(
                 Visibility::Hidden,
             ))
             .id();
+        let prison = commands
+            .spawn((
+                Mesh3d(visuals.ice_prison.clone()),
+                MeshMaterial3d(visuals.material(&mut materials, id.0, is_me, Look::Frost)),
+                WorldAligned(Quat::IDENTITY, 0.0),
+                Visibility::Hidden,
+            ))
+            .id();
+        let rune = commands
+            .spawn((
+                Mesh3d(visuals.frost_rune.clone()),
+                MeshMaterial3d(visuals.material(&mut materials, id.0, is_me, Look::Chill)),
+                WorldAligned(Quat::IDENTITY, 0.04),
+                Visibility::Hidden,
+            ))
+            .id();
         commands
             .entity(entity)
             .insert((
@@ -376,9 +443,11 @@ fn add_visuals(
                 Transform::from_translation(to_world(pos.0, 0.0)),
                 ShownSwing::default(),
                 ShownDash::default(),
+                ShownNova::default(),
                 Telegraph(telegraph),
+                Frost { prison, rune, shown: (false, false) },
             ))
-            .add_child(telegraph)
+            .add_children(&[telegraph, prison, rune])
             .with_child((
                 Mesh3d(visuals.ring.clone()),
                 MeshMaterial3d(ring),
@@ -477,6 +546,107 @@ fn show_dashes(
         let material = visuals.material(&mut materials, id.0, is_me, Look::Spirit);
         let until = time.elapsed_secs() + DASH_SECONDS;
         commands.spawn(flash(streak, material, to_world(pos.0, 0.1), dash.dir, until));
+    }
+}
+
+/// The tick of the last nova drawn for this player.
+#[derive(Component, Default)]
+struct ShownNova(u32);
+
+/// A burst of ice around each new nova: a bright shockwave races out from the caster to the
+/// nova's edge, a spray of ice erupts where the staff struck, frost spreads over the ground, and
+/// shards burst up in two rings as the wave passes them. `AbilityState` is predicted for us (at
+/// the press) and shown on the same delayed timeline as others' positions; each nova is drawn
+/// once, though rollbacks may rewrite it.
+fn show_novas(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut visuals: ResMut<Visuals>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut casters: Query<(&PlayerId, &ClassId, &Pos, &AbilityState, Has<Predicted>, &mut ShownNova), Changed<AbilityState>>,
+) {
+    for (id, class, pos, ability, is_me, mut shown) in &mut casters {
+        let Some(used_at) = ability.used_at(*class).filter(|&t| t > shown.0) else { continue };
+        shown.0 = used_at;
+        let AbilityKind::Nova { radius, .. } = class.def().ability.kind else { continue };
+        let Some(nova) = visuals.novas.get(class).cloned() else { continue };
+        let frost = visuals.material(&mut materials, id.0, is_me, Look::Frost);
+        let wave = visuals.material(&mut materials, id.0, is_me, Look::Spirit);
+        let now = time.elapsed_secs();
+        // Each piece starts at nothing and only grows from there (`grow_bursts`); `until` is how
+        // long it stays.
+        let mut burst = |mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>, at: Vec3, dir: Vec2, until: f32, burst: Burst| {
+            let placed = Transform::from_translation(at).with_rotation(Quat::from_rotation_y(dir.to_angle()));
+            commands.spawn((
+                SwingFx { until: now + until },
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(material.clone()),
+                placed.with_scale(Vec3::splat(1e-3)),
+                burst,
+            ));
+        };
+        let at_once = |grow| Burst { started: now, grow, size: Vec3::ONE };
+        burst(&nova.disc, &frost, to_world(pos.0, 0.05), Vec2::X, NOVA_SECONDS, at_once(NOVA_WAVE_SECONDS));
+        burst(&nova.ring, &wave, to_world(pos.0, 0.07), Vec2::X, NOVA_WAVE_SECONDS + 0.06, at_once(NOVA_WAVE_SECONDS));
+        burst(&nova.eruption, &frost, to_world(pos.0, 0.0), Vec2::X, NOVA_SECONDS * 0.6, at_once(0.07));
+        // Shards in two rings, the outer one taller; each bursts up as the wave reaches it.
+        for (count, out, tall, turn) in [(9, 0.5, 0.45, 0.35), (18, 0.92, 0.7, 0.0)] {
+            for i in 0..count {
+                let dir = Vec2::from_angle(i as f32 / count as f32 * std::f32::consts::TAU + turn);
+                let height = tall * (0.75 + 0.5 * ((i * 7) % 4) as f32 / 3.0);
+                let reached = Burst { started: now + NOVA_WAVE_SECONDS * out * 0.9, grow: NOVA_GROW_SECONDS, size: Vec3::splat(height) };
+                burst(&nova.shard, &frost, to_world(pos.0 + dir * radius * out, 0.0), dir, NOVA_SECONDS, reached);
+            }
+        }
+    }
+}
+
+/// Bursts grow out to full size (quickly at first), then sink away just before they're gone.
+fn grow_bursts(time: Res<Time>, mut bursts: Query<(&Burst, &SwingFx, &mut Transform)>) {
+    let now = time.elapsed_secs();
+    for (burst, fx, mut transform) in &mut bursts {
+        let grown = ((now - burst.started) / burst.grow).clamp(0.0, 1.0);
+        let grown = 1.0 - (1.0 - grown).powi(3);
+        let sinking = ((fx.until - now) / NOVA_GROW_SECONDS).clamp(0.0, 1.0);
+        let scale = (burst.size * Vec3::new(grown, grown * sinking, grown)).max(Vec3::splat(1e-3));
+        if transform.scale != scale {
+            transform.scale = scale;
+        }
+    }
+}
+
+/// Frost on every fighter: slowed, its colors take a cold blue cast and frost turns slowly under
+/// its feet; rooted, ice locks its feet instead. `Chilled` comes from the server (it's never
+/// predicted); its spans are compared with the timeline each fighter is shown on, so others'
+/// frost comes and goes in step with their (delayed) bodies.
+fn show_frost(
+    clock: AttackClock,
+    time: Res<Time>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut fighters: Query<(&Chilled, &MeshMaterial3d<StandardMaterial>, &mut Frost, Has<Predicted>)>,
+    mut parts: Query<(&mut Visibility, &mut WorldAligned)>,
+) {
+    let turn = Quat::from_rotation_y(time.elapsed_secs() * RUNE_TURN_RATE);
+    for (chilled, material, mut frost, is_me) in &mut fighters {
+        let now = clock.now(is_me);
+        let (slowed, rooted) = (chilled.slowed.covers(now), chilled.rooted.covers(now));
+        if slowed && !rooted
+            && let Ok((_, mut aligned)) = parts.get_mut(frost.rune)
+        {
+            aligned.0 = turn;
+        }
+        if frost.shown == (slowed, rooted) {
+            continue;
+        }
+        frost.shown = (slowed, rooted);
+        if let Some(mut m) = materials.get_mut(&material.0) {
+            m.base_color = if slowed || rooted { palette::FROSTBITE } else { Color::WHITE };
+        }
+        for (part, visible) in [(frost.prison, rooted), (frost.rune, slowed && !rooted)] {
+            if let Ok((mut visibility, _)) = parts.get_mut(part) {
+                visibility.set_if_neq(shown(visible));
+            }
+        }
     }
 }
 
