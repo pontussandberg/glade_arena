@@ -8,6 +8,7 @@ use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
 pub use crate::classes::ClassId;
+use crate::classes::Chill;
 
 /// Marks a player entity and says which client controls it. Projectiles don't carry it (their
 /// owner is `Projectile::owner`), so `With<PlayerId>` always means "a player".
@@ -99,6 +100,66 @@ pub struct Dash {
     pub dir: Vec2,
 }
 
+/// Crowd control on a player: how much it's slowed and when, and when it's frozen in place
+/// (rooted). Server-authoritative like `Health`: replicated, never predicted. The spans are in
+/// ticks, so a client's own predicted movement replays them exactly after a rollback (a span
+/// that hadn't started yet doesn't apply to the ticks before it), and others' are shown on the
+/// timeline they're drawn on.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
+pub struct Chilled {
+    /// The fraction of speed taken away while `slowed`.
+    pub slow: f32,
+    pub slowed: Span,
+    pub rooted: Span,
+}
+
+/// Ticks `from` (inclusive) to `until` (exclusive). The default covers none.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
+pub struct Span {
+    pub from: u32,
+    pub until: u32,
+}
+
+impl Span {
+    /// Whether the span covers `now` (a fractional tick for drawing in between).
+    pub fn covers(&self, now: f32) -> bool {
+        self.from as f32 <= now && now < self.until as f32
+    }
+
+    /// `ticks` from the tick after `now`, or the rest of this span if it's still running and
+    /// lasts longer.
+    fn renewed(self, now: u32, ticks: u32) -> Span {
+        let until = now + 1 + ticks;
+        if self.covers(now as f32 + 1.0) && self.until >= until { self } else { Span { from: now + 1, until } }
+    }
+}
+
+impl Chilled {
+    /// A hit at `now` applies `chill`, from the next tick. A new slow replaces a running one if
+    /// it's at least as strong; a root extends a running one.
+    pub fn apply(&mut self, chill: Chill, now: u32) {
+        if chill.slow > 0.0 && chill.slow_ticks > 0 {
+            let running = self.slowed.covers(now as f32 + 1.0);
+            if !running || chill.slow >= self.slow {
+                self.slowed = self.slowed.renewed(now, chill.slow_ticks);
+                self.slow = chill.slow;
+            }
+        }
+        if chill.root_ticks > 0 {
+            self.rooted = self.rooted.renewed(now, chill.root_ticks);
+        }
+    }
+
+    /// What's left of a player's speed at `tick` (1 unslowed).
+    pub fn speed_factor(&self, tick: u32) -> f32 {
+        if self.slowed.covers(tick as f32) { 1.0 - self.slow } else { 1.0 }
+    }
+
+    pub fn rooted_at(&self, tick: u32) -> bool {
+        self.rooted.covers(tick as f32)
+    }
+}
+
 /// The player's most recent melee swing, for drawing it. Predicted, so your own swing shows
 /// instantly, and replicated, so others see it too.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
@@ -182,6 +243,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<PlayerId>().replicate();
         app.component::<ClassId>().replicate();
         app.component::<Health>().replicate();
+        app.component::<Chilled>().replicate();
         app.component::<Pos>()
             .replicate()
             .predict()

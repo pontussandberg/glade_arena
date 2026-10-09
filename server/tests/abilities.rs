@@ -98,3 +98,66 @@ fn rift_step_cuts_where_it_ends_not_who_it_leaves_behind() {
     d.run(Duration::from_millis(300));
     assert_eq!(server_player(&mut d.server, B).1, full, "cut by a dash going the other way");
 }
+
+fn server_tick(d: &mut Duel) -> u32 {
+    d.server.world().resource::<LocalTimeline>().tick().0 as u32
+}
+
+fn chilled(app: &mut App, id: u64) -> Chilled {
+    player(app, id).expect("no such player")
+}
+
+/// The counter to a diving Revenant: a nova freezes it in place (no walking, no Rift Step), then
+/// leaves it slowed. Its own client, which predicts its movement, ends up where the server has it.
+#[test]
+fn frost_nova_freezes_a_revenant_then_slows_it() {
+    let mut d = duel(5880, "frost_mage", "revenant");
+    let AbilityKind::Nova { damage, chill, .. } = class_id("frost_mage").def().ability.kind else { panic!("not a nova") };
+    let full = server_player(&mut d.server, B).1;
+
+    a_uses_q_at_b(&mut d);
+    d.until(Duration::from_secs(2), "the nova freezes B", |d| chilled(&mut d.server, B).rooted.until > 0);
+    assert_eq!(server_player(&mut d.server, B).1, full - damage);
+    let frozen = chilled(&mut d.server, B);
+
+    // B tries to walk away and to Rift Step out: neither goes anywhere while frozen.
+    let away = arena_shared::map::Map::tile_of(B_SPOT + Vec2::X * 4.0);
+    edit_input(&mut d.b, |i| (i.move_to, i.aim, i.ability) = (Some(away), Vec2::X, true));
+    d.until(Duration::from_secs(1), "the root starts", |d| server_tick(d) >= frozen.rooted.from);
+    let held = server_player(&mut d.server, B).0;
+    while server_tick(&mut d) + 4 < frozen.rooted.until {
+        d.update();
+        assert_eq!(server_player(&mut d.server, B).0, held, "B moved while frozen");
+    }
+    let ability: AbilityState = player(&mut d.server, B).unwrap();
+    assert!(ability.dash.is_none() && ability.ready_at == 0, "B dashed (or spent Rift Step) while frozen");
+    // B's client predicted itself walking and was rolled back to where the server holds it.
+    assert!(sees(&mut d.b, B).unwrap().distance(held) < 0.05, "B's client didn't end up frozen");
+
+    // Thawed, but still slowed: B walks off at a fraction of its speed.
+    d.until(Duration::from_secs(1), "the root wears off", |d| server_tick(d) > frozen.rooted.until + 2);
+    assert!(chill.slow_ticks > chill.root_ticks + 40, "the slow should outlast the root");
+    let (from, from_tick) = (server_player(&mut d.server, B).0, server_tick(&mut d));
+    d.run(Duration::from_millis(300));
+    let (to, to_tick) = (server_player(&mut d.server, B).0, server_tick(&mut d));
+    assert!(to_tick < frozen.slowed.until, "the slow wore off during the measurement");
+    let speed = from.distance(to) / ((to_tick - from_tick) as f32 / 64.0);
+    let expected = class_id("revenant").def().move_speed * (1.0 - chill.slow);
+    println!("slowed B walked {speed:.2} m/s (expected {expected:.2})");
+    assert!((speed - expected).abs() < 0.3, "slowed B walked at {speed} m/s, expected {expected}");
+}
+
+#[test]
+fn frostbolts_slow_what_they_hit() {
+    let mut d = duel(5881, "frost_mage", "revenant");
+    let attack = &class_id("frost_mage").def().attack;
+    let full = server_player(&mut d.server, B).1;
+    let aim = sees(&mut d.a, B).unwrap() - sees(&mut d.a, A).unwrap();
+    edit_input(&mut d.a, |i| (i.aim, i.fire) = (aim, true));
+    d.until(Duration::from_secs(2), "the bolt hits", |d| server_player(&mut d.server, B).1 < full);
+    edit_input(&mut d.a, |i| i.fire = false);
+    assert_eq!(server_player(&mut d.server, B).1, full - attack.damage);
+    let slowed = chilled(&mut d.server, B);
+    assert_eq!((slowed.slow, slowed.slowed.until - slowed.slowed.from), (attack.chill.slow, attack.chill.slow_ticks));
+    assert_eq!(slowed.rooted, Span::default(), "a frostbolt shouldn't root");
+}

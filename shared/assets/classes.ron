@@ -14,11 +14,16 @@
 //           Projectile(speed, radius, range) flies straight, stops at walls/rocks/trees;
 //             optional far_damage: damage after flying the full range, scaling linearly from
 //             `damage` (point blank) by how far the shot flew
+//     chill (optional): crowd control each hit applies on top of its damage:
+//       (slow: fraction of speed taken away, slow_ticks: for how long, root_ticks: frozen in
+//       place this long: no walking, no dashing, and a dash in progress stops)
 //   ability       the Q ability, aimed at the cursor: name, description, cooldown_ticks, and
 //     kind: Projectile(speed, radius, range, damage)  thrown instantly: no windup, no root
 //           Dash(distance, ticks, damage)  dash toward the aim over `ticks`, through fighters,
 //             cutting each one crossed for `damage`; stops at walls. With resets_attack, landing
 //             a hit readies the auto-attack at once.
+//           Nova(radius, damage, chill)  a burst around you, at once: everyone within `radius`
+//             (and not behind a wall) takes `damage` and `chill`
 [
     (
         id: "javelinist",
@@ -58,6 +63,27 @@
             description: "Dash through enemies, cutting each one. A hit readies your blade at once.",
             cooldown_ticks: 320,
             kind: Dash(distance: 6.0, ticks: 10, damage: 18, resets_attack: true),
+        ),
+    ),
+    (
+        id: "frost_mage",
+        name: "Frost Mage",
+        role: "Controller",
+        blurb: "Bends the cold. Little damage, but nobody gets close, and nobody gets away.",
+        max_hp: 100,
+        move_speed: 5.0,
+        attack: (
+            damage: 9,
+            cooldown_ticks: 44,
+            windup_ticks: 18,
+            kind: Projectile(speed: 17.0, radius: 0.28, range: 12.0),
+            chill: (slow: 0.4, slow_ticks: 128),
+        ),
+        ability: (
+            name: "Frost Nova",
+            description: "Instantly freeze everyone within 3.5 m in place: no walking, no dashing.",
+            cooldown_ticks: 448,
+            kind: Nova(radius: 3.5, damage: 6, chill: (slow: 0.4, slow_ticks: 224, root_ticks: 96)),
         ),
     ),
 ]

@@ -130,7 +130,7 @@ fn orbit(
 fn describe(
     inspect: Res<Inspect>,
     clock: AttackClock,
-    fighters: Query<(&PlayerId, &ClassId, &Pos, Option<&Health>, &AttackState, &AbilityState, Has<Predicted>)>,
+    fighters: Query<(&PlayerId, &ClassId, &Pos, Option<&Health>, Option<&Chilled>, &AttackState, &AbilityState, Has<Predicted>)>,
     panel: Single<(&mut Text, &mut Visibility), With<DevPanel>>,
 ) {
     let (mut text, mut visibility) = panel.into_inner();
@@ -138,14 +138,17 @@ fn describe(
     if !inspect.on {
         return;
     }
-    let Some((id, class, pos, health, attack, ability, is_me)) = inspect.target.and_then(|t| fighters.get(t).ok())
+    let Some((id, class, pos, health, chilled, attack, ability, is_me)) = inspect.target.and_then(|t| fighters.get(t).ok())
     else {
         return;
     };
     let def = class.def();
     let now = clock.now(is_me);
+    let chilled = chilled.copied().unwrap_or_default();
     let doing = if health.is_some_and(|h| !h.alive()) {
         "dead".to_string()
+    } else if chilled.rooted.covers(now) {
+        "frozen in place".to_string()
     } else if ability.dash.is_some() {
         format!("dashing ({})", def.ability.name)
     } else if let Some(windup) = attack.windup {
@@ -157,7 +160,8 @@ fn describe(
     let you = if is_me { " (you)" } else { "" };
     let hp = health.map_or("?".to_string(), |h| h.0.to_string());
     let _ = writeln!(panel, "INSPECT  {} {}{you}  {hp}/{} hp", def.name, id.0.to_bits(), def.max_hp);
-    let _ = writeln!(panel, "{doing}  at ({:.1}, {:.1})", pos.0.x, pos.0.y);
+    let slowed = if chilled.slowed.covers(now) { format!("  slowed {:.0}%", chilled.slow * 100.0) } else { String::new() };
+    let _ = writeln!(panel, "{doing}{slowed}  at ({:.1}, {:.1})", pos.0.x, pos.0.y);
     panel.push_str("F2: off | Tab: next fighter | middle-drag or [ ]: orbit | wheel: zoom");
     if text.0 != panel {
         text.0 = panel;

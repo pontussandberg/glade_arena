@@ -204,18 +204,21 @@ fn cancel_walk_on_attack(
 // The four systems below only run once the client's timeline is synced with the server
 // (`SyncedLocalTimeline` makes Bevy skip them until then).
 
+/// Our movement, right away. Slows and roots (`Chilled`) are the server's: one lands on us a
+/// round trip late, and the rollback it causes replays our movement with it from when it began.
 fn predict_player_movement(
-    _synced: SyncedLocalTimeline,
+    synced: SyncedLocalTimeline,
     mut players: Query<
-        (&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &AbilityState, &Health),
+        (&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &AbilityState, &Chilled, &Health),
         (With<Predicted>, With<PlayerId>),
     >,
 ) {
-    for (mut pos, class, input, attack, ability, health) in &mut players {
+    let tick = synced.current_tick().0 as u32;
+    for (mut pos, class, input, attack, ability, chilled, health) in &mut players {
         if !health.alive() {
             continue;
         }
-        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, ability)));
+        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, ability, chilled, tick)));
     }
 }
 
@@ -247,24 +250,25 @@ fn predict_attack(
     }
 }
 
-/// Our Q, right away: a thrown ability is spawned locally, a dash starts moving us. Who gets hit
-/// (and a dash readying the auto-attack) is up to the server.
+/// Our Q, right away: a thrown ability is spawned locally, a dash starts moving us, a nova's
+/// burst shows (from `AbilityState`). Who gets hit (and a dash readying the auto-attack) is up to
+/// the server.
 fn predict_ability(
     synced: SyncedLocalTimeline,
     mut commands: Commands,
     mut players: Query<
-        (&PlayerId, &ClassId, &Pos, &ActionState<PlayerInput>, &AttackState, &mut AbilityState, &Health),
+        (&PlayerId, &ClassId, &Pos, &ActionState<PlayerInput>, &AttackState, &Chilled, &mut AbilityState, &Health),
         With<Predicted>,
     >,
 ) {
     let tick = synced.current_tick().0 as u32;
-    for (id, class, pos, input, attack, mut state, health) in &mut players {
+    for (id, class, pos, input, attack, chilled, mut state, health) in &mut players {
         if !health.alive() {
             continue;
         }
-        let (next, thrown) = sim::step_ability(tick, id.0, *class, pos.0, &input.0, attack, *state);
+        let (next, cast) = sim::step_ability(tick, id.0, *class, pos.0, &input.0, attack, chilled, *state);
         state.set_if_neq(next);
-        if let Some(projectile) = thrown {
+        if let Some(sim::Cast::Throw(projectile)) = cast {
             commands.spawn(projectile.bundle());
         }
     }

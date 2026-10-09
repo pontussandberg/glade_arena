@@ -18,6 +18,12 @@ projectile) and Q ability; all of it lives in `shared/assets/classes.ron`:
 |---|---|---|---|
 | Javelinist | Hunter | Slow, heavy javelins that hit harder the farther they fly (`far_damage`) | **Spirit Spear**: a fast spectral spear, thrown instantly (no windup, no root) |
 | Revenant | Duelist | Quick, short-windup blade swings | **Rift Step**: dash through enemies, cutting each one; a hit readies the blade at once |
+| Frost Mage | Controller | Frostbolts: little damage, but each hit slows (40% for 2 s) | **Frost Nova**: freeze everyone within 3.5 m in place for 1.5 s (no walking, no dashing), then slow them |
+
+Hits can carry **crowd control** (`chill` in `classes.ron`): a slow takes a share off walking
+and dashing speed, a root freezes a fighter in place (it can't walk or dash, and a dash in
+progress stops) but it can still attack. Slowed fighters take on a cold blue cast; frozen ones
+stand in ice.
 
 Every attack has a short windup (`windup_ticks`): you stand still with your aim locked while a
 cast bar fills under your health bar and a faint telegraph shows what it will cover (the swing's
@@ -41,7 +47,7 @@ shared/   protocol (replicated components, PlayerInput, messages), sim (pure gam
 server/   headless authoritative server (spawning, hit decisions, lag compensation, respawns);
           tests/ has the end-to-end tests
 client/   ClientNetPlugin (networking + prediction, headless-capable), bot (sparring AI);
-          render (fighters, shots, swings, telegraphs, dash streaks, HUD, input), camera,
+          render (fighters, shots, swings, telegraphs, dash streaks, novas, frost, HUD, input), camera,
           action_bar (your ability icon and cooldown), minimap,
           dev (dev mode: the inspect camera),
           glade (the 3D scene and all meshes), rig (animated fighters: facing, walk cycle,
@@ -79,11 +85,13 @@ scripts/  build-web.sh, serve.mjs
   telegraph and dash line up with where you see them; except that a throw shows the moment its
   spear appears (`SeenThrows`), which can be a little ahead of the thrower's body.
 - Other players are **interpolated** between server snapshots.
-- `Health` is server-only: replicated, never predicted. Melee and dash damage are decided by the
-  server too (and a Rift Step readying the blade: your client is corrected by a rollback); your
-  own swing (`LastSwing`) is predicted so it shows instantly.
+- `Health` is server-only: replicated, never predicted. Melee, dash and nova damage are decided
+  by the server too (and a Rift Step readying the blade: your client is corrected by a rollback);
+  your own swing (`LastSwing`) is predicted so it shows instantly.
+- So is `Chilled` (slows and roots). It holds tick spans, so when one lands on you a round trip
+  late, the rollback it causes replays your movement with it from exactly the tick it began.
 - **Lag compensation:** you see others slightly in the past, so the server keeps a short
-  position history and judges your swings and dashes against where *you* saw the target (up to
+  position history and judges your swings, dashes and novas against where *you* saw the target (up to
   ~250 ms back, using the interpolation delay your inputs carry). Projectiles are judged in the
   present instead ("favor the target"): they can be dodged, and the target sees them exactly as
   judged; the shooter may sometimes see a shot pass through someone who had already stepped
@@ -106,7 +114,7 @@ Prereqs: Rust (stable, MSVC on Windows), `rustup target add wasm32-unknown-unkno
 # tests (~45s): sim unit tests, plus real server + headless bot clients over WebTransport:
 #   map/sim       map symmetry, pathfinding, every spawn point reaching every other; windups,
 #                 cooldowns, far_damage, Q throws, dashes (full distance, never into a wall,
-#                 not mid-swing)
+#                 not mid-swing), slows, roots (stopping walks and dashes), novas
 #   classes       the class file parses and every class has sane numbers
 #   netcode.rs    click-to-move prediction, reconciliation, interpolation, unreachable clicks,
 #                 predicted windup, prespawned shot, server-decided hit, rollback on server
@@ -115,7 +123,8 @@ Prereqs: Rust (stable, MSVC on Windows), `rustup target add wasm32-unknown-unkno
 #                 of reach, death and respawn
 #   abilities.rs  spirit spear predicted at once (no windup) and hitting; rift step cutting
 #                 through a target once and readying the blade, cutting where it ends but not
-#                 who it leaves behind
+#                 who it leaves behind; frost nova freezing a revenant (no walk, no dash, its
+#                 own client rolled back to the spot) and leaving it slowed; frostbolts slowing
 #   inputs.rs     4 fps client releasing fire; frozen client stops moving server-side;
 #                 attacking cancels the walk, a click during the windup is kept
 cargo test
@@ -191,7 +200,7 @@ deploy restarts the server, which disconnects everyone playing.
 ## Not done yet (see the plan)
 
 - More classes, and more abilities (W/E/R); a balance pass (in bot duels the Revenant's
-  dash-and-swing tends to beat the Javelinist)
+  dash-and-swing tends to beat the Javelinist; the Frost Mage is new and untuned)
 - Network debug overlay (lag sliders, server ghost), room codes, switching class without rejoining
 - Visual smoothing: frame interpolation between ticks and correction blending after rollbacks
 - Accounts service issuing netcode connect tokens (currently a shared zero dev key)

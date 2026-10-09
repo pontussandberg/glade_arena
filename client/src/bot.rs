@@ -66,11 +66,13 @@ fn think(
     };
     let clear = map().shot_clear(me.0, target);
     let fire = distance <= attack_within && clear;
-    // Q whenever it would land: a dash to close in from just out of reach, a throw in range.
+    // Q whenever it would land: a dash to close in from just out of reach, a throw in range, a
+    // nova when the target is right on top of us.
     let ability = clear
         && match class.def().ability.kind {
             AbilityKind::Dash { distance: dash, .. } => distance > attack_within && distance < dash * 0.9,
             AbilityKind::Projectile { range, .. } => distance < range * 0.9,
+            AbilityKind::Nova { radius, .. } => distance < radius * 0.8,
         };
     desired.0 = PlayerInput { move_to, aim: to_target, fire, ability, ..default() };
 }

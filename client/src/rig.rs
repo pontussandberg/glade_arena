@@ -18,6 +18,10 @@
 //! shoulder, turning away; the strike chops it down through the target, stepping into it. A
 //! dash is a forward lunge with the blade swept back.
 //!
+//! The frost mage carries its staff upright at its side. The windup raises it high toward the
+//! target, the off hand reaching out to gather the cold; the cast thrusts the crystal forward at
+//! the target. A nova is the same thrust, quickly.
+//!
 //! Transforms are only written when they change, so a fighter standing still costs nothing.
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
@@ -105,6 +109,8 @@ struct Moves {
     lean: [f32; 4],
     head_dip: [f32; 4],
     held: Held,
+    /// Throws its weapon with the auto-attack: the hand is empty until a new one is drawn.
+    throws: bool,
     /// How big the fighter is drawn (1 = the joints in `glade`).
     scale: f32,
 }
@@ -116,6 +122,9 @@ enum Held {
     OnTarget,
     /// Fixed in the fist, along the arm and this far (radians) forward of it: a sword.
     InHand(f32),
+    /// Kept standing up, whatever the arm and body do, tipped this far (radians, keyframes like
+    /// the joints') toward the facing: a staff.
+    Upright([f32; 4]),
 }
 
 const JAVELINIST: Moves = Moves {
@@ -127,6 +136,7 @@ const JAVELINIST: Moves = Moves {
     lean: [0.0, 0.28, -0.38, -0.45],
     head_dip: [0.0, 0.2, -0.15, 0.0],
     held: Held::OnTarget,
+    throws: true,
     scale: 1.12,
 };
 
@@ -139,7 +149,21 @@ const REVENANT: Moves = Moves {
     lean: [0.0, 0.2, -0.4, -0.55],
     head_dip: [0.0, 0.15, -0.25, 0.0],
     held: Held::InHand(0.45),
+    throws: false,
     scale: 1.0,
+};
+
+const FROST_MAGE: Moves = Moves {
+    weapon_arm: [0.3, 1.9, 1.25, 0.3],
+    lead_arm: [-0.1, 1.25, 0.8, -0.1],
+    lead_leg: [0.1, 0.3, 0.5, 0.1],
+    back_leg: [-0.1, -0.3, -0.5, -0.1],
+    twist: [0.0, -0.4, 0.35, 0.0],
+    lean: [0.0, 0.12, -0.25, 0.0],
+    head_dip: [0.0, 0.1, -0.15, 0.0],
+    held: Held::Upright([0.08, -0.25, 1.0, 0.08]),
+    throws: false,
+    scale: 1.05,
 };
 
 /// The moves for a class's look (every class has one: `glade::FIGHTER_LOOKS`).
@@ -147,6 +171,7 @@ fn moves(class_key: &str) -> &'static Moves {
     match class_key {
         "javelinist" => &JAVELINIST,
         "revenant" => &REVENANT,
+        "frost_mage" => &FROST_MAGE,
         _ => unreachable!("no moves for class {class_key:?}"),
     }
 }
@@ -411,7 +436,7 @@ fn pose_rigs(
             (None, None) => (0.0, 0.0),
         };
         let flicked = since_throw(ability.used_at(*class), seen.and_then(|seen| seen.ability));
-        if let (AbilityKind::Projectile { .. }, Some(since)) = (&def.ability.kind, flicked) {
+        if let (AbilityKind::Projectile { .. } | AbilityKind::Nova { .. }, Some(since)) = (&def.ability.kind, flicked) {
             throw = throw.max(1.0 - ease(FLICK.0, FLICK.1, since));
         }
         let dashing = if ability.dash.is_some() { 1.0 } else { 0.0 };
@@ -420,7 +445,8 @@ fn pose_rigs(
         let braced = draw.max(throw).max(dashing);
         // A thrown weapon: the hand is empty until a new one is drawn, halfway through the cooldown.
         let rearm = (def.attack.cooldown_ticks - def.attack.windup_ticks) as f32 / 2.0;
-        let empty_handed = matches!(def.attack.kind, AttackKind::Projectile { .. })
+        let empty_handed = rig.moves.throws
+            && matches!(def.attack.kind, AttackKind::Projectile { .. })
             && windup.is_none()
             && released.is_some_and(|s| s < rearm);
 
@@ -463,6 +489,7 @@ fn pose_rigs(
         let held = match moves.held {
             Held::OnTarget => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-(FRAC_PI_2 - 0.12)),
             Held::InHand(forward) => Quat::from_rotation_z(PI + forward),
+            Held::Upright(tip) => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-pose(tip)),
         };
         let rotations = [
             (rig.head, unlean * Quat::from_rotation_z(-head_dip)),
