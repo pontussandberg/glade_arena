@@ -3,6 +3,15 @@ name = "arena-client"
 version.workspace = true
 edition.workspace = true
 
+# No doc tests or unit tests in main.rs: skip building their (empty) test harnesses.
+[lib]
+doctest = false
+
+[[bin]]
+name = "arena-client"
+path = "src/main.rs"
+test = false
+
 [features]
 default = ["render"]
 # Window, 3D rendering and keyboard/mouse input. Off for headless test bots.

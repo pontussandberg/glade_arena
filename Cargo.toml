@@ -20,6 +20,9 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+# No debug info for dependencies (ours keep it, so panics and test failures still point at exact
+# lines): far smaller objects, so linking Bevy is much faster and needs much less memory.
+debug = false
 
 [profile.wasm-release]
 inherits = "release"

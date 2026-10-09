@@ -1,2 +1,11 @@
+[build]
+# Leave a few cores free so the machine stays usable while Bevy builds (and fewer heavy compiles
+# and links at once, which had run out of memory).
+jobs = 12
+
+# Rust's bundled LLD instead of MSVC's link.exe: links Bevy much faster, with far less memory.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
+
 [target.wasm32-unknown-unknown]
 rustflags = ["--cfg", "getrandom_backend=\"wasm_js\"", "--cfg", "web_sys_unstable_apis"]
