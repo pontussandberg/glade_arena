@@ -114,8 +114,9 @@ pub fn faceted(mesh: Mesh) -> Mesh {
     mesh.with_duplicated_vertices().with_computed_flat_normals()
 }
 
-/// Class ids that have their own figure in `fighter_mesh`. A new class in `classes.ron` gets the
-/// plain pawn until it's added here (a test checks every class has one).
+/// Class ids that have their own figure in `fighter_mesh`. Every class in `classes.ron` needs
+/// one (and its parts in `fighter_rig` and its moves in `rig.rs`): the client won't start
+/// without them, and a test checks every class has one.
 pub const FIGHTER_LOOKS: [&str; 2] = ["javelinist", "revenant"];
 
 /// Class ids whose shots have their own look in `shot_look` (the rest throw round bolts).
@@ -408,7 +409,7 @@ fn held_spear() -> Mesh {
 }
 
 /// A fighter's low-poly figure, feet at the origin, picked by class id so each class has its own
-/// silhouette from above. Ids not in `FIGHTER_LOOKS` get a plain pawn.
+/// silhouette from above. Every class needs one (see `FIGHTER_LOOKS`).
 pub fn fighter_mesh(class_key: &str) -> Mesh {
     // Drawn in a white material: these are the real colors, the same for every player (rings,
     // health bars and shots tell teams apart).

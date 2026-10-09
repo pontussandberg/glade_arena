@@ -102,7 +102,8 @@ Prereqs: Rust (stable, MSVC on Windows), `rustup target add wasm32-unknown-unkno
 #   combat.rs     melee hits where the attacker saw the target (lag compensation), misses out
 #                 of reach, death and respawn
 #   abilities.rs  spirit spear predicted at once (no windup) and hitting; rift step cutting
-#                 through a target once and readying the blade
+#                 through a target once and readying the blade, cutting where it ends but not
+#                 who it leaves behind
 #   inputs.rs     4 fps client releasing fire; frozen client stops moving server-side;
 #                 attacking cancels the walk, a click during the windup is kept
 cargo test

@@ -33,12 +33,16 @@ pub struct LobbyPlugin;
 impl Plugin for LobbyPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(Update, CameraControl.run_if(not(in_lobby)));
+        // No fighting input while picking: a Q pressed here would otherwise be kept until it's
+        // sent, and go off the moment we spawn.
+        app.configure_sets(Update, crate::PlayerControls.run_if(not(in_lobby)));
         app.add_systems(Startup, open_lobby);
         app.add_systems(
             Update,
             (
                 (pick_fighter, show_fighter, enter_arena).chain(),
-                (show_status, hide_game_ui),
+                // Before `enter_arena`, which shows the game's UI on the frame we go in.
+                (show_status, hide_game_ui.before(enter_arena)),
                 turn_stage_camera.in_set(CameraMoves),
             )
                 .run_if(in_lobby),
@@ -433,6 +437,7 @@ fn show_status(
 fn enter_arena(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
+    mut mouse: ResMut<ButtonInput<MouseButton>>,
     lobby: Res<Lobby>,
     mut chosen: ResMut<ChosenClass>,
     button: Single<(&Interaction, &mut BackgroundColor), With<EnterButton>>,
@@ -445,6 +450,9 @@ fn enter_arena(
         return;
     }
     chosen.0 = Some(lobby.selected);
+    // The button goes in on the press: forget the held button, or our fighter could spawn while
+    // it's still down and take the click for an attack.
+    mouse.reset(MouseButton::Left);
     commands.remove_resource::<Lobby>();
     for part in &parts {
         commands.entity(part).despawn();

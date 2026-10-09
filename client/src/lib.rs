@@ -11,6 +11,7 @@ use arena_shared::config::*;
 use arena_shared::protocol::*;
 use arena_shared::sim;
 use bevy::prelude::*;
+use lightyear::core::timeline::is_in_rollback;
 use lightyear::netcode::NetcodeClient;
 use lightyear::netcode::client_plugin::NetcodeConfig;
 use lightyear::prelude::client::input::InputSystems;
@@ -100,7 +101,12 @@ impl Plugin for ClientNetPlugin {
 
         app.add_observer(mark_controlled_player);
         app.add_systems(Update, send_class_choice);
-        app.add_systems(FixedPreUpdate, write_input.in_set(InputSystems::WriteClientInputs));
+        // Not during rollback replays: lightyear replays the inputs it buffered then, and
+        // `write_input` would use up a Q press that hasn't been sent yet.
+        app.add_systems(
+            FixedPreUpdate,
+            write_input.in_set(InputSystems::WriteClientInputs).run_if(not(is_in_rollback)),
+        );
         // Same rules, same order as the server, but only for what this client predicts.
         app.add_systems(
             FixedUpdate,
