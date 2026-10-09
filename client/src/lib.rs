@@ -213,7 +213,7 @@ fn predict_player_movement(
         (With<Predicted>, With<PlayerId>),
     >,
 ) {
-    let tick = synced.current_tick().0 as u32;
+    let tick = synced.current_tick().0;
     for (mut pos, class, input, attack, ability, chilled, health) in &mut players {
         if !health.alive() {
             continue;
@@ -232,7 +232,7 @@ fn predict_attack(
         With<Predicted>,
     >,
 ) {
-    let tick = synced.current_tick().0 as u32;
+    let tick = synced.current_tick().0;
     for (id, class, pos, input, mut state, mut last_swing, health) in &mut players {
         if !health.alive() {
             continue;
@@ -261,7 +261,7 @@ fn predict_ability(
         With<Predicted>,
     >,
 ) {
-    let tick = synced.current_tick().0 as u32;
+    let tick = synced.current_tick().0;
     for (id, class, pos, input, attack, chilled, mut state, health) in &mut players {
         if !health.alive() {
             continue;
@@ -282,7 +282,7 @@ fn predict_projectiles(
     mut commands: Commands,
     mut projectiles: Query<(Entity, &mut Pos, &Projectile)>,
 ) {
-    let tick = synced.current_tick().0 as u32;
+    let tick = synced.current_tick().0;
     for (entity, mut pos, projectile) in &mut projectiles {
         pos.set_if_neq(Pos(sim::projectile_pos(projectile, tick as f32)));
         if sim::projectile_expired(pos.0, projectile, tick) {
