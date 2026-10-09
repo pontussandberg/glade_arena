@@ -68,17 +68,26 @@ scripts/  build-web.sh, serve.mjs
 - Projectiles are **prespawned**: the client spawns its shot immediately with a hash
   (`projectile_prespawn_hash`, different for an auto-attack and a Q thrown in the same tick), and
   the server's copy is matched to it when it arrives.
+- **Every client predicts every projectile**, not just its own. A shot flies on rails: its
+  position is a pure function of the tick (`sim::projectile_pos`, from its origin, direction and
+  spawn tick). So others' shots, which reach you a round trip late, are still drawn where they
+  really are, on the same clock as your own player, and what you see dodge is what the server
+  judges. A late spear shoots out of its thrower's hand fast and catches up within 0.2 s.
 - `AttackState` (cooldown, windup) and `AbilityState` (Q cooldown, dash) are predicted for your
   own player, so your windup, throw and dash start the moment you click or press Q. For others
   they're interpolated on the same delayed timeline as their positions, so their cast bar,
-  telegraph and dash line up with where you see them.
-- Other players and their projectiles are **interpolated** between server snapshots.
+  telegraph and dash line up with where you see them; except that a throw shows the moment its
+  spear appears (`SeenThrows`), which can be a little ahead of the thrower's body.
+- Other players are **interpolated** between server snapshots.
 - `Health` is server-only: replicated, never predicted. Melee and dash damage are decided by the
   server too (and a Rift Step readying the blade: your client is corrected by a rollback); your
   own swing (`LastSwing`) is predicted so it shows instantly.
 - **Lag compensation:** you see others slightly in the past, so the server keeps a short
-  position history and judges your hits (swings, shots, dashes) against where *you* saw the
-  target (up to ~250 ms back, using the interpolation delay your inputs carry).
+  position history and judges your swings and dashes against where *you* saw the target (up to
+  ~250 ms back, using the interpolation delay your inputs carry). Projectiles are judged in the
+  present instead ("favor the target"): they can be dodged, and the target sees them exactly as
+  judged; the shooter may sometimes see a shot pass through someone who had already stepped
+  aside.
 - `classes.ron` is compiled into both sides, and its hash is part of the protocol id: a client
   built with different class numbers can't connect.
 
