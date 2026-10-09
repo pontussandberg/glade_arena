@@ -1,0 +1,29 @@
+# systemd unit for the game server; deploy/setup-server.sh installs it.
+#   journalctl -u arena -f
+[Unit]
+Description=Arena game server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=arena
+WorkingDirectory=/var/lib/arena
+ExecStart=/opt/arena/bin/arena-server
+# Caddy's certificate, copied here by arena-cert-sync. The server waits for it on first start,
+# and exits when it's renewed, to be restarted with it.
+Environment=ARENA_TLS_CERT=/var/lib/arena/tls/cert.pem
+Environment=ARENA_TLS_KEY=/var/lib/arena/tls/key.pem
+# Plain lines in the journal (no color codes). For a log collector: ARENA_LOG_FORMAT=json.
+# More detail (every hit): RUST_LOG=info,arena_server=debug,lightyear=warn.
+Environment=NO_COLOR=1
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/arena
+
+[Install]
+WantedBy=multi-user.target

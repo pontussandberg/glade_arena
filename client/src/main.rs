@@ -60,7 +60,8 @@ fn dev_mode() -> bool {
 
 /// Native dev client: `arena-client [client_id] [class]`, no certificate validation. Without a
 /// class (e.g. `javelinist`) it opens the lobby. `ARENA_SERVER=ip:port` picks another server
-/// (like the page's `?server=`); `ARENA_BOT=1` lets a simple bot play this client; `ARENA_DEV=1`
+/// (like the page's `?server=`), `ARENA_SERVER_URL=https://host:port` a deployed one by name;
+/// `ARENA_BOT=1` lets a simple bot play this client; `ARENA_DEV=1`
 /// turns on dev tools.
 #[cfg(not(target_family = "wasm"))]
 fn client_settings() -> ClientSettings {
@@ -77,6 +78,7 @@ fn client_settings() -> ClientSettings {
         client_id,
         server_addr,
         cert_digest: String::new(),
+        server_url: std::env::var("ARENA_SERVER_URL").ok(),
         conditioner: None,
         class,
     }
@@ -91,8 +93,9 @@ fn random_id() -> u64 {
     nanos ^ ((std::process::id() as u64) << 32)
 }
 
-/// Browser client: index.html puts the server's certificate digest (and optionally a server
-/// address) on `window` before starting the wasm module.
+/// Browser client: index.html puts on `window`, before starting the wasm module, either the
+/// deployed server's URL (`ARENA_SERVER_URL`, real certificate) or, in local dev, the
+/// self-signed certificate's digest (`ARENA_CERT_DIGEST`) and optionally a server address.
 #[cfg(target_family = "wasm")]
 fn client_settings() -> ClientSettings {
     let window = web_sys::window().expect("no window");
@@ -101,7 +104,7 @@ fn client_settings() -> ClientSettings {
             .ok()
             .and_then(|v| v.as_string())
     };
-    let cert_digest = get("ARENA_CERT_DIGEST").expect("index.html must set window.ARENA_CERT_DIGEST");
+    let cert_digest = get("ARENA_CERT_DIGEST").unwrap_or_default();
     let server_addr = get("ARENA_SERVER")
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(default_server_addr);
@@ -109,6 +112,7 @@ fn client_settings() -> ClientSettings {
         client_id: (js_sys::Math::random() * u32::MAX as f64) as u64,
         server_addr,
         cert_digest,
+        server_url: get("ARENA_SERVER_URL"),
         conditioner: None,
         class: None,
     }

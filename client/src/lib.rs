@@ -44,9 +44,14 @@ pub struct ClientSettings {
     /// Must be unique per connected client.
     pub client_id: u64,
     pub server_addr: SocketAddr,
-    /// Hex SHA-256 of the server certificate. Required in the browser; native dev clients may
-    /// leave it empty to skip validation.
+    /// Hex SHA-256 of the server certificate, for a self-signed one (local dev). Empty for a real
+    /// certificate (`server_url`); native clients may also leave it empty to skip validation.
     pub cert_digest: String,
+    /// The server's WebTransport URL (`https://host:port`), to connect by name to a server with a
+    /// real certificate. `server_addr` then only goes in the netcode connect token, which the
+    /// server checks against its own address: `127.0.0.1` and the server's port pass for a server
+    /// listening on all addresses (`0.0.0.0`).
+    pub server_url: Option<String>,
     /// Simulated latency/jitter/loss on received packets, for testing bad networks.
     pub conditioner: Option<LinkConditionerConfig>,
     /// Class to join as. `None` waits for the lobby (or a bot) to set `ChosenClass`.
@@ -136,7 +141,7 @@ fn spawn_client_entity(world: &mut World, settings: &ClientSettings) {
         LocalAddr(SocketAddr::new(std::net::Ipv4Addr::UNSPECIFIED.into(), 0)),
         PeerAddr(settings.server_addr),
         netcode,
-        WebTransportClientIo { certificate_digest: settings.cert_digest.clone(), target: None },
+        WebTransportClientIo { certificate_digest: settings.cert_digest.clone(), target: settings.server_url.clone() },
     ));
 }
 

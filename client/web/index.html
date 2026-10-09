@@ -16,12 +16,18 @@
   <script type="module">
     const status = document.getElementById('status');
     try {
-      // The dev server writes a fresh self-signed cert on every start; the browser needs its hash.
-      const res = await fetch('digest.txt', { cache: 'no-store' });
-      if (!res.ok) throw new Error('digest.txt missing — is the server running?');
-      window.ARENA_CERT_DIGEST = (await res.text()).trim();
       const params = new URLSearchParams(location.search);
-      if (params.has('server')) window.ARENA_SERVER = params.get('server');
+      if (['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
+        // Local dev: the server writes a fresh self-signed cert on every start; the browser
+        // needs its hash.
+        const res = await fetch('digest.txt', { cache: 'no-store' });
+        if (!res.ok) throw new Error('digest.txt missing — is the server running?');
+        window.ARENA_CERT_DIGEST = (await res.text()).trim();
+        if (params.has('server')) window.ARENA_SERVER = params.get('server');
+      } else {
+        // Deployed: the game server runs on this page's host, with the same real certificate.
+        window.ARENA_SERVER_URL = params.get('server_url') ?? `https://${location.hostname}:5888`;
+      }
       if (params.has('dev')) window.ARENA_DEV = '1';
       const { default: init } = await import('./pkg/arena-client.js');
       status.remove();

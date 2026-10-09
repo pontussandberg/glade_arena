@@ -120,7 +120,7 @@ Prereqs: Rust (stable, MSVC on Windows), `rustup target add wasm32-unknown-unkno
 #                 attacking cancels the walk, a click during the windup is kept
 cargo test
 
-# server (run from the repo root; writes client/web/digest.txt for the browser)
+# server (run from the repo root; writes client/web/digest.txt for the browser; see Logs below)
 cargo run -p arena-server
 
 # browser client
@@ -157,6 +157,36 @@ Two tabs work: a hidden tab keeps simulating and networking without rendering (s
 `client/src/hidden_tab.rs`, which works around Bevy 0.19 ignoring Lightyear's keepalive). If a
 client does freeze, the server stops its player after ~8 ticks (`neutralize_stale_inputs`) and
 drops it after 3s; the HUD then says DISCONNECTED and a page reload rejoins.
+
+## Logs
+
+The server logs to stderr. At info: start, connects and disconnects (with the reason), joins,
+kills, a `status` line every minute (players, each client's ping, jitter and input gaps), and
+warnings when the server hitches or a client's inputs stop arriving for over a second. Debug
+adds every hit and respawn: `RUST_LOG=info,arena_server=debug,lightyear=warn`.
+`ARENA_LOG_FORMAT=json` writes one JSON object per line, for a log collector. Panics are logged
+too (`server/src/logging.rs`).
+
+## Deploying
+
+One Ubuntu VPS (e.g. Hetzner Cloud; 4 GB of RAM, since the server is built there) with a domain
+pointing at it. Caddy serves the page over HTTPS and gets the certificate from Let's Encrypt; the
+game server's WebTransport uses the same certificate (copied for it whenever Caddy renews it; the
+server then restarts itself to load it), so the browser needs no `digest.txt` and connects to
+`https://<domain>:5888`. The server is a systemd service; its logs go to the journal.
+
+```sh
+# .env.local (not committed):
+#   DEPLOY_HOST=root@<server ip>
+#   DEPLOY_DOMAIN=arena.example.com     (its A record pointing at the server)
+bash deploy/deploy.sh setup   # once: Rust, Caddy, firewall (80/443 TCP, 5888 UDP), the service
+bash deploy/deploy.sh app     # build the web client here, the server there (from the last
+                              # commit; refuses with uncommitted changes), restart
+bash deploy/deploy.sh logs    # follow the server's logs
+```
+
+If your provider has its own firewall (Hetzner Cloud Firewall), open the same ports there. A
+deploy restarts the server, which disconnects everyone playing.
 
 ## Not done yet (see the plan)
 

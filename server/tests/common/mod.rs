@@ -6,14 +6,14 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use arena_client::{ClientSettings, DesiredInput, build_headless_client_app};
-use arena_server::{ServerSettings, build_server_app};
+use arena_server::{Certificate, ServerSettings, build_server_app};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
 /// A started server. `setup` can add test-only systems or resources before it starts.
 pub fn start_server(port: u16, setup: impl FnOnce(&mut App)) -> App {
-    let mut server = build_server_app(ServerSettings { port, digest_out: None });
+    let mut server = build_server_app(ServerSettings { port, certificate: Certificate::SelfSigned { digest_out: None } });
     setup(&mut server);
     server.finish();
     server.cleanup();
@@ -28,6 +28,7 @@ pub fn start_client(id: u64, port: u16, class: &str, conditioner: Option<LinkCon
         client_id: id,
         server_addr: SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port),
         cert_digest: String::new(),
+        server_url: None,
         conditioner,
         class: Some(class_id(class)),
     });

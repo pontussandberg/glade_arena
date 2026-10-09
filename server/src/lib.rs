@@ -21,11 +21,35 @@ use lightyear::prelude::server::input::{InputValidationAppExt, authorize_control
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
+use crate::logging::InputGaps;
+
+pub mod logging;
+
 pub struct ServerSettings {
     pub port: u16,
-    /// Where to write the self-signed certificate's SHA-256 digest. Browsers need it to trust the
-    /// WebTransport connection, so the dev web page fetches it from here.
-    pub digest_out: Option<PathBuf>,
+    pub certificate: Certificate,
+}
+
+/// The TLS certificate WebTransport runs on.
+pub enum Certificate {
+    /// Made up at start, for local dev: valid 14 days, for localhost only. Browsers trust it by
+    /// its SHA-256 digest, written to `digest_out` for the dev web page to fetch.
+    SelfSigned { digest_out: Option<PathBuf> },
+    /// A real certificate (deployed: the one Caddy gets from Let's Encrypt), as PEM files. Waited
+    /// for if they're not there yet (Caddy may still be getting it), and when the certificate
+    /// file changes (renewed), the server exits to be restarted with the new one: a running
+    /// WebTransport server can't swap certificates.
+    Pem { cert: PathBuf, key: PathBuf },
+}
+
+/// How often to check whether the certificate was renewed.
+const CERT_CHECK_EVERY: Duration = Duration::from_secs(600);
+
+/// The certificate file the server runs on, and when it was last modified as loaded.
+#[derive(Resource)]
+struct CertificateFile {
+    path: PathBuf,
+    loaded: Option<std::time::SystemTime>,
 }
 
 /// A headless server app, ready to `run()` or to be stepped manually with `update()` in tests.
@@ -33,7 +57,7 @@ pub fn build_server_app(settings: ServerSettings) -> App {
     let mut app = App::new();
     app.add_plugins((
         MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(Duration::from_millis(2))),
-        bevy::log::LogPlugin::default(),
+        logging::log_plugin(),
         bevy::state::app::StatesPlugin,
     ));
     app.add_plugins(ServerPlugins { tick_duration: TICK_DURATION });
@@ -43,21 +67,24 @@ pub fn build_server_app(settings: ServerSettings) -> App {
 }
 
 fn spawn_server_entity(app: &mut App, settings: ServerSettings) {
-    let identity = Identity::self_signed(["localhost", "127.0.0.1", "::1"])
-        .expect("failed to generate self-signed certificate");
-    let digest: String = identity.certificate_chain().as_slice()[0]
-        .hash()
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02X}"))
-        .collect();
-    info!("WebTransport certificate digest: {digest}");
-    if let Some(path) = &settings.digest_out {
-        std::fs::write(path, &digest).expect("failed to write certificate digest");
-        info!("Wrote certificate digest to {}", path.display());
-    }
+    let identity = match settings.certificate {
+        Certificate::SelfSigned { digest_out } => self_signed(digest_out),
+        Certificate::Pem { cert, key } => {
+            let identity = load_pem(&cert, &key);
+            app.insert_resource(CertificateFile { loaded: modified(&cert), path: cert });
+            app.add_systems(Update, restart_on_renewal);
+            identity
+        }
+    };
 
     let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), settings.port);
+    info!(
+        port = settings.port,
+        tick_hz = TICK_HZ,
+        protocol = format!("{PROTOCOL_ID:#018x}"),
+        version = env!("CARGO_PKG_VERSION"),
+        "server starting"
+    );
     app.world_mut().spawn((
         Name::from("Server"),
         Server::new(None),
@@ -78,7 +105,7 @@ pub struct ServerGamePlugin;
 
 impl Plugin for ServerGamePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(ProtocolPlugin);
+        app.add_plugins((ProtocolPlugin, logging::LoggingPlugin));
         // A client may only send inputs for the player it controls. Lightyear doesn't check this
         // by default, so without it a modified client could drive anyone else's fighter.
         app.add_input_validator(authorize_controlled_targets::<NativeStateSequence<PlayerInput>>);
@@ -147,6 +174,60 @@ const PLACE_BEFORE_RESPAWN_TICKS: u32 = 16;
 /// Players who can move, attack and be hit: placed and alive.
 type InPlay = (Without<NeedsSpawnPoint>, Without<Dead>);
 
+fn self_signed(digest_out: Option<PathBuf>) -> Identity {
+    let identity = Identity::self_signed(["localhost", "127.0.0.1", "::1"])
+        .expect("failed to generate self-signed certificate");
+    let digest: String = identity.certificate_chain().as_slice()[0]
+        .hash()
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02X}"))
+        .collect();
+    info!("WebTransport certificate digest: {digest}");
+    if let Some(path) = &digest_out {
+        std::fs::write(path, &digest).expect("failed to write certificate digest");
+        info!("Wrote certificate digest to {}", path.display());
+    }
+    identity
+}
+
+fn load_pem(cert: &std::path::Path, key: &std::path::Path) -> Identity {
+    if !(cert.exists() && key.exists()) {
+        info!(cert = %cert.display(), "waiting for the TLS certificate");
+        while !(cert.exists() && key.exists()) {
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+    // wtransport reads the files with tokio, which needs its runtime around.
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("failed to start tokio");
+    let identity = runtime
+        .block_on(Identity::load_pemfiles(cert, key))
+        .unwrap_or_else(|e| panic!("failed to load the TLS certificate {}: {e}", cert.display()));
+    info!(cert = %cert.display(), "loaded the TLS certificate");
+    identity
+}
+
+fn modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// Exits when the certificate file changes, to be restarted with it (see `Certificate::Pem`).
+fn restart_on_renewal(
+    time: Res<Time<Real>>,
+    mut next: Local<Duration>,
+    file: Res<CertificateFile>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if time.elapsed() < *next {
+        return;
+    }
+    *next = time.elapsed() + CERT_CHECK_EVERY;
+    if modified(&file.path) != file.loaded {
+        info!(cert = %file.path.display(), "the TLS certificate was renewed; exiting to restart with it");
+        exit.write(AppExit::Success);
+    }
+}
+
 /// Every new link needs a `ReplicationSender` before we can replicate anything to it.
 fn on_new_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
     commands.entity(trigger.entity).insert(ReplicationSender);
@@ -159,6 +240,7 @@ fn spawn_chosen_classes(
     players: Query<&ControlledBy, With<PlayerId>>,
     mut commands: Commands,
 ) {
+    let mut count = players.iter().len();
     for (link, remote, mut receiver) in &mut links {
         let mut has_player = players.iter().any(|c| c.owner == link);
         for ChooseClass(class) in receiver.receive() {
@@ -168,7 +250,8 @@ fn spawn_chosen_classes(
             }
             has_player = true;
             let id = remote.0;
-            info!("Client {id:?} joined as {}", class.def().name);
+            count += 1;
+            info!(client = ?id, class = class.def().name, players = count, "joined");
             commands.spawn((
                 Name::from("Player"),
                 PlayerId(id),
@@ -181,6 +264,7 @@ fn spawn_chosen_classes(
                 DashHits::default(),
                 LastSwing::default(),
                 PosHistory::default(),
+                InputGaps::default(),
                 ActionState::<PlayerInput>::default(),
                 // Replication starts in `place_players`, once it has a real position.
                 // Despawned automatically when this client disconnects.
@@ -222,15 +306,18 @@ const STALE_INPUT_TICKS: i32 = 8;
 
 fn neutralize_stale_inputs(
     timeline: Res<LocalTimeline>,
-    mut players: Query<(&mut ActionState<PlayerInput>, Option<&NativeBuffer<PlayerInput>>)>,
+    mut players: Query<(&PlayerId, &mut ActionState<PlayerInput>, Option<&NativeBuffer<PlayerInput>>, &mut InputGaps)>,
 ) {
     let tick = timeline.tick();
-    for (mut action, buffer) in &mut players {
-        let fresh = buffer
-            .and_then(|b| b.end_tick())
-            .is_some_and(|newest| tick - newest <= STALE_INPUT_TICKS);
+    for (id, mut action, buffer, mut gaps) in &mut players {
+        let newest = buffer.and_then(|b| b.end_tick());
+        let fresh = newest.is_some_and(|newest| tick - newest <= STALE_INPUT_TICKS);
         if !fresh {
             action.set_if_neq(ActionState::default());
+        }
+        // Not before the first input: a player who just joined hasn't sent any yet.
+        if newest.is_some() {
+            gaps.update(id.0, fresh, tick.0 as u32);
         }
     }
 }
@@ -287,12 +374,13 @@ fn view_time(now: Tick, link: Entity, delays: &Query<&InterpolationDelay, With<C
     ((tick.0 as u32).max(earliest), overstep)
 }
 
-/// Apply damage; at zero health the player is out of the fight for `RESPAWN_TICKS`.
-fn damage(commands: &mut Commands, now: u32, (player, id): (Entity, PeerId), health: &mut Health, amount: i32, by: PeerId) {
+/// Apply damage dealt `by` someone `with` an attack (named, for the log); at zero health the
+/// player is out of the fight for `RESPAWN_TICKS`.
+fn damage(commands: &mut Commands, now: u32, (player, id): (Entity, PeerId), health: &mut Health, amount: i32, (by, with): (PeerId, &str)) {
     health.0 = (health.0 - amount).max(0);
-    info!("{by:?} hit {id:?} for {amount}, health now {}", health.0);
+    debug!(attacker = ?by, target = ?id, with, amount, health = health.0, "hit");
     if health.0 == 0 {
-        info!("{id:?} died");
+        info!(killer = ?by, victim = ?id, with, "kill");
         commands.entity(player).insert(Dead { respawn_at: now + RESPAWN_TICKS, placed: false });
     }
 }
@@ -314,6 +402,7 @@ fn respawn(
             *attack = AttackState::default();
             *ability = AbilityState::default();
             commands.entity(player).remove::<Dead>();
+            debug!(?player, "respawned");
         }
     }
 }
@@ -328,13 +417,13 @@ fn hit_where_seen(
     now: u32,
     targets: &mut Targets,
     seen_at: (u32, f32),
-    attacker: PeerId,
+    attacker: (PeerId, &str),
     amount: i32,
     mut hits: impl FnMut(PeerId, Vec2) -> bool,
 ) -> usize {
     let mut count = 0;
     for (target, target_id, target_pos, history, mut health) in targets {
-        if target_id.0 != attacker && hits(target_id.0, history.at(seen_at).unwrap_or(target_pos.0)) {
+        if target_id.0 != attacker.0 && hits(target_id.0, history.at(seen_at).unwrap_or(target_pos.0)) {
             damage(commands, now, (target, target_id.0), &mut health, amount, attacker);
             count += 1;
         }
@@ -367,7 +456,7 @@ fn attack(
                 *last_swing = swing;
                 let seen_at = view_time(now, controlled_by.owner, &delays);
                 let amount = class.def().attack.damage;
-                hit_where_seen(&mut commands, now.0 as u32, &mut targets, seen_at, id.0, amount, |_, seen| {
+                hit_where_seen(&mut commands, now.0 as u32, &mut targets, seen_at, (id.0, "auto-attack"), amount, |_, seen| {
                     sim::melee_hits(pos.0, swing.dir, *class, seen)
                 });
             }
@@ -414,7 +503,8 @@ fn use_abilities(
                 hits.1.clear();
             }
             let seen_at = view_time(now, controlled_by.owner, &delays);
-            let cut_now = hit_where_seen(&mut commands, now.0 as u32, &mut targets, seen_at, id.0, *cut, |target, seen| {
+            let with = (id.0, class.def().ability.name.as_str());
+            let cut_now = hit_where_seen(&mut commands, now.0 as u32, &mut targets, seen_at, with, *cut, |target, seen| {
                 let fresh = !hits.1.contains(&target) && sim::dash_hits(pos.0, seen);
                 if fresh {
                     hits.1.push(target);
@@ -466,7 +556,9 @@ fn resolve_projectile_hits(
             }
             commands.entity(projectile_entity).try_despawn();
             let amount = sim::projectile_damage(projectile, now.0 as u32);
-            damage(&mut commands, now.0 as u32, (target, target_id.0), &mut health, amount, projectile.owner);
+            let def = projectile.class.def();
+            let with = if projectile.ability { def.ability.name.as_str() } else { "auto-attack" };
+            damage(&mut commands, now.0 as u32, (target, target_id.0), &mut health, amount, (projectile.owner, with));
             break;
         }
     }
