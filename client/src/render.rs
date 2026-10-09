@@ -48,9 +48,16 @@ impl Plugin for RenderPlugin {
 const PROJECTILE_HEIGHT: f32 = 0.9;
 /// How long a thrown spear takes to ease from the hand onto its real path (seconds).
 const SETTLE_SECONDS: f32 = 0.2;
-/// Where a thrown spear's wind starts, behind its point, and how long it gets.
-const WIND_FRONT: f32 = 1.5;
-const WIND_LENGTH: f32 = 3.0;
+/// Where a thrown spear's wind starts (just behind its butt, the spear is 2 m long) and how long
+/// it gets.
+const WIND_FRONT: f32 = 2.05;
+const WIND_LENGTH: f32 = 2.4;
+/// The wind's rubber: its spring (stiffness rad/s, damping; loose, so it overshoots), and how
+/// much and how often (per second) it pulses.
+const RUBBER_STIFFNESS: f32 = 14.0;
+const RUBBER_DAMPING: f32 = 0.3;
+const RUBBER_PULSE: f32 = 0.18;
+const RUBBER_RATE: f32 = 3.5;
 /// How long a swing, and a dash streak, stay on screen.
 const SWING_SECONDS: f32 = 0.16;
 const DASH_SECONDS: f32 = 0.3;
@@ -95,6 +102,8 @@ pub(crate) enum Look {
     Plain,
     /// The faint white wind behind a thrown spear.
     Wind,
+    /// The white glow on a thrown spear's point.
+    Spark,
     /// Swings are see-through flashes.
     Swing,
     /// A faint marking of where an attack that's winding up will land.
@@ -113,7 +122,7 @@ impl Visuals {
     ) -> Handle<StandardMaterial> {
         // Everything but spirit is per player: in the owner's color, or (bodies) so the hit flash
         // brightens just that fighter.
-        let key = (!matches!(look, Look::Spirit | Look::Plain | Look::Wind)).then_some(owner);
+        let key = (!matches!(look, Look::Spirit | Look::Plain | Look::Wind | Look::Spark)).then_some(owner);
         self.materials
             .entry((key, look))
             .or_insert_with(|| {
@@ -124,7 +133,8 @@ impl Visuals {
                     Look::Shot => glade::glow(color, 4.0),
                     Look::Spirit => glade::glow(palette::SPIRIT, 6.0),
                     Look::Plain => glade::matte(Color::WHITE),
-                    Look::Wind => glade::translucent(Color::WHITE, 0.35, 1.5),
+                    Look::Wind => glade::translucent(Color::WHITE, 0.6, 1.5),
+                    Look::Spark => glade::glow(Color::WHITE, 5.0),
                     Look::Swing => glade::translucent(color, 0.45, 2.0),
                     Look::Telegraph => glade::translucent(color, 0.28, 1.2),
                     Look::Ring => glade::glow(color, 1.2),
@@ -146,6 +156,9 @@ struct SwingFx {
 struct Thrown {
     wind: Entity,
     launch: Option<Launch>,
+    /// The wind's length, on a loose spring (and how fast it's changing).
+    length: f32,
+    stretch: f32,
 }
 
 /// When (seconds) and where a thrown spear left the hand: its point, how far that is off its
@@ -349,10 +362,13 @@ fn add_visuals(
         };
         let is_mine = projectile.owner == me.0;
         // A glowing shot is drawn in its owner's color (spirit blue for abilities); one in its own
-        // colors gets a glowing tip in the owner's color, so whose it is still reads.
-        let glow = if projectile.ability { Look::Spirit } else { Look::Shot };
-        let glow = visuals.material(&mut materials, projectile.owner, is_mine, glow);
-        let body = if colored { visuals.material(&mut materials, projectile.owner, is_mine, Look::Plain) } else { glow.clone() };
+        // colors (a thrown spear, just as it was held) gets a white glow on its point.
+        let look = match (colored, projectile.ability) {
+            (true, _) => Look::Plain,
+            (false, true) => Look::Spirit,
+            (false, false) => Look::Shot,
+        };
+        let body = visuals.material(&mut materials, projectile.owner, is_mine, look);
         let mut shot = commands.entity(entity);
         shot.insert((
             Mesh3d(mesh),
@@ -361,14 +377,15 @@ fn add_visuals(
                 .with_rotation(Quat::from_rotation_y(projectile.dir.to_angle())),
         ));
         if colored {
-            shot.with_child((Mesh3d(visuals.shot_tip.clone()), MeshMaterial3d(glow)));
+            let spark = visuals.material(&mut materials, projectile.owner, is_mine, Look::Spark);
+            shot.with_child((Mesh3d(visuals.shot_tip.clone()), MeshMaterial3d(spark)));
         }
         if thrown {
             let material = visuals.material(&mut materials, projectile.owner, is_mine, Look::Wind);
             // No length yet: it grows as the spear flies.
             let wind = Transform::from_xyz(-WIND_FRONT, 0.0, 0.0).with_scale(Vec3::new(0.0, 1.0, 1.0));
             let wind = shot.commands().spawn((Mesh3d(visuals.wind.clone()), MeshMaterial3d(material), wind)).id();
-            shot.add_child(wind).insert(Thrown { wind, launch: None });
+            shot.add_child(wind).insert(Thrown { wind, launch: None, length: 0.0, stretch: 0.0 });
         }
     }
 }
@@ -547,10 +564,18 @@ fn fly_shots(
         let at = on_path + across * left(SETTLE_SECONDS) + forward_dir * ahead * left(give_back);
         let turned = 1.0 - left(SETTLE_SECONDS);
         transform.set_if_neq(Transform::from_translation(at).with_rotation(launch.held.slerp(along, turned)));
+        // The wind, rubbery like a sprint's: its length chases how far the spear has flown (up to
+        // `WIND_LENGTH`), pulsing, on a loose spring, so it stretches out past that and snaps back.
+        let flown = (at.distance(launch.from) - WIND_FRONT).clamp(0.0, WIND_LENGTH);
+        let wanted = flown * (1.0 + RUBBER_PULSE * (since * RUBBER_RATE * std::f32::consts::TAU).sin());
+        let dt = time.delta_secs().min(0.05);
+        let pull = RUBBER_STIFFNESS * RUBBER_STIFFNESS * (wanted - thrown.length) - 2.0 * RUBBER_DAMPING * RUBBER_STIFFNESS * thrown.stretch;
+        thrown.stretch += pull * dt;
+        thrown.length = (thrown.length + thrown.stretch * dt).max(0.0);
         if let Ok(mut wind) = winds.get_mut(thrown.wind) {
-            let length = at.distance(launch.from).min(WIND_LENGTH);
-            if wind.scale.x != length {
-                wind.scale.x = length;
+            let scale = Vec3::new(thrown.length, 1.0, 1.0);
+            if wind.scale != scale {
+                wind.scale = scale;
             }
         }
     }

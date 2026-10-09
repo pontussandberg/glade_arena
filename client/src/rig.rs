@@ -89,7 +89,7 @@ enum Held {
 }
 
 const JAVELINIST: Moves = Moves {
-    weapon_arm: [-2.1, -2.8, 1.9, -2.1],
+    weapon_arm: [-2.9, -2.8, 1.9, -2.1],
     lead_arm: [0.35, 1.5, -0.9, -0.8],
     lead_leg: [0.12, 0.55, 0.4, 0.6],
     back_leg: [-0.1, -0.5, -0.75, -0.6],
@@ -131,7 +131,7 @@ const FOLLOW_THROUGH: (f32, f32) = (3.0, 14.0);
 const FLICK: (f32, f32) = (1.0, 10.0);
 /// How quickly a fighter turns toward where it wants to face, and eases in and out of its walk
 /// (per second, exponential).
-const TURN_RATE: f32 = 16.0;
+const TURN_RATE: f32 = 28.0;
 const WALK_RATE: f32 = 10.0;
 /// How brightly the eyes glow.
 const EYE_GLOW: f32 = 6.0;

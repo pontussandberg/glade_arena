@@ -105,7 +105,9 @@ fn orbit(
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     mut inspect: ResMut<Inspect>,
-    fighters: Query<&GlobalTransform, With<PlayerId>>,
+    // Its own transform, set this frame (`GlobalTransform` lags a frame, so the camera would
+    // trail the fighter and it would jitter).
+    fighters: Query<&Transform, (With<PlayerId>, Without<Camera3d>)>,
     mut camera: Single<&mut Transform, With<Camera3d>>,
 ) {
     if !inspect.on {
@@ -121,7 +123,7 @@ fn orbit(
     let notches = wheel_notches(&scroll);
     inspect.distance = (inspect.distance * (1.0 - notches * 0.12)).clamp(DISTANCE.0, DISTANCE.1);
     // Follow the fighter's feet (not its posed, leaning body) at chest height.
-    let aim = Vec3::new(target.translation().x, AIM_HEIGHT, target.translation().z);
+    let aim = target.translation.with_y(AIM_HEIGHT);
     let around = Quat::from_rotation_y(inspect.yaw) * Quat::from_rotation_x(-inspect.pitch);
     camera.set_if_neq(Transform::from_translation(aim + around * Vec3::Z * inspect.distance).looking_at(aim, Vec3::Y));
 }
