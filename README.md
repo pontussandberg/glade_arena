@@ -10,7 +10,8 @@ point-and-click like LoL or OSRS: **right click** walks to a tile (pathfinding a
 toward the cursor, **S** stops. Your ability's cooldown shows on an icon at the bottom of your
 screen, and a minimap in the corner shows everyone.
 
-Before joining you pick a **class**. Each has its own HP, speed, auto-attack (melee or
+Before joining you pick a **class** in the lobby, where it stands on a stage to look at (drag
+to turn it) next to its numbers and Q ability; then enter the arena. Each class has its own HP, speed, auto-attack (melee or
 projectile) and Q ability; all of it lives in `shared/assets/classes.ron`:
 
 | Class | Role | Auto-attack | Q |
@@ -44,7 +45,7 @@ client/   ClientNetPlugin (networking + prediction, headless-capable), bot (spar
           action_bar (your ability icon and cooldown), minimap,
           dev (dev mode: the inspect camera),
           glade (the 3D scene and all meshes), rig (animated fighters: facing, walk cycle,
-          windup and throw), join (class picker), feedback (health and cast bars, hit flash)
+          windup and throw), lobby (character select), feedback (health and cast bars, hit flash)
 client/web/  index.html for the browser build (pkg/ and digest.txt are generated)
 docs/     art-direction.md: "The Glade" look (palette, light, shape rules, props, fighters)
 scripts/  build-web.sh, serve.mjs
@@ -114,7 +115,7 @@ cargo run -p arena-server
 node scripts/serve.mjs          # -> http://localhost:8080 (open twice to play; you are blue)
 
 # native client (optional, handy for debugging): [client id] [class], e.g. `11 javelinist`;
-# without a class it shows the join screen. ARENA_SERVER=ip:port picks another server.
+# without a class it opens the lobby. ARENA_SERVER=ip:port picks another server.
 cargo run -p arena-client
 
 # a sparring partner: a native client played by a simple bot
@@ -130,7 +131,8 @@ The server makes a new self-signed certificate (valid 14 days) on every start. T
 its hash from `digest.txt`, so after restarting the server, reload the page. Chrome and Firefox
 support WebTransport with certificate hashes.
 
-Controls: pick a class with a click or its number key, right click to move, S to stop, left
+Controls: in the lobby, pick a class with a click or its number key and enter with the button or
+Enter; in the arena, right click to move, S to stop, left
 click to attack toward the cursor, Q for your ability toward the cursor, hold Space to lock the camera on
 yourself, push the mouse to a screen edge or use the arrow keys to pan, mouse wheel to zoom.
 

@@ -30,7 +30,7 @@ pub mod feedback;
 #[cfg(feature = "render")]
 pub mod glade;
 #[cfg(feature = "render")]
-pub mod join;
+pub mod lobby;
 #[cfg(feature = "render")]
 pub mod minimap;
 #[cfg(feature = "render")]
@@ -48,7 +48,7 @@ pub struct ClientSettings {
     pub cert_digest: String,
     /// Simulated latency/jitter/loss on received packets, for testing bad networks.
     pub conditioner: Option<LinkConditionerConfig>,
-    /// Class to join as. `None` waits for the join screen (or a bot) to set `ChosenClass`.
+    /// Class to join as. `None` waits for the lobby (or a bot) to set `ChosenClass`.
     pub class: Option<ClassId>,
 }
 
