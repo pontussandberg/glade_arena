@@ -108,9 +108,10 @@ fn chilled(app: &mut App, id: u64) -> Chilled {
 }
 
 /// The counter to a diving Revenant: a nova freezes it in place (no walking, no Rift Step), then
-/// leaves it slowed. Its own client, which predicts its movement, ends up where the server has it.
+/// lets it go at full speed. Its own client, which predicts its movement, ends up where the
+/// server has it.
 #[test]
-fn frost_nova_freezes_a_revenant_then_slows_it() {
+fn frost_nova_freezes_a_revenant_then_lets_it_go() {
     let mut d = duel(5880, "frost_mage", "revenant");
     let AbilityKind::Nova { damage, chill, .. } = class_id("frost_mage").def().ability.kind else { panic!("not a nova") };
     let full = server_player(&mut d.server, B).1;
@@ -134,17 +135,20 @@ fn frost_nova_freezes_a_revenant_then_slows_it() {
     // B's client predicted itself walking and was rolled back to where the server holds it.
     assert!(sees(&mut d.b, B).unwrap().distance(held) < 0.05, "B's client didn't end up frozen");
 
-    // Thawed, but still slowed: B walks off at a fraction of its speed.
+    // Thawed, and not slowed (only frostbolts slow): B walks off at its full speed. It lets go of
+    // Q, and clicks again: its client predicted the Rift Step before it heard of the root, which
+    // dropped the walk.
+    assert!(chill.slow == 0.0 || chill.slow_ticks == 0, "the nova shouldn't slow");
     d.until(Duration::from_secs(1), "the root wears off", |d| server_tick(d) > frozen.rooted.until + 2);
-    assert!(chill.slow_ticks > chill.root_ticks + 40, "the slow should outlast the root");
+    edit_input(&mut d.b, |i| (i.move_to, i.ability) = (Some(away), false));
+    d.until(Duration::from_secs(1), "B walks again", |d| server_player(&mut d.server, B).0 != held);
     let (from, from_tick) = (server_player(&mut d.server, B).0, server_tick(&mut d));
     d.run(Duration::from_millis(300));
     let (to, to_tick) = (server_player(&mut d.server, B).0, server_tick(&mut d));
-    assert!(to_tick < frozen.slowed.until, "the slow wore off during the measurement");
     let speed = from.distance(to) / ((to_tick - from_tick) as f32 / 64.0);
-    let expected = class_id("revenant").def().move_speed * (1.0 - chill.slow);
-    println!("slowed B walked {speed:.2} m/s (expected {expected:.2})");
-    assert!((speed - expected).abs() < 0.3, "slowed B walked at {speed} m/s, expected {expected}");
+    let expected = class_id("revenant").def().move_speed;
+    println!("thawed B walked {speed:.2} m/s (expected {expected:.2})");
+    assert!((speed - expected).abs() < 0.3, "thawed B walked at {speed} m/s, expected {expected}");
 }
 
 #[test]

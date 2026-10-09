@@ -18,12 +18,12 @@ projectile) and Q ability; all of it lives in `shared/assets/classes.ron`:
 |---|---|---|---|
 | Javelinist | Hunter | Slow, heavy javelins that hit harder the farther they fly (`far_damage`) | **Spirit Spear**: a fast spectral spear, thrown instantly (no windup, no root) |
 | Revenant | Duelist | Quick, short-windup blade swings | **Rift Step**: dash through enemies, cutting each one; a hit readies the blade at once |
-| Frost Mage | Controller | Frostbolts: little damage, but each hit slows (40% for 2 s) | **Frost Nova**: freeze everyone within 3.5 m in place for 1.5 s (no walking, no dashing), then slow them |
+| Frost Mage | Controller | Frostbolts: little damage and shorter range (mid range), but each hit slows (40% for 2 s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5 s (no walking, no dashing) |
 
 Hits can carry **crowd control** (`chill` in `classes.ron`): a slow takes a share off walking
 and dashing speed, a root freezes a fighter in place (it can't walk or dash, and a dash in
-progress stops) but it can still attack. Slowed fighters take on a cold blue cast; frozen ones
-stand in ice.
+progress stops) but it can still attack. Slowed fighters take on a cold blue cast and frost turns
+under their feet; frozen ones stand in ice.
 
 Every attack has a short windup (`windup_ticks`): you stand still with your aim locked while a
 cast bar fills under your health bar and a faint telegraph shows what it will cover (the swing's
@@ -124,7 +124,7 @@ Prereqs: Rust (stable, MSVC on Windows), `rustup target add wasm32-unknown-unkno
 #   abilities.rs  spirit spear predicted at once (no windup) and hitting; rift step cutting
 #                 through a target once and readying the blade, cutting where it ends but not
 #                 who it leaves behind; frost nova freezing a revenant (no walk, no dash, its
-#                 own client rolled back to the spot) and leaving it slowed; frostbolts slowing
+#                 own client rolled back to the spot), then letting it go; frostbolts slowing
 #   inputs.rs     4 fps client releasing fire; frozen client stops moving server-side;
 #                 attacking cancels the walk, a click during the windup is kept
 cargo test

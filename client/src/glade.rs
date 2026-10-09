@@ -53,6 +53,11 @@ pub mod palette {
     pub const FROST_ROBE: Color = Color::srgb_u8(0x1E, 0x27, 0x36);
     pub const FROST_DARK: Color = Color::srgb_u8(0x12, 0x17, 0x21);
     pub const RIME: Color = Color::srgb_u8(0xB4, 0xC8, 0xD2);
+    /// The frost mage's accent: a clear, cold blue on its sash, cuffs, front panel and staff
+    /// bindings.
+    pub const FROST_BLUE: Color = Color::srgb_u8(0x3A, 0x86, 0xD4);
+    /// What the frost mage's eyes, staff crystals, shoulder shards and robe runes glow with.
+    pub const FROST_GLOW: Color = Color::srgb_u8(0x6C, 0xC6, 0xFF);
     /// Pale, cold blade steel, and dark iron for shafts.
     pub const STEEL: Color = Color::srgb_u8(0xA9, 0xB5, 0xBC);
     pub const IRON: Color = Color::srgb_u8(0x5E, 0x66, 0x6E);
@@ -238,8 +243,14 @@ pub struct RigMeshes {
     pub leg: Mesh,
     /// The weapon in the right hand, pointing up (+Y) from the grip.
     pub held: Mesh,
-    /// Eyes in the head's space, drawn glowing (`WISP`).
+    /// Eyes in the head's space, drawn glowing in `glow`.
     pub eyes: Mesh,
+    /// What the eyes, and the glowing parts below, glow with.
+    pub glow: Color,
+    /// Parts of the held weapon (in its space) and of the body (in the fighter's space) drawn
+    /// glowing, like the eyes: crystals, runes.
+    pub held_glow: Option<Mesh>,
+    pub body_glow: Option<Mesh>,
     /// Something that hangs from the upper back and swings on its own (a tail, a cape),
     /// hanging down (-Y) from `RIG_TAIL`.
     pub tail: Option<Mesh>,
@@ -284,6 +295,9 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             ]),
             held: held_spear(),
             eyes: eye_slits(EYE.x + 0.01, EYE.y, EYE.z),
+            glow: palette::WISP,
+            held_glow: None,
+            body_glow: None,
             tail: None,
         },
         "revenant" => RigMeshes {
@@ -303,6 +317,9 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             ]),
             held: sword(),
             eyes: eye_slits(0.13, 0.2, 0.06),
+            glow: palette::WISP,
+            held_glow: None,
+            body_glow: None,
             // The tattered cape.
             tail: Some(tinted(
                 hanging_cone(0.22, 0.9, 14).scaled_by(Vec3::new(0.45, 1.0, 1.1)).translated_by(Vec3::Y * -0.45),
@@ -311,10 +328,11 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
         },
         "frost_mage" => RigMeshes {
             head: frost_crowned_hood(),
-            // Wide bell sleeves, rimed at the cuff, over a slim dark glove.
+            // Wide bell sleeves, banded in blue and rimed at the cuff, over a slim dark glove.
             arm: sculpted(vec![
                 taper(0.07, 0.095, 0.3, 16, Vec3::Y * -0.15, palette::FROST_ROBE),
                 taper(0.15, 0.08, 0.16, 16, Vec3::Y * -0.36, palette::FROST_ROBE),
+                taper(0.149, 0.144, 0.045, 16, Vec3::Y * -0.41, palette::FROST_BLUE),
                 taper(0.155, 0.15, 0.03, 16, Vec3::Y * -0.45, palette::RIME),
                 taper(0.05, 0.06, 0.1, 16, Vec3::Y * -0.46, palette::DARK_LEATHER),
                 tinted(ball(0.055).translated_by(RIG_HAND), palette::DARK_LEATHER),
@@ -327,6 +345,9 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             ]),
             held: ice_staff(),
             eyes: eye_slits(0.14, 0.19, 0.06),
+            glow: palette::FROST_GLOW,
+            held_glow: Some(staff_crystals()),
+            body_glow: Some(frost_mage_glow()),
             // A long, narrow cape, rimed along its hem.
             tail: Some(sculpted(vec![
                 tinted(hanging_cone(0.22, 1.05, 14).scaled_by(Vec3::new(0.4, 1.0, 1.15)).translated_by(Vec3::Y * -0.52), palette::FROST_DARK),
@@ -384,23 +405,89 @@ fn ice_shard(radius: f32, height: f32) -> Mesh {
     faceted(sculpted(vec![body, point]))
 }
 
-/// The frost mage's staff, gripped at the origin, standing up (+Y): dark wood bound in rime,
-/// three prongs holding a long ice crystal at the top.
+/// The frost mage's staff, gripped at the origin, standing up (+Y): a dark shaft bound in blue and
+/// shod in steel, and at the top two steel crescents crossing like an open cage around its
+/// crystals (`staff_crystals`, drawn glowing).
 fn ice_staff() -> Mesh {
-    let wood = palette::BARK.darker(0.12);
+    let wood = palette::BARK.darker(0.15);
     let mut parts = vec![
-        rod(Vec3::Y * -0.55, Vec3::Y * 1.05, 0.026, wood),
-        taper(0.034, 0.034, 0.05, 12, Vec3::Y * 0.12, palette::RIME),
-        taper(0.034, 0.034, 0.05, 12, Vec3::Y * -0.12, palette::RIME),
-        taper(0.04, 0.03, 0.06, 12, Vec3::Y * 1.06, palette::RIME),
+        rod(Vec3::Y * -0.62, Vec3::Y * 1.04, 0.024, wood),
+        // The steel butt spike and its collar.
+        tinted(hanging_cone(0.03, 0.16, 10).translated_by(Vec3::Y * -0.7), palette::STEEL),
+        taper(0.034, 0.03, 0.05, 12, Vec3::Y * -0.6, palette::STEEL),
+        // Blue bindings either side of the grip and up the shaft.
+        taper(0.032, 0.032, 0.06, 12, Vec3::Y * 0.12, palette::FROST_BLUE),
+        taper(0.032, 0.032, 0.06, 12, Vec3::Y * -0.12, palette::FROST_BLUE),
+        taper(0.03, 0.03, 0.03, 12, Vec3::Y * 0.6, palette::FROST_BLUE),
+        taper(0.03, 0.03, 0.03, 12, Vec3::Y * 0.68, palette::FROST_BLUE),
+        // The collar holding the head.
+        taper(0.03, 0.05, 0.1, 12, Vec3::Y * 1.02, palette::STEEL),
+        taper(0.052, 0.052, 0.025, 12, Vec3::Y * 1.08, palette::FROST_BLUE),
     ];
-    for i in 0..3 {
-        let around = Quat::from_rotation_y(i as f32 / 3.0 * std::f32::consts::TAU);
-        let (from, to) = (around * Vec3::new(0.03, 1.08, 0.0), around * Vec3::new(0.09, 1.3, 0.0));
-        parts.push(rod(from, to, 0.011, palette::RIME));
+    for side in CRESCENTS {
+        let steps = 7;
+        for i in 0..steps {
+            let (a, b) = (crescent(side, i as f32 / steps as f32), crescent(side, (i + 1) as f32 / steps as f32));
+            parts.push(rod(a, b, 0.013, palette::STEEL));
+        }
+        parts.push(tinted(ball(0.022).translated_by(crescent(side, 1.0)), palette::STEEL));
     }
-    let crystal = faceted(Sphere::new(0.075).mesh().ico(0).unwrap()).scaled_by(Vec3::new(0.8, 2.6, 0.8));
-    parts.push(tinted(crystal.translated_by(Vec3::Y * 1.32), palette::ICE));
+    sculpted(parts)
+}
+
+/// The middle of the staff's head (above the grip), and how far its crescents reach out.
+const STAFF_HEAD: f32 = 1.32;
+const STAFF_REACH: f32 = 0.17;
+/// How far around (radians from the bottom of the head) each crescent half curls up.
+const STAFF_CURL: f32 = 2.5;
+/// The sides the staff's crescent halves curl up on.
+const CRESCENTS: [Vec3; 4] = [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z];
+
+/// A point `t` (0..1) of the way along a crescent half, from the bottom of the staff's head up
+/// around `side` to its tip.
+fn crescent(side: Vec3, t: f32) -> Vec3 {
+    let angle = STAFF_CURL * t;
+    Vec3::Y * STAFF_HEAD + (side * angle.sin() - Vec3::Y * angle.cos()) * STAFF_REACH
+}
+
+/// The staff's crystals, drawn glowing: a long one floating in the middle of its head, a small
+/// one above it, and a sliver growing out of each crescent's tip.
+fn staff_crystals() -> Mesh {
+    let crystal = faceted(Sphere::new(0.07).mesh().ico(0).unwrap()).scaled_by(Vec3::new(0.85, 2.7, 0.85));
+    let mut parts = vec![
+        tinted(crystal.translated_by(Vec3::Y * (STAFF_HEAD + 0.02)), Color::WHITE),
+        tinted(ice_shard(0.022, 0.1).translated_by(Vec3::Y * (STAFF_HEAD + 0.25)), Color::WHITE),
+    ];
+    for side in CRESCENTS {
+        let tip = crescent(side, 1.0);
+        let out = (side + Vec3::Y).normalize();
+        let sliver = ice_shard(0.016, 0.11).rotated_by(Quat::from_rotation_arc(Vec3::Y, out));
+        parts.push(tinted(sliver.translated_by(tip), Color::WHITE));
+    }
+    sculpted(parts)
+}
+
+/// What glows on the frost mage's body: ice shards growing out of its mantle, a crystal at its
+/// sash, and runes circling the hem of its robe.
+fn frost_mage_glow() -> Mesh {
+    let mut parts = Vec::new();
+    for side in [1.0, -1.0] {
+        for (i, (out, height)) in [(0.25, 0.22), (0.6, 0.16), (0.95, 0.12)].into_iter().enumerate() {
+            let shard = ice_shard(0.03, height).rotated_by(Quat::from_rotation_x(side * out));
+            let at = Vec3::new(-0.06 + 0.06 * i as f32, 1.42, side * (0.2 + 0.03 * i as f32));
+            parts.push(tinted(shard.translated_by(at), Color::WHITE));
+        }
+    }
+    let gem = faceted(Sphere::new(0.045).mesh().ico(0).unwrap()).scaled_by(Vec3::new(0.6, 1.4, 1.0));
+    parts.push(tinted(gem.translated_by(Vec3::new(0.165, 0.88, 0.0)), Color::WHITE));
+    // Runes: small upright diamonds just above the hem, following the robe's curve.
+    for i in 0..10 {
+        let around = (i as f32 + 0.5) / 10.0 * std::f32::consts::TAU;
+        let (sin, cos) = around.sin_cos();
+        let rune = faceted(Sphere::new(0.03).mesh().ico(0).unwrap()).scaled_by(Vec3::new(0.35, 1.5, 1.0));
+        let turned = rune.rotated_by(Quat::from_rotation_y(-around));
+        parts.push(tinted(turned.translated_by(Vec3::new(cos * 0.385 * 0.85, 0.17, sin * 0.385)), Color::WHITE));
+    }
     sculpted(parts)
 }
 
@@ -418,26 +505,82 @@ pub fn ice_prison_mesh() -> Mesh {
     sculpted(parts)
 }
 
-/// A nova bursting: a flat disc of `radius` on the ground, and a ring of ice shards bursting
-/// out of its edge, leaning outward.
-pub fn nova_meshes(radius: f32) -> (Mesh, Mesh) {
-    let mut disc = FlatMesh::default();
-    let steps = 40;
-    let point = |i: u32| {
+/// A nova's parts, all around its center at the origin (see `render::show_novas`).
+#[derive(Clone)]
+pub struct NovaMeshes<M = Mesh> {
+    /// Frost over the ground it reaches, thickest at the edge.
+    pub disc: M,
+    /// The shockwave: a band at its edge, fading inward, that races out from the center.
+    pub ring: M,
+    /// One shard bursting out of the ground, leaning out along +X, 1 m tall.
+    pub shard: M,
+    /// Ice erupting from where the staff strikes the ground: a spray of tall shards.
+    pub eruption: M,
+}
+
+pub fn nova_meshes(radius: f32) -> NovaMeshes {
+    let steps = 48;
+    let point = |i: u32, r: f32| {
         let t = i as f32 / steps as f32 * std::f32::consts::TAU;
-        Vec3::new(t.cos() * radius, 0.0, -t.sin() * radius)
+        Vec3::new(t.cos() * r, 0.0, -t.sin() * r)
     };
+    let mut disc = FlatMesh::default();
+    let mut ring = FlatMesh::default();
     for i in 0..steps {
-        disc.tri([Vec3::ZERO, point(i), point(i + 1)], Color::WHITE);
+        disc.tri_faded([Vec3::ZERO, point(i, radius), point(i + 1, radius)], [0.25, 1.0, 1.0]);
+        let inner = radius * 0.72;
+        ring.tri_faded([point(i, inner), point(i, radius), point(i + 1, radius)], [0.0, 1.0, 1.0]);
+        ring.tri_faded([point(i, inner), point(i + 1, radius), point(i + 1, inner)], [0.0, 1.0, 0.0]);
     }
-    let mut shards = Vec::new();
-    for i in 0..18 {
-        let around = i as f32 / 18.0 * std::f32::consts::TAU;
-        let height = 0.5 + 0.3 * ((i * 7) % 4) as f32 / 3.0;
-        let shard = ice_shard(0.1, height).rotated_by(Quat::from_rotation_z(-0.35));
-        shards.push(shard.translated_by(Vec3::X * radius * 0.92).rotated_by(Quat::from_rotation_y(around)));
+    let mut eruption = Vec::new();
+    for i in 0..9 {
+        let around = i as f32 / 9.0 * std::f32::consts::TAU;
+        let height = 0.7 + 0.5 * ((i * 4) % 5) as f32 / 4.0;
+        let lean = 0.35 + 0.25 * ((i * 2) % 3) as f32 / 2.0;
+        let shard = ice_shard(0.07, height).rotated_by(Quat::from_rotation_z(-lean));
+        eruption.push(shard.translated_by(Vec3::X * 0.15).rotated_by(Quat::from_rotation_y(around)));
     }
-    (disc.build(), sculpted(shards))
+    NovaMeshes {
+        disc: disc.build(),
+        ring: ring.build(),
+        shard: ice_shard(0.11, 1.0).rotated_by(Quat::from_rotation_z(-0.35)),
+        eruption: sculpted(eruption),
+    }
+}
+
+/// Frost under a slowed fighter's feet, flat on the ground: a thin ring and a six-armed
+/// snowflake inside it (each arm branching twice), fading toward the middle.
+pub fn frost_rune_mesh() -> Mesh {
+    let mut b = FlatMesh::default();
+    let at = |angle: f32, r: f32| Vec3::new(angle.cos() * r, 0.0, -angle.sin() * r);
+    // The ring.
+    let steps = 36;
+    let (inner, outer) = (0.56, 0.64);
+    for i in 0..steps {
+        let (a, z) = (i as f32 / steps as f32 * std::f32::consts::TAU, (i + 1) as f32 / steps as f32 * std::f32::consts::TAU);
+        b.tri_faded([at(a, inner), at(a, outer), at(z, outer)], [0.7, 1.0, 1.0]);
+        b.tri_faded([at(a, inner), at(z, outer), at(z, inner)], [0.7, 1.0, 0.7]);
+    }
+    // A thin bar from `from` to `to`, `width` wide, opaque at `to`.
+    let mut bar = |from: Vec3, to: Vec3, width: f32, alpha: [f32; 2]| {
+        let along = (to - from).normalize();
+        let side = Vec3::new(along.z, 0.0, -along.x) * width / 2.0;
+        let corners = [from - side, to - side, to + side, from + side];
+        b.tri_faded([corners[0], corners[1], corners[2]], [alpha[0], alpha[1], alpha[1]]);
+        b.tri_faded([corners[0], corners[2], corners[3]], [alpha[0], alpha[1], alpha[0]]);
+    };
+    for i in 0..6 {
+        let angle = i as f32 / 6.0 * std::f32::consts::TAU;
+        bar(at(angle, 0.12), at(angle, 0.5), 0.05, [0.2, 1.0]);
+        for (r, length) in [(0.26, 0.1), (0.38, 0.08)] {
+            for turn in [0.7, -0.7] {
+                let from = at(angle, r);
+                let to = from + at(angle + turn, length);
+                bar(from, to, 0.035, [0.6, 1.0]);
+            }
+        }
+    }
+    b.build()
 }
 
 /// A long, straight sword, gripped at the origin, blade up (+Y).
@@ -593,25 +736,21 @@ pub fn fighter_mesh(class_key: &str) -> Mesh {
             sculpted(parts)
         }
         // Controller: a frost mage in a long, deep navy robe flaring to the ground, rimed at
-        // the hem and belt, a heavy rime mantle over the shoulders with ice shards growing out
-        // of it. Head (an ice-crowned hood), arms, legs, cape and staff are separate, animated
-        // parts (`fighter_rig`).
+        // the hem, with a blue sash, front panel and band above the hem, and a heavy rime mantle
+        // over the shoulders (the ice shards growing out of it glow: `frost_mage_glow`). Head (an
+        // ice-crowned hood), arms, legs, cape and staff are separate, animated parts
+        // (`fighter_rig`).
         "frost_mage" => {
-            let mut parts = vec![
+            let parts = vec![
                 taper(0.19, 0.27, 0.5, 18, Vec3::Y * 1.12, palette::FROST_ROBE).scaled_by(Vec3::new(0.66, 1.0, 1.0)),
                 taper(0.42, 0.21, 0.84, 22, Vec3::Y * 0.44, palette::FROST_ROBE).scaled_by(Vec3::new(0.85, 1.0, 1.0)),
-                block(Vec3::new(0.04, 0.7, 0.1), Vec3::new(0.25, 0.4, 0.0), palette::FROST_DARK),
+                // The front panel, down the slope of the robe.
+                rod(Vec3::new(0.35, 0.06, 0.0), Vec3::new(0.18, 0.86, 0.0), 0.032, palette::FROST_BLUE),
                 taper(0.43, 0.42, 0.05, 22, Vec3::Y * 0.03, palette::RIME).scaled_by(Vec3::new(0.85, 1.0, 1.0)),
-                taper(0.215, 0.215, 0.06, 20, Vec3::Y * 0.88, palette::RIME).scaled_by(Vec3::new(0.7, 1.0, 1.0)),
+                taper(0.415, 0.405, 0.05, 22, Vec3::Y * 0.08, palette::FROST_BLUE).scaled_by(Vec3::new(0.85, 1.0, 1.0)),
+                taper(0.22, 0.22, 0.07, 20, Vec3::Y * 0.88, palette::FROST_BLUE).scaled_by(Vec3::new(0.7, 1.0, 1.0)),
                 tinted(ball(0.3).scaled_by(Vec3::new(0.7, 0.3, 1.1)).translated_by(Vec3::Y * 1.38), palette::RIME),
             ];
-            for side in [1.0, -1.0] {
-                for (i, (out, height)) in [(0.25, 0.22), (0.6, 0.16), (0.95, 0.12)].into_iter().enumerate() {
-                    let shard = ice_shard(0.03, height).rotated_by(Quat::from_rotation_x(side * out));
-                    let at = Vec3::new(-0.06 + 0.06 * i as f32, 1.42, side * (0.2 + 0.03 * i as f32));
-                    parts.push(tinted(shard.translated_by(at), palette::ICE));
-                }
-            }
             sculpted(parts)
         }
         _ => unreachable!("no figure for class {class_key:?} (add it to FIGHTER_LOOKS)"),
