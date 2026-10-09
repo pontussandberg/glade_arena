@@ -1,6 +1,6 @@
 //! Fighters, projectiles, melee swings, dash streaks and windup telegraphs, the destination
 //! marker and the HUD, plus mouse and keyboard input.
-//! The scene itself is in `glade.rs`, the camera in `camera.rs`, the join screen in `join.rs`.
+//! The scene itself is in `glade.rs`, the camera in `camera.rs`, the lobby in `lobby.rs`.
 
 use std::fmt::Write;
 
@@ -25,7 +25,7 @@ impl Plugin for RenderPlugin {
         app.add_plugins((
             glade::GladePlugin,
             crate::camera::CameraPlugin,
-            crate::join::JoinPlugin,
+            crate::lobby::LobbyPlugin,
             crate::feedback::FeedbackPlugin,
             crate::rig::RigPlugin,
             crate::action_bar::ActionBarPlugin,
@@ -114,6 +114,11 @@ pub(crate) enum Look {
 }
 
 impl Visuals {
+    /// A class's body (the rest of the fighter is its rig, `rig.rs`).
+    pub(crate) fn fighter(&self, class: ClassId) -> Handle<Mesh> {
+        self.fighters[&class].clone()
+    }
+
     pub(crate) fn material(
         &mut self,
         materials: &mut Assets<StandardMaterial>,
@@ -185,6 +190,10 @@ struct WorldAligned(Quat, f32);
 #[derive(Component)]
 struct Hud;
 
+/// The in-game UI (HUD, minimap): hidden while the lobby is open.
+#[derive(Component)]
+pub(crate) struct GameUi;
+
 /// Shows where we're walking to.
 #[derive(Component)]
 struct DestinationMarker;
@@ -235,6 +244,7 @@ fn setup_scene(
     });
     commands.spawn((
         Hud,
+        GameUi,
         Text::new("connecting..."),
         TextFont { font_size: FontSize::Px(16.0), ..default() },
         TextColor(palette::HAZE),

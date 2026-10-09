@@ -36,13 +36,17 @@ impl Health {
     }
 }
 
-/// The auto-attack's state: when the next one may start, and the windup in progress (if any).
-/// Predicted, so your own windup starts instantly and rollbacks restore it; replicated (and
-/// shown on the same delayed timeline as others' positions), so others see your windup coming.
+/// The auto-attack's state: when the next one may start, the windup in progress (if any), and
+/// when the last one went off. Predicted, so your own windup starts instantly and rollbacks
+/// restore it; replicated (and shown on the same delayed timeline as others' positions), so
+/// others see your windup coming.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct AttackState {
     pub ready_at: u32,
     pub windup: Option<Windup>,
+    /// The tick the last attack went off (`None`: never). Kept rather than worked out from
+    /// `ready_at`, which a Rift Step hit resets.
+    pub released_at: Option<u32>,
 }
 
 /// An attack winding up: aim locked toward `dir`, goes off `windup_ticks` after `started_at`.
@@ -85,15 +89,6 @@ impl AbilityState {
     /// When the ability was last used (`None`: never).
     pub fn used_at(&self, class: ClassId) -> Option<u32> {
         (self.ready_at > 0).then(|| self.ready_at.saturating_sub(class.def().ability.cooldown_ticks))
-    }
-}
-
-impl AttackState {
-    /// When the last attack went off (`None`: never): its windup after it started, which is a
-    /// cooldown before it's ready again.
-    pub fn released_at(&self, class: ClassId) -> Option<u32> {
-        let attack = &class.def().attack;
-        (self.ready_at > 0).then(|| (self.ready_at + attack.windup_ticks).saturating_sub(attack.cooldown_ticks))
     }
 }
 

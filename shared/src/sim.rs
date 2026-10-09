@@ -94,6 +94,7 @@ pub fn step_attack(
     }
     let dir = windup.dir;
     state.windup = None;
+    state.released_at = Some(tick);
     let released = match attack.kind {
         AttackKind::Projectile { radius, .. } => {
             let projectile = Projectile { owner, class, dir, spawn_tick: tick, ability: false };
@@ -326,9 +327,10 @@ mod tests {
     fn attacks_go_off_after_the_windup_once_per_cooldown() {
         for class in ClassId::all() {
             let (windup, cooldown) = (class.def().attack.windup_ticks, class.def().attack.cooldown_ticks);
-            let (released, _) = attack_ticks(class, &aim(Vec2::X, true), 10, 10 + 2 * cooldown + windup);
+            let (released, state) = attack_ticks(class, &aim(Vec2::X, true), 10, 10 + 2 * cooldown + windup);
             let expected = vec![10 + windup, 10 + cooldown + windup, 10 + 2 * cooldown + windup];
             assert_eq!(released, expected, "{}", class.def().id);
+            assert_eq!(state.released_at, released.last().copied(), "{}: last release", class.def().id);
         }
     }
 

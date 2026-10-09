@@ -59,7 +59,7 @@ fn dev_mode() -> bool {
 }
 
 /// Native dev client: `arena-client [client_id] [class]`, no certificate validation. Without a
-/// class (e.g. `javelinist`) it shows the join screen. `ARENA_SERVER=ip:port` picks another server
+/// class (e.g. `javelinist`) it opens the lobby. `ARENA_SERVER=ip:port` picks another server
 /// (like the page's `?server=`); `ARENA_BOT=1` lets a simple bot play this client; `ARENA_DEV=1`
 /// turns on dev tools.
 #[cfg(not(target_family = "wasm"))]

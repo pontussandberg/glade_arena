@@ -77,6 +77,7 @@ fn spawn_minimap(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     commands
         .spawn((
             Minimap,
+            crate::render::GameUi,
             Node {
                 position_type: PositionType::Absolute,
                 right: px(MARGIN),

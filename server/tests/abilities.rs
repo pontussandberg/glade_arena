@@ -76,3 +76,25 @@ fn rift_step_cuts_through_and_readies_the_blade() {
     assert!(a_pos.x > B_SPOT.x, "A should have dashed through B");
     assert_eq!(server_player(&mut d.server, B).1, full - damage, "cut more than once by one dash");
 }
+
+/// Regression: hits used to be checked before each step instead of after it, so the dash's last
+/// step was never checked (a target just past its end, where A ends up overlapping them, wasn't
+/// cut) and the spot it started from was (someone right behind A was cut as A dashed away).
+#[test]
+fn rift_step_cuts_where_it_ends_not_who_it_leaves_behind() {
+    let AbilityKind::Dash { distance, damage, .. } = class_id("revenant").def().ability.kind else { panic!("not a dash") };
+
+    // B half a meter past where A's dash ends: A finishes on top of B.
+    let mut d = Duel::placed(5890, ("revenant", A_SPOT), ("javelinist", A_SPOT + Vec2::X * (distance + 0.5)));
+    let full = server_player(&mut d.server, B).1;
+    a_uses_q_at_b(&mut d);
+    d.until(Duration::from_secs(2), "the end of the dash cuts B", |d| server_player(&mut d.server, B).1 == full - damage);
+
+    // B right behind A, and A dashes the other way.
+    let mut d = Duel::placed(5889, ("revenant", A_SPOT), ("javelinist", A_SPOT - Vec2::X * 0.5));
+    let full = server_player(&mut d.server, B).1;
+    edit_input(&mut d.a, |i| (i.aim, i.ability) = (Vec2::X, true));
+    d.until(Duration::from_secs(2), "A dashes away", |d| server_player(&mut d.server, A).0.x > A_SPOT.x + distance - 0.5);
+    d.run(Duration::from_millis(300));
+    assert_eq!(server_player(&mut d.server, B).1, full, "cut by a dash going the other way");
+}

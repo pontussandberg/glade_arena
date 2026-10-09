@@ -9,7 +9,13 @@ const port = Number(process.env.PORT ?? 8080);
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.txt': 'text/plain' };
 
 createServer(async (req, res) => {
-  const path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname)).replace(/^[\\/]+/, '');
+  let path;
+  try {
+    path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname)).replace(/^[\\/]+/, '');
+  } catch {
+    // A malformed URL (e.g. a lone %) would otherwise throw out of here and stop the server.
+    return res.writeHead(400).end('bad request');
+  }
   if (path.startsWith('..')) return res.writeHead(403).end();
   try {
     const body = await readFile(join(root, path || 'index.html'));

@@ -327,7 +327,9 @@ fn ease_out(from: f32, to: f32, x: f32) -> f32 {
 /// undo that to stay on the aim.
 fn pose_rigs(
     time: Res<Time>,
-    clock: AttackClock,
+    // Not there until we're synced with the server; the lobby's fighter is posed before that
+    // (and it never attacks, so it doesn't need the clock).
+    clock: Option<AttackClock>,
     mut rigs: Query<(
         &mut Rig,
         &Facing,
@@ -355,9 +357,9 @@ fn pose_rigs(
         // windup, and the follow-through easing back to carrying after it; a thrown Q
         // flicks through it.
         let def = class.def();
-        let now = clock.now(is_me);
+        let now = clock.as_ref().map_or(0.0, |clock| clock.now(is_me));
         let since = |tick: Option<u32>| tick.map(|t| now - t as f32).filter(|s| *s >= 0.0);
-        let (draw, mut throw) = match (attack.windup, since(attack.released_at(*class))) {
+        let (draw, mut throw) = match (attack.windup, since(attack.released_at)) {
             (Some(windup), _) => {
                 let progress = windup.progress(now, *class);
                 (ease(0.0, DRAW_END, progress), ease_out(STRIKE_START, 1.0, progress))
@@ -376,7 +378,7 @@ fn pose_rigs(
         let rearm = (def.attack.cooldown_ticks - def.attack.windup_ticks) as f32 / 2.0;
         let empty_handed = matches!(def.attack.kind, AttackKind::Projectile { .. })
             && attack.windup.is_none()
-            && since(attack.released_at(*class)).is_some_and(|s| s < rearm);
+            && since(attack.released_at).is_some_and(|s| s < rearm);
 
         // Every angle chases its pose on a spring.
         let spring = |joint: &mut Spring, target: f32| joint.follow(target, dt, JOINT_STIFFNESS, JOINT_DAMPING);

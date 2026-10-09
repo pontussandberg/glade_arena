@@ -15,7 +15,8 @@ use arena_shared::sim;
 use bevy::prelude::*;
 use lightyear::interpolation::plugin::InterpolationDelay;
 use lightyear::netcode::NetcodeServer;
-use lightyear::prelude::input::native::{ActionState, NativeBuffer};
+use lightyear::prelude::input::native::{ActionState, NativeBuffer, NativeStateSequence};
+use lightyear::prelude::server::input::{InputValidationAppExt, authorize_controlled_targets};
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
@@ -77,6 +78,9 @@ pub struct ServerGamePlugin;
 impl Plugin for ServerGamePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(ProtocolPlugin);
+        // A client may only send inputs for the player it controls. Lightyear doesn't check this
+        // by default, so without it a modified client could drive anyone else's fighter.
+        app.add_input_validator(authorize_controlled_targets::<NativeStateSequence<PlayerInput>>);
         app.insert_resource(ReplicationMetadata::new(SEND_INTERVAL));
         app.add_observer(on_new_link);
         app.add_systems(Update, spawn_chosen_classes);
@@ -388,29 +392,30 @@ fn use_abilities(
 ) {
     let now = timeline.tick();
     for (id, class, pos, input, controlled_by, mut attack, mut state, mut hits) in &mut users {
+        // Cut whoever this tick's dash step reached (`move_players` just made it). Checked before
+        // the ability steps, which ends the dash on its last tick: so every step is checked, the
+        // last one included, and the spot the dash started from isn't.
+        if let (Some(dash), AbilityKind::Dash { damage: cut, resets_attack, .. }) = (state.dash, &class.def().ability.kind) {
+            if hits.0 != dash.started_at {
+                hits.0 = dash.started_at;
+                hits.1.clear();
+            }
+            let seen_at = view_time(now, controlled_by.owner, &delays);
+            let cut_now = hit_where_seen(&mut commands, now.0 as u32, &mut targets, seen_at, id.0, *cut, |target, seen| {
+                let fresh = !hits.1.contains(&target) && sim::dash_hits(pos.0, seen);
+                if fresh {
+                    hits.1.push(target);
+                }
+                fresh
+            });
+            if cut_now > 0 && *resets_attack && attack.windup.is_none() && attack.ready_at > now.0 as u32 {
+                attack.ready_at = now.0 as u32;
+            }
+        }
         let (next, thrown) = sim::step_ability(now.0 as u32, id.0, *class, pos.0, &input.0, &attack, *state);
         state.set_if_neq(next);
         if let Some((spawn, projectile)) = thrown {
             commands.spawn((projectile.bundle(spawn), owner_predicted(id.0)));
-        }
-        let (Some(dash), AbilityKind::Dash { damage: cut, resets_attack, .. }) = (state.dash, &class.def().ability.kind)
-        else {
-            continue;
-        };
-        if hits.0 != dash.started_at {
-            hits.0 = dash.started_at;
-            hits.1.clear();
-        }
-        let seen_at = view_time(now, controlled_by.owner, &delays);
-        let cut_now = hit_where_seen(&mut commands, now.0 as u32, &mut targets, seen_at, id.0, *cut, |target, seen| {
-            let fresh = !hits.1.contains(&target) && sim::dash_hits(pos.0, seen);
-            if fresh {
-                hits.1.push(target);
-            }
-            fresh
-        });
-        if cut_now > 0 && *resets_attack && attack.windup.is_none() && attack.ready_at > now.0 as u32 {
-            attack.ready_at = now.0 as u32;
         }
     }
 }

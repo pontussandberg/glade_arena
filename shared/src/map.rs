@@ -229,12 +229,21 @@ impl Map {
     /// Exact (segment against blocked tiles grown by the radius), not sampled, so every piece
     /// of a walkable line is walkable too: following a line never turns it unwalkable halfway.
     pub fn line_walkable(&self, a: Vec2, b: Vec2) -> bool {
+        self.line_blocker(a, b).is_none()
+    }
+
+    /// A blocked tile that keeps a body from moving straight from `a` to `b` (`None`: nothing
+    /// does). Looks from `a`'s end, so it finds an obstacle near `a` first: where a walker is,
+    /// and usually what hides the rest of its path too.
+    fn line_blocker(&self, a: Vec2, b: Vec2) -> Option<IVec2> {
         let half = Vec2::splat(0.5 + NAV_RADIUS);
         // Only visit tiles the grown segment can reach: per row, the x-span of the part of the
         // segment inside that row's band (padded a hair so rounding never skips a real hit).
         let band = half.y + 0.01;
         let d = b - a;
         let rows = Map::tile_of(a.min(b) - half).y..=Map::tile_of(a.max(b) + half).y;
+        let (mut up, mut down) = (rows.clone(), rows.rev());
+        let rows: &mut dyn Iterator<Item = i32> = if d.y >= 0.0 { &mut up } else { &mut down };
         for j in rows {
             let row_y = Map::center(IVec2::new(0, j)).y;
             let (t0, t1) = if d.y == 0.0 {
@@ -252,14 +261,21 @@ impl Map {
             let (x0, x1) = (a.x + d.x * t0, a.x + d.x * t1);
             let first = Map::tile_of(Vec2::new(x0.min(x1) - band, 0.0)).x;
             let last = Map::tile_of(Vec2::new(x0.max(x1) + band, 0.0)).x;
-            for i in first..=last {
-                let t = IVec2::new(i, j);
-                if !self.walkable(t) && segment_hits_box(a, b, Map::center(t) - half, Map::center(t) + half) {
-                    return false;
+            let (mut right, mut left) = ((first..=last), (first..=last).rev());
+            let columns: &mut dyn Iterator<Item = i32> = if d.x >= 0.0 { &mut right } else { &mut left };
+            for i in columns {
+                if self.blocks_line(IVec2::new(i, j), a, b) {
+                    return Some(IVec2::new(i, j));
                 }
             }
         }
-        true
+        None
+    }
+
+    /// Does tile `t`, if it's blocked, keep a body from moving straight from `a` to `b`?
+    fn blocks_line(&self, t: IVec2, a: Vec2, b: Vec2) -> bool {
+        let half = Vec2::splat(0.5 + NAV_RADIUS);
+        !self.walkable(t) && segment_hits_box(a, b, Map::center(t) - half, Map::center(t) + half)
     }
 
     /// True if no wall, rock or tree lies on the line from `a` to `b` (water doesn't block).
@@ -341,13 +357,30 @@ impl Map {
     /// point on the A* path reachable in a straight line, so movement looks direct (LoL-style)
     /// instead of zig-zagging along tiles. `None` if the target can't be reached.
     pub fn next_waypoint(&self, pos: Vec2, target: IVec2) -> Option<Vec2> {
-        let goal = Map::center(target);
-        if self.walkable(target) && self.line_walkable(pos, goal) {
-            return Some(goal);
+        if !self.walkable(target) {
+            return None;
         }
+        let goal = Map::center(target);
+        let Some(mut blocker) = self.line_blocker(pos, goal) else { return Some(goal) };
         let start = Map::tile_of(pos);
         let path = self.cached_path(start, target)?;
-        let farthest_visible = path[1..].iter().rev().map(|t| Map::center(*t)).find(|p| self.line_walkable(pos, *p));
+        // The goal (the path's last tile) is out of sight: find the farthest tile before it
+        // that isn't. Tiles next to each other on the path are mostly hidden by the same
+        // obstacle, so the one that hid the last tile is tried first. Exactly what checking
+        // every line in full would find, only cheaper.
+        let before_goal = path.get(1..path.len() - 1).unwrap_or_default();
+        let farthest_visible = before_goal.iter().rev().map(|t| Map::center(*t)).find(|&p| {
+            if self.blocks_line(blocker, pos, p) {
+                return false;
+            }
+            match self.line_blocker(pos, p) {
+                Some(t) => {
+                    blocker = t;
+                    false
+                }
+                None => true,
+            }
+        });
         // Nothing visible (we're hugging a wall, e.g. after a server teleport): go to our own
         // tile's center first. That stays inside one walkable tile, and from any tile center the
         // next path step is always visible.
@@ -473,6 +506,42 @@ mod tests {
                 _ => a + Vec2::new(rand(12.0), rand(12.0)),
             };
             assert_eq!(m.line_walkable(a, b), brute(a, b), "{a} -> {b}");
+        }
+    }
+
+    /// `next_waypoint`'s shortcuts (the remembered path, trying the last obstacle first) must
+    /// give exactly what a plain search gives: client and server must agree to the bit.
+    #[test]
+    fn next_waypoint_matches_a_plain_search() {
+        let m = map();
+        let plain = |pos: Vec2, target: IVec2| {
+            let goal = Map::center(target);
+            if m.walkable(target) && m.line_walkable(pos, goal) {
+                return Some(goal);
+            }
+            let start = Map::tile_of(pos);
+            let path = m.find_path(start, target)?;
+            let farthest = path[1..].iter().rev().map(|t| Map::center(*t)).find(|p| m.line_walkable(pos, *p));
+            Some(farthest.unwrap_or(Map::center(start)))
+        };
+        let all: Vec<IVec2> = m.tiles().map(|(t, _)| t).collect();
+        let walkable: Vec<IVec2> = all.iter().copied().filter(|t| m.walkable(*t)).collect();
+        let mut seed = 777u64;
+        let mut pick = |n: usize| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as usize % n
+        };
+        for _ in 0..2000 {
+            // Anywhere inside a walkable tile, to any tile: mostly walkable ones, sometimes
+            // water, walls or off the map.
+            let offset = Vec2::new(pick(1000) as f32, pick(1000) as f32) / 1000.0 - 0.5;
+            let pos = Map::center(walkable[pick(walkable.len())]) + offset;
+            let target = match pick(10) {
+                0 => all[pick(all.len())],
+                1 => IVec2::new(-50, 3),
+                _ => walkable[pick(walkable.len())],
+            };
+            assert_eq!(m.next_waypoint(pos, target), plain(pos, target), "{pos} -> {target}");
         }
     }
 

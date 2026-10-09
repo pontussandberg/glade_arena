@@ -153,14 +153,16 @@ fn place_bars(
 
 /// Flash white when health drops. `Health` is server-authoritative, so this shows confirmed
 /// hits only, about one round trip after the swing or shot. The fighter's material is its own
-/// (one per player), so the flash brightens it in place.
+/// (one per player), so the flash brightens it in place. Also run when a fighter first gets its
+/// body, to note its health then: it arrives before the body does, so waiting for the next
+/// change would spend the first hit on noting it, without a flash.
 fn flash_on_hit(
     mut commands: Commands,
     time: Res<Time>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut players: Query<
         (Entity, &Health, &MeshMaterial3d<StandardMaterial>, Option<&mut ShownHealth>, Option<&mut HitFlash>),
-        Changed<Health>,
+        Or<(Changed<Health>, Added<MeshMaterial3d<StandardMaterial>>)>,
     >,
 ) {
     let until = time.elapsed_secs() + FLASH_SECONDS;

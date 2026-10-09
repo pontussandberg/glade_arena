@@ -1,7 +1,8 @@
 //! Playable classes, loaded from `assets/classes.ron`.
 //!
 //! Gameplay code never names a class: it reads a `ClassDef` (HP, speed, auto-attack, Q ability)
-//! through the player's `ClassId`. Adding or retuning a class is a data change.
+//! through the player's `ClassId`. Retuning a class is a data change; a new class also needs its
+//! look in the client (`glade.rs` figure and parts, `rig.rs` moves).
 
 use std::sync::LazyLock;
 
@@ -164,11 +165,19 @@ pub fn classes() -> &'static [ClassDef] {
 
 /// FNV-1a over the class file, folded into the protocol id.
 pub const fn classes_hash() -> u64 {
-    let bytes = CLASSES_RON.as_bytes();
+    text_hash(CLASSES_RON)
+}
+
+/// FNV-1a over `text`, skipping carriage returns: a CRLF checkout (git's autocrlf on Windows)
+/// must agree with an LF one, or builds from the two couldn't connect.
+const fn text_hash(text: &str) -> u64 {
+    let bytes = text.as_bytes();
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     let mut i = 0;
     while i < bytes.len() {
-        hash = (hash ^ bytes[i] as u64).wrapping_mul(0x0100_0000_01b3);
+        if bytes[i] != b'\r' {
+            hash = (hash ^ bytes[i] as u64).wrapping_mul(0x0100_0000_01b3);
+        }
         i += 1;
     }
     hash
@@ -226,6 +235,12 @@ mod tests {
         let attack = |kind| AttackDef { damage: 10, cooldown_ticks: 40, windup_ticks: 10, kind };
         assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(30))).damage_at(d)), [10, 20, 30, 30]);
         assert_eq!(attack(kind(None)).damage_at(5.0), 10);
+    }
+
+    #[test]
+    fn class_file_hash_ignores_line_endings() {
+        assert_eq!(text_hash("a: 1,\r\nb: 2,\r\n"), text_hash("a: 1,\nb: 2,\n"));
+        assert_ne!(text_hash("a: 1,\n"), text_hash("a: 2,\n"));
     }
 
     #[test]
