@@ -11,14 +11,12 @@
 //!   it really is now rather than where the server last said; the server decides the hit and the
 //!   damage replicates to everyone
 
-mod common;
-
 use std::time::{Duration, Instant};
 
 use arena_shared::map::{Map, Tile, map};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
-use common::*;
+use crate::common::*;
 
 const PORT: u16 = 5899;
 /// A shoots (a projectile class); B is a sturdy melee class.

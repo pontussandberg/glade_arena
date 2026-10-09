@@ -1,14 +1,12 @@
 //! Input edge cases: one server and one client, mostly with the client stepped at an unhealthy
 //! rate.
 
-mod common;
-
 use std::time::{Duration, Instant};
 
 use arena_shared::map::{Map, map};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
-use common::*;
+use crate::common::*;
 
 const CLIENT: u64 = 7;
 /// A healthy client frame rate.

@@ -3,6 +3,10 @@ name = "arena-shared"
 version.workspace = true
 edition.workspace = true
 
+# No doc tests: skip building their (empty) harness.
+[lib]
+doctest = false
+
 [dependencies]
 bevy = { workspace = true, features = ["std", "bevy_log", "bevy_state", "serialize"] }
 lightyear = { workspace = true, features = [

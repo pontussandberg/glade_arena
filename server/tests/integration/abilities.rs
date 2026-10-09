@@ -1,14 +1,12 @@
 //! Q abilities end to end: a real server and two headless clients over WebTransport, the user
 //! of the ability on a 60 ms + jitter + 2% loss connection.
 
-mod common;
-
 use std::time::{Duration, Instant};
 
 use arena_shared::classes::AbilityKind;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
-use common::*;
+use crate::common::*;
 use lightyear::prelude::LocalTimeline;
 
 /// Open ground, B 3 m in front of A (both on the same row as the combat tests).

@@ -1,14 +1,12 @@
 //! Melee, lag compensation, death and respawn, end to end: a real server and two headless
 //! clients over WebTransport, the attacker on a 60 ms + jitter + 2% loss connection.
 
-mod common;
-
 use std::time::{Duration, Instant};
 
 use arena_shared::map::{Map, SPAWN_POINTS, map};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
-use common::*;
+use crate::common::*;
 
 /// Melee attacker and its target.
 const A_CLASS: &str = "revenant";

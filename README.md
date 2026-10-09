@@ -45,7 +45,7 @@ shared/   protocol (replicated components, PlayerInput, messages), sim (pure gam
           map (the tile map, A* pathfinding, line-of-movement checks), classes (+ assets/classes.ron),
           config
 server/   headless authoritative server (spawning, hit decisions, lag compensation, respawns);
-          tests/ has the end-to-end tests
+          tests/integration/ has the end-to-end tests (one test binary: each links all of Bevy)
 client/   ClientNetPlugin (networking + prediction, headless-capable), bot (sparring AI);
           render (fighters, shots, swings, telegraphs, dash streaks, novas, frost, HUD, input), camera,
           action_bar (your ability icon and cooldown), minimap,
@@ -107,11 +107,16 @@ decisions (damage, death) stay in `server/`.
 Prereqs: Rust (stable, MSVC on Windows), `rustup target add wasm32-unknown-unknown`, and
 `cargo install wasm-bindgen-cli --version <version of wasm-bindgen in Cargo.lock>`.
 
+Build settings that keep Bevy builds fast and within memory: Windows links with Rust's bundled
+`rust-lld` and cargo runs at most 12 jobs (`.cargo/config.toml`); dependencies build without
+debug info (`Cargo.toml`; our own crates keep it).
+
 ```sh
 # all at once: rebuild the browser client, replace any running server, serve on :8080
 ./scripts/dev.sh
 
-# tests (~45s): sim unit tests, plus real server + headless bot clients over WebTransport:
+# tests (~10s to run, plus the build): sim unit tests, plus real server + headless bot clients
+# over WebTransport (server/tests/integration/):
 #   map/sim       map symmetry, pathfinding, every spawn point reaching every other; windups,
 #                 cooldowns, far_damage, Q throws, dashes (full distance, never into a wall,
 #                 not mid-swing), slows, roots (stopping walks and dashes), novas
