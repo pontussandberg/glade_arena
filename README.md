@@ -91,6 +91,9 @@ Prereqs: Rust (stable, MSVC on Windows), `rustup target add wasm32-unknown-unkno
 `cargo install wasm-bindgen-cli --version <version of wasm-bindgen in Cargo.lock>`.
 
 ```sh
+# all at once: rebuild the browser client, replace any running server, serve on :8080
+./scripts/dev.sh
+
 # tests (~45s): sim unit tests, plus real server + headless bot clients over WebTransport:
 #   map/sim       map symmetry, pathfinding, every spawn point reaching every other; windups,
 #                 cooldowns, far_damage, Q throws, dashes (full distance, never into a wall,
