@@ -234,8 +234,8 @@ fn predict_attack(
         let Some(attack) = released else { continue };
         match attack {
             // Matched to the server's copy by hash when it arrives.
-            sim::Attack::Projectile(spawn, projectile) => {
-                commands.spawn(projectile.bundle(spawn));
+            sim::Attack::Projectile(projectile) => {
+                commands.spawn(projectile.bundle());
             }
             sim::Attack::Melee(swing) => *last_swing = swing,
         }
@@ -259,21 +259,23 @@ fn predict_ability(
         }
         let (next, thrown) = sim::step_ability(tick, id.0, *class, pos.0, &input.0, attack, *state);
         state.set_if_neq(next);
-        if let Some((spawn, projectile)) = thrown {
-            commands.spawn(projectile.bundle(spawn));
+        if let Some(projectile) = thrown {
+            commands.spawn(projectile.bundle());
         }
     }
 }
 
+/// Every projectile, ours and others': where it is this tick. Others' arrive from the server
+/// a round trip late, with the position they had back then; this puts them where they really
+/// are now, on the same clock as our own player.
 fn predict_projectiles(
     synced: SyncedLocalTimeline,
     mut commands: Commands,
-    // Interpolated projectiles (other players') get their position from the server instead.
-    mut projectiles: Query<(Entity, &mut Pos, &Projectile), Without<Interpolated>>,
+    mut projectiles: Query<(Entity, &mut Pos, &Projectile)>,
 ) {
     let tick = synced.current_tick().0 as u32;
     for (entity, mut pos, projectile) in &mut projectiles {
-        pos.0 = sim::step_projectile(pos.0, projectile);
+        pos.set_if_neq(Pos(sim::projectile_pos(projectile, tick as f32)));
         if sim::projectile_expired(pos.0, projectile, tick) {
             // Rollback-aware despawn: restored if a rollback rewinds past this point.
             commands.entity(entity).prediction_despawn();

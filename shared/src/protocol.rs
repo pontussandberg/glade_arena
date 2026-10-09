@@ -112,6 +112,9 @@ pub struct Projectile {
     pub owner: PeerId,
     /// The shooter's class: speed, size, range and damage come from its attack (or ability).
     pub class: ClassId,
+    /// Where it was thrown from; with `dir` and `spawn_tick` that says where it is at any tick
+    /// (`sim::projectile_pos`).
+    pub origin: Vec2,
     pub dir: Vec2,
     pub spawn_tick: u32,
     /// Thrown with the Q ability rather than the auto-attack.
@@ -121,10 +124,10 @@ pub struct Projectile {
 impl Projectile {
     /// Everything a newly fired projectile spawns with, on both client and server. The shared
     /// `PreSpawned` hash is what matches the server's copy to the one the client predicted.
-    pub fn bundle(self, pos: Vec2) -> impl Bundle {
+    pub fn bundle(self) -> impl Bundle {
         (
             Name::from("Projectile"),
-            Pos(pos),
+            Pos(self.origin),
             self,
             PreSpawned::new(crate::sim::projectile_prespawn_hash(&self)),
         )
@@ -186,6 +189,8 @@ impl Plugin for ProtocolPlugin {
         app.component::<AttackState>().replicate().predict().add_interpolation_with(hold);
         app.component::<LastSwing>().replicate().predict().add_interpolation_with(hold);
         app.component::<AbilityState>().replicate().predict().add_interpolation_with(hold);
+        // Every client predicts every projectile, not just its own: they fly on rails, so each
+        // client can draw them where they really are, on the same clock as its own player.
         app.component::<Projectile>().replicate().predict();
     }
 }

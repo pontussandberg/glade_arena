@@ -1,8 +1,9 @@
 //! Authoritative match server.
 //!
 //! Clients pick a class, then only send inputs. The server runs the shared sim on them, decides
-//! hits and damage (with lag compensation), and replicates the result. A client's own player and
-//! projectiles are predicted on that client; everyone else's are interpolated.
+//! hits and damage (melee and dashes with lag compensation), and replicates the result. A
+//! client's own player is predicted on that client, other players are interpolated; every
+//! client predicts every projectile.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -112,6 +113,18 @@ fn owner_predicted(owner: PeerId) -> impl Bundle {
         PredictionTarget::to_clients(NetworkTarget::Single(owner)),
         InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(owner)),
     )
+}
+
+/// Projectiles are predicted by everyone: the shooter matches the server's copy to the one it
+/// already threw (`PreSpawned`); the others learn of it late and catch it up to where it really
+/// is. Either way it flies on the same clock as each client's own player, which is what makes
+/// a dodge look the way the server judges it (see `resolve_projectile_hits`).
+fn spawn_projectile(commands: &mut Commands, projectile: Projectile) {
+    commands.spawn((
+        projectile.bundle(),
+        Replicate::to_clients(NetworkTarget::All),
+        PredictionTarget::to_clients(NetworkTarget::All),
+    ));
 }
 
 /// Server-only: this player (new or respawning) still needs a spawn point.
@@ -235,7 +248,9 @@ fn move_players(
 // An attacker sees other players slightly in the past (interpolated), so judging their hits
 // against where targets are *now* makes clear hits miss at any real ping. Instead the server
 // keeps a short position history per player and checks hits against where the attacker saw
-// the target: their own interpolation delay back in time ("favor the shooter"), capped.
+// the target: their own interpolation delay back in time ("favor the shooter"), capped. Only
+// for melee and dashes, which land the instant they're made; projectiles are judged in the
+// present (`resolve_projectile_hits`).
 
 /// How far back a hit may be judged: ~250 ms.
 const MAX_REWIND_TICKS: u32 = 16;
@@ -347,9 +362,7 @@ fn attack(
         state.set_if_neq(next);
         let Some(attack) = released else { continue };
         match attack {
-            sim::Attack::Projectile(spawn, projectile) => {
-                commands.spawn((projectile.bundle(spawn), owner_predicted(id.0)));
-            }
+            sim::Attack::Projectile(projectile) => spawn_projectile(&mut commands, projectile),
             sim::Attack::Melee(swing) => {
                 *last_swing = swing;
                 let seen_at = view_time(now, controlled_by.owner, &delays);
@@ -414,8 +427,8 @@ fn use_abilities(
         }
         let (next, thrown) = sim::step_ability(now.0 as u32, id.0, *class, pos.0, &input.0, &attack, *state);
         state.set_if_neq(next);
-        if let Some((spawn, projectile)) = thrown {
-            commands.spawn((projectile.bundle(spawn), owner_predicted(id.0)));
+        if let Some(projectile) = thrown {
+            spawn_projectile(&mut commands, projectile);
         }
     }
 }
@@ -427,31 +440,28 @@ fn move_projectiles(
 ) {
     let tick = timeline.tick().0 as u32;
     for (entity, mut pos, projectile) in &mut projectiles {
-        pos.0 = sim::step_projectile(pos.0, projectile);
+        pos.0 = sim::projectile_pos(projectile, tick as f32);
         if sim::projectile_expired(pos.0, projectile, tick) {
             commands.entity(entity).despawn();
         }
     }
 }
 
-/// Projectile hits, judged against where the shooter saw each target. Clients see the result
-/// through replicated `Health`.
+/// Projectile hits, judged against where everyone is now: no lag compensation, unlike melee and
+/// dashes. Projectiles can be dodged, and every client draws them on its own player's clock, so
+/// what the target sees is exactly what's judged here ("favor the target"). The price is paid by
+/// the shooter, who sees others a little in the past and may watch a shot pass through someone
+/// who had already stepped aside. Clients see the result through replicated `Health`.
 fn resolve_projectile_hits(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    delays: Query<&InterpolationDelay, With<ClientOf>>,
-    metadata: Res<NetworkingMetadata>,
     projectiles: Query<(Entity, &Pos, &Projectile)>,
     mut targets: Targets,
 ) {
     let now = timeline.tick();
     for (projectile_entity, projectile_pos, projectile) in &projectiles {
-        // The shooter's connection; gone if they disconnected mid-flight.
-        let Some(&shooter_link) = metadata.peer_map.get(&projectile.owner) else { continue };
-        let seen_at = view_time(now, shooter_link, &delays);
-        for (target, target_id, target_pos, history, mut health) in &mut targets {
-            let seen = history.at(seen_at).unwrap_or(target_pos.0);
-            if target_id.0 == projectile.owner || !sim::projectile_hits(projectile_pos.0, projectile, seen) {
+        for (target, target_id, target_pos, _, mut health) in &mut targets {
+            if target_id.0 == projectile.owner || !sim::projectile_hits(projectile_pos.0, projectile, target_pos.0) {
                 continue;
             }
             commands.entity(projectile_entity).try_despawn();

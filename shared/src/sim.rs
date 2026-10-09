@@ -62,8 +62,8 @@ pub fn arrived(pos: Vec2, target: IVec2) -> bool {
 
 /// What an auto-attack produces.
 pub enum Attack {
-    /// Spawn this projectile at this position.
-    Projectile(Vec2, Projectile),
+    /// Spawn this projectile.
+    Projectile(Projectile),
     /// A swing; the server resolves who it hits (`melee_hits`).
     Melee(LastSwing),
 }
@@ -97,8 +97,8 @@ pub fn step_attack(
     state.released_at = Some(tick);
     let released = match attack.kind {
         AttackKind::Projectile { radius, .. } => {
-            let projectile = Projectile { owner, class, dir, spawn_tick: tick, ability: false };
-            Attack::Projectile(shot_spawn(pos, dir, radius), projectile)
+            let origin = shot_spawn(pos, dir, radius);
+            Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: false })
         }
         AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir }),
     };
@@ -121,7 +121,7 @@ pub fn step_ability(
     input: &PlayerInput,
     attack: &AttackState,
     mut state: AbilityState,
-) -> (AbilityState, Option<(Vec2, Projectile)>) {
+) -> (AbilityState, Option<Projectile>) {
     let ability = &class.def().ability;
     if let (Some(dash), AbilityKind::Dash { ticks, .. }) = (state.dash, &ability.kind)
         && tick >= dash.started_at + ticks
@@ -133,7 +133,8 @@ pub fn step_ability(
     };
     let thrown = match ability.kind {
         AbilityKind::Projectile { radius, .. } => {
-            Some((shot_spawn(pos, dir, radius), Projectile { owner, class, dir, spawn_tick: tick, ability: true }))
+            let origin = shot_spawn(pos, dir, radius);
+            Some(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: true })
         }
         AbilityKind::Dash { .. } if attack.windup.is_none() => {
             state.dash = Some(Dash { started_at: tick, dir });
@@ -155,8 +156,12 @@ fn shot(projectile: &Projectile) -> Shot {
     projectile.class.def().shot(projectile.ability).unwrap_or_default()
 }
 
-pub fn step_projectile(pos: Vec2, projectile: &Projectile) -> Vec2 {
-    pos + projectile.dir * shot(projectile).speed * TICK_DT
+/// Where a projectile is at `tick` (after that tick's step; fractional ticks for drawing in
+/// between). It flies straight at a constant speed, so this is all there is to it: whoever learns
+/// of a shot late (everyone but its shooter) can still put it where it really is.
+pub fn projectile_pos(projectile: &Projectile, tick: f32) -> Vec2 {
+    let steps = tick - projectile.spawn_tick as f32 + 1.0;
+    projectile.origin + projectile.dir * (shot(projectile).speed * TICK_DT * steps)
 }
 
 /// Out of range, or into a wall, rock or tree (water doesn't stop shots).
@@ -372,21 +377,18 @@ mod tests {
         let input = aim(target - shooter_pos, true);
         let windup = shooter().def().attack.windup_ticks;
         let (state, _) = step_attack(0, PeerId::Netcode(1), shooter(), shooter_pos, &input, AttackState::default());
-        let Some(Attack::Projectile(mut pos, proj)) =
-            step_attack(windup, PeerId::Netcode(1), shooter(), shooter_pos, &input, state).1
+        let Some(Attack::Projectile(proj)) = step_attack(windup, PeerId::Netcode(1), shooter(), shooter_pos, &input, state).1
         else {
             panic!("a projectile class should shoot after its windup");
         };
-        let hit_tick = (1..=proj.class.def().shot(false).unwrap().lifetime_ticks()).find(|_| {
-            pos = step_projectile(pos, &proj);
-            projectile_hits(pos, &proj, target)
-        });
+        let lifetime = proj.class.def().shot(false).unwrap().lifetime_ticks();
+        let hit_tick = (windup..windup + lifetime).find(|&tick| projectile_hits(projectile_pos(&proj, tick as f32), &proj, target));
         assert!(hit_tick.is_some(), "projectile should hit a target 6 m away in its path");
     }
 
     #[test]
     fn projectile_expires_at_its_range_and_at_walls() {
-        let proj = Projectile { owner: PeerId::Netcode(1), class: shooter(), dir: Vec2::X, spawn_tick: 5, ability: false };
+        let proj = Projectile { owner: PeerId::Netcode(1), class: shooter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 5, ability: false };
         let lifetime = shooter().def().shot(false).unwrap().lifetime_ticks();
         assert!(!projectile_expired(Vec2::ZERO, &proj, 5 + lifetime - 1));
         assert!(projectile_expired(Vec2::ZERO, &proj, 5 + lifetime));
@@ -412,7 +414,7 @@ mod tests {
         let class = thrower();
         let me = PeerId::Netcode(1);
         let (state, thrown) = step_ability(10, me, class, Vec2::ZERO, &press_q(Vec2::X), &AttackState::default(), default());
-        let (_, projectile) = thrown.expect("thrown the tick Q is pressed");
+        let projectile = thrown.expect("thrown the tick Q is pressed");
         assert!(projectile.ability && projectile.spawn_tick == 10);
         let cooldown = class.def().ability.cooldown_ticks;
         let again = |tick| step_ability(tick, me, class, Vec2::ZERO, &press_q(Vec2::X), &AttackState::default(), state).1;
@@ -485,7 +487,7 @@ mod tests {
 
     #[test]
     fn prespawn_hash_differs_per_owner_tick_and_kind() {
-        let shot = Projectile { owner: PeerId::Netcode(1), class: shooter(), dir: Vec2::X, spawn_tick: 100, ability: false };
+        let shot = Projectile { owner: PeerId::Netcode(1), class: shooter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 100, ability: false };
         let a = projectile_prespawn_hash(&shot);
         assert_ne!(a, projectile_prespawn_hash(&Projectile { owner: PeerId::Netcode(2), ..shot }));
         assert_ne!(a, projectile_prespawn_hash(&Projectile { spawn_tick: 101, ..shot }));

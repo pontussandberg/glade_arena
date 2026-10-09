@@ -37,7 +37,37 @@ pub struct RigPlugin;
 impl Plugin for RigPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_rigs);
-        app.add_systems(Update, (add_rigs, turn_fighters, pose_rigs).chain().in_set(Posing));
+        app.add_systems(Update, (add_rigs, see_throws, turn_fighters, pose_rigs).chain().in_set(Posing));
+    }
+}
+
+/// The spawn ticks of another fighter's latest auto-attack and Q throws, noted as their spears
+/// appear. Spears fly on our own clock (where they really are), but the thrower is drawn a round
+/// trip or so in the past: its body only gets to a throw after the spear is already flying. What
+/// shows a throw (the arm, the hand going empty, the cast bar, the telegraph) goes by this
+/// instead, so the javelin isn't drawn in the hand and in the air at once.
+#[derive(Component, Default)]
+pub(crate) struct SeenThrows {
+    attack: Option<u32>,
+    ability: Option<u32>,
+}
+
+impl SeenThrows {
+    /// The windup to show: none once its spear is flying.
+    pub(crate) fn windup(seen: Option<&Self>, attack: &AttackState) -> Option<Windup> {
+        let thrown = seen.and_then(|seen| seen.attack);
+        attack.windup.filter(|windup| thrown.is_none_or(|thrown| windup.started_at > thrown))
+    }
+}
+
+fn see_throws(
+    shots: Query<&Projectile, Added<Projectile>>,
+    mut throwers: Query<(&PlayerId, &mut SeenThrows), Without<Predicted>>,
+) {
+    for shot in &shots {
+        let Some((_, mut seen)) = throwers.iter_mut().find(|(id, _)| id.0 == shot.owner) else { continue };
+        let latest = if shot.ability { &mut seen.ability } else { &mut seen.attack };
+        *latest = (*latest).max(Some(shot.spawn_tick));
     }
 }
 
@@ -279,7 +309,12 @@ fn add_rigs(
         if let Some(tail) = rig.tail {
             commands.entity(player).add_child(tail);
         }
-        commands.entity(player).insert((rig, Facing { look: Vec2::X, last_pos: pos.0, moved: Vec2::ZERO, turned: 0.0 }, HeldAt::default()));
+        commands.entity(player).insert((
+            rig,
+            Facing { look: Vec2::X, last_pos: pos.0, moved: Vec2::ZERO, turned: 0.0 },
+            HeldAt::default(),
+            SeenThrows::default(),
+        ));
     }
 }
 
@@ -338,13 +373,14 @@ fn pose_rigs(
         &ClassId,
         &AttackState,
         &AbilityState,
+        Option<&SeenThrows>,
         Has<Predicted>,
     )>,
     mut parts: Query<(&mut Transform, &mut Visibility), Without<Rig>>,
 ) {
     let ease_walk = rate(&time, WALK_RATE);
     let dt = time.delta_secs().min(0.1);
-    for (mut rig, facing, mut body, mut held_at, class, attack, ability, is_me) in &mut rigs {
+    for (mut rig, facing, mut body, mut held_at, class, attack, ability, seen, is_me) in &mut rigs {
         let rig = &mut *rig;
         rig.stride += facing.moved.length() * STRIDES_PER_METER;
         let is_walking = if facing.moved.length() > 0.001 { 1.0 } else { 0.0 };
@@ -358,8 +394,15 @@ fn pose_rigs(
         // flicks through it.
         let def = class.def();
         let now = clock.as_ref().map_or(0.0, |clock| clock.now(is_me));
-        let since = |tick: Option<u32>| tick.map(|t| now - t as f32).filter(|s| *s >= 0.0);
-        let (draw, mut throw) = match (attack.windup, since(attack.released_at)) {
+        let present = clock.as_ref().map_or(0.0, |clock| clock.now(true));
+        // A throw whose spear we've seen counts from when it really happened, on our own clock.
+        let since_throw = |tick: Option<u32>, seen: Option<u32>| match seen.filter(|&s| tick.is_none_or(|t| t <= s)) {
+            Some(seen) => Some(present - seen as f32).filter(|s| *s >= 0.0),
+            None => tick.map(|t| now - t as f32).filter(|s| *s >= 0.0),
+        };
+        let released = since_throw(attack.released_at, seen.and_then(|seen| seen.attack));
+        let windup = SeenThrows::windup(seen, attack);
+        let (draw, mut throw) = match (windup, released) {
             (Some(windup), _) => {
                 let progress = windup.progress(now, *class);
                 (ease(0.0, DRAW_END, progress), ease_out(STRIKE_START, 1.0, progress))
@@ -367,7 +410,8 @@ fn pose_rigs(
             (None, Some(since)) => (0.0, 1.0 - ease(FOLLOW_THROUGH.0, FOLLOW_THROUGH.1, since)),
             (None, None) => (0.0, 0.0),
         };
-        if let (AbilityKind::Projectile { .. }, Some(since)) = (&def.ability.kind, since(ability.used_at(*class))) {
+        let flicked = since_throw(ability.used_at(*class), seen.and_then(|seen| seen.ability));
+        if let (AbilityKind::Projectile { .. }, Some(since)) = (&def.ability.kind, flicked) {
             throw = throw.max(1.0 - ease(FLICK.0, FLICK.1, since));
         }
         let dashing = if ability.dash.is_some() { 1.0 } else { 0.0 };
@@ -377,8 +421,8 @@ fn pose_rigs(
         // A thrown weapon: the hand is empty until a new one is drawn, halfway through the cooldown.
         let rearm = (def.attack.cooldown_ticks - def.attack.windup_ticks) as f32 / 2.0;
         let empty_handed = matches!(def.attack.kind, AttackKind::Projectile { .. })
-            && attack.windup.is_none()
-            && since(attack.released_at).is_some_and(|s| s < rearm);
+            && windup.is_none()
+            && released.is_some_and(|s| s < rearm);
 
         // Every angle chases its pose on a spring.
         let spring = |joint: &mut Spring, target: f32| joint.follow(target, dt, JOINT_STIFFNESS, JOINT_DAMPING);

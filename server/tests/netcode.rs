@@ -7,8 +7,9 @@
 //! - client-side prediction: A's own movement shows up locally before the server could confirm it
 //! - reconciliation: after moving, A's predicted position converges to the server's
 //! - server authority: clicks into the river go nowhere; far clicks are walked at normal speed
-//! - projectiles: A's shot appears instantly on A (prespawned); the server decides the hit and
-//!   the damage replicates to everyone
+//! - projectiles: A's shot appears instantly on A (prespawned) and is predicted on B too, where
+//!   it really is now rather than where the server last said; the server decides the hit and the
+//!   damage replicates to everyone
 
 mod common;
 
@@ -27,6 +28,12 @@ const B_CLASS: &str = "revenant";
 fn projectile_count(app: &mut App) -> usize {
     let mut q = app.world_mut().query_filtered::<(), With<Projectile>>();
     q.iter(app.world()).count()
+}
+
+/// How far along its path the (only) projectile is, and whether this app predicts it.
+fn projectile_flown(app: &mut App) -> Option<(f32, bool)> {
+    let mut q = app.world_mut().query::<(&Pos, &Projectile, Has<lightyear::prelude::Predicted>)>();
+    q.iter(app.world()).next().map(|(pos, shot, predicted)| ((pos.0 - shot.origin).dot(shot.dir), predicted))
 }
 
 fn rollbacks(app: &App) -> u32 {
@@ -131,8 +138,16 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     println!("A's projectile appeared locally after {:?} (windup {windup:?})", t0.elapsed());
     assert!(t0.elapsed() < windup + Duration::from_millis(60), "projectile was not predicted");
 
-    // B's client sees the projectile too (interpolated from the server).
+    // B's client sees the projectile too, predicted: it learned of it late, but puts it where it
+    // really is on B's own clock, which runs ahead of the server's (not where the server's
+    // message said it was, a moment ago).
     h.until(Duration::from_secs(1), "B sees A's projectile", |h| projectile_count(&mut h.b) > 0);
+    h.update();
+    if let (Some((on_b, predicted)), Some((on_server, _))) = (projectile_flown(&mut h.b), projectile_flown(&mut h.server)) {
+        println!("A's projectile: {on_b:.2} m along on B, {on_server:.2} m on the server");
+        assert!(predicted, "B should predict A's projectile");
+        assert!(on_b >= on_server, "B's copy of A's projectile is behind the server's");
+    }
 
     // The server decides the hit (damage depends on how far the shot flew); health replicates to
     // both clients.
@@ -151,7 +166,7 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     assert_eq!(server_player(&mut h.server, B).1, damaged);
     assert_eq!(projectile_count(&mut h.server), 0, "projectile should be gone after hitting");
     assert_eq!(projectile_count(&mut h.a), 0, "A's predicted projectile should be gone");
-    assert_eq!(projectile_count(&mut h.b), 0, "B's interpolated projectile should be gone");
+    assert_eq!(projectile_count(&mut h.b), 0, "B's copy of A's projectile should be gone");
     println!("rollbacks at end: A={} B={}", rollbacks(&h.a), rollbacks(&h.b));
 }
 

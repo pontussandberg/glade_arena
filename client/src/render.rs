@@ -15,8 +15,9 @@ use lightyear::prelude::*;
 
 use crate::DesiredInput;
 use crate::camera::{CameraMode, CameraPlaced, key_axis};
+use crate::feedback::AttackClock;
 use crate::glade::{self, palette, to_gameplay, to_world};
-use crate::rig::HeldAt;
+use crate::rig::{HeldAt, SeenThrows};
 
 pub struct RenderPlugin;
 
@@ -49,6 +50,10 @@ impl Plugin for RenderPlugin {
 const PROJECTILE_HEIGHT: f32 = 0.9;
 /// How long a thrown spear takes to ease from the hand onto its real path (seconds).
 const SETTLE_SECONDS: f32 = 0.2;
+/// Others' spears reach us a round trip (and a bit) after they're thrown, when their real path
+/// is already meters ahead of the hand. A spear never starts more than this far (meters) behind
+/// it; beyond that (a very high ping) the rest is skipped.
+const MAX_CATCH_UP: f32 = 8.0;
 /// Where a thrown spear's wind starts (just behind its butt, the spear is 2 m long) and how long
 /// it gets.
 const WIND_FRONT: f32 = 2.05;
@@ -484,17 +489,19 @@ fn fade_swings(mut commands: Commands, time: Res<Time>, swings: Query<(Entity, &
 }
 
 /// Show the telegraph, pointing where the attack is locked to, while a fighter winds up.
-/// `AttackState` is predicted for us (shown the moment we click) and interpolated for others.
+/// `AttackState` is predicted for us (shown the moment we click) and interpolated for others
+/// (and gone once their spear is seen flying, see `SeenThrows`).
 fn show_telegraphs(
-    players: Query<(&AttackState, &Telegraph), Changed<AttackState>>,
+    players: Query<(&AttackState, Option<&SeenThrows>, &Telegraph), Or<(Changed<AttackState>, Changed<SeenThrows>)>>,
     mut telegraphs: Query<(&mut WorldAligned, &mut Visibility)>,
 ) {
-    for (attack, telegraph) in &players {
+    for (attack, seen, telegraph) in &players {
         let Ok((mut aligned, mut visibility)) = telegraphs.get_mut(telegraph.0) else { continue };
-        if let Some(windup) = attack.windup {
+        let windup = SeenThrows::windup(seen, attack);
+        if let Some(windup) = windup {
             aligned.0 = Quat::from_rotation_y(windup.dir.to_angle());
         }
-        visibility.set_if_neq(shown(attack.windup.is_some()));
+        visibility.set_if_neq(shown(windup.is_some()));
     }
 }
 
@@ -536,29 +543,32 @@ fn sync_transforms(mut q: Query<(&Pos, &mut Transform), (Changed<Pos>, Without<P
     }
 }
 
-/// Places every shot each frame. Ours (predicted) move once per tick, so they're drawn as far
-/// as they've flown since (they fly straight at a constant speed), and glide instead of
-/// stepping; others' are interpolated already.
+/// Places every shot each frame, where it really is right now (on our own player's clock, between
+/// ticks too, so it glides instead of stepping). Every shot is predicted, ours and others'.
 ///
 /// A thrown spear leaves the hand: the first frame it's drawn (after the thrower is posed,
 /// releasing) it takes over the held javelin's place, then eases onto its real path (which
 /// starts at the thrower's center, where hits are judged), across and up/down within
 /// `SETTLE_SECONDS`, turning from how it was held to the way it flies. A hand ahead of the real
-/// path is given back more slowly, so the spear never seems to slow below 3/4 speed. Its wind
-/// stretches back to where it left the hand, up to `WIND_LENGTH`.
+/// path is given back more slowly, so the spear never seems to slow below 3/4 speed; one behind
+/// it is caught up within `SETTLE_SECONDS` however far behind it is, so others' spears (which
+/// reach us late, already meters down their path) shoot out of the hand fast and are where they
+/// really are almost at once. Its wind stretches back to where it left the hand, up to
+/// `WIND_LENGTH`.
 fn fly_shots(
     time: Res<Time>,
-    fixed: Res<Time<Fixed>>,
+    clock: AttackClock,
     holders: Query<(&PlayerId, &HeldAt)>,
-    mut shots: Query<(&Pos, &Projectile, &mut Transform, Option<&mut Thrown>, Has<Interpolated>), With<Mesh3d>>,
+    mut shots: Query<(&Projectile, &mut Transform, Option<&mut Thrown>), With<Mesh3d>>,
     mut winds: Query<&mut Transform, Without<Projectile>>,
 ) {
     let now = time.elapsed_secs();
-    for (pos, projectile, mut transform, thrown, interpolated) in &mut shots {
+    let tick = clock.now(true);
+    for (projectile, mut transform, thrown) in &mut shots {
         let speed = projectile.class.def().shot(projectile.ability).map_or(0.0, |s| s.speed);
-        let flown = if interpolated { 0.0 } else { fixed.overstep().as_secs_f32() * speed };
-        let on_path = to_world(pos.0 + projectile.dir * flown, PROJECTILE_HEIGHT);
+        let on_path = to_world(sim::projectile_pos(projectile, tick), PROJECTILE_HEIGHT);
         let along = Quat::from_rotation_y(projectile.dir.to_angle());
+        let forward_dir = along * Vec3::X;
         let Some(mut thrown) = thrown else {
             transform.set_if_neq(Transform::from_translation(on_path).with_rotation(along));
             continue;
@@ -572,7 +582,11 @@ fn fly_shots(
                         let from = held.translation + held.rotation * Vec3::Y * glade::GRIP_TO_TIP;
                         // The held javelin points up (+Y), a shot along +X.
                         let rotation = held.rotation * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
-                        Launch { at: now, from, offset: from - on_path, held: rotation }
+                        // No more than `MAX_CATCH_UP` behind its real path.
+                        let mut offset = from - on_path;
+                        let excess = offset.dot(forward_dir) + MAX_CATCH_UP;
+                        offset -= forward_dir * excess.min(0.0);
+                        Launch { at: now, from, offset, held: rotation }
                     }
                     // No thrower to be seen: straight from its path.
                     None => Launch { at: now, from: on_path, offset: Vec3::ZERO, held: along },
@@ -580,12 +594,11 @@ fn fly_shots(
             }
         };
         let since = now - launch.at;
-        let forward_dir = along * Vec3::X;
         let ahead = launch.offset.dot(forward_dir);
         let across = launch.offset - forward_dir * ahead;
         // Eased out (1 to 0 over `seconds`), so the spear runs onto its path without a kink.
         let left = |seconds: f32| (1.0 - since / seconds).max(0.0).powi(2);
-        let give_back = SETTLE_SECONDS.max(8.0 * ahead.abs() / speed.max(1.0));
+        let give_back = SETTLE_SECONDS.max(8.0 * ahead / speed.max(1.0));
         let at = on_path + across * left(SETTLE_SECONDS) + forward_dir * ahead * left(give_back);
         let turned = 1.0 - left(SETTLE_SECONDS);
         transform.set_if_neq(Transform::from_translation(at).with_rotation(launch.held.slerp(along, turned)));

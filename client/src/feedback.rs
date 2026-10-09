@@ -12,6 +12,7 @@ use lightyear::prelude::*;
 use crate::camera::CameraPlaced;
 use crate::glade::{palette, to_world};
 use crate::render::{player_color, shown};
+use crate::rig::SeenThrows;
 
 pub struct FeedbackPlugin;
 
@@ -110,13 +111,13 @@ fn place_bars(
     mut commands: Commands,
     clock: AttackClock,
     camera: Single<(&Camera, &GlobalTransform)>,
-    players: Query<(&Pos, &ClassId, Option<&Health>, &AttackState, Has<Predicted>)>,
+    players: Query<(&Pos, &ClassId, Option<&Health>, &AttackState, Option<&SeenThrows>, Has<Predicted>)>,
     mut bars: Query<(Entity, &Bars, &mut Node, &mut Visibility)>,
     mut parts: Query<(&mut Node, &mut Visibility), Without<Bars>>,
 ) {
     let (camera, camera_transform) = *camera;
     for (bar, ids, mut node, mut visibility) in &mut bars {
-        let Ok((pos, class, health, attack, is_me)) = players.get(ids.player) else {
+        let Ok((pos, class, health, attack, seen, is_me)) = players.get(ids.player) else {
             commands.entity(bar).despawn();
             continue;
         };
@@ -142,11 +143,12 @@ fn place_bars(
             }
         };
         fill_to(ids.health_fill, health.map_or(1.0, |h| h.0 as f32 / class.def().max_hp as f32));
-        if let Some(windup) = attack.windup {
+        let windup = SeenThrows::windup(seen, attack);
+        if let Some(windup) = windup {
             fill_to(ids.cast_fill, windup.progress(clock.now(is_me), *class));
         }
         if let Ok((_, mut cast_visibility)) = parts.get_mut(ids.cast) {
-            cast_visibility.set_if_neq(shown(attack.windup.is_some()));
+            cast_visibility.set_if_neq(shown(windup.is_some()));
         }
     }
 }
