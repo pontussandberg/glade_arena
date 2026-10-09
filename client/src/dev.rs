@@ -15,7 +15,7 @@ use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
-use crate::camera::{CameraControl, wheel_notches};
+use crate::camera::{CameraControl, CameraMoves, Orbit, key_axis, wheel_notches};
 use crate::feedback::AttackClock;
 use crate::glade::palette;
 use crate::render::shown;
@@ -27,7 +27,7 @@ impl Plugin for DevPlugin {
         app.insert_resource(Inspect::default());
         app.configure_sets(Update, CameraControl.run_if(|inspect: Res<Inspect>| !inspect.on));
         app.add_systems(Startup, spawn_panel);
-        app.add_systems(Update, (inspect_keys, orbit, describe).chain().after(CameraControl).after(crate::rig::Posing));
+        app.add_systems(Update, (inspect_keys, orbit, describe).chain().in_set(CameraMoves).after(CameraControl));
     }
 }
 
@@ -36,6 +36,7 @@ impl Plugin for DevPlugin {
 const DISTANCE: (f32, f32) = (1.2, 14.0);
 const AIM_HEIGHT: f32 = 1.1;
 const DRAG_SPEED: f32 = 0.006;
+const PITCH: (f32, f32) = (-0.2, FRAC_PI_2 - 0.05);
 /// How fast `[` / `]` turn it (radians per second).
 const KEY_TURN: f32 = 2.0;
 
@@ -44,14 +45,12 @@ const KEY_TURN: f32 = 2.0;
 struct Inspect {
     on: bool,
     target: Option<Entity>,
-    yaw: f32,
-    pitch: f32,
-    distance: f32,
+    view: Orbit,
 }
 
 impl Default for Inspect {
     fn default() -> Self {
-        Inspect { on: false, target: None, yaw: 0.6, pitch: 0.35, distance: 4.0 }
+        Inspect { on: false, target: None, view: Orbit { yaw: 0.6, pitch: 0.35, distance: 4.0 } }
     }
 }
 
@@ -114,18 +113,17 @@ fn orbit(
         return;
     }
     let Some(target) = inspect.target.and_then(|t| fighters.get(t).ok()) else { return };
+    let mut turn = Vec2::X * -key_axis(&keys, KeyCode::BracketRight, KeyCode::BracketLeft) * KEY_TURN * time.delta_secs();
     if mouse.pressed(MouseButton::Middle) {
-        inspect.yaw -= motion.delta.x * DRAG_SPEED;
-        inspect.pitch = (inspect.pitch + motion.delta.y * DRAG_SPEED).clamp(-0.2, FRAC_PI_2 - 0.05);
+        turn += motion.delta * DRAG_SPEED;
     }
-    let keyed = keys.pressed(KeyCode::BracketRight) as i8 as f32 - keys.pressed(KeyCode::BracketLeft) as i8 as f32;
-    inspect.yaw += keyed * KEY_TURN * time.delta_secs();
+    inspect.view.turn(turn, PITCH);
     let notches = wheel_notches(&scroll);
-    inspect.distance = (inspect.distance * (1.0 - notches * 0.12)).clamp(DISTANCE.0, DISTANCE.1);
+    if notches != 0.0 {
+        inspect.view.zoom(notches, 0.12, DISTANCE);
+    }
     // Follow the fighter's feet (not its posed, leaning body) at chest height.
-    let aim = target.translation.with_y(AIM_HEIGHT);
-    let around = Quat::from_rotation_y(inspect.yaw) * Quat::from_rotation_x(-inspect.pitch);
-    camera.set_if_neq(Transform::from_translation(aim + around * Vec3::Z * inspect.distance).looking_at(aim, Vec3::Y));
+    camera.set_if_neq(inspect.view.transform(target.translation.with_y(AIM_HEIGHT)));
 }
 
 /// The panel: who's inspected and what they're doing, plus the controls.

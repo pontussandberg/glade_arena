@@ -14,6 +14,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::DesiredInput;
+use crate::camera::{CameraMode, CameraPlaced, key_axis};
 use crate::glade::{self, palette, to_gameplay, to_world};
 use crate::rig::HeldAt;
 
@@ -34,7 +35,7 @@ impl Plugin for RenderPlugin {
         app.add_systems(
             Update,
             (
-                (read_local_input.in_set(crate::PlayerControls), show_destination).chain(),
+                (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
                 (add_visuals, sync_transforms).chain().before(crate::rig::Posing),
                 fly_shots.after(crate::rig::Posing),
                 (show_swings, show_dashes, fade_swings, (show_telegraphs, align_to_world).chain().after(crate::rig::Posing)),
@@ -256,6 +257,7 @@ fn read_local_input(
     window: Option<Single<&Window>>,
     camera: Single<(&Camera, &GlobalTransform)>,
     me: Query<&Pos, (With<Predicted>, With<PlayerId>)>,
+    mode: Res<CameraMode>,
     mut last_pos: Local<Option<Vec2>>,
     mut desired: ResMut<DesiredInput>,
 ) {
@@ -272,8 +274,14 @@ fn read_local_input(
         move_to = None;
     }
     *last_pos = me;
-    // Once per click: holding the button doesn't keep re-targeting.
-    if mouse.just_pressed(MouseButton::Right)
+    // Once per click: holding the button doesn't keep re-targeting. With the free camera, on
+    // release, and only if it wasn't dragged (dragging turns the camera).
+    let clicked = if mode.free {
+        mouse.just_released(MouseButton::Right) && !mode.turning()
+    } else {
+        mouse.just_pressed(MouseButton::Right)
+    };
+    if clicked
         && let Some(cursor) = cursor
         && let Some(tile) = map().nearest_walkable(Map::tile_of(cursor), 4)
     {
@@ -291,13 +299,20 @@ fn read_local_input(
         _ => desired.0.aim,
     };
     let fire = mouse.pressed(MouseButton::Left);
-    // S stops: drops the destination (as in LoL).
-    if keys.just_pressed(KeyCode::KeyS) {
+    // With the free camera, WASD walks relative to it, dropping any destination; otherwise S
+    // stops: drops the destination (as in LoL).
+    let walk = if mode.free {
+        let (forward, right) = mode.ground_axes();
+        forward * key_axis(&keys, KeyCode::KeyW, KeyCode::KeyS) + right * key_axis(&keys, KeyCode::KeyD, KeyCode::KeyA)
+    } else {
+        Vec2::ZERO
+    };
+    if walk != Vec2::ZERO || (!mode.free && keys.just_pressed(KeyCode::KeyS)) {
         move_to = None;
     }
     // Kept until it's been sent (`write_input` clears it), so a short tap isn't missed.
     let ability = desired.0.ability || keys.just_pressed(KeyCode::KeyQ);
-    desired.0 = PlayerInput { move_to, aim, fire, ability };
+    desired.0 = PlayerInput { move_to, walk, aim, fire, ability };
 }
 
 fn show_destination(
@@ -586,6 +601,7 @@ fn update_hud(
     client: Query<(&Link, Has<Connected>, Option<&Disconnected>), With<Client>>,
     metrics: Option<Res<lightyear::prediction::prelude::PredictionMetrics>>,
     players: Query<(&PlayerId, &ClassId, Option<&Health>, Has<Predicted>)>,
+    mode: Res<CameraMode>,
 ) {
     let Ok((link, connected, disconnected)) = client.single() else { return };
     let mut text = String::new();
@@ -615,7 +631,11 @@ fn update_hud(
             }
             .ok();
         }
-        text.push_str("right click: move | S: stop | left click: attack | Q: ability\nhold Space: lock camera | edges/arrows: pan | wheel: zoom");
+        text.push_str(if mode.free {
+            "WASD or right click: move | left click: attack | Q: ability\nhold right mouse: turn camera | wheel: zoom | V: MOBA camera"
+        } else {
+            "right click: move | S: stop | left click: attack | Q: ability\nhold Space: lock camera | edges/arrows: pan | wheel: zoom | V: free camera"
+        });
     }
     // Only touch the component when the text changed, so Bevy doesn't re-layout it every frame.
     if hud.0 != text {

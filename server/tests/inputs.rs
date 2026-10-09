@@ -165,3 +165,29 @@ fn frozen_client_stops_moving_on_server() {
     // Input still in flight plus the stale-input grace period: well under 0.5 s of movement.
     assert!(drift < speed * 0.5, "server kept moving a frozen client");
 }
+
+/// Walking with the keys (free camera): the server walks the player that way at its speed,
+/// overriding a click, the client predicts the same spot, and letting go stops it.
+#[test]
+fn key_walking_moves_on_the_server_and_stops_on_release() {
+    let mut p = Pair::new(5887);
+    p.until(Duration::from_secs(5), "our player is spawned", |p| client_view(&mut p.client, CLIENT).is_some_and(|v| v.2));
+
+    let start = p.server_pos();
+    let dir = (-start).normalize();
+    p.input(PlayerInput { walk: dir, move_to: Some(Map::tile_of(start) + IVec2::new(0, -6)), ..default() });
+    // A second, some of it spent getting the input there.
+    p.run(Duration::from_secs(1), SMOOTH);
+    let walked = p.server_pos() - start;
+    println!("walked {walked} in 1 s from {start}, keys toward {dir}");
+    assert!(walked.length() > 2.0, "the keys didn't walk us");
+    assert!(walked.normalize().dot(dir) > 0.95, "walked {walked}, not along {dir}");
+
+    p.input(PlayerInput::default());
+    p.run(Duration::from_millis(300), SMOOTH);
+    let stopped = p.server_pos();
+    p.run(Duration::from_millis(300), SMOOTH);
+    assert!(stopped.distance(p.server_pos()) < 0.01, "kept walking after the keys were let go");
+    let predicted = client_view(&mut p.client, CLIENT).unwrap().0;
+    assert!(predicted.distance(p.server_pos()) < 0.05, "client predicted {predicted}, server has {}", p.server_pos());
+}

@@ -11,15 +11,29 @@ use crate::config::*;
 use crate::map::{Map, SPAWN_POINTS, map};
 use crate::protocol::{AbilityState, AttackState, Dash, LastSwing, PlayerInput, Projectile, Windup};
 
-/// Advance a player one tick toward the tile it was told to walk to (point-and-click).
-/// Pathfinding runs here, in the shared sim, so the client predicts exactly the route the
-/// server walks. Unreachable or missing targets mean standing still.
+/// Advance a player one tick: straight the way its keys walk it, or else toward the tile it
+/// was told to walk to (point-and-click). Pathfinding runs here, in the shared sim, so the
+/// client predicts exactly the route the server walks. Unreachable or missing targets mean
+/// standing still.
 pub fn step_player(pos: Vec2, input: &PlayerInput, speed: f32) -> Vec2 {
+    if let Some(dir) = input.walk.try_normalize() {
+        return walk_step(pos, dir * speed * TICK_DT);
+    }
     let Some(target) = input.move_to else { return pos };
     let Some(waypoint) = map().next_waypoint(pos, target) else { return pos };
     let to_waypoint = waypoint - pos;
     let step = speed * TICK_DT;
     if to_waypoint.length() <= step { waypoint } else { pos + to_waypoint.normalize() * step }
+}
+
+/// One step straight by `step`, sliding along whatever blocks it (just its free axis), or
+/// standing if both are blocked.
+fn walk_step(pos: Vec2, step: Vec2) -> Vec2 {
+    [step, step.with_y(0.0), step.with_x(0.0)]
+        .into_iter()
+        .map(|s| pos + s)
+        .find(|&next| map().line_walkable(pos, next))
+        .unwrap_or(pos)
 }
 
 /// One tick of a player's movement: dashing, standing still while winding up an attack, or
@@ -204,7 +218,7 @@ mod tests {
     const SPEED: f32 = 6.0;
 
     fn aim(aim: Vec2, fire: bool) -> PlayerInput {
-        PlayerInput { move_to: None, aim, fire, ability: false }
+        PlayerInput { aim, fire, ..default() }
     }
 
     fn walk_to(t: IVec2) -> PlayerInput {
@@ -232,6 +246,27 @@ mod tests {
             p = next;
         }
         (p, max_ticks)
+    }
+
+    #[test]
+    fn walks_where_its_keys_point_overriding_a_click_and_slides_along_walls() {
+        let from = SPAWN_POINTS[0];
+        let keys = PlayerInput { walk: Vec2::new(0.0, 2.0), move_to: Some(Map::tile_of(from) + IVec2::new(3, 0)), ..default() };
+        let next = step_player(from, &keys, SPEED);
+        assert!(next.abs_diff_eq(from + Vec2::Y * SPEED * TICK_DT, 1e-5), "walked to {next}");
+
+        // Diagonally into blocked ground: never onto it, and still moving along the free axis
+        // until both are blocked.
+        let mut p = from;
+        for dir in [Vec2::new(1.0, 1.0), Vec2::new(-1.0, 1.0), Vec2::new(1.0, -1.0), Vec2::new(-1.0, -1.0)] {
+            let keys = PlayerInput { walk: dir, ..default() };
+            for _ in 0..2000 {
+                let next = step_player(p, &keys, SPEED);
+                assert!(next.distance(p) <= SPEED * TICK_DT + 1e-5);
+                assert!(map().walkable_at(next), "walked onto a blocked tile at {next}");
+                p = next;
+            }
+        }
     }
 
     #[test]

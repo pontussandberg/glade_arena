@@ -9,6 +9,7 @@ use lightyear::core::time::TickInstant;
 use lightyear::interpolation::timeline::InterpolationTimeline;
 use lightyear::prelude::*;
 
+use crate::camera::CameraPlaced;
 use crate::glade::{palette, to_world};
 use crate::render::{player_color, shown};
 
@@ -18,7 +19,7 @@ impl Plugin for FeedbackPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (spawn_bars, place_bars, flash_on_hit, end_flashes, hide_the_dead),
+            (spawn_bars, place_bars.in_set(CameraPlaced), flash_on_hit, end_flashes, hide_the_dead),
         );
     }
 }

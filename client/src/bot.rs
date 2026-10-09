@@ -72,5 +72,5 @@ fn think(
             AbilityKind::Dash { distance: dash, .. } => distance > attack_within && distance < dash * 0.9,
             AbilityKind::Projectile { range, .. } => distance < range * 0.9,
         };
-    desired.0 = PlayerInput { move_to, aim: to_target, fire, ability };
+    desired.0 = PlayerInput { move_to, aim: to_target, fire, ability, ..default() };
 }

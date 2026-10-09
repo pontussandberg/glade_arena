@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use lightyear::prelude::*;
 
+use crate::camera::CameraPlaced;
 use crate::glade::{self, palette};
 use crate::render::{ground_at, player_color, shown};
 
@@ -18,7 +19,7 @@ pub struct MinimapPlugin;
 impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_minimap);
-        app.add_systems(Update, (spawn_dots, place_dots, frame_view));
+        app.add_systems(Update, (spawn_dots, place_dots, frame_view.in_set(CameraPlaced)));
     }
 }
 

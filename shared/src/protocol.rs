@@ -141,6 +141,9 @@ impl Projectile {
 pub struct PlayerInput {
     /// Tile the player right-clicked to walk to. The sim pathfinds there; `None` stands still.
     pub move_to: Option<IVec2>,
+    /// Keys held to walk (WASD, free camera): this way on the gameplay plane, overriding
+    /// `move_to`. The sim normalizes it; zero means walk to `move_to` instead.
+    pub walk: Vec2,
     /// Aim direction on the gameplay plane; the sim normalizes it.
     pub aim: Vec2,
     /// Left mouse held: auto-attack toward `aim`.

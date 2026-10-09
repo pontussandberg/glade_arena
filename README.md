@@ -134,6 +134,10 @@ Controls: pick a class with a click or its number key, right click to move, S to
 click to attack toward the cursor, Q for your ability toward the cursor, hold Space to lock the camera on
 yourself, push the mouse to a screen edge or use the arrow keys to pan, mouse wheel to zoom.
 
+V toggles a free, WoW-style camera that follows behind you: WASD walks relative to it, holding
+the right mouse button and dragging turns it, the wheel zooms. Click to move still works there:
+a right click without dragging walks to where you clicked. V again goes back.
+
 Two tabs work: a hidden tab keeps simulating and networking without rendering (see
 `client/src/hidden_tab.rs`, which works around Bevy 0.19 ignoring Lightyear's keepalive). If a
 client does freeze, the server stops its player after ~8 ticks (`neutralize_stale_inputs`) and
