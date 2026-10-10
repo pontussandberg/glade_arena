@@ -30,6 +30,8 @@ lightyear = { workspace = true, features = [
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "std"] }
 # Only to load the TLS certificate (wtransport reads it with tokio); already used by the transport.
 tokio = { version = "1", default-features = false, features = ["rt", "fs"] }
+# Rolling crits.
+fastrand = "2"
 
 [dev-dependencies]
 # The integration test drives real headless clients against a real server.

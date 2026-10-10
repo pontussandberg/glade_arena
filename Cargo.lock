@@ -339,6 +339,7 @@ dependencies = [
  "arena-client",
  "arena-shared",
  "bevy",
+ "fastrand",
  "lightyear",
  "tokio",
  "tracing-subscriber",
