@@ -276,8 +276,9 @@ impl Projectile {
 /// Everything a client sends each tick. Clients never send positions, only intent.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Reflect)]
 pub struct PlayerInput {
-    /// Tile the player right-clicked to walk to. The sim pathfinds there; `None` stands still.
-    pub move_to: Option<IVec2>,
+    /// Point the player right-clicked to walk to (`Map::walk_target` of the click). The sim
+    /// pathfinds there; `None` stands still.
+    pub move_to: Option<Vec2>,
     /// Keys held to walk (WASD, free camera): this way on the gameplay plane, overriding
     /// `move_to`. The sim normalizes it; zero means walk to `move_to` instead.
     pub walk: Vec2,

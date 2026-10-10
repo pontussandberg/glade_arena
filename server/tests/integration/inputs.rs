@@ -119,7 +119,7 @@ fn attacking_cancels_the_walk_until_the_next_click() {
 
     // Fire while walking.
     let start = p.server_pos();
-    p.input(PlayerInput { move_to: Some(Map::tile_of(-start)), ..default() });
+    p.input(PlayerInput { move_to: Some(Map::center(Map::tile_of(-start))), ..default() });
     p.run(Duration::from_millis(300), SMOOTH);
     p.click_fire();
     p.until(Duration::from_secs(1), "the attack goes off on the server", |p| {
@@ -136,7 +136,7 @@ fn attacking_cancels_the_walk_until_the_next_click() {
     let here = p.server_pos();
     let goal = map().nearest_walkable(Map::tile_of(here) + IVec2::new(0, 4), 2).expect("open ground nearby");
     p.click_fire();
-    edit_input(&mut p.client, |i| i.move_to = Some(goal));
+    edit_input(&mut p.client, |i| i.move_to = Some(Map::center(goal)));
     p.until(windup(CLASS) + Duration::from_secs(1), "we walk to the click made during the windup", |p| {
         here.distance(p.server_pos()) > 2.0
     });
@@ -151,7 +151,7 @@ fn frozen_client_stops_moving_on_server() {
 
     // Click across the map, so the walk is still going when the client freezes.
     let start = p.server_pos();
-    p.input(PlayerInput { move_to: Some(Map::tile_of(-start)), ..default() });
+    p.input(PlayerInput { move_to: Some(Map::center(Map::tile_of(-start))), ..default() });
     p.run(Duration::from_millis(500), SMOOTH);
     let before_freeze = p.server_pos();
     p.run(Duration::from_millis(1000), None);
@@ -172,7 +172,7 @@ fn key_walking_moves_on_the_server_and_stops_on_release() {
 
     let start = p.server_pos();
     let dir = (-start).normalize();
-    p.input(PlayerInput { walk: dir, move_to: Some(Map::tile_of(start) + IVec2::new(0, -6)), ..default() });
+    p.input(PlayerInput { walk: dir, move_to: Some(Map::center(Map::tile_of(start) + IVec2::new(0, -6))), ..default() });
     // A second, some of it spent getting the input there.
     p.run(Duration::from_secs(1), SMOOTH);
     let walked = p.server_pos() - start;

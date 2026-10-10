@@ -178,10 +178,13 @@ fn moves(class_key: &str) -> &'static Moves {
     }
 }
 
-/// Where in the windup (0..1) the draw back ends and the strike starts: draw, a clear hold at
-/// full draw, then a fast, committed strike.
+/// Where in the windup (0..1) the draw back ends, and how many ticks the strike at its end
+/// takes (at most the rest of it): draw, a clear hold at full draw, then a fast, committed
+/// strike, however long the windup.
 const DRAW_END: f32 = 0.5;
-const STRIKE_START: f32 = 0.78;
+const STRIKE_TICKS: f32 = 5.0;
+/// A thrown weapon: ticks after a throw until a new one is in the hand.
+const REARM_TICKS: f32 = 12.0;
 /// After the throw: how long (ticks) the follow-through is held, and when it's back to carrying.
 const FOLLOW_THROUGH: (f32, f32) = (3.0, 14.0);
 /// A thrown Q's flick: ticks after the throw until the arm starts and finishes coming back.
@@ -447,7 +450,8 @@ fn pose_rigs(
         let (draw, mut throw) = match (windup, released) {
             (Some(windup), _) => {
                 let progress = windup.progress(now, *class);
-                (ease(0.0, DRAW_END, progress), ease_out(STRIKE_START, 1.0, progress))
+                let strike_start = (1.0 - STRIKE_TICKS / def.attack.windup_ticks.max(1) as f32).max(DRAW_END);
+                (ease(0.0, DRAW_END, progress), ease_out(strike_start, 1.0, progress))
             }
             (None, Some(since)) => (0.0, 1.0 - ease(FOLLOW_THROUGH.0, FOLLOW_THROUGH.1, since)),
             (None, None) => (0.0, 0.0),
@@ -463,12 +467,11 @@ fn pose_rigs(
         let moves = rig.moves;
         let pose = |[carry, drawn, released, dash]: [f32; 4]| carry.lerp(drawn, draw).lerp(released, throw).lerp(dash, dashing);
         let braced = draw.max(throw).max(dashing);
-        // A thrown weapon: the hand is empty until a new one is drawn, halfway through the cooldown.
-        let rearm = (def.attack.cooldown_ticks - def.attack.windup_ticks) as f32 / 2.0;
+        // A thrown weapon: the hand is empty for a moment after a throw, even when the next
+        // windup has already started (holding fire), until a new one is drawn.
         let empty_handed = rig.moves.throws
             && matches!(def.attack.kind, AttackKind::Projectile { .. })
-            && windup.is_none()
-            && released.is_some_and(|s| s < rearm);
+            && released.is_some_and(|s| s < REARM_TICKS);
 
         // Every angle chases its pose on a spring.
         let spring = |joint: &mut Spring, target: f32| joint.follow(target, dt, JOINT_STIFFNESS, JOINT_DAMPING);

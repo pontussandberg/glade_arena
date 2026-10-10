@@ -6,7 +6,7 @@ use std::fmt::Write;
 
 use arena_shared::classes::{AbilityKind, AttackKind};
 use arena_shared::config::*;
-use arena_shared::map::{Map, map};
+use arena_shared::map::map;
 use arena_shared::protocol::*;
 use arena_shared::sim;
 use bevy::platform::collections::HashMap;
@@ -403,7 +403,7 @@ fn setup_scene(
         });
 }
 
-/// Mouse -> `DesiredInput`, LoL/OSRS-style: right click walks to the clicked tile, left click
+/// Mouse -> `DesiredInput`, LoL-style: right click walks to the clicked point, left click
 /// attacks toward the cursor.
 fn read_local_input(
     mouse: Res<ButtonInput<MouseButton>>,
@@ -433,13 +433,13 @@ fn read_local_input(
     if !mode.free
         && mouse.just_pressed(MouseButton::Right)
         && let Some(cursor) = cursor
-        && let Some(tile) = map().nearest_walkable(Map::tile_of(cursor), 4)
+        && let Some(point) = map().walk_target(cursor, 4)
     {
-        move_to = Some(tile);
+        move_to = Some(point);
     }
     // Arrived: forget it, so nothing lingers.
-    if let (Some(tile), Some(me)) = (move_to, me)
-        && sim::arrived(me, tile)
+    if let (Some(point), Some(me)) = (move_to, me)
+        && sim::arrived(me, point)
     {
         move_to = None;
     }
@@ -492,8 +492,8 @@ fn show_destination(
 ) {
     let (mut transform, mut visibility) = marker.into_inner();
     match desired.0.move_to {
-        Some(tile) => {
-            transform.translation = to_world(Map::center(tile), 0.03);
+        Some(point) => {
+            transform.translation = to_world(point, 0.03);
             *visibility = Visibility::Inherited;
         }
         None => *visibility = Visibility::Hidden,

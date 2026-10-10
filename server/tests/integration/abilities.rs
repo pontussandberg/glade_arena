@@ -120,7 +120,7 @@ fn frost_nova_freezes_a_revenant_then_lets_it_go() {
     let frozen = chilled(&mut d.server, B);
 
     // B tries to walk away and to Rift Step out: neither goes anywhere while frozen.
-    let away = arena_shared::map::Map::tile_of(B_SPOT + Vec2::X * 4.0);
+    let away = arena_shared::map::Map::center(arena_shared::map::Map::tile_of(B_SPOT + Vec2::X * 4.0));
     edit_input(&mut d.b, |i| (i.move_to, i.aim, i.ability) = (Some(away), Vec2::X, true));
     d.until(Duration::from_secs(1), "the root starts", |d| server_tick(d) >= frozen.rooted.from);
     let held = server_player(&mut d.server, B).0;
