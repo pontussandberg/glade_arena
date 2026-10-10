@@ -11,7 +11,7 @@ use crate::config::*;
 use crate::map::{Map, SPAWN_POINTS, map};
 use crate::protocol::{AbilityState, AttackState, Chilled, Dash, LastSwing, PlayerInput, Projectile, Windup};
 
-/// Advance a player one tick: straight the way its keys walk it, or else toward the tile it
+/// Advance a player one tick: straight the way its keys walk it, or else toward the point it
 /// was told to walk to (point-and-click). Pathfinding runs here, in the shared sim, so the
 /// client predicts exactly the route the server walks. Unreachable or missing targets mean
 /// standing still.
@@ -68,9 +68,9 @@ fn dash_step(pos: Vec2, dir: Vec2, class: ClassId, speed: f32) -> Vec2 {
     if map().line_walkable(pos, next) { next } else { pos }
 }
 
-/// True once a player stands on the clicked tile. Exact: `step_player` snaps onto it.
-pub fn arrived(pos: Vec2, target: IVec2) -> bool {
-    pos == Map::center(target)
+/// True once a player stands on the clicked point. Exact: `step_player` snaps onto it.
+pub fn arrived(pos: Vec2, target: Vec2) -> bool {
+    pos == target
 }
 
 /// What an auto-attack produces.
@@ -267,7 +267,11 @@ mod tests {
     }
 
     fn walk_to(t: IVec2) -> PlayerInput {
-        PlayerInput { move_to: Some(t), ..default() }
+        walk_to_point(Map::center(t))
+    }
+
+    fn walk_to_point(p: Vec2) -> PlayerInput {
+        PlayerInput { move_to: Some(p), ..default() }
     }
 
     /// The first class whose auto-attack is a projectile / melee (tests don't hard-code classes).
@@ -280,9 +284,13 @@ mod tests {
 
     /// Walks until arrival (or `max_ticks`), checking every step on the way.
     fn walk(from: Vec2, to: IVec2, max_ticks: u32) -> (Vec2, u32) {
+        walk_point(from, Map::center(to), max_ticks)
+    }
+
+    fn walk_point(from: Vec2, to: Vec2, max_ticks: u32) -> (Vec2, u32) {
         let mut p = from;
         for tick in 0..max_ticks {
-            let next = step_player(p, &walk_to(to), SPEED);
+            let next = step_player(p, &walk_to_point(to), SPEED);
             assert!(next.distance(p) <= SPEED * TICK_DT + 1e-5, "too fast at tick {tick}");
             assert!(map().walkable_at(next), "walked onto a blocked tile at {next}");
             if next == p {
@@ -296,7 +304,7 @@ mod tests {
     #[test]
     fn walks_where_its_keys_point_overriding_a_click_and_slides_along_walls() {
         let from = SPAWN_POINTS[0];
-        let keys = PlayerInput { walk: Vec2::new(0.0, 2.0), move_to: Some(Map::tile_of(from) + IVec2::new(3, 0)), ..default() };
+        let keys = PlayerInput { walk: Vec2::new(0.0, 2.0), move_to: Some(from + Vec2::new(3.0, 0.0)), ..default() };
         let next = step_player(from, &keys, SPEED);
         assert!(next.abs_diff_eq(from + Vec2::Y * SPEED * TICK_DT, 1e-5), "walked to {next}");
 
@@ -322,6 +330,23 @@ mod tests {
         assert_eq!(end, Map::center(target));
         // 3 m at 6 m/s is 0.5 s = 32 ticks.
         assert!((31..=34).contains(&ticks), "took {ticks} ticks");
+    }
+
+    #[test]
+    fn walks_to_exactly_the_clicked_point_even_against_a_wall() {
+        let from = SPAWN_POINTS[0];
+        let off_center = from + Vec2::new(0.27, 2.81);
+        assert_eq!(walk_point(from, off_center, 500).0, off_center);
+        // A click right against a wall is pulled in to where a body fits, and reached.
+        let m = map();
+        let wall = m.tiles().find(|(t, tile)| *tile == crate::map::Tile::Wall && m.walkable(*t + IVec2::X)).unwrap().0;
+        let clicked = m.walk_target(Map::center(wall + IVec2::X) - Vec2::new(0.49, 0.0), 4).unwrap();
+        let (end, ticks) = walk_point(SPAWN_POINTS[3], clicked, 64 * 30);
+        assert!(arrived(end, clicked), "stuck at {end} after {ticks} ticks, short of {clicked}");
+        // Even a point the client didn't pull in gets walked to (its tile's center), never stuck.
+        let hugging = Map::center(wall + IVec2::X) - Vec2::new(0.49, 0.0);
+        assert_eq!(walk_point(SPAWN_POINTS[3], hugging, 64 * 30).0, Map::center(wall + IVec2::X));
+        assert_eq!(step_player(from, &walk_to_point(Vec2::NAN), SPEED), from);
     }
 
     #[test]

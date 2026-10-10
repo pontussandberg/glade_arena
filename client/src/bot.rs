@@ -57,11 +57,11 @@ fn think(
     };
     let stand_at = target - to_target.normalize_or_zero() * preferred;
     let wanted = ((distance - preferred).abs() > 1.0)
-        .then(|| map().nearest_walkable(Map::tile_of(stand_at), 3))
+        .then(|| map().nearest_walkable(Map::tile_of(stand_at), 3).map(Map::center))
         .flatten();
     // Keep the current plan unless the goal moved a couple of tiles: fewer fresh path searches.
     let move_to = match (desired.0.move_to, wanted) {
-        (Some(current), Some(new)) if (new - current).abs().max_element() < 2 => Some(current),
+        (Some(current), Some(new)) if (new - current).abs().max_element() < 2.0 => Some(current),
         _ => wanted,
     };
     let clear = map().shot_clear(me.0, target);
