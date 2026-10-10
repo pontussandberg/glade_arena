@@ -9,7 +9,7 @@ use lightyear::prelude::PeerId;
 use crate::classes::{AbilityKind, AttackKind, Chill, ClassId, Shot};
 use crate::config::*;
 use crate::map::{Map, SPAWN_POINTS, map};
-use crate::protocol::{AbilityState, AttackState, Chilled, Dash, LastSwing, PlayerInput, Projectile, Windup};
+use crate::protocol::{AbilityState, AttackState, Chilled, Dash, Hasted, LastSwing, PlayerInput, Projectile, Windup};
 
 /// Advance a player one tick: straight the way its keys walk it, or else toward the point it
 /// was told to walk to (point-and-click). Pathfinding runs here, in the shared sim, so the
@@ -38,7 +38,9 @@ fn walk_step(pos: Vec2, step: Vec2) -> Vec2 {
 
 /// One tick (`tick`) of a player's movement: frozen in place while rooted, dashing, standing
 /// still while winding up an attack, or walking at its class's speed. A slow takes its share off
-/// walking and dashing alike. What both the server and the predicting client run.
+/// walking and dashing alike; a haste speeds up walking only (on top of a slow). What both the
+/// server and the predicting client run.
+#[allow(clippy::too_many_arguments)]
 pub fn move_player(
     pos: Vec2,
     input: &PlayerInput,
@@ -46,6 +48,7 @@ pub fn move_player(
     attack: &AttackState,
     ability: &AbilityState,
     chilled: &Chilled,
+    hasted: &Hasted,
     tick: u32,
 ) -> Vec2 {
     let speed = chilled.speed_factor(tick);
@@ -56,8 +59,18 @@ pub fn move_player(
     } else if attack.windup.is_some() {
         pos
     } else {
-        step_player(pos, input, class.def().move_speed * speed)
+        step_player(pos, input, class.def().move_speed * speed * hasted.speed_factor(tick))
     }
+}
+
+/// Is a player at `pos` close enough to take the pickup lying at `at`? Only the server decides.
+pub fn touches_pickup(pos: Vec2, at: Vec2) -> bool {
+    pos.distance(at) <= PICKUP_RADIUS
+}
+
+/// How much a heal pickup restores to a player of `max_hp`.
+pub fn heal_amount(max_hp: i32) -> i32 {
+    (max_hp as f32 * HEAL_FRACTION).ceil() as i32
 }
 
 /// One tick of a dash, at `speed` of its full pace; a wall (or water's edge, anything
@@ -437,8 +450,8 @@ mod tests {
         let (_, winding) = attack_ticks(class, &aim(Vec2::X, true), 10, 10);
         assert!(winding.windup.is_some());
         let (idle, warm) = (AbilityState::default(), Chilled::default());
-        assert_eq!(move_player(from, &walk, class, &winding, &idle, &warm, 11), from, "moved during the windup");
-        assert_ne!(move_player(from, &walk, class, &AttackState::default(), &idle, &warm, 11), from, "rooted without attacking");
+        assert_eq!(move_player(from, &walk, class, &winding, &idle, &warm, &default(), 11), from, "moved during the windup");
+        assert_ne!(move_player(from, &walk, class, &AttackState::default(), &idle, &warm, &default(), 11), from, "rooted without attacking");
     }
 
     #[test]
@@ -515,7 +528,7 @@ mod tests {
                 let (mut state, _) = step_ability(1, PeerId::Netcode(1), class, from, &press_q(dir), &AttackState::default(), &default(), default());
                 let mut pos = from;
                 for tick in 2..=1 + ticks + 3 {
-                    pos = move_player(pos, &PlayerInput::default(), class, &AttackState::default(), &state, &default(), tick);
+                    pos = move_player(pos, &PlayerInput::default(), class, &AttackState::default(), &state, &default(), &default(), tick);
                     assert!(map().walkable_at(pos), "dashed into a wall at {pos}");
                     state = step_ability(tick, PeerId::Netcode(1), class, pos, &PlayerInput::default(), &AttackState::default(), &default(), state).0;
                 }
@@ -557,7 +570,7 @@ mod tests {
         let from = SPAWN_POINTS[0];
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let (attack, ability) = (AttackState::default(), AbilityState::default());
-        let step = |chilled: &Chilled| move_player(from, &walk, chiller(), &attack, &ability, chilled, 101).distance(from);
+        let step = |chilled: &Chilled| move_player(from, &walk, chiller(), &attack, &ability, chilled, &default(), 101).distance(from);
         assert!((step(&chilled) - step(&Chilled::default()) * (1.0 - chill.slow)).abs() < 1e-5);
 
         // A weaker slow doesn't replace a stronger one; the same one again renews it.
@@ -569,6 +582,31 @@ mod tests {
     }
 
     #[test]
+    fn a_haste_doubles_walking_from_the_tick_after_and_wears_off() {
+        let mut hasted = Hasted::default();
+        hasted.start(100);
+        let from = SPAWN_POINTS[0];
+        let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
+        let class = dasher();
+        let (attack, idle, warm) = (AttackState::default(), AbilityState::default(), Chilled::default());
+        let step = |tick| move_player(from, &walk, class, &attack, &idle, &warm, &hasted, tick).distance(from);
+        let normal = class.def().move_speed * TICK_DT;
+        assert!((step(100) - normal).abs() < 1e-5, "hasted on the tick it was taken");
+        assert!((step(101) - normal * HASTE_FACTOR).abs() < 1e-5);
+        assert!((step(100 + HASTE_TICKS) - normal * HASTE_FACTOR).abs() < 1e-5);
+        assert!((step(101 + HASTE_TICKS) - normal).abs() < 1e-5, "still hasted after it wore off");
+        // Dashes aren't sped up.
+        let (dashing, _) = step_ability(101, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &attack, &warm, idle);
+        assert_eq!(
+            move_player(from, &walk, class, &attack, &dashing, &warm, &hasted, 102),
+            move_player(from, &walk, class, &attack, &dashing, &warm, &Hasted::default(), 102)
+        );
+        assert!(touches_pickup(from, from + Vec2::X * PICKUP_RADIUS));
+        assert!(!touches_pickup(from, from + Vec2::X * (PICKUP_RADIUS + 0.01)));
+        assert_eq!(heal_amount(95), 48);
+    }
+
+    #[test]
     fn rooted_means_no_walking_no_dashing_and_a_dash_stops() {
         let mut chilled = Chilled::default();
         chilled.apply(Chill { root_ticks: 64, ..default() }, 10);
@@ -576,8 +614,8 @@ mod tests {
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let class = dasher();
         let (attack, idle) = (AttackState::default(), AbilityState::default());
-        assert_eq!(move_player(from, &walk, class, &attack, &idle, &chilled, 11), from, "walked while rooted");
-        assert_ne!(move_player(from, &walk, class, &attack, &idle, &chilled, 75), from, "still rooted after it wore off");
+        assert_eq!(move_player(from, &walk, class, &attack, &idle, &chilled, &default(), 11), from, "walked while rooted");
+        assert_ne!(move_player(from, &walk, class, &attack, &idle, &chilled, &default(), 75), from, "still rooted after it wore off");
 
         let (state, _) = step_ability(11, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &attack, &chilled, idle);
         assert!(state.dash.is_none() && state.ready_at == 0, "dashed (or spent the cooldown) while rooted");
@@ -585,7 +623,7 @@ mod tests {
         // A dash in progress when the root lands goes no further, and ends.
         let (dashing, _) = step_ability(9, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &attack, &default(), idle);
         assert!(dashing.dash.is_some());
-        assert_eq!(move_player(from, &walk, class, &attack, &dashing, &chilled, 11), from, "dashed on while rooted");
+        assert_eq!(move_player(from, &walk, class, &attack, &dashing, &chilled, &default(), 11), from, "dashed on while rooted");
         let (stopped, _) = step_ability(11, PeerId::Netcode(1), class, from, &PlayerInput::default(), &attack, &chilled, dashing);
         assert!(stopped.dash.is_none(), "the dash should stop");
     }

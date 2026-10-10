@@ -112,12 +112,14 @@ impl Plugin for ServerGamePlugin {
         app.add_input_validator(authorize_controlled_targets::<NativeStateSequence<PlayerInput>>);
         app.insert_resource(ReplicationMetadata::new(SEND_INTERVAL));
         app.add_observer(on_new_link);
+        app.add_systems(Startup, spawn_pickups);
         app.add_systems(Update, spawn_chosen_classes);
         app.add_systems(
             FixedUpdate,
             (
                 neutralize_stale_inputs,
                 move_players,
+                take_pickups,
                 record_history,
                 attack,
                 use_abilities,
@@ -260,7 +262,7 @@ fn spawn_chosen_classes(
                 Pos::default(),
                 NeedsSpawnPoint,
                 Health(class.def().max_hp),
-                (Chilled::default(), RecentHits::default()),
+                (Chilled::default(), Hasted::default(), RecentHits::default()),
                 AttackState::default(),
                 AbilityState::default(),
                 DashHits::default(),
@@ -326,11 +328,55 @@ fn neutralize_stale_inputs(
 
 fn move_players(
     timeline: Res<LocalTimeline>,
-    mut players: Query<(&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &AbilityState, &Chilled), InPlay>,
+    mut players: Query<(&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &AbilityState, &Chilled, &Hasted), InPlay>,
 ) {
     let now = timeline.tick().0;
-    for (mut pos, class, input, attack, ability, chilled) in &mut players {
-        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, ability, chilled, now)));
+    for (mut pos, class, input, attack, ability, chilled, hasted) in &mut players {
+        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, ability, chilled, hasted, now)));
+    }
+}
+
+/// The pickups, lying at their spots for everyone to see.
+fn spawn_pickups(mut commands: Commands) {
+    for (at, kind) in arena_shared::map::PICKUP_SPOTS {
+        commands.spawn((Name::from("Pickup"), Pickup { kind, at, back_at: None, taken_by: None }, Replicate::to_clients(NetworkTarget::All)));
+    }
+}
+
+/// A fighter touching a pickup that's lying there takes it (the first found, if several), and
+/// it's gone for `PICKUP_RESPAWN_TICKS`. A heal is taken even at full health; what it restores
+/// goes in `RecentHits` (as a heal), for the client's number. A haste starts next tick.
+fn take_pickups(
+    timeline: Res<LocalTimeline>,
+    mut pickups: Query<&mut Pickup>,
+    mut players: Query<(&PlayerId, &ClassId, &Pos, &mut Health, &mut Hasted, &mut RecentHits), InPlay>,
+) {
+    let now = timeline.tick().0;
+    for mut pickup in &mut pickups {
+        match pickup.back_at {
+            Some(back_at) if now < back_at => continue,
+            Some(_) => pickup.back_at = None,
+            None => {}
+        }
+        let at = pickup.at;
+        let Some((id, class, _, mut health, mut hasted, mut hits)) =
+            players.iter_mut().find(|(_, _, pos, ..)| sim::touches_pickup(pos.0, at))
+        else {
+            continue;
+        };
+        match pickup.kind {
+            PickupKind::Heal => {
+                let healed = (health.0 + sim::heal_amount(class.def().max_hp)).min(class.def().max_hp);
+                if healed > health.0 {
+                    hits.push(healed - health.0, HitKind::Heal);
+                    health.0 = healed;
+                }
+            }
+            PickupKind::Haste => hasted.start(now),
+        }
+        pickup.back_at = Some(now + PICKUP_RESPAWN_TICKS);
+        pickup.taken_by = Some(id.0);
+        debug!(player = ?id.0, kind = ?pickup.kind, health = health.0, "took a pickup");
     }
 }
 
@@ -402,7 +448,7 @@ fn damage(
     let crit = fastrand::f32() < class.def().crit.chance_against(chilled.rooted_at(now));
     let amount = if crit { (blow.amount as f32 * CRIT_MULTIPLIER).round() as i32 } else { blow.amount };
     health.0 = (health.0 - amount).max(0);
-    hits.push(amount, crit);
+    hits.push(amount, if crit { HitKind::Crit } else { HitKind::Damage });
     if !blow.chill.is_none() {
         chilled.apply(blow.chill, now);
     }
@@ -417,10 +463,10 @@ fn damage(
 fn respawn(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    mut dead: Query<(Entity, &ClassId, &mut Health, &mut Chilled, &mut AttackState, &mut AbilityState, &mut Dead)>,
+    mut dead: Query<(Entity, &ClassId, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, &mut AbilityState, &mut Dead)>,
 ) {
     let now = timeline.tick().0;
-    for (player, class, mut health, mut chilled, mut attack, mut ability, mut dead) in &mut dead {
+    for (player, class, mut health, (mut chilled, mut hasted), mut attack, mut ability, mut dead) in &mut dead {
         if !dead.placed && now + PLACE_BEFORE_RESPAWN_TICKS >= dead.respawn_at {
             dead.placed = true;
             commands.entity(player).insert(NeedsSpawnPoint);
@@ -428,6 +474,7 @@ fn respawn(
         if now >= dead.respawn_at {
             health.0 = class.def().max_hp;
             chilled.set_if_neq(Chilled::default());
+            hasted.set_if_neq(Hasted::default());
             *attack = AttackState::default();
             *ability = AbilityState::default();
             commands.entity(player).remove::<Dead>();

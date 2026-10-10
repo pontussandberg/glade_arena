@@ -1,7 +1,9 @@
 //! The minimap in the bottom-right corner: the clearing drawn tile by tile from the shared map
-//! (so it's exactly what blocks movement), every fighter as a dot in its ring color, and a frame
-//! showing what the camera sees.
+//! (so it's exactly what blocks movement), every fighter as a dot in its ring color, every
+//! pickup as its icon while it's lying there or the seconds until it's back, and a frame showing
+//! what the camera sees.
 
+use arena_shared::config::TICK_HZ;
 use arena_shared::map::{MAP_HALF_EXTENTS, MAP_TILES, Tile, map};
 use arena_shared::protocol::*;
 use bevy::asset::RenderAssetUsages;
@@ -11,22 +13,26 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use lightyear::prelude::*;
 
 use crate::camera::CameraPlaced;
+use crate::feedback::AttackClock;
 use crate::glade::{self, palette};
-use crate::render::{Relation, ground_at, shown};
+use crate::render::{Relation, ground_at, shown, ui_text};
 
 pub struct MinimapPlugin;
 
 impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_minimap);
-        app.add_systems(Update, (spawn_dots, place_dots, frame_view.in_set(CameraPlaced)));
+        app.add_systems(Update, (spawn_dots, place_dots, (spawn_markers, update_markers).chain(), frame_view.in_set(CameraPlaced)));
     }
 }
 
-/// Screen pixels per map tile, the gap from the screen corner, and a dot's size.
-const SCALE: f32 = 3.0;
+/// Screen pixels per map tile, the gap from the screen corner, a dot's size, and a pickup
+/// marker's (and its text's).
+const SCALE: f32 = 6.0;
 const MARGIN: f32 = 12.0;
-const DOT: f32 = 8.0;
+const DOT: f32 = 12.0;
+const MARKER: f32 = 22.0;
+const MARKER_TEXT: f32 = 14.0;
 
 /// The minimap's picture; dots and the view frame are its children.
 #[derive(Component)]
@@ -41,6 +47,15 @@ struct Dot {
 /// What the camera sees.
 #[derive(Component)]
 struct ViewFrame;
+
+/// A pickup's marker (this entity, a round chip) and its text, and what it shows now: the
+/// pickup's icon (`None`: it's lying there), else the seconds until it's back.
+#[derive(Component)]
+struct PickupMarker {
+    pickup: Entity,
+    text: Entity,
+    showing: Option<u32>,
+}
 
 /// Where a gameplay position is on the minimap, in whole pixels from its top-left corner (so a
 /// dot or the view frame only moves, and the UI is only laid out again, when it moves a pixel).
@@ -141,6 +156,71 @@ fn place_dots(
         if node.left != left || node.top != top {
             node.left = left;
             node.top = top;
+        }
+    }
+}
+
+/// Each pickup gets a marker on its spot once it arrives. Above the fighters' dots, so a fighter
+/// standing on it doesn't hide its timer.
+fn spawn_markers(mut commands: Commands, minimap: Single<Entity, With<Minimap>>, new: Query<(Entity, &Pickup), Added<Pickup>>) {
+    for (pickup, info) in &new {
+        let color = crate::pickups::color(info.kind);
+        // Spawned showing its icon, as lying there; `update_markers` turns it into a timer.
+        let text = commands.spawn(ui_text(crate::pickups::icon(info.kind), MARKER_TEXT, palette::INK)).id();
+        let at = on_minimap(info.at) - Vec2::splat(MARKER / 2.0);
+        let marker = commands
+            .spawn((
+                PickupMarker { pickup, text, showing: None },
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(at.x),
+                    top: px(at.y),
+                    width: px(MARKER),
+                    height: px(MARKER),
+                    border: UiRect::all(px(2.0)),
+                    border_radius: BorderRadius::MAX,
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(color),
+                BorderColor::all(color),
+                ZIndex(1),
+            ))
+            .add_child(text)
+            .id();
+        commands.entity(*minimap).add_child(marker);
+    }
+}
+
+/// A pickup lying there shows its icon ("+" a heal, ">>" a haste) in its color; a taken one, the
+/// whole seconds until it's back (rounded up), dimmed. Only writes what changed.
+fn update_markers(
+    mut commands: Commands,
+    clock: AttackClock,
+    pickups: Query<&Pickup>,
+    mut markers: Query<(Entity, &mut PickupMarker, &mut BackgroundColor)>,
+    mut texts: Query<(&mut Text, &mut TextColor)>,
+) {
+    let now = clock.now(true);
+    for (entity, mut marker, mut background) in &mut markers {
+        let Ok(pickup) = pickups.get(marker.pickup) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let wanted = pickup.back_at.map(|back_at| ((back_at as f32 - now) / TICK_HZ as f32).ceil().max(1.0) as u32);
+        if marker.showing == wanted {
+            continue;
+        }
+        marker.showing = wanted;
+        let (label, text_color, fill) = match wanted {
+            Some(seconds) => (seconds.to_string(), palette::HAZE, palette::INK.with_alpha(0.85)),
+            None => (crate::pickups::icon(pickup.kind).to_string(), palette::INK, crate::pickups::color(pickup.kind)),
+        };
+        background.set_if_neq(BackgroundColor(fill));
+        if let Ok((mut text, mut current)) = texts.get_mut(marker.text) {
+            text.0 = label;
+            current.set_if_neq(TextColor(text_color));
         }
     }
 }

@@ -33,6 +33,8 @@ pub mod lobby;
 #[cfg(feature = "render")]
 pub mod minimap;
 #[cfg(feature = "render")]
+pub mod pickups;
+#[cfg(feature = "render")]
 pub mod render;
 #[cfg(feature = "render")]
 pub mod rig;
@@ -204,21 +206,22 @@ fn cancel_walk_on_attack(
 // The four systems below only run once the client's timeline is synced with the server
 // (`SyncedLocalTimeline` makes Bevy skip them until then).
 
-/// Our movement, right away. Slows and roots (`Chilled`) are the server's: one lands on us a
-/// round trip late, and the rollback it causes replays our movement with it from when it began.
+/// Our movement, right away. Slows and roots (`Chilled`) and hastes (`Hasted`) are the server's:
+/// one lands on us a round trip late, and the rollback it causes replays our movement with it
+/// from when it began.
 fn predict_player_movement(
     synced: SyncedLocalTimeline,
     mut players: Query<
-        (&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &AbilityState, &Chilled, &Health),
+        (&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &AbilityState, (&Chilled, &Hasted), &Health),
         (With<Predicted>, With<PlayerId>),
     >,
 ) {
     let tick = synced.current_tick().0;
-    for (mut pos, class, input, attack, ability, chilled, health) in &mut players {
+    for (mut pos, class, input, attack, ability, (chilled, hasted), health) in &mut players {
         if !health.alive() {
             continue;
         }
-        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, ability, chilled, tick)));
+        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, ability, chilled, hasted, tick)));
     }
 }
 

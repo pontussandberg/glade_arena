@@ -31,6 +31,7 @@ impl Plugin for RenderPlugin {
             crate::rig::RigPlugin,
             crate::action_bar::ActionBarPlugin,
             crate::minimap::MinimapPlugin,
+            crate::pickups::PickupsPlugin,
             crate::stat_frame::StatFramePlugin,
         ));
         app.add_systems(Startup, setup_scene);
@@ -277,7 +278,7 @@ struct Telegraph(Entity);
 /// whatever its parent does (fighters turn, lean, crouch and are drawn bigger, see `rig.rs`): the range circle and the telegraph
 /// stay flat on the ground.
 #[derive(Component)]
-struct WorldAligned(Quat, f32);
+pub(crate) struct WorldAligned(pub Quat, pub f32);
 
 /// Top left: the connection (ping, or connecting / disconnected) and whether you're dead, with
 /// the keys under it (`KeyHints`).

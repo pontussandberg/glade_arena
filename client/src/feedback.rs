@@ -1,6 +1,7 @@
 //! Combat feedback: a health bar over every fighter with a cast bar under it while it winds up
 //! an attack, a white flash and a damage number when one takes damage (a crit's bigger and
-//! golden), and dead fighters disappearing until they respawn.
+//! golden), a green number when one is healed, and dead fighters disappearing until they
+//! respawn.
 
 use arena_shared::protocol::*;
 use bevy::ecs::system::SystemParam;
@@ -256,7 +257,7 @@ fn hide_the_dead(
 
 /// A number for each new hit in a fighter's `RecentHits` (server-confirmed, like the flash). The
 /// hits already there when we first see a fighter are only noted. Damage to us is in our
-/// enemies' red; a crit is bigger, flame-gold, and ends in "!".
+/// enemies' red; a crit is bigger, flame-gold, and ends in "!". A heal is a green "+".
 fn spawn_damage_numbers(
     mut commands: Commands,
     time: Res<Time>,
@@ -269,16 +270,18 @@ fn spawn_damage_numbers(
         };
         let last = std::mem::replace(&mut shown.0, recent.seq());
         for (i, hit) in recent.0.iter().filter(|hit| hit.seq > last).enumerate() {
-            let (text, size, color) = match (hit.crit, is_me) {
-                (true, _) => (format!("{}!", hit.amount), CRIT_NUMBER_SIZE, palette::TORCH_FLAME),
-                (false, true) => (hit.amount.to_string(), NUMBER_SIZE, palette::ENEMY),
-                (false, false) => (hit.amount.to_string(), NUMBER_SIZE, palette::SUN),
+            let crit = hit.kind == HitKind::Crit;
+            let (text, size, color) = match (hit.kind, is_me) {
+                (HitKind::Heal, _) => (format!("+{}", hit.amount), NUMBER_SIZE, palette::HEAL),
+                (HitKind::Crit, _) => (format!("{}!", hit.amount), CRIT_NUMBER_SIZE, palette::TORCH_FLAME),
+                (HitKind::Damage, true) => (hit.amount.to_string(), NUMBER_SIZE, palette::ENEMY),
+                (HitKind::Damage, false) => (hit.amount.to_string(), NUMBER_SIZE, palette::SUN),
             };
             // Alternate sides from the second on, so numbers landing together don't overlap.
             let side = if i % 2 == 0 { 1.0 } else { -1.0 };
-            let lasts = if hit.crit { CRIT_NUMBER_SECONDS } else { NUMBER_SECONDS };
+            let lasts = if crit { CRIT_NUMBER_SECONDS } else { NUMBER_SECONDS };
             commands.spawn((
-                DamageNumber { player, born: time.elapsed_secs(), lasts, crit: hit.crit, dx: side * NUMBER_SPREAD * i.div_ceil(2) as f32 },
+                DamageNumber { player, born: time.elapsed_secs(), lasts, crit, dx: side * NUMBER_SPREAD * i.div_ceil(2) as f32 },
                 ui_text(text, size, color),
                 TextShadow { offset: Vec2::splat(2.0), color: palette::INK },
                 Node { position_type: PositionType::Absolute, ..default() },

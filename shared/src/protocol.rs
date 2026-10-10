@@ -46,8 +46,18 @@ pub struct RecentHits(pub Vec<Hit>);
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Hit {
     pub seq: u32,
+    /// Health lost (or, for a heal, gained).
     pub amount: i32,
-    pub crit: bool,
+    pub kind: HitKind,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+pub enum HitKind {
+    Damage,
+    /// Damage, critical.
+    Crit,
+    /// Health gained (a heal pickup).
+    Heal,
 }
 
 impl RecentHits {
@@ -59,12 +69,12 @@ impl RecentHits {
         self.0.last().map_or(0, |hit| hit.seq)
     }
 
-    pub fn push(&mut self, amount: i32, crit: bool) {
+    pub fn push(&mut self, amount: i32, kind: HitKind) {
         let seq = self.seq() + 1;
         if self.0.len() == Self::KEEP {
             self.0.remove(0);
         }
-        self.0.push(Hit { seq, amount, crit });
+        self.0.push(Hit { seq, amount, kind });
     }
 }
 
@@ -191,6 +201,44 @@ impl Chilled {
     }
 }
 
+/// Walking faster: `HASTE_FACTOR` times as fast during the span. From a haste pickup.
+/// Server-authoritative like `Chilled` (replicated, never predicted, in ticks for the same
+/// reasons).
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
+pub struct Hasted(pub Span);
+
+impl Hasted {
+    /// Hasted from the tick after `now` for `HASTE_TICKS` (or the rest of a longer one running).
+    pub fn start(&mut self, now: u32) {
+        self.0 = self.0.renewed(now, crate::config::HASTE_TICKS);
+    }
+
+    /// How many times its walking speed a player has at `tick` (1 unhasted).
+    pub fn speed_factor(&self, tick: u32) -> f32 {
+        if self.0.covers(tick as f32) { crate::config::HASTE_FACTOR } else { 1.0 }
+    }
+}
+
+/// What a pickup does to whoever takes it.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
+pub enum PickupKind {
+    /// Restores `HEAL_FRACTION` of max health (taken even at full health).
+    Heal,
+    /// Walking `HASTE_FACTOR` times as fast for `HASTE_TICKS`.
+    Haste,
+}
+
+/// A pickup lying at `at` (one of `map::PICKUP_SPOTS`), or, while `back_at` is set, taken (last
+/// by `taken_by`) and gone until that tick. Server-authoritative: the server decides who takes
+/// it, clients draw it, its timer, and its taker's burst.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct Pickup {
+    pub kind: PickupKind,
+    pub at: Vec2,
+    pub back_at: Option<u32>,
+    pub taken_by: Option<PeerId>,
+}
+
 /// The player's most recent melee swing, for drawing it. Predicted, so your own swing shows
 /// instantly, and replicated, so others see it too.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
@@ -277,6 +325,8 @@ impl Plugin for ProtocolPlugin {
         app.component::<Health>().replicate();
         app.component::<Chilled>().replicate();
         app.component::<RecentHits>().replicate();
+        app.component::<Hasted>().replicate();
+        app.component::<Pickup>().replicate();
         app.component::<Pos>()
             .replicate()
             .predict()

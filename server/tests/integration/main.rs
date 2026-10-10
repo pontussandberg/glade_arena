@@ -8,3 +8,4 @@ mod abilities;
 mod combat;
 mod inputs;
 mod netcode;
+mod pickups;

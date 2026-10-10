@@ -16,6 +16,8 @@ use std::sync::LazyLock;
 
 use bevy::math::{IVec2, Vec2};
 
+use crate::protocol::PickupKind;
+
 /// Tiles across and down. Even, so the grid is point-symmetric around (0, 0).
 pub const MAP_TILES: IVec2 = IVec2::new(64, 44);
 pub const MAP_HALF_EXTENTS: Vec2 = Vec2::new(MAP_TILES.x as f32 / 2.0, MAP_TILES.y as f32 / 2.0);
@@ -62,6 +64,15 @@ pub const SPAWN_POINTS: [Vec2; 8] = [
     Vec2::new(20.5, -7.5),
     Vec2::new(20.5, 8.5),
     Vec2::new(11.5, 2.5),
+];
+
+/// Where the pickups lie (tile centers): a heal and a haste per bank, mirrored. Each bank's heal
+/// is up north by the river, its haste down south between the spawns and the low wall.
+pub const PICKUP_SPOTS: [(Vec2, PickupKind); 4] = [
+    (Vec2::new(-4.5, 10.5), PickupKind::Heal),
+    (Vec2::new(4.5, -10.5), PickupKind::Heal),
+    (Vec2::new(-11.5, -8.5), PickupKind::Haste),
+    (Vec2::new(11.5, 8.5), PickupKind::Haste),
 ];
 
 /// Smooth periodic wave in [-1, 1] with period 4 (a sine look-alike from a cubic), using only
@@ -480,6 +491,20 @@ mod tests {
     fn spawn_points_are_walkable() {
         for p in SPAWN_POINTS {
             assert!(map().walkable_at(p), "spawn point {p} is not walkable");
+        }
+    }
+
+    #[test]
+    fn pickups_lie_mirrored_on_open_ground_away_from_spawns() {
+        let m = map();
+        for (at, kind) in PICKUP_SPOTS {
+            assert_eq!(at, Map::center(Map::tile_of(at)), "{at} isn't a tile center");
+            assert!(m.walkable_at(at), "pickup at {at} isn't walkable");
+            assert!(PICKUP_SPOTS.contains(&(-at, kind)), "pickup at {at} has no mirror");
+            assert!(SPAWN_POINTS.iter().all(|s| s.distance(at) >= 4.0), "pickup at {at} is on a spawn");
+            for spawn in SPAWN_POINTS {
+                assert!(m.find_path(Map::tile_of(spawn), Map::tile_of(at)).is_some(), "{at} unreachable from {spawn}");
+            }
         }
     }
 
