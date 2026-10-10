@@ -8,6 +8,7 @@ pub mod classes;
 pub mod config;
 pub mod map;
 pub mod protocol;
+pub mod rooms;
 pub mod sim;
 
 pub use protocol::ProtocolPlugin;

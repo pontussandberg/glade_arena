@@ -1,6 +1,7 @@
 //! Authoritative match server.
 //!
-//! Clients pick a class, then only send inputs. The server runs the shared sim on them, decides
+//! Guests meet in rooms (`rooms.rs`); each room is its own arena, all in this one world. In a
+//! started room, clients pick a class, then only send inputs. The server runs the shared sim on them, decides
 //! hits, damage and crowd control (melee, dashes and novas with lag compensation), and
 //! replicates the result. A
 //! client's own player is predicted on that client, other players are interpolated; every
@@ -23,8 +24,10 @@ use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
 use crate::logging::InputGaps;
+use crate::rooms::InRoom;
 
 pub mod logging;
+pub mod rooms;
 
 pub struct ServerSettings {
     pub port: u16,
@@ -106,14 +109,12 @@ pub struct ServerGamePlugin;
 
 impl Plugin for ServerGamePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((ProtocolPlugin, logging::LoggingPlugin));
+        app.add_plugins((ProtocolPlugin, RoomPlugin, logging::LoggingPlugin, rooms::RoomsPlugin));
         // A client may only send inputs for the player it controls. Lightyear doesn't check this
         // by default, so without it a modified client could drive anyone else's fighter.
         app.add_input_validator(authorize_controlled_targets::<NativeStateSequence<PlayerInput>>);
         app.insert_resource(ReplicationMetadata::new(SEND_INTERVAL));
         app.add_observer(on_new_link);
-        app.add_systems(Startup, spawn_pickups);
-        app.add_systems(Update, spawn_chosen_classes);
         app.add_systems(
             FixedUpdate,
             (
@@ -132,7 +133,7 @@ impl Plugin for ServerGamePlugin {
         );
         // Also every frame, so players who join between fixed ticks are placed before their
         // first replication.
-        app.add_systems(Update, place_players.after(spawn_chosen_classes));
+        app.add_systems(Update, place_players.after(rooms::RoomSystems));
     }
 }
 
@@ -149,9 +150,12 @@ fn owner_predicted(owner: PeerId) -> impl Bundle {
 /// already threw (`PreSpawned`); the others learn of it late and catch it up to where it really
 /// is. Either way it flies on the same clock as each client's own player, which is what makes
 /// a dodge look the way the server judges it (see `resolve_projectile_hits`).
-fn spawn_projectile(commands: &mut Commands, projectile: Projectile) {
+fn spawn_projectile(commands: &mut Commands, projectile: Projectile, (room, team): Side) {
     commands.spawn((
         projectile.bundle(),
+        room,
+        room.rooms(),
+        team,
         Replicate::to_clients(NetworkTarget::All),
         PredictionTarget::to_clients(NetworkTarget::All),
     ));
@@ -236,62 +240,45 @@ fn on_new_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
     commands.entity(trigger.entity).insert(ReplicationSender);
 }
 
-/// A connected client picked a class on its join screen: spawn its player. Later picks from the
-/// same client are ignored (switching classes means rejoining, for now).
-fn spawn_chosen_classes(
-    mut links: Query<(Entity, &RemoteId, &mut MessageReceiver<ChooseClass>), With<ClientOf>>,
-    players: Query<&ControlledBy, With<PlayerId>>,
-    mut commands: Commands,
-) {
-    let mut count = players.iter().len();
-    for (link, remote, mut receiver) in &mut links {
-        let mut has_player = players.iter().any(|c| c.owner == link);
-        for ChooseClass(class) in receiver.receive() {
-            let Some(class) = class.checked() else { continue };
-            if has_player {
-                continue;
-            }
-            has_player = true;
-            let id = remote.0;
-            count += 1;
-            info!(client = ?id, class = class.def().name, players = count, "joined");
-            commands.spawn((
-                Name::from("Player"),
-                PlayerId(id),
-                class,
-                Pos::default(),
-                NeedsSpawnPoint,
-                Health(class.def().max_hp),
-                (Chilled::default(), Hasted::default(), RecentHits::default()),
-                AttackState::default(),
-                AbilityState::default(),
-                DashHits::default(),
-                LastSwing::default(),
-                PosHistory::default(),
-                InputGaps::default(),
-                ActionState::<PlayerInput>::default(),
-                // Replication starts in `place_players`, once it has a real position.
-                // Despawned automatically when this client disconnects.
-                ControlledBy { owner: link, lifetime: default() },
-            ));
-        }
-    }
+/// A room member's fighter, as `class`, on `team`. Despawned with the client's link when it
+/// disconnects; `rooms.rs` despawns it when the member leaves the room.
+fn spawn_player(commands: &mut Commands, link: Entity, id: PeerId, class: ClassId, room: InRoom, team: Team) -> Entity {
+    commands
+        .spawn((
+            Name::from("Player"),
+            PlayerId(id),
+            (class, team, room, room.rooms()),
+            Pos::default(),
+            NeedsSpawnPoint,
+            Health(class.def().max_hp),
+            (Chilled::default(), Hasted::default(), RecentHits::default()),
+            AttackState::default(),
+            AbilityState::default(),
+            DashHits::default(),
+            LastSwing::default(),
+            PosHistory::default(),
+            InputGaps::default(),
+            ActionState::<PlayerInput>::default(),
+            // Replication starts in `place_players`, once it has a real position.
+            ControlledBy { owner: link, lifetime: default() },
+        ))
+        .id()
 }
 
-/// Places waiting players one at a time, each away from everyone already placed, so players
-/// joining or respawning in the same tick don't land on the same spot.
+/// Places waiting players one at a time, each away from everyone already placed in their room,
+/// so players joining or respawning in the same tick don't land on the same spot.
 fn place_players(
     mut commands: Commands,
-    mut players: Query<(Entity, &PlayerId, &mut Pos, &mut PosHistory, Has<NeedsSpawnPoint>, Has<Replicate>)>,
+    mut players: Query<(Entity, &PlayerId, &InRoom, &mut Pos, &mut PosHistory, Has<NeedsSpawnPoint>, Has<Replicate>)>,
 ) {
-    let mut placed: Vec<Vec2> =
-        players.iter().filter(|(.., waiting, _)| !waiting).map(|(_, _, pos, ..)| pos.0).collect();
-    for (entity, id, mut pos, mut history, waiting, replicated) in &mut players {
+    let mut placed: Vec<(InRoom, Vec2)> =
+        players.iter().filter(|(.., waiting, _)| !waiting).map(|(_, _, room, pos, ..)| (*room, pos.0)).collect();
+    for (entity, id, room, mut pos, mut history, waiting, replicated) in &mut players {
         if !waiting {
             continue;
         }
-        pos.0 = sim::pick_spawn_point(placed.iter().copied());
-        placed.push(pos.0);
+        pos.0 = sim::pick_spawn_point(placed.iter().filter(|(r, _)| r == room).map(|(_, p)| *p));
+        placed.push((*room, pos.0));
         // Hits can't be judged against where the player was before the teleport.
         history.0.clear();
         let mut player = commands.entity(entity);
@@ -336,11 +323,15 @@ fn move_players(
     }
 }
 
-/// The pickups, lying at their spots for everyone to see.
-fn spawn_pickups(mut commands: Commands) {
-    for (at, kind) in arena_shared::map::PICKUP_SPOTS {
-        commands.spawn((Name::from("Pickup"), Pickup { kind, at, back_at: None, taken_by: None }, Replicate::to_clients(NetworkTarget::All)));
-    }
+/// A room's pickups, lying at their spots for everyone in it to see.
+fn spawn_pickups(commands: &mut Commands, room: InRoom) -> Vec<Entity> {
+    arena_shared::map::PICKUP_SPOTS
+        .into_iter()
+        .map(|(at, kind)| {
+            let pickup = Pickup { kind, at, back_at: None, taken_by: None };
+            commands.spawn((Name::from("Pickup"), pickup, room, room.rooms(), Replicate::to_clients(NetworkTarget::All))).id()
+        })
+        .collect()
 }
 
 /// A fighter touching a pickup that's lying there takes it (the first found, if several), and
@@ -348,19 +339,19 @@ fn spawn_pickups(mut commands: Commands) {
 /// goes in `RecentHits` (as a heal), for the client's number. A haste starts next tick.
 fn take_pickups(
     timeline: Res<LocalTimeline>,
-    mut pickups: Query<&mut Pickup>,
-    mut players: Query<(&PlayerId, &ClassId, &Pos, &mut Health, &mut Hasted, &mut RecentHits), InPlay>,
+    mut pickups: Query<(&mut Pickup, &InRoom)>,
+    mut players: Query<(&PlayerId, &ClassId, &Pos, &mut Health, &mut Hasted, &mut RecentHits, &InRoom), InPlay>,
 ) {
     let now = timeline.tick().0;
-    for mut pickup in &mut pickups {
+    for (mut pickup, room) in &mut pickups {
         match pickup.back_at {
             Some(back_at) if now < back_at => continue,
             Some(_) => pickup.back_at = None,
             None => {}
         }
         let at = pickup.at;
-        let Some((id, class, _, mut health, mut hasted, mut hits)) =
-            players.iter_mut().find(|(_, _, pos, ..)| sim::touches_pickup(pos.0, at))
+        let Some((id, class, _, mut health, mut hasted, mut hits, _)) =
+            players.iter_mut().find(|(_, _, pos, .., in_room)| *in_room == room && sim::touches_pickup(pos.0, at))
         else {
             continue;
         };
@@ -434,6 +425,14 @@ struct Blow {
 /// Who dealt a hit, of which class (whose crit odds it rolls), and `with` what (for the log).
 type Attacker<'a> = (PeerId, ClassId, &'a str);
 
+/// Where a fighter (or a projectile) fights: which room, which side.
+type Side = (InRoom, Team);
+
+/// Whether something on `side` can hurt someone on `other`: same room, not allies.
+fn foes(side: Side, other: Side) -> bool {
+    side.0 == other.0 && !side.1.allied(other.1)
+}
+
 /// Apply a hit dealt by `attacker`; at zero health the player is out of the fight for
 /// `RESPAWN_TICKS`. A crit is rolled on the attacker's class's odds, against whether the target
 /// is frozen now: a root this very hit applies starts next tick, so it doesn't count.
@@ -489,6 +488,7 @@ type Targets<'w, 's> = Query<
     (
         Entity,
         &'static PlayerId,
+        (&'static InRoom, &'static Team),
         &'static Pos,
         &'static PosHistory,
         &'static mut Health,
@@ -498,20 +498,22 @@ type Targets<'w, 's> = Query<
     InPlay,
 >;
 
-/// Lag-compensated hits: deals `blow` to everyone but `attacker` that `hits` says is hit,
-/// judged at where they were at `seen_at` (where the attacker saw them). Returns how many.
+/// Lag-compensated hits: deals `blow` to every foe of `attacker` (on `side`) that `hits` says
+/// is hit, judged at where they were at `seen_at` (where the attacker saw them). Returns how many.
+#[expect(clippy::too_many_arguments)]
 fn hit_where_seen(
     commands: &mut Commands,
     now: u32,
     targets: &mut Targets,
     seen_at: (u32, f32),
     attacker: Attacker,
+    side: Side,
     blow: Blow,
     mut hits: impl FnMut(PeerId, Vec2) -> bool,
 ) -> usize {
     let mut count = 0;
-    for (target, target_id, target_pos, history, mut health, mut chilled, mut recent) in targets {
-        if target_id.0 != attacker.0 && hits(target_id.0, history.at(seen_at).unwrap_or(target_pos.0)) {
+    for (target, target_id, (room, team), target_pos, history, mut health, mut chilled, mut recent) in targets {
+        if target_id.0 != attacker.0 && foes(side, (*room, *team)) && hits(target_id.0, history.at(seen_at).unwrap_or(target_pos.0)) {
             damage(commands, now, (target, target_id.0), (&mut health, &mut chilled, &mut recent), blow, attacker);
             count += 1;
         }
@@ -527,24 +529,26 @@ fn attack(
     timeline: Res<LocalTimeline>,
     delays: Query<&InterpolationDelay, With<ClientOf>>,
     mut attackers: Query<
-        (&PlayerId, &ClassId, &Pos, &ActionState<PlayerInput>, &ControlledBy, &mut AttackState, &mut LastSwing),
+        (&PlayerId, &ClassId, &Pos, &ActionState<PlayerInput>, &ControlledBy, &mut AttackState, &mut LastSwing, (&InRoom, &Team)),
         InPlay,
     >,
     mut targets: Targets,
 ) {
     let now = timeline.tick();
-    for (id, class, pos, input, controlled_by, mut state, mut last_swing) in &mut attackers {
+    for (id, class, pos, input, controlled_by, mut state, mut last_swing, (room, team)) in &mut attackers {
+        let side = (*room, *team);
         let (next, released) = sim::step_attack(now.0, id.0, *class, pos.0, &input.0, *state);
         // Only on change: AttackState is replicated.
         state.set_if_neq(next);
         let Some(attack) = released else { continue };
         match attack {
-            sim::Attack::Projectile(projectile) => spawn_projectile(&mut commands, projectile),
+            sim::Attack::Projectile(projectile) => spawn_projectile(&mut commands, projectile, side),
             sim::Attack::Melee(swing) => {
                 *last_swing = swing;
                 let seen_at = view_time(now, controlled_by.owner, &delays);
                 let blow = Blow { amount: class.def().attack.damage, chill: class.def().attack.chill };
-                hit_where_seen(&mut commands, now.0, &mut targets, seen_at, (id.0, *class, "auto-attack"), blow, |_, seen| {
+                let with = (id.0, *class, "auto-attack");
+                hit_where_seen(&mut commands, now.0, &mut targets, seen_at, with, side, blow, |_, seen| {
                     sim::melee_hits(pos.0, swing.dir, *class, seen)
                 });
             }
@@ -576,6 +580,7 @@ fn use_abilities(
             &mut AttackState,
             &mut AbilityState,
             &mut DashHits,
+            (&InRoom, &Team),
         ),
         InPlay,
     >,
@@ -585,7 +590,8 @@ fn use_abilities(
     // Read up front: `targets` holds every player's `Chilled` mutably. A root or slow landing
     // during this loop starts next tick anyway.
     let chills: Vec<(PeerId, Chilled)> = targets.iter().map(|(_, id, .., chilled, _)| (id.0, *chilled)).collect();
-    for (id, class, pos, input, controlled_by, mut attack, mut state, mut hits) in &mut users {
+    for (id, class, pos, input, controlled_by, mut attack, mut state, mut hits, (room, team)) in &mut users {
+        let side = (*room, *team);
         let chilled = chills.iter().find(|(p, _)| *p == id.0).map(|(_, c)| *c).unwrap_or_default();
         // Cut whoever this tick's dash step reached (`move_players` just made it). Checked before
         // the ability steps, which ends the dash on its last tick: so every step is checked, the
@@ -600,7 +606,7 @@ fn use_abilities(
             let seen_at = view_time(now, controlled_by.owner, &delays);
             let with = (id.0, *class, class.def().ability.name.as_str());
             let blow = Blow { amount: *cut, chill: Chill::default() };
-            let cut_now = hit_where_seen(&mut commands, now.0, &mut targets, seen_at, with, blow, |target, seen| {
+            let cut_now = hit_where_seen(&mut commands, now.0, &mut targets, seen_at, with, side, blow, |target, seen| {
                 let fresh = !hits.1.contains(&target) && sim::dash_hits(pos.0, seen);
                 if fresh {
                     hits.1.push(target);
@@ -614,13 +620,13 @@ fn use_abilities(
         let (next, cast) = sim::step_ability(now.0, id.0, *class, pos.0, &input.0, &attack, &chilled, *state);
         state.set_if_neq(next);
         match cast {
-            Some(sim::Cast::Throw(projectile)) => spawn_projectile(&mut commands, projectile),
+            Some(sim::Cast::Throw(projectile)) => spawn_projectile(&mut commands, projectile, side),
             Some(sim::Cast::Nova) => {
                 let AbilityKind::Nova { damage, chill, .. } = class.def().ability.kind else { continue };
                 let seen_at = view_time(now, controlled_by.owner, &delays);
                 let with = (id.0, *class, class.def().ability.name.as_str());
                 let blow = Blow { amount: damage, chill };
-                hit_where_seen(&mut commands, now.0, &mut targets, seen_at, with, blow, |_, seen| {
+                hit_where_seen(&mut commands, now.0, &mut targets, seen_at, with, side, blow, |_, seen| {
                     sim::nova_hits(pos.0, *class, seen)
                 });
             }
@@ -643,7 +649,7 @@ fn move_projectiles(
     }
 }
 
-/// Projectile hits, judged against where everyone is now: no lag compensation, unlike melee and
+/// Projectile hits on the shooter's foes (allies' pass through), judged against where everyone is now: no lag compensation, unlike melee and
 /// dashes. Projectiles can be dodged, and every client draws them on its own player's clock, so
 /// what the target sees is exactly what's judged here ("favor the target"). The price is paid by
 /// the shooter, who sees others a little in the past and may watch a shot pass through someone
@@ -652,13 +658,15 @@ fn move_projectiles(
 fn resolve_projectile_hits(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    projectiles: Query<(Entity, &Pos, &Projectile)>,
+    projectiles: Query<(Entity, &Pos, &Projectile, &InRoom, &Team)>,
     mut targets: Targets,
 ) {
     let now = timeline.tick();
-    for (projectile_entity, projectile_pos, projectile) in &projectiles {
-        for (target, target_id, target_pos, _, mut health, mut chilled, mut recent) in &mut targets {
-            if target_id.0 == projectile.owner || !sim::projectile_hits(projectile_pos.0, projectile, target_pos.0) {
+    for (projectile_entity, projectile_pos, projectile, room, team) in &projectiles {
+        for (target, target_id, (target_room, target_team), target_pos, _, mut health, mut chilled, mut recent) in &mut targets {
+            if target_id.0 == projectile.owner
+                || !foes((*room, *team), (*target_room, *target_team))
+                || !sim::projectile_hits(projectile_pos.0, projectile, target_pos.0) {
                 continue;
             }
             commands.entity(projectile_entity).try_despawn();

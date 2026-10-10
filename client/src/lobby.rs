@@ -1,11 +1,18 @@
-//! The lobby: before entering the arena, pick a fighter, see it up close, and enter. Laid out
-//! like a classic character select:
+//! The character select: home (once connected, and back from practice or a lobby) and a room's
+//! lobby. Pick a fighter, see it up close, and go. Laid out like a classic character select:
 //!
 //! - the fighter stands on a stage filling the screen (drag to turn it)
 //! - what it is and does on the left: name, role, a line on how it plays, its stat frame (as in
 //!   the arena), its passive and Q ability
 //! - the fighters to pick from in a row of tiles at the bottom (click, or press the number)
-//! - the way in at the bottom right (the button, or Enter), with the connection above it
+//! - on the right, the side panel: at home, the lobbies to join or create (`browser.rs`, opened
+//!   with "Create / join lobby"); in a room, its name and mode, who's in it (by team), the team
+//!   buttons, and for the leader the mode switch
+//! - the way in at the bottom right (the button, or Enter): at home, practice; in a room, the
+//!   leader's start, or once the match is on, into the arena
+//!
+//! In a room, the picked fighter goes to the server as it's picked: the others see it, and the
+//! start (or the way in) takes us in as it.
 //!
 //! The tiles are built from the class file, so a new class shows up without code changes. The
 //! stage is a dark room far off the map, lit for the fighter; while the lobby is open the camera
@@ -17,67 +24,43 @@ use std::fmt::Write;
 
 use arena_shared::classes::{ClassDef, seconds};
 use arena_shared::config::TICK_HZ;
-use arena_shared::protocol::{AbilityState, AttackState, ClassId, PlayerId, Pos};
+use arena_shared::protocol::{AbilityState, AttackState, ClassId, Pos, RoomRequest};
+use arena_shared::rooms::{BLUE, MAX_PER_TEAM, Member, Mode, NO_TEAM, RED, RoomView, team_name};
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
+use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use crate::ChosenClass;
+use crate::browser::{LobbiesButton, Typing};
 use crate::camera::{CameraControl, CameraMoves, Orbit};
 use crate::glade::{self, palette, to_world};
-use crate::render::{GameUi, Visuals, key_chip, ui_text};
+use crate::render::{GameUi, Visuals, button, clicked, key_chip, shown, ui_text};
+use crate::rooms::{CurrentRoom, Me, Notice, Picking, Screen, request};
 use crate::stat_frame;
 
 pub struct LobbyPlugin;
 
 impl Plugin for LobbyPlugin {
     fn build(&self, app: &mut App) {
-        app.configure_sets(Update, CameraControl.run_if(not(in_lobby)));
-        // No fighting input while picking: a Q pressed here would otherwise be kept until it's
-        // sent, and go off the moment we spawn.
-        app.configure_sets(Update, crate::PlayerControls.run_if(not(in_lobby)));
-        app.add_systems(Startup, open_lobby);
+        // Fighting and the arena's camera only in the arena. No fighting input while picking: a
+        // Q pressed here would otherwise be kept until it's sent, and go off the moment we spawn.
+        app.configure_sets(Update, CameraControl.run_if(in_state(Screen::InGame)));
+        app.configure_sets(Update, crate::PlayerControls.run_if(in_state(Screen::InGame)));
+        app.add_systems(OnEnter(Picking), open_lobby);
+        app.add_systems(OnExit(Picking), close_lobby);
         app.add_systems(
             Update,
             (
-                (pick_fighter, show_fighter, enter_arena).chain(),
-                // Before `enter_arena`, which shows the game's UI on the frame we go in.
-                (show_status, hide_game_ui.before(enter_arena)),
+                (pick_fighter, show_fighter, (show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena).chain(),
+                show_status,
                 turn_stage_camera.in_set(CameraMoves),
             )
-                .run_if(in_lobby),
+                .run_if(in_state(Picking)),
         );
-        #[cfg(target_family = "wasm")]
-        app.add_systems(Update, tell_page_ready);
-    }
-}
-
-/// Frames the lobby's fighter has to have been drawn before the page's loading screen goes: by
-/// then what it needed (shaders above all) is ready, so the loader gives way to the lobby rather
-/// than to a dark screen that fills in.
-#[cfg(target_family = "wasm")]
-const READY_AFTER_FRAMES: u32 = 8;
-
-/// Tells the page (`index.html`'s loading screen, through `window.arenaReady`) the game is up,
-/// once: `READY_AFTER_FRAMES` frames after the lobby's fighter first stands on the stage (or,
-/// without a lobby, after start).
-#[cfg(target_family = "wasm")]
-fn tell_page_ready(lobby: Option<Res<Lobby>>, mut frames: Local<u32>) {
-    use wasm_bindgen::JsCast;
-
-    if lobby.is_some_and(|lobby| lobby.shown.is_none()) {
-        return;
-    }
-    *frames = frames.saturating_add(1);
-    if *frames != READY_AFTER_FRAMES + 1 {
-        return;
-    }
-    let Some(window) = web_sys::window() else { return };
-    if let Ok(ready) = js_sys::Reflect::get(&window, &"arenaReady".into())
-        && let Ok(ready) = ready.dyn_into::<js_sys::Function>()
-    {
-        let _ = ready.call0(&window);
+        app.add_systems(Update, hide_game_ui.run_if(not(in_state(Screen::InGame))));
+        app.add_systems(OnEnter(Screen::InGame), show_game_ui);
     }
 }
 
@@ -97,8 +80,10 @@ const ACCENT: Color = stat_frame::ACCENT;
 /// Spacing steps (pixels).
 const GAP: f32 = 8.0;
 const MARGIN: f32 = 40.0;
+/// The side panel's width.
+const SIDE_WIDTH: f32 = 380.0;
 
-/// The lobby is open (and what it shows) while this exists.
+/// What the lobby shows, while it's open.
 #[derive(Resource)]
 struct Lobby {
     selected: ClassId,
@@ -109,11 +94,7 @@ struct Lobby {
     facing: f32,
 }
 
-fn in_lobby(lobby: Option<Res<Lobby>>) -> bool {
-    lobby.is_some()
-}
-
-/// Everything the lobby spawned: despawned on entering the arena.
+/// Everything the lobby spawned: despawned when it closes.
 #[derive(Component)]
 struct LobbyPart;
 
@@ -123,9 +104,25 @@ struct FighterTile(ClassId);
 #[derive(Component)]
 struct EnterButton;
 
+/// The way in's text, and the hint under it.
+#[derive(Component)]
+struct EnterLabel;
+
+#[derive(Component)]
+struct EnterHint;
+
 /// The left column's content, rebuilt for the selected fighter.
 #[derive(Component)]
 struct Details;
+
+/// The column on the right: home's lobbies (`browser.rs`), or the room we're in, rebuilt when it
+/// changes.
+#[derive(Component)]
+pub struct SidePanel;
+
+/// What a button in the room column asks the server for.
+#[derive(Component, Clone)]
+struct RoomButton(RoomRequest);
 
 #[derive(Component)]
 struct Status;
@@ -136,15 +133,19 @@ fn open_lobby(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // A class given up front (command line, bot) skips the lobby.
-    if chosen.0.is_some() {
-        return;
-    }
-    let selected = ClassId::all().next().expect("at least one class");
+    // The fighter we last went in as.
+    let selected = chosen.0.unwrap_or_else(|| ClassId::all().next().expect("at least one class"));
     let view = Orbit { yaw: FRONT, pitch: 0.1, distance: STAGE_DISTANCE };
     commands.insert_resource(Lobby { selected, shown: None, view, facing: FRONT });
     spawn_stage(&mut commands, &mut meshes, &mut materials);
     spawn_screen(&mut commands);
+}
+
+fn close_lobby(mut commands: Commands, parts: Query<Entity, With<LobbyPart>>) {
+    commands.remove_resource::<Lobby>();
+    for part in &parts {
+        commands.entity(part).despawn();
+    }
 }
 
 /// The stage: a dark room around a low stone dais, a warm key light and a cold rim light.
@@ -183,8 +184,8 @@ fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &m
     commands.spawn(light(palette::SPIRIT, 180_000.0, Vec3::new(-2.4, 2.6, 1.6)));
 }
 
-/// The screen over the stage: a top bar, the selected fighter's details on the left, and along
-/// the bottom the controls hint, the fighter tiles and the way in.
+/// The screen over the stage: a top bar, the selected fighter's details on the left, the side
+/// panel on the right, and along the bottom the controls hint, the fighter tiles and the way in.
 fn spawn_screen(commands: &mut Commands) {
     commands
         .spawn((
@@ -202,6 +203,19 @@ fn spawn_screen(commands: &mut Commands) {
         ))
         .with_children(|screen| {
             screen.spawn(ui_text("GLADE ARENA", 18.0, palette::STONE));
+            screen.spawn((
+                SidePanel,
+                Visibility::Hidden,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(MARGIN),
+                    right: px(MARGIN),
+                    width: px(SIDE_WIDTH),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(GAP * 1.5),
+                    ..default()
+                },
+            ));
             screen.spawn((
                 Details,
                 // Fills the height between the top bar and the bottom row, its content from the
@@ -226,18 +240,32 @@ fn spawn_screen(commands: &mut Commands) {
                 });
                 bottom.spawn(side(JustifyContent::FlexEnd)).with_children(|right| {
                     right
-                        .spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::FlexEnd, row_gap: px(GAP), ..default() })
+                        .spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Stretch, row_gap: px(GAP), ..default() })
                         .with_children(|column| {
-                            column.spawn((Status, ui_text("Connecting...", 12.0, palette::STONE)));
+                            column.spawn((Status, ui_text("", 12.0, palette::STONE), Node { align_self: AlignSelf::FlexEnd, ..default() }));
+                            column
+                                .spawn((
+                                    LobbiesButton,
+                                    Button,
+                                    Node {
+                                        padding: UiRect::axes(px(36.0), px(12.0)),
+                                        justify_content: JustifyContent::Center,
+                                        border: UiRect::all(px(1.0)),
+                                        ..default()
+                                    },
+                                    BorderColor::all(palette::STONE.with_alpha(0.5)),
+                                    BackgroundColor(palette::INK.with_alpha(0.85)),
+                                ))
+                                .with_child(ui_text("CREATE / JOIN LOBBY", 14.0, palette::HAZE));
                             column
                                 .spawn((
                                     EnterButton,
                                     Button,
-                                    Node { padding: UiRect::axes(px(36.0), px(16.0)), ..default() },
+                                    Node { padding: UiRect::axes(px(36.0), px(16.0)), justify_content: JustifyContent::Center, ..default() },
                                     BackgroundColor(ACCENT),
                                 ))
-                                .with_child(ui_text("ENTER THE ARENA", 18.0, palette::INK));
-                            column.spawn(ui_text("or press Enter", 11.0, palette::STONE));
+                                .with_child((EnterLabel, ui_text("PRACTICE", 18.0, palette::INK)));
+                            column.spawn((EnterHint, ui_text("or press Enter", 11.0, palette::STONE), Node { align_self: AlignSelf::FlexEnd, ..default() }));
                         });
                 });
             });
@@ -281,19 +309,27 @@ const NUMBER_KEYS: [KeyCode; 9] = [
     KeyCode::Digit9,
 ];
 
-/// Picks a fighter with a click or its number key, and marks the selected tile.
+/// Picks a fighter with a click or its number key (unless typing), and marks the selected tile.
+/// In a room, what's picked goes to the server at once.
 fn pick_fighter(
     keys: Res<ButtonInput<KeyCode>>,
+    typing: Res<Typing>,
     mut lobby: ResMut<Lobby>,
+    mut chosen: ResMut<ChosenClass>,
     mut tiles: Query<(&FighterTile, &Interaction, &mut BorderColor, &mut BackgroundColor)>,
 ) {
-    if let Some((_, id)) = NUMBER_KEYS.iter().zip(ClassId::all()).find(|(key, _)| keys.just_pressed(**key)) {
+    if !typing.0
+        && let Some((_, id)) = NUMBER_KEYS.iter().zip(ClassId::all()).find(|(key, _)| keys.just_pressed(**key))
+    {
         lobby.selected = id;
     }
     for (tile, interaction, ..) in &tiles {
         if *interaction == Interaction::Pressed {
             lobby.selected = tile.0;
         }
+    }
+    if chosen.0 != Some(lobby.selected) {
+        chosen.0 = Some(lobby.selected);
     }
     for (tile, interaction, mut border, mut background) in &mut tiles {
         let (edge, fill) = match (tile.0 == lobby.selected, interaction) {
@@ -393,11 +429,9 @@ fn turn_stage_camera(
     mouse: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     buttons: Query<&Interaction>,
-    // Optional: entering the arena can remove it this same frame.
-    lobby: Option<ResMut<Lobby>>,
+    mut lobby: ResMut<Lobby>,
     mut camera: Single<&mut Transform, With<Camera3d>>,
 ) {
-    let Some(mut lobby) = lobby else { return };
     let on_button = buttons.iter().any(|i| *i != Interaction::None);
     if mouse.pressed(MouseButton::Left) && !on_button {
         lobby.facing -= motion.delta.x * STAGE_DRAG;
@@ -414,19 +448,194 @@ fn hide_game_ui(mut game_ui: Query<&mut Visibility, With<GameUi>>) {
     }
 }
 
-/// Whether we're connected, and how many are fighting already.
+fn show_game_ui(mut game_ui: Query<&mut Visibility, With<GameUi>>) {
+    for mut visibility in &mut game_ui {
+        visibility.set_if_neq(Visibility::Inherited);
+    }
+}
+
+/// A team's color in the lobby.
+pub(crate) fn team_color(team: u8) -> Color {
+    match team {
+        RED => palette::ENEMY,
+        BLUE => palette::FROST_BLUE,
+        _ => palette::STONE,
+    }
+}
+
+/// A card in the side panel: a block of its own, dark, with room around its content.
+pub(crate) fn card() -> impl Bundle {
+    (
+        Node { flex_direction: FlexDirection::Column, row_gap: px(GAP), padding: UiRect::all(px(GAP * 2.0)), ..default() },
+        BackgroundColor(palette::INK.with_alpha(0.88)),
+    )
+}
+
+/// A small caps label over a part of a card.
+pub(crate) fn label(text: &str) -> impl Bundle {
+    ui_text(text.to_uppercase(), 11.0, palette::STONE)
+}
+
+/// The room column, two cards. The room: name, mode, whether it's on, and for the leader the mode
+/// switch. Who's in it: in free-for-all a list; in red vs blue the two teams side by side, blue on
+/// the left, red on the right, each with its way to switch to it. Then the way out. Rebuilt when
+/// the room changes, or we come to it.
+///
+/// Names are all in one neutral color, so a team's color stays the team's: the column, its header
+/// and each member's stripe carry it, and we're marked by a tinted row and a "YOU" tag instead.
+fn show_room(
+    mut commands: Commands,
+    room: Res<CurrentRoom>,
+    screen: Res<State<Screen>>,
+    me: Option<Res<Me>>,
+    panel: Single<(Entity, Ref<SidePanel>, &mut Visibility)>,
+) {
+    let (panel, fresh, mut visibility) = panel.into_inner();
+    if !room.is_changed() && !fresh.is_added() && !screen.is_changed() {
+        return;
+    }
+    let Some(view) = &room.0 else { return };
+    visibility.set_if_neq(Visibility::Inherited);
+    let my_id = me.as_ref().map_or(0, |me| me.guest_id);
+    let leading = view.leader == my_id;
+    commands.entity(panel).despawn_children().with_children(|panel| {
+        panel.spawn(card()).with_children(|card| {
+            card.spawn(label("Lobby"));
+            card.spawn(ui_text(view.name.clone(), 24.0, palette::HAZE));
+            card.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Center, ..default() }).with_children(|row| {
+                let (state, color) = if view.started { ("LIVE", ACCENT) } else { ("WAITING", palette::STONE) };
+                row.spawn(key_chip(state, 10.0, color, color));
+                let line = if view.started { "Match in progress" } else if leading { "Start when you're ready" } else { "Waiting for the leader" };
+                row.spawn(ui_text(line, 12.0, palette::STONE));
+            });
+            if leading && !view.started {
+                card.spawn(Node { height: px(GAP * 0.5), ..default() });
+                card.spawn(label("Mode"));
+                card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
+                    for mode in [Mode::Ffa, Mode::Teams] {
+                        let on = view.mode == mode;
+                        let fill = if on { palette::PINE } else { palette::HUNTER_DARK.with_alpha(0.8) };
+                        let edge = if on { ACCENT } else { palette::STONE.with_alpha(0.3) };
+                        let text = if on { palette::HAZE } else { palette::STONE };
+                        let mut switch = row.spawn((RoomButton(RoomRequest::SetMode(mode)), button(mode.label(), 12.0, fill, text, edge)));
+                        switch.entry::<Node>().and_modify(|mut node| node.flex_grow = 1.0);
+                    }
+                });
+            } else {
+                card.spawn(ui_text(view.mode.label(), 13.0, palette::HAZE));
+            }
+        });
+
+        panel.spawn(card()).with_children(|card| match view.mode {
+            Mode::Ffa => {
+                card.spawn(label(&format!("Fighters  {}/{}", view.members.len(), view.mode.capacity())));
+                for member in &view.members {
+                    member_row(card, view, member, my_id);
+                }
+            }
+            Mode::Teams => {
+                let my_team = view.member(my_id).map_or(NO_TEAM, |m| m.team);
+                card.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Stretch, ..default() }).with_children(|sides| {
+                    // Blue on the left, red on the right.
+                    for team in [BLUE, RED] {
+                        team_column(sides, view, team, my_team, my_id);
+                    }
+                });
+            }
+        });
+
+        let leave = button("Leave lobby", 12.0, palette::INK.with_alpha(0.88), palette::STONE, palette::STONE.with_alpha(0.3));
+        panel.spawn((RoomButton(RoomRequest::Leave), leave));
+    });
+}
+
+/// A team's side: its colored header and count, its members, and (unless we're on it, or it's
+/// full) the way onto it.
+fn team_column(sides: &mut ChildSpawnerCommands, view: &RoomView, team: u8, my_team: u8, my_id: u32) {
+    let color = team_color(team);
+    let column = Node {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        flex_basis: px(0.0),
+        row_gap: px(GAP * 0.75),
+        padding: UiRect::all(px(GAP)),
+        border: UiRect::top(px(3.0)),
+        ..default()
+    };
+    sides.spawn((column, BorderColor::all(color), BackgroundColor(color.with_alpha(0.07)))).with_children(|column| {
+        column.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|header| {
+            header.spawn(ui_text(team_name(team).to_uppercase(), 13.0, color));
+            header.spawn(ui_text(format!("{}/{MAX_PER_TEAM}", view.on_team(team)), 12.0, palette::STONE));
+        });
+        let mut members = view.members.iter().filter(|m| m.team == team).peekable();
+        if members.peek().is_none() {
+            column.spawn(ui_text("Empty", 12.0, palette::STONE.with_alpha(0.6)));
+        }
+        for member in members {
+            member_row(column, view, member, my_id);
+        }
+        // Pushed to the bottom, so both sides' buttons line up.
+        column.spawn(Node { flex_grow: 1.0, ..default() });
+        if team != my_team && view.on_team(team) < MAX_PER_TEAM {
+            let join = button(format!("Join {}", team_name(team)), 11.0, color.with_alpha(0.15), color, color.with_alpha(0.6));
+            column.spawn((RoomButton(RoomRequest::SetTeam(team)), join));
+        } else if team == my_team {
+            column.spawn(Node { justify_content: JustifyContent::Center, padding: UiRect::vertical(px(5.0)), ..default() })
+                .with_child(ui_text("Your team", 11.0, color.with_alpha(0.8)));
+        }
+    });
+}
+
+/// A member: their name (and tags: leader, you) over their fighter and whether they're in the
+/// arena, with a stripe in their team's color. Our own row is tinted.
+fn member_row(column: &mut ChildSpawnerCommands, view: &RoomView, member: &Member, my_id: u32) {
+    let is_me = member.guest_id == my_id;
+    let row = Node {
+        flex_direction: FlexDirection::Column,
+        row_gap: px(2.0),
+        padding: UiRect::new(px(GAP), px(GAP * 0.5), px(GAP * 0.5), px(GAP * 0.5)),
+        border: UiRect::left(px(2.0)),
+        ..default()
+    };
+    let tint = if is_me { ACCENT.with_alpha(0.14) } else { palette::HUNTER_DARK.with_alpha(0.5) };
+    column.spawn((row, BorderColor::all(team_color(member.team)), BackgroundColor(tint))).with_children(|row| {
+        row.spawn(Node { column_gap: px(GAP * 0.75), align_items: AlignItems::Center, ..default() }).with_children(|line| {
+            line.spawn(ui_text(member.name.clone(), 13.0, palette::HAZE));
+            if member.guest_id == view.leader {
+                line.spawn(ui_text("LEADER", 9.0, palette::TORCH_FLAME));
+            }
+            if is_me {
+                line.spawn(ui_text("YOU", 9.0, ACCENT));
+            }
+        });
+        let fighter = member.class.map_or("Picking...".to_string(), |c| c.def().name.clone());
+        row.spawn(Node { column_gap: px(GAP * 0.75), ..default() }).with_children(|line| {
+            line.spawn(ui_text(fighter, 11.0, palette::STONE));
+            if member.in_arena {
+                line.spawn(ui_text("in arena", 11.0, ACCENT));
+            }
+        });
+    });
+}
+
+/// The room column's buttons ask the server.
+fn room_buttons(buttons: Query<(Ref<Interaction>, &RoomButton)>, mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>) {
+    for (interaction, button) in &buttons {
+        if clicked(interaction) {
+            request(&mut sender, button.0.clone());
+        }
+    }
+}
+
+/// The connection if it's in trouble, else what the server last told us.
 fn show_status(
     client: Query<(Has<Connected>, Has<Disconnected>), With<Client>>,
-    players: Query<(), With<PlayerId>>,
+    notice: Res<Notice>,
     mut status: Single<&mut Text, With<Status>>,
 ) {
     let Ok((connected, disconnected)) = client.single() else { return };
     let text = match (connected, disconnected) {
-        (true, _) => match players.iter().count() {
-            0 => "Online. The arena is empty".to_string(),
-            1 => "Online. 1 fighter in the arena".to_string(),
-            n => format!("Online. {n} fighters in the arena"),
-        },
+        (true, _) => notice.0.clone().unwrap_or_default(),
         (false, true) => "Can't reach the server. Reload to try again".to_string(),
         (false, false) => "Connecting...".to_string(),
     };
@@ -435,32 +644,72 @@ fn show_status(
     }
 }
 
-/// The button or Enter: join as the selected fighter, close the lobby, show the game's UI, and
-/// hand the camera back (it centers on our fighter once it appears).
+/// What the way in does: at home, practice; in a room, into the arena once the match is on, the
+/// start for the leader, or nothing while waiting for the leader.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WayIn {
+    Practice,
+    Enter,
+    Start,
+    Wait,
+}
+
+fn way_in(screen: Screen, view: Option<&RoomView>, me: Option<&Me>) -> WayIn {
+    match view {
+        _ if screen == Screen::Home => WayIn::Practice,
+        Some(view) if view.started => WayIn::Enter,
+        Some(view) if me.is_some_and(|me| me.guest_id == view.leader) => WayIn::Start,
+        _ => WayIn::Wait,
+    }
+}
+
+/// The button or Enter: at home, practice as the selected fighter; in a room, the leader starts
+/// the match (everyone goes in as what they picked), and once it's on, in we go. We're taken to
+/// the arena when our fighter appears. "Create / join lobby" is there at home only.
+#[allow(clippy::too_many_arguments)]
 fn enter_arena(
-    mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
+    typing: Res<Typing>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
-    lobby: Res<Lobby>,
-    mut chosen: ResMut<ChosenClass>,
-    button: Single<(&Interaction, &mut BackgroundColor), With<EnterButton>>,
-    parts: Query<Entity, With<LobbyPart>>,
-    mut game_ui: Query<&mut Visibility, With<GameUi>>,
+    screen: Res<State<Screen>>,
+    room: Res<CurrentRoom>,
+    me: Option<Res<Me>>,
+    mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
+    button: Single<(Ref<Interaction>, &mut BackgroundColor), With<EnterButton>>,
+    mut label: Single<&mut Text, With<EnterLabel>>,
+    mut hint: Single<&mut Visibility, (With<EnterHint>, Without<LobbiesButton>)>,
+    mut lobbies: Single<&mut Visibility, (With<LobbiesButton>, Without<EnterHint>)>,
 ) {
+    let way = way_in(*screen.get(), room.0.as_ref(), me.as_deref());
+    // Its look is `browser.rs`'s, where it opens the lobbies.
+    lobbies.set_if_neq(shown(way == WayIn::Practice));
+    let text = match way {
+        WayIn::Practice => "PRACTICE",
+        WayIn::Enter => "ENTER THE ARENA",
+        WayIn::Start => "START THE MATCH",
+        WayIn::Wait => "WAITING FOR THE LEADER",
+    };
+    if label.0 != text {
+        label.0 = text.to_string();
+    }
+    hint.set_if_neq(shown(way != WayIn::Wait));
     let (interaction, mut background) = button.into_inner();
-    background.set_if_neq(BackgroundColor(if *interaction == Interaction::None { ACCENT } else { ACCENT.lighter(0.08) }));
-    if *interaction != Interaction::Pressed && !keys.just_pressed(KeyCode::Enter) {
+    let fill = match (way, *interaction) {
+        (WayIn::Wait, _) => palette::STONE.with_alpha(0.5),
+        (_, Interaction::None) => ACCENT,
+        _ => ACCENT.lighter(0.08),
+    };
+    background.set_if_neq(BackgroundColor(fill));
+    if !clicked(interaction) && !(keys.just_pressed(KeyCode::Enter) && !typing.0) {
         return;
     }
-    chosen.0 = Some(lobby.selected);
     // The button goes in on the press: forget the held button, or our fighter could spawn while
     // it's still down and take the click for an attack.
     mouse.reset(MouseButton::Left);
-    commands.remove_resource::<Lobby>();
-    for part in &parts {
-        commands.entity(part).despawn();
-    }
-    for mut visibility in &mut game_ui {
-        visibility.set_if_neq(Visibility::Inherited);
+    match way {
+        WayIn::Practice => request(&mut sender, RoomRequest::Practice),
+        WayIn::Enter => request(&mut sender, RoomRequest::EnterArena),
+        WayIn::Start => request(&mut sender, RoomRequest::Start),
+        WayIn::Wait => {}
     }
 }

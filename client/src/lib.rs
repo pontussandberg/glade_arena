@@ -1,5 +1,5 @@
-//! Game client: connects to the server, picks a class, sends inputs, and predicts its own player,
-//! projectiles and swings.
+//! Game client: connects to the server, joins a room (`rooms.rs`), picks a class, sends inputs,
+//! and predicts its own player, projectiles and swings.
 //!
 //! The networking part (`ClientNetPlugin`) has no rendering, so integration tests can run it
 //! headless as a bot. `render` adds the window, 3D scene and keyboard/mouse input on top.
@@ -23,7 +23,11 @@ use lightyear::prelude::*;
 pub mod action_bar;
 pub mod bot;
 #[cfg(feature = "render")]
+pub mod browser;
+#[cfg(feature = "render")]
 pub mod camera;
+#[cfg(feature = "render")]
+pub mod esc_menu;
 #[cfg(feature = "render")]
 pub mod feedback;
 #[cfg(feature = "render")]
@@ -38,6 +42,7 @@ pub mod pickups;
 pub mod render;
 #[cfg(feature = "render")]
 pub mod rig;
+pub mod rooms;
 #[cfg(feature = "render")]
 pub mod stat_frame;
 
@@ -56,8 +61,12 @@ pub struct ClientSettings {
     pub server_url: Option<String>,
     /// Simulated latency/jitter/loss on received packets, for testing bad networks.
     pub conditioner: Option<LinkConditionerConfig>,
-    /// Class to join as. `None` waits for the lobby (or a bot) to set `ChosenClass`.
+    /// Class to join as. `None` waits for the room's lobby (or a bot) to set `ChosenClass`.
     pub class: Option<ClassId>,
+    /// A room to join (or make and start) right away, skipping the browser.
+    pub quick_join: Option<String>,
+    /// The guest name we had last time, to ask for again.
+    pub guest_name: Option<String>,
 }
 
 /// Systems that turn a human's mouse and keyboard into `DesiredInput`. The bot switches this set
@@ -65,7 +74,7 @@ pub struct ClientSettings {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PlayerControls;
 
-/// The class this client will join as. Sent to the server once per connection.
+/// The class this client enters the arena as. Sent to the server whenever it's picked in a room.
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct ChosenClass(pub Option<ClassId>);
 
@@ -93,6 +102,10 @@ pub struct ClientNetPlugin {
 impl Plugin for ClientNetPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(ProtocolPlugin);
+        app.add_plugins(rooms::RoomsNetPlugin {
+            quick_join: self.settings.quick_join.clone(),
+            guest_name: self.settings.guest_name.clone(),
+        });
         app.init_resource::<DesiredInput>();
         app.insert_resource(ChosenClass(self.settings.class));
         // Apply our own inputs immediately and cover the round trip with prediction.
@@ -107,7 +120,6 @@ impl Plugin for ClientNetPlugin {
         });
 
         app.add_observer(mark_controlled_player);
-        app.add_systems(Update, send_class_choice);
         // Not during rollback replays: lightyear replays the inputs it buffered then, and
         // `write_input` would use up a Q press that hasn't been sent yet.
         app.add_systems(
@@ -145,20 +157,6 @@ fn spawn_client_entity(world: &mut World, settings: &ClientSettings) {
         netcode,
         WebTransportClientIo { certificate_digest: settings.cert_digest.clone(), target: settings.server_url.clone() },
     ));
-}
-
-/// Joining: tell the server our class when we connect (again after a reconnect) or when it's
-/// picked, whichever comes last. The server spawns our player and ignores repeats.
-fn send_class_choice(
-    chosen: Res<ChosenClass>,
-    client: Single<(&mut MessageSender<ChooseClass>, Ref<Connected>), With<Client>>,
-) {
-    let (mut sender, connected) = client.into_inner();
-    if let Some(class) = chosen.0
-        && (chosen.is_changed() || connected.is_added())
-    {
-        sender.send::<Reliable>(ChooseClass(class));
-    }
 }
 
 /// The server marks our own player as `Controlled`; that's the one we write inputs to.

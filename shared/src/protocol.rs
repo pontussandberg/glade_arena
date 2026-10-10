@@ -9,11 +9,23 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::classes::ClassId;
 use crate::classes::Chill;
+use crate::rooms::{LeaveReason, Mode, NO_TEAM, RoomKey, RoomSummary, RoomView};
 
 /// Marks a player entity and says which client controls it. Projectiles don't carry it (their
 /// owner is `Projectile::owner`), so `With<PlayerId>` always means "a player".
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct PlayerId(pub PeerId);
+
+/// Which side a player fights on: `rooms::RED` or `rooms::BLUE`, or `rooms::NO_TEAM` in
+/// free-for-all. Allies can't hurt each other.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub struct Team(pub u8);
+
+impl Team {
+    pub fn allied(self, other: Team) -> bool {
+        self.0 != NO_TEAM && self.0 == other.0
+    }
+}
 
 /// Position on the 2D gameplay plane (the client renders it in 3D, see `render.rs`).
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect, Deref, DerefMut)]
@@ -295,10 +307,55 @@ impl MapEntities for PlayerInput {
     fn map_entities<M: EntityMapper>(&mut self, _entity_mapper: &mut M) {}
 }
 
-/// Sent once after connecting: the class picked on the join screen. The server spawns the
-/// player when it arrives.
+/// The class picked in the room's lobby. Once the match has started, the server spawns our
+/// fighter as this class when it arrives (or at the start, the last one picked before it).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct ChooseClass(pub ClassId);
+
+/// First thing after connecting: who we were last time (kept by the browser), to be called that
+/// again if the name is free. The server answers `LobbyEvent::Welcome`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Hello {
+    pub guest_name: Option<String>,
+}
+
+/// Asks about rooms, from the browser or a room's lobby. The server answers with
+/// `LobbyEvent::Room`, or `LobbyEvent::Refused` saying why not.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum RoomRequest {
+    /// Make a room and lead it.
+    Create { name: String, mode: Mode },
+    Join(RoomKey),
+    /// Join the room called this, or make it and start it right away: for bots and tests.
+    QuickJoin(String),
+    /// A room of our own, never listed, straight into its arena.
+    Practice,
+    Leave,
+    /// Into the room's arena, once its match is on, as our picked class.
+    EnterArena,
+    /// Out of the arena, back to the room's lobby (still in the room).
+    LeaveArena,
+    /// Leader only, before the start.
+    SetMode(Mode),
+    SetTeam(u8),
+    /// Leader only.
+    Start,
+}
+
+/// What the server tells a client about guests and rooms.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum LobbyEvent {
+    /// Who we are, for as long as we're connected.
+    Welcome { guest_id: u32, name: String },
+    /// Every room, while we're in the browser: on arrival and whenever it changes.
+    RoomList(Vec<RoomSummary>),
+    /// The room we're in, whenever anything in it changes.
+    Room(RoomView),
+    /// We're out of our room, back to the browser.
+    Left(LeaveReason),
+    /// A request that couldn't be done.
+    Refused(String),
+}
 
 /// Reliable, ordered channel for the few messages we send.
 pub struct Reliable;
@@ -317,11 +374,15 @@ impl Plugin for ProtocolPlugin {
             mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
             ..default()
         })
-        .add_direction(NetworkDirection::ClientToServer);
+        .add_direction(NetworkDirection::Bidirectional);
         app.register_message::<ChooseClass>().add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<Hello>().add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<RoomRequest>().add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<LobbyEvent>().add_direction(NetworkDirection::ServerToClient);
 
         app.component::<PlayerId>().replicate();
         app.component::<ClassId>().replicate();
+        app.component::<Team>().replicate();
         app.component::<Health>().replicate();
         app.component::<Chilled>().replicate();
         app.component::<RecentHits>().replicate();

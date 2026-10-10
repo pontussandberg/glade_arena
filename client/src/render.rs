@@ -1,6 +1,7 @@
 //! Fighters, projectiles, melee swings, dash streaks, nova bursts and windup telegraphs, frost on
 //! slowed and frozen fighters, the destination marker and the HUD, plus mouse and keyboard input.
-//! The scene itself is in `glade.rs`, the camera in `camera.rs`, the lobby in `lobby.rs`.
+//! The scene itself is in `glade.rs`, the camera in `camera.rs`, the server browser in
+//! `browser.rs`, a room's lobby in `lobby.rs` and the ESC menu in `esc_menu.rs`.
 
 use std::fmt::Write;
 
@@ -26,7 +27,9 @@ impl Plugin for RenderPlugin {
         app.add_plugins((
             glade::GladePlugin,
             crate::camera::CameraPlugin,
+            crate::browser::BrowserPlugin,
             crate::lobby::LobbyPlugin,
+            crate::esc_menu::EscMenuPlugin,
             crate::feedback::FeedbackPlugin,
             crate::rig::RigPlugin,
             crate::action_bar::ActionBarPlugin,
@@ -45,6 +48,7 @@ impl Plugin for RenderPlugin {
                 (show_telegraphs, align_to_world).chain().after(crate::rig::Posing),
                 toggle_range_circle,
                 (update_status, update_key_hints),
+                (mark_relations, light_buttons),
             ),
         );
     }
@@ -94,20 +98,24 @@ const RUNE_TURN_RATE: f32 = 0.8;
 /// How wide (meters) the circle at the edge of your shots' range is.
 const RANGE_CIRCLE_WIDTH: f32 = 0.05;
 
-/// Who a fighter is to you. Only its health bar and minimap dot show it; its body, shots, swings
-/// and telegraph look the same whoever's they are.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+/// Who a fighter is to you (kept up to date on each fighter by `mark_relations`). Only its health
+/// bar and minimap dot show it; its body, shots, swings and telegraph look the same whoever's
+/// they are.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Relation {
     You,
-    #[expect(dead_code, reason = "no teams yet")]
     Ally,
     Enemy,
 }
 
 impl Relation {
-    /// Everyone else is an enemy until there are teams.
-    pub(crate) fn of(is_me: bool) -> Self {
-        if is_me { Self::You } else { Self::Enemy }
+    /// Whether it's us, and else whether it's on our team.
+    pub(crate) fn of(is_me: bool, allied: bool) -> Self {
+        match (is_me, allied) {
+            (true, _) => Self::You,
+            (false, true) => Self::Ally,
+            (false, false) => Self::Enemy,
+        }
     }
 
     pub(crate) fn color(self) -> Color {
@@ -880,6 +888,66 @@ pub(crate) fn key_chip(text: impl Into<String>, size: f32, color: Color, border:
         BorderColor::all(border),
         children![ui_text(text, size, color)],
     )
+}
+
+/// A button's color when nothing's on it; `light_buttons` brightens it under the mouse.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ButtonFill(pub Color);
+
+/// A button reading `label` (in `text_color`) on `fill`, with a thin `border`.
+pub(crate) fn button(label: impl Into<String>, size: f32, fill: Color, text_color: Color, border: Color) -> impl Bundle {
+    (
+        Button,
+        ButtonFill(fill),
+        Node {
+            padding: UiRect::axes(px(size * 1.2), px(size * 0.6)),
+            border: UiRect::all(px(1.0)),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(fill),
+        BorderColor::all(border),
+        children![ui_text(label, size, text_color)],
+    )
+}
+
+/// What makes a node a button that lights up like `button`'s, on `fill`, for one laid out by hand.
+pub(crate) fn button_fill(fill: Color) -> impl Bundle {
+    (Button, ButtonFill(fill), BackgroundColor(fill))
+}
+
+/// Buttons brighten under the mouse, and more while pressed.
+fn light_buttons(mut buttons: Query<(&Interaction, &ButtonFill, &mut BackgroundColor), Changed<Interaction>>) {
+    for (interaction, fill, mut background) in &mut buttons {
+        let color = match interaction {
+            Interaction::None => fill.0,
+            Interaction::Hovered => fill.0.lighter(0.08),
+            Interaction::Pressed => fill.0.lighter(0.16),
+        };
+        background.set_if_neq(BackgroundColor(color));
+    }
+}
+
+/// Whether a button was clicked this frame.
+pub(crate) fn clicked(interaction: Ref<Interaction>) -> bool {
+    interaction.is_changed() && *interaction == Interaction::Pressed
+}
+
+/// Who each fighter is to us, as `Relation`: ours, on our team, or not.
+fn mark_relations(
+    mut commands: Commands,
+    me: Query<&Team, (With<Predicted>, With<PlayerId>)>,
+    players: Query<(Entity, Has<Predicted>, Option<&Team>, Option<&Relation>), With<PlayerId>>,
+) {
+    let my_team = me.single().ok().copied();
+    for (player, is_me, team, relation) in &players {
+        let allied = my_team.zip(team).is_some_and(|(mine, theirs)| mine.allied(*theirs));
+        let now = Relation::of(is_me, allied);
+        if relation != Some(&now) {
+            commands.entity(player).insert(now);
+        }
+    }
 }
 
 /// Visible (if its parent is) or hidden.

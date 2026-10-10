@@ -22,7 +22,7 @@ impl Plugin for FeedbackPlugin {
         app.add_systems(
             Update,
             (
-                spawn_bars,
+                (spawn_bars, color_bars).chain(),
                 place_bars.in_set(CameraPlaced),
                 flash_on_hit,
                 end_flashes,
@@ -102,7 +102,7 @@ fn spawn_bars(mut commands: Commands, new: Query<(Entity, Has<Predicted>), (With
         )
     };
     for (player, is_me) in &new {
-        let health_fill = commands.spawn(fill(Relation::of(is_me).color())).id();
+        let health_fill = commands.spawn(fill(Relation::of(is_me, false).color())).id();
         // Pale, so it never reads as a (colored) health bar.
         let cast_fill = commands.spawn(fill(palette::SUN)).id();
         // Absolute inside the health bar's border, so shift left by it to line the two up.
@@ -120,6 +120,24 @@ fn spawn_bars(mut commands: Commands, new: Query<(Entity, Has<Predicted>), (With
                 Visibility::Hidden,
             ))
             .add_children(&[health_fill, cast]);
+    }
+}
+
+/// A health bar is in its fighter's `Relation` color: ours, an ally's or an enemy's.
+fn color_bars(
+    players: Query<&Relation>,
+    changed: Query<(), Changed<Relation>>,
+    new: Query<(), Added<Bars>>,
+    bars: Query<(Entity, &Bars)>,
+    mut fills: Query<&mut BackgroundColor>,
+) {
+    for (bar, ids) in &bars {
+        if !(changed.contains(ids.player) || new.contains(bar)) {
+            continue;
+        }
+        if let (Ok(relation), Ok(mut fill)) = (players.get(ids.player), fills.get_mut(ids.health_fill)) {
+            fill.set_if_neq(BackgroundColor(relation.color()));
+        }
     }
 }
 
