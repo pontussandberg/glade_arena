@@ -1,7 +1,7 @@
 //! A fighter's stat frame: health, move speed, crit chance (hover it for what a crit does), and
 //! the auto-attack's damage, speed and range, in one panel.
 //! The lobby shows it for the selected fighter; in the arena it sits in the bottom-left corner
-//! for your own, its health live.
+//! for your own, its health live with a bar under it.
 //!
 //! Also the words for a class's passive and Q, which the lobby lists and the action bar shows
 //! as tooltips.
@@ -58,12 +58,14 @@ fn spawn_corner(mut commands: Commands) {
 pub struct HealthParts {
     pub frame: Entity,
     pub text: Entity,
+    /// The health bar's fill: in the arena only (a placeholder in the lobby).
     pub fill: Entity,
 }
 
-/// A stat frame for `class`, under `parent`: with its name and role on top when `named` (the
-/// lobby shows those bigger itself), its health full.
-pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, named: bool) -> HealthParts {
+/// A stat frame for `class`, under `parent`, its health full. In the `arena`, with its name and
+/// role on top (the lobby shows those bigger itself) and a bar under its health (in the lobby it
+/// would only ever be full).
+pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, arena: bool) -> HealthParts {
     let def = class.def();
     let mut parts = HealthParts { frame: Entity::PLACEHOLDER, text: Entity::PLACEHOLDER, fill: Entity::PLACEHOLDER };
     parts.frame = parent
@@ -80,7 +82,7 @@ pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, named: boo
             BorderColor::all(palette::STONE.with_alpha(0.3)),
         ))
         .with_children(|frame| {
-            if named {
+            if arena {
                 frame
                     .spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Baseline, ..default() })
                     .with_children(|row| {
@@ -95,13 +97,15 @@ pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, named: boo
                         row.spawn(ui_text("HEALTH", 11.0, palette::STONE));
                         parts.text = row.spawn(ui_text(def.max_hp.to_string(), 11.0, palette::HAZE)).id();
                     });
-                    health
-                        .spawn((Node { height: px(6.0), ..default() }, BackgroundColor(palette::HAZE.with_alpha(0.12))))
-                        .with_children(|bar| {
-                            parts.fill = bar
-                                .spawn((Node { width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(ACCENT)))
-                                .id();
-                        });
+                    if arena {
+                        health
+                            .spawn((Node { height: px(6.0), ..default() }, BackgroundColor(palette::HAZE.with_alpha(0.12))))
+                            .with_children(|bar| {
+                                parts.fill = bar
+                                    .spawn((Node { width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(ACCENT)))
+                                    .id();
+                            });
+                    }
                 });
             for (label, value, tip) in stats(def) {
                 let name = frame
