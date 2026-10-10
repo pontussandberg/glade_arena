@@ -65,11 +65,13 @@ impl Plugin for LobbyPlugin {
 
 /// Where the stage is, on the gameplay plane: far off the map, out of sight of the arena.
 const STAGE: Vec2 = Vec2::new(0.0, -300.0);
-/// The stage camera: how high it looks at the fighter, how far it stays, which way it looks
-/// from (a three-quarter view of the front), how far and fast it sways on its own, and how fast
-/// dragging turns it (radians per pixel).
+/// The stage camera: how high it looks at the fighter, how far back it stands (along the
+/// ground) and how far above that point it is, which way it looks from (a three-quarter view of
+/// the front), how far and fast it sways on its own, and how fast dragging turns it (radians per
+/// pixel).
 const STAGE_AIM_HEIGHT: f32 = 1.2;
-const STAGE_DISTANCE: f32 = 4.4;
+const STAGE_BACK: f32 = 8.36;
+const STAGE_RISE: f32 = 2.4;
 const FRONT: f32 = FRAC_PI_2 - 0.4;
 const SWAY: (f32, f32) = (0.25, 0.35);
 const STAGE_DRAG: f32 = 0.008;
@@ -135,7 +137,7 @@ fn open_lobby(
 ) {
     // The fighter we last went in as.
     let selected = chosen.0.unwrap_or_else(|| ClassId::all().next().expect("at least one class"));
-    let view = Orbit { yaw: FRONT, pitch: 0.1, distance: STAGE_DISTANCE };
+    let view = Orbit { yaw: FRONT, pitch: STAGE_RISE.atan2(STAGE_BACK), distance: STAGE_BACK.hypot(STAGE_RISE) };
     commands.insert_resource(Lobby { selected, shown: None, view, facing: FRONT });
     spawn_stage(&mut commands, &mut meshes, &mut materials);
     spawn_screen(&mut commands, me.as_ref().map_or("", |me| &me.name));
@@ -148,16 +150,26 @@ fn close_lobby(mut commands: Commands, parts: Query<Entity, With<LobbyPart>>) {
     }
 }
 
-/// The stage: a low stone dais in a mossy hollow (a glowing backdrop, a rolling floor, trunks,
+/// The stage: a low stone dais in a hollow at dusk (a glowing backdrop, a rolling floor, trunks,
 /// stones and grass), a flickering warm key light, a cold rim light and fireflies drifting about.
 fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
     let center = to_world(STAGE, 0.0);
+    // The sun went down behind the fighter (as first seen), a little to one side.
+    let sunset = Quat::from_rotation_y(FRONT + std::f32::consts::PI + 0.35) * Vec3::Z;
     let ground = center - Vec3::Y * FLOOR_DROP;
     let sky = StandardMaterial { base_color: Color::WHITE, unlit: true, cull_mode: None, ..default() };
     commands.spawn((
         LobbyPart,
-        Mesh3d(meshes.add(glade::hollow_sky_mesh(24.0))),
+        Mesh3d(meshes.add(glade::hollow_sky_mesh(24.0, sunset))),
         MeshMaterial3d(materials.add(sky)),
+        Transform::from_translation(center),
+        NotShadowCaster,
+    ));
+    let clouds = StandardMaterial { base_color: Color::WHITE, alpha_mode: AlphaMode::Blend, unlit: true, cull_mode: None, ..default() };
+    commands.spawn((
+        LobbyPart,
+        Mesh3d(meshes.add(glade::sunset_clouds_mesh(22.5, sunset))),
+        MeshMaterial3d(materials.add(clouds)),
         Transform::from_translation(center),
         NotShadowCaster,
     ));

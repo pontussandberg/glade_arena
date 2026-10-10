@@ -111,6 +111,28 @@ pub mod palette {
         /// The one accent: the role, what's selected, the main button.
         pub const SPROUT: Color = Color::srgb_u8(0xD4, 0xDE, 0x95);
     }
+
+    /// The lobby stage's warm dusk, behind the green UI (an autumn hollow, so the olive panels
+    /// stand out from it instead of melting into it).
+    pub mod stage {
+        use bevy::color::Color;
+
+        /// The deep warm dark of the sky overhead and the floor's far edge.
+        pub const NIGHT: Color = Color::srgb_u8(0x24, 0x14, 0x0E);
+        /// The backdrop, just after sunset: deep indigo overhead, a cool teal lower down
+        /// (against the warm floor), and an amber afterglow along the horizon, brightest where
+        /// the sun went down.
+        pub const VOID: Color = Color::srgb_u8(0x08, 0x09, 0x14);
+        pub const TWILIGHT: Color = Color::srgb_u8(0x0E, 0x1D, 0x22);
+        pub const DUSK: Color = Color::srgb_u8(0x8A, 0x4C, 0x24);
+        /// The floor where the light falls on it, and the ground further out.
+        pub const OCHRE: Color = Color::srgb_u8(0x7A, 0x52, 0x26);
+        pub const RUST: Color = Color::srgb_u8(0x4A, 0x2A, 0x18);
+        /// Trunks and roots.
+        pub const UMBER: Color = Color::srgb_u8(0x3B, 0x23, 0x16);
+        /// Dry grass and moss in the light.
+        pub const GOLD: Color = Color::srgb_u8(0xB8, 0x8A, 0x2E);
+    }
 }
 
 use palette::*;
@@ -1048,6 +1070,14 @@ impl FlatMesh {
         }
     }
 
+    /// A triangle with its own color (and opacity) at each corner, blended across it.
+    fn tri_shaded(&mut self, corners: [Vec3; 3], colors: [[f32; 4]; 3]) {
+        for (p, color) in corners.into_iter().zip(colors) {
+            self.positions.push(p.to_array());
+            self.colors.push(color);
+        }
+    }
+
     /// A quad from four corners in order (counter-clockwise seen from its front).
     fn quad(&mut self, [a, b, c, d]: [Vec3; 4], color: Color) {
         self.tri([a, b, c], color);
@@ -1062,13 +1092,13 @@ impl FlatMesh {
     }
 }
 
-/// The lobby's backdrop: a sphere of `radius` around the stage, lit from within by a soft olive
-/// glow along the horizon that fades into shadow above and below, mottled so it doesn't read as
+/// The lobby's backdrop: a sphere of `radius` around the stage, lit from within by an afterglow
+/// (brightest toward `sunset`, a direction on the ground) along the horizon that fades into shadow above and below, mottled so it doesn't read as
 /// one flat color. Vertex-colored: draw it unlit, on white, from the inside.
-pub fn hollow_sky_mesh(radius: f32) -> Mesh {
+pub fn hollow_sky_mesh(radius: f32, sunset: Vec3) -> Mesh {
     let mut mesh = Sphere::new(radius).mesh().ico(5).unwrap();
     let positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION).and_then(|p| p.as_float3()).expect("a sphere has positions");
-    let (deep, glow) = (ui::SHADOW.darker(0.06).to_linear(), ui::OLIVE.darker(0.12).to_linear());
+    let (deep, mid, glow) = (stage::VOID.to_linear(), stage::TWILIGHT.to_linear(), stage::DUSK.to_linear());
     let colors: Vec<[f32; 4]> = positions
         .iter()
         .map(|p| {
@@ -1078,10 +1108,15 @@ pub fn hollow_sky_mesh(radius: f32) -> Mesh {
             let band = (-above * above).exp();
             // Slow, overlapping waves around the sphere: clouds of mist, without a texture.
             let mist = 0.5 + 0.25 * (d.x * 4.1 + d.z * 2.3 + d.y * 3.0).sin() + 0.25 * (d.z * 6.7 - d.x * 3.1 + d.y * 5.0).sin();
-            let lit = band * (0.45 + 0.55 * mist);
+            // The afterglow, strong toward the sunset, fading to a trace on the far side.
+            let toward = (Vec3::new(d.x, 0.0, d.z).normalize_or_zero().dot(sunset) + 1.0) * 0.5;
+            let lit = band * (0.45 + 0.55 * mist) * (0.2 + 0.8 * toward.powf(2.5));
+            // Twilight slate low in the sky, darkening toward the top, mottled all over.
+            let high = ((d.y - 0.1) / 0.6).clamp(0.0, 1.0);
+            let sky = mid.mix(&deep, high * high * (3.0 - 2.0 * high)) * (0.8 + 0.4 * mist);
             // Darker straight down, so the floor's edge sinks into it.
             let floor = (-d.y).max(0.0);
-            let c = deep.mix(&glow, lit) * (1.0 - 0.5 * floor);
+            let c = sky.mix(&glow, lit) * (1.0 - 0.5 * floor);
             [c.red, c.green, c.blue, 1.0]
         })
         .collect();
@@ -1089,7 +1124,7 @@ pub fn hollow_sky_mesh(radius: f32) -> Mesh {
     mesh
 }
 
-/// The lobby's floor: a low-poly disc of `radius`, mossy and lit at the middle, darkening into
+/// The lobby's floor: a low-poly disc of `radius`, ochre and lit at the middle, darkening into
 /// the backdrop at its edge, its facets nudged up and down so the lights catch them.
 pub fn hollow_floor_mesh(radius: f32) -> Mesh {
     const RINGS: usize = 14;
@@ -1112,10 +1147,10 @@ pub fn hollow_floor_mesh(radius: f32) -> Mesh {
                 .collect(),
         );
     }
-    let (moss, olive, deep) = (ui::HOLLOW, ui::OLIVE.darker(0.08), ui::SHADOW.darker(0.12));
+    let (ground, lit, deep) = (stage::RUST, stage::OCHRE, stage::NIGHT);
     let color = |at: Vec3, rng: &mut Lcg| {
         let out = (at.length() / radius).min(1.0);
-        let base = olive.mix(&moss, (out * 2.2).min(1.0)).mix(&deep, ((out - 0.35) / 0.65).max(0.0));
+        let base = lit.mix(&ground, (out * 2.2).min(1.0)).mix(&deep, ((out - 0.35) / 0.65).max(0.0));
         Color::from(base.to_linear() * rng.range(0.9, 1.1))
     };
     let mut b = FlatMesh::default();
@@ -1152,7 +1187,7 @@ pub fn hollow_props_mesh() -> Mesh {
         let foot = Vec3::new(r * a.cos(), 0.0, r * a.sin());
         let width = rng.range(0.35, 0.75);
         let lean = Quat::from_rotation_z(rng.range(-0.12, 0.12)) * Quat::from_rotation_x(rng.range(-0.12, 0.12));
-        let bark = ui::SHADOW.mix(&BARK.darker(0.2), rng.range(0.2, 0.5));
+        let bark = stage::NIGHT.mix(&stage::UMBER, rng.range(0.4, 0.9));
         add(cylinder(width, 30.0, 7), Transform::from_translation(foot + Vec3::Y * 15.0).with_rotation(lean), bark);
         for k in 0..3 {
             let out = a + TAU * (k as f32 / 3.0 + rng.range(0.0, 0.2));
@@ -1170,22 +1205,22 @@ pub fn hollow_props_mesh() -> Mesh {
         let at = spot(&mut rng, 2.0, 8.5);
         let size = rng.range(0.12, 0.38);
         let squash = Vec3::new(rng.range(0.9, 1.5), rng.range(0.45, 0.8), rng.range(0.9, 1.4)) * size;
-        let stone = WALL.darker(0.3).mix(&ui::HOLLOW, rng.range(0.1, 0.4));
+        let stone = WALL.darker(0.3).mix(&stage::RUST, rng.range(0.2, 0.5));
         add(Sphere::new(1.0).mesh().ico(0).unwrap(), Transform::from_translation(at).with_rotation(Quat::from_rotation_y(rng.range(0.0, TAU))).with_scale(squash), stone);
         // Moss on top.
-        add(Sphere::new(1.0).mesh().ico(0).unwrap(), Transform::from_translation(at + Vec3::Y * squash.y * 0.45).with_scale(squash * Vec3::new(0.8, 0.5, 0.8)), ui::OLIVE.darker(0.05));
+        add(Sphere::new(1.0).mesh().ico(0).unwrap(), Transform::from_translation(at + Vec3::Y * squash.y * 0.45).with_scale(squash * Vec3::new(0.8, 0.5, 0.8)), stage::GOLD.darker(0.3));
     }
     for _ in 0..26 {
         let at = spot(&mut rng, 1.8, 9.0);
         let size = rng.range(0.25, 0.6);
-        let clump = ui::HOLLOW.mix(&ui::OLIVE, rng.range(0.3, 0.9));
+        let clump = stage::RUST.mix(&stage::OCHRE, rng.range(0.3, 0.9));
         add(Sphere::new(1.0).mesh().ico(1).unwrap(), Transform::from_translation(at).with_scale(Vec3::new(size, size * 0.3, size * rng.range(0.7, 1.2))), clump);
     }
     for _ in 0..70 {
         let at = spot(&mut rng, 1.7, 9.0);
         let blades = 3 + (rng.next() * 3.0) as usize;
         let tall = rng.range(0.18, 0.42);
-        let grass = ui::OLIVE.mix(&ui::MUTED, rng.range(0.0, 0.5));
+        let grass = stage::OCHRE.mix(&stage::GOLD, rng.range(0.2, 0.8));
         for _ in 0..blades {
             let tilt = Quat::from_rotation_y(rng.range(0.0, TAU)) * Quat::from_rotation_x(rng.range(0.1, 0.45));
             let h = tall * rng.range(0.7, 1.1);
@@ -1193,6 +1228,60 @@ pub fn hollow_props_mesh() -> Mesh {
         }
     }
     sculpted(parts)
+}
+
+/// Streaks of cloud across the lobby's sky, just inside a sphere of `radius`: long and thin, dark
+/// on top and lit from below by the afterglow, brightest and lowest toward `sunset` (a direction
+/// on the ground), and fading out at their ends and edges. Colored and see-through by vertex:
+/// draw it unlit and blended, on white.
+pub fn sunset_clouds_mesh(radius: f32, sunset: Vec3) -> Mesh {
+    use std::f32::consts::{PI, TAU};
+    const STREAKS: usize = 12;
+    const STEPS: usize = 24;
+    let mut rng = Lcg(0xC10_0D5);
+    let base = sunset.z.atan2(sunset.x);
+    let (dark, lit, hot) = (stage::VOID.mix(&stage::TWILIGHT, 0.35).to_linear(), stage::DUSK.to_linear(), stage::DUSK.lighter(0.15).to_linear());
+    let mut b = FlatMesh::default();
+    for _ in 0..STREAKS {
+        // More of them toward the sunset, where they catch the light.
+        let off = rng.range(-1.0, 1.0);
+        let center = base + off * off.abs() * PI;
+        let span = rng.range(0.22, 0.45);
+        let toward = |a: f32| ((a - base).cos() + 1.0) * 0.5;
+        // Low streaks near the horizon, a few higher and fainter.
+        let rise = rng.next().powf(1.8);
+        let (height, thick) = (1.8 + rise * 7.0, rng.range(1.1, 2.2) * (1.0 + rise));
+        // Lumps along it, so it reads as a bank of cloud, not a stripe.
+        let (lumps, lump_phase) = (rng.range(1.5, 3.5), rng.range(0.0, TAU));
+        let opacity = rng.range(0.55, 0.9) * (1.0 - 0.4 * rise);
+        let tilt = rng.range(-0.6, 0.6);
+        let r = radius - rng.range(0.0, 1.5);
+        // Each column: the streak's top, middle and underside, at angle `a`.
+        let column = |k: usize| {
+            let t = k as f32 / STEPS as f32;
+            let a = center + (t - 0.5) * span;
+            let fade = (t * PI).sin().powf(0.7);
+            let lump = 0.5 + 0.5 * (t * lumps * TAU + lump_phase).sin().abs();
+            let swell = thick * (0.25 + 0.75 * fade) * lump;
+            let mid = height + tilt * (t - 0.5);
+            let at = |y: f32| Vec3::new(r * a.cos(), y, r * a.sin());
+            let glow = toward(a).powf(3.0) * (1.0 - 0.6 * rise);
+            let shade = |under: f32, alpha: f32| {
+                let c = dark.mix(&lit, glow * under).mix(&hot, (glow * under - 0.6).max(0.0));
+                [c.red, c.green, c.blue, alpha * fade * opacity]
+            };
+            [(at(mid + swell * 0.85), shade(0.15, 0.0)), (at(mid), shade(0.55, 1.0)), (at(mid - swell * 0.45), shade(1.0, 0.0))]
+        };
+        for k in 0..STEPS {
+            let (left, right) = (column(k), column(k + 1));
+            for row in 0..2 {
+                let (a, b1, c, d) = (left[row], right[row], right[row + 1], left[row + 1]);
+                b.tri_shaded([a.0, b1.0, c.0], [a.1, b1.1, c.1]);
+                b.tri_shaded([a.0, c.0, d.0], [a.1, c.1, d.1]);
+            }
+        }
+    }
+    b.build()
 }
 
 /// A torch flame; flickers its light.
