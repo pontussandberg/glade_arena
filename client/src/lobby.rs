@@ -54,6 +54,7 @@ impl Plugin for LobbyPlugin {
                 (pick_fighter, show_fighter, (show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena).chain(),
                 show_status,
                 turn_stage_camera.in_set(CameraMoves),
+                liven_stage,
             )
                 .run_if(in_state(Picking)),
         );
@@ -64,11 +65,13 @@ impl Plugin for LobbyPlugin {
 
 /// Where the stage is, on the gameplay plane: far off the map, out of sight of the arena.
 const STAGE: Vec2 = Vec2::new(0.0, -300.0);
-/// The stage camera: how high it looks at the fighter, how far it stays, which way it looks
-/// from (a three-quarter view of the front), how far and fast it sways on its own, and how fast
-/// dragging turns it (radians per pixel).
+/// The stage camera: how high it looks at the fighter, how far back it stands (along the
+/// ground) and how far above that point it is, which way it looks from (a three-quarter view of
+/// the front), how far and fast it sways on its own, and how fast dragging turns it (radians per
+/// pixel).
 const STAGE_AIM_HEIGHT: f32 = 1.2;
-const STAGE_DISTANCE: f32 = 4.4;
+const STAGE_BACK: f32 = 8.36;
+const STAGE_RISE: f32 = 2.4;
 const FRONT: f32 = FRAC_PI_2 - 0.4;
 const SWAY: (f32, f32) = (0.25, 0.35);
 const STAGE_DRAG: f32 = 0.008;
@@ -134,7 +137,7 @@ fn open_lobby(
 ) {
     // The fighter we last went in as.
     let selected = chosen.0.unwrap_or_else(|| ClassId::all().next().expect("at least one class"));
-    let view = Orbit { yaw: FRONT, pitch: 0.1, distance: STAGE_DISTANCE };
+    let view = Orbit { yaw: FRONT, pitch: STAGE_RISE.atan2(STAGE_BACK), distance: STAGE_BACK.hypot(STAGE_RISE) };
     commands.insert_resource(Lobby { selected, shown: None, view, facing: FRONT });
     spawn_stage(&mut commands, &mut meshes, &mut materials);
     spawn_screen(&mut commands, me.as_ref().map_or("", |me| &me.name));
@@ -147,31 +150,38 @@ fn close_lobby(mut commands: Commands, parts: Query<Entity, With<LobbyPart>>) {
     }
 }
 
-/// The stage: a dark room around a low stone dais, a warm key light and a cold rim light.
+/// The stage: a low stone dais in a hollow at dusk (a glowing backdrop, a rolling floor, trunks,
+/// stones and grass), a flickering warm key light, a cold rim light and fireflies drifting about.
 fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
     let center = to_world(STAGE, 0.0);
-    let room = StandardMaterial { cull_mode: None, ..glade::glow(palette::HUNTER_DARK, 1.0) };
+    // The sun went down behind the fighter (as first seen), a little to one side.
+    let sunset = Quat::from_rotation_y(FRONT + std::f32::consts::PI + 0.35) * Vec3::Z;
+    let ground = center - Vec3::Y * FLOOR_DROP;
+    let sky = StandardMaterial { base_color: Color::WHITE, unlit: true, cull_mode: None, ..default() };
     commands.spawn((
         LobbyPart,
-        Mesh3d(meshes.add(Sphere::new(24.0).mesh().ico(3).unwrap())),
-        MeshMaterial3d(materials.add(room)),
+        Mesh3d(meshes.add(glade::hollow_sky_mesh(24.0, sunset))),
+        MeshMaterial3d(materials.add(sky)),
         Transform::from_translation(center),
         NotShadowCaster,
     ));
-    let mut disc = |radius: f32, height: f32| meshes.add(Cylinder::new(radius, height).mesh().resolution(48).build());
-    let (dais, floor) = (disc(1.3, 0.16), disc(9.0, 0.1));
+    let clouds = StandardMaterial { base_color: Color::WHITE, alpha_mode: AlphaMode::Blend, unlit: true, cull_mode: None, ..default() };
     commands.spawn((
         LobbyPart,
-        Mesh3d(dais),
+        Mesh3d(meshes.add(glade::sunset_clouds_mesh(22.5, sunset))),
+        MeshMaterial3d(materials.add(clouds)),
+        Transform::from_translation(center),
+        NotShadowCaster,
+    ));
+    commands.spawn((
+        LobbyPart,
+        Mesh3d(meshes.add(Cylinder::new(glade::DAIS_RADIUS, 0.16).mesh().resolution(48).build())),
         MeshMaterial3d(materials.add(glade::matte(palette::WALL.darker(0.25)))),
         Transform::from_translation(center - Vec3::Y * 0.08),
     ));
-    commands.spawn((
-        LobbyPart,
-        Mesh3d(floor),
-        MeshMaterial3d(materials.add(glade::matte(palette::INK.darker(0.12)))),
-        Transform::from_translation(center - Vec3::Y * 0.2),
-    ));
+    let white = materials.add(glade::matte(Color::WHITE));
+    commands.spawn((LobbyPart, Mesh3d(meshes.add(glade::hollow_floor_mesh(18.0))), MeshMaterial3d(white.clone()), Transform::from_translation(ground)));
+    commands.spawn((LobbyPart, Mesh3d(meshes.add(glade::hollow_props_mesh())), MeshMaterial3d(white), Transform::from_translation(ground)));
     let light = |color: Color, intensity: f32, at: Vec3| {
         (
             LobbyPart,
@@ -179,8 +189,58 @@ fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &m
             Transform::from_translation(center + at),
         )
     };
-    commands.spawn(light(palette::TORCH_LIGHT, 260_000.0, Vec3::new(2.6, 3.2, -1.8)));
+    commands.spawn((StageTorch, light(palette::TORCH_LIGHT, TORCH_INTENSITY, Vec3::new(2.6, 3.2, -1.8))));
     commands.spawn(light(palette::SPIRIT, 180_000.0, Vec3::new(-2.4, 2.6, 1.6)));
+
+    let mote = meshes.add(Sphere::new(0.022).mesh().ico(1).unwrap());
+    let glow = materials.add(glade::glow(palette::ui::SPROUT, 6.0));
+    for i in 0..MOTES {
+        // Spread evenly around the stage (golden angle), at varied distances and heights.
+        let a = i as f32 * 2.399;
+        let r = 1.6 + 6.0 * ((i * 37 % MOTES) as f32 / MOTES as f32);
+        let home = center + Vec3::new(r * a.cos(), 0.3 + 2.6 * ((i * 53 % MOTES) as f32 / MOTES as f32), r * a.sin());
+        commands.spawn((
+            LobbyPart,
+            Mote { home, phase: i as f32 * 1.37, speed: 0.25 + 0.3 * ((i * 17 % 11) as f32 / 11.0) },
+            Mesh3d(mote.clone()),
+            MeshMaterial3d(glow.clone()),
+            Transform::from_translation(home),
+            NotShadowCaster,
+        ));
+    }
+}
+
+/// How far the floor sits below the dais's base.
+const FLOOR_DROP: f32 = 0.15;
+/// The stage's key light's strength, before it flickers.
+const TORCH_INTENSITY: f32 = 260_000.0;
+/// How many fireflies drift around the stage.
+const MOTES: usize = 48;
+
+/// The stage's warm key light, which flickers like the torches in the arena.
+#[derive(Component)]
+struct StageTorch;
+
+/// A firefly, wandering slowly around its `home` and pulsing.
+#[derive(Component)]
+struct Mote {
+    home: Vec3,
+    phase: f32,
+    speed: f32,
+}
+
+fn liven_stage(time: Res<Time>, mut motes: Query<(&Mote, &mut Transform)>, mut torch: Single<&mut PointLight, With<StageTorch>>) {
+    let t = time.elapsed_secs();
+    for (mote, mut transform) in &mut motes {
+        let (s, p) = (t * mote.speed, mote.phase);
+        let drift = Vec3::new((s + p).sin() * 0.5 + (s * 2.3 + p).sin() * 0.15, (s * 0.8 + p * 2.0).sin() * 0.35, (s * 0.9 + p * 0.7).cos() * 0.5);
+        transform.translation = mote.home + drift;
+        // Brightening and fading out now and then.
+        let pulse = (t * 1.3 * mote.speed * 3.0 + p).sin();
+        transform.scale = Vec3::splat(0.35 + 0.65 * pulse.max(0.0));
+    }
+    let f = 1.0 + 0.1 * (t * 7.3).sin() * (t * 12.1 + 1.3).sin() + 0.05 * (t * 2.1).sin();
+    torch.intensity = TORCH_INTENSITY * f;
 }
 
 /// The screen over the stage: a top bar with our `name`, the selected fighter's details on the
@@ -207,7 +267,7 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
             let side = |justify: JustifyContent| Node { flex_grow: 1.0, flex_basis: px(0.0), justify_content: justify, ..default() };
             // The game on the left, who we are in the middle, over the fighter.
             screen.spawn(Node { align_items: AlignItems::Center, ..default() }).with_children(|bar| {
-                bar.spawn(side(JustifyContent::FlexStart)).with_child(ui_text("GLADE ARENA", 18.0, palette::STONE));
+                bar.spawn(side(JustifyContent::FlexStart)).with_child(ui_text("GLADE ARENA", 18.0, palette::ui::MUTED));
                 bar.spawn((
                     Node {
                         column_gap: px(GAP * 1.5),
@@ -216,7 +276,7 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                         border: UiRect::bottom(px(2.0)),
                         ..default()
                     },
-                    BackgroundColor(palette::INK.with_alpha(0.7)),
+                    BackgroundColor(palette::ui::HOLLOW.with_alpha(0.7)),
                     BorderColor::all(ACCENT),
                 ))
                 .with_children(|badge| {
@@ -262,7 +322,7 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                     right
                         .spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Stretch, row_gap: px(GAP), ..default() })
                         .with_children(|column| {
-                            column.spawn((Status, ui_text("", 12.0, palette::STONE), Node { align_self: AlignSelf::FlexEnd, ..default() }));
+                            column.spawn((Status, ui_text("", 12.0, palette::ui::MUTED), Node { align_self: AlignSelf::FlexEnd, ..default() }));
                             column
                                 .spawn((
                                     LobbiesButton,
@@ -273,10 +333,10 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                                         border: UiRect::all(px(1.0)),
                                         ..default()
                                     },
-                                    BorderColor::all(palette::STONE.with_alpha(0.5)),
-                                    BackgroundColor(palette::INK.with_alpha(0.85)),
+                                    BorderColor::all(palette::ui::MUTED.with_alpha(0.5)),
+                                    BackgroundColor(palette::ui::HOLLOW.with_alpha(0.85)),
                                 ))
-                                .with_child(ui_text("CREATE / JOIN LOBBY", 14.0, palette::HAZE));
+                                .with_child(ui_text("CREATE / JOIN LOBBY", 14.0, palette::ui::LICHEN));
                             column
                                 .spawn((
                                     EnterButton,
@@ -284,8 +344,8 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                                     Node { padding: UiRect::axes(px(36.0), px(16.0)), justify_content: JustifyContent::Center, ..default() },
                                     BackgroundColor(ACCENT),
                                 ))
-                                .with_child((EnterLabel, ui_text("PRACTICE", 18.0, palette::INK)));
-                            column.spawn((EnterHint, ui_text("or press Enter", 11.0, palette::STONE), Node { align_self: AlignSelf::FlexEnd, ..default() }));
+                                .with_child((EnterLabel, ui_text("PRACTICE", 18.0, palette::ui::HOLLOW)));
+                            column.spawn((EnterHint, ui_text("or press Enter", 11.0, palette::ui::MUTED), Node { align_self: AlignSelf::FlexEnd, ..default() }));
                         });
                 });
             });
@@ -311,8 +371,8 @@ fn spawn_tile(tiles: &mut ChildSpawnerCommands, number: usize, class: ClassId) {
             BackgroundColor(Color::NONE),
         ))
         .with_children(|tile| {
-            tile.spawn(ui_text(number.to_string(), 11.0, palette::STONE));
-            tile.spawn(ui_text(def.name.clone(), 20.0, palette::HAZE));
+            tile.spawn(ui_text(number.to_string(), 11.0, palette::ui::MUTED));
+            tile.spawn(ui_text(def.name.clone(), 20.0, palette::ui::LICHEN));
             tile.spawn(ui_text(def.role.to_uppercase(), 11.0, ACCENT));
         });
 }
@@ -353,9 +413,9 @@ fn pick_fighter(
     }
     for (tile, interaction, mut border, mut background) in &mut tiles {
         let (edge, fill) = match (tile.0 == lobby.selected, interaction) {
-            (true, _) => (ACCENT, palette::PINE.with_alpha(0.9)),
-            (false, Interaction::Hovered) => (palette::STONE.with_alpha(0.6), palette::INK.with_alpha(0.85)),
-            (false, _) => (palette::STONE.with_alpha(0.25), palette::INK.with_alpha(0.7)),
+            (true, _) => (ACCENT, palette::ui::OLIVE.with_alpha(0.9)),
+            (false, Interaction::Hovered) => (palette::ui::MUTED.with_alpha(0.6), palette::ui::HOLLOW.with_alpha(0.85)),
+            (false, _) => (palette::ui::MUTED.with_alpha(0.25), palette::ui::HOLLOW.with_alpha(0.7)),
         };
         border.set_if_neq(BorderColor::all(edge));
         background.set_if_neq(BackgroundColor(fill));
@@ -396,8 +456,8 @@ fn show_fighter(
     let def = selected.def();
     commands.entity(*details).despawn_children().with_children(|column| {
         column.spawn(ui_text(def.role.to_uppercase(), 12.0, ACCENT));
-        column.spawn(ui_text(def.name.clone(), 44.0, palette::HAZE));
-        column.spawn(ui_text(def.blurb.clone(), 14.0, palette::STONE));
+        column.spawn(ui_text(def.name.clone(), 44.0, palette::ui::LICHEN));
+        column.spawn(ui_text(def.blurb.clone(), 14.0, palette::ui::MUTED));
         column.spawn(Node { height: px(GAP * 2.0), ..default() });
         stat_frame::spawn_frame(column, selected, false);
         if let Some(passive) = stat_frame::passive_blurb(def) {
@@ -414,12 +474,12 @@ fn show_fighter(
 fn power(column: &mut ChildSpawnerCommands, badge: &str, color: Color, blurb: stat_frame::Blurb) {
     column.spawn(Node { column_gap: px(GAP * 1.5), align_items: AlignItems::Center, ..default() }).with_children(|row| {
         row.spawn(key_chip(badge, 13.0, color, color));
-        row.spawn(ui_text(blurb.name, 16.0, palette::HAZE));
+        row.spawn(ui_text(blurb.name, 16.0, palette::ui::LICHEN));
     });
     if let Some(cooldown) = blurb.cooldown {
-        column.spawn(ui_text(cooldown, 11.0, palette::STONE));
+        column.spawn(ui_text(cooldown, 11.0, palette::ui::MUTED));
     }
-    column.spawn(ui_text(blurb.description, 13.0, palette::STONE));
+    column.spawn(ui_text(blurb.description, 13.0, palette::ui::MUTED));
 }
 
 /// Keeps the camera on the fighter, swaying gently around its front; dragging (left button,
@@ -459,7 +519,7 @@ pub(crate) fn team_color(team: u8) -> Color {
     match team {
         RED => palette::ENEMY,
         BLUE => palette::FROST_BLUE,
-        _ => palette::STONE,
+        _ => palette::ui::MUTED,
     }
 }
 
@@ -467,13 +527,13 @@ pub(crate) fn team_color(team: u8) -> Color {
 pub(crate) fn card() -> impl Bundle {
     (
         Node { flex_direction: FlexDirection::Column, row_gap: px(GAP), padding: UiRect::all(px(GAP * 2.0)), ..default() },
-        BackgroundColor(palette::INK.with_alpha(0.88)),
+        BackgroundColor(palette::ui::HOLLOW.with_alpha(0.88)),
     )
 }
 
 /// A small caps label over a part of a card.
 pub(crate) fn label(text: &str) -> impl Bundle {
-    ui_text(text.to_uppercase(), 11.0, palette::STONE)
+    ui_text(text.to_uppercase(), 11.0, palette::ui::MUTED)
 }
 
 /// The room column, two cards. The room: name, mode, whether it's on, and for the leader the mode
@@ -501,11 +561,11 @@ fn show_room(
     commands.entity(panel).despawn_children().with_children(|panel| {
         panel.spawn(card()).with_children(|card| {
             card.spawn(label("Lobby"));
-            card.spawn(ui_text(view.name.clone(), 24.0, palette::HAZE));
+            card.spawn(ui_text(view.name.clone(), 24.0, palette::ui::LICHEN));
             let (line, color) = match (view.started, leading) {
                 (true, _) => ("Match in progress", ACCENT),
-                (false, true) => ("Start when you're ready", palette::STONE),
-                (false, false) => ("Waiting for the leader", palette::STONE),
+                (false, true) => ("Start when you're ready", palette::ui::MUTED),
+                (false, false) => ("Waiting for the leader", palette::ui::MUTED),
             };
             card.spawn(ui_text(line, 12.0, color));
             if leading && !view.started {
@@ -514,15 +574,15 @@ fn show_room(
                 card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
                     for mode in [Mode::Ffa, Mode::Teams] {
                         let on = view.mode == mode;
-                        let fill = if on { palette::PINE } else { palette::HUNTER_DARK.with_alpha(0.8) };
-                        let edge = if on { ACCENT } else { palette::STONE.with_alpha(0.3) };
-                        let text = if on { palette::HAZE } else { palette::STONE };
+                        let fill = if on { palette::ui::OLIVE } else { palette::ui::SHADOW.with_alpha(0.8) };
+                        let edge = if on { ACCENT } else { palette::ui::MUTED.with_alpha(0.3) };
+                        let text = if on { palette::ui::LICHEN } else { palette::ui::MUTED };
                         let mut switch = row.spawn((RoomButton(RoomRequest::SetMode(mode)), button(mode.label(), 12.0, fill, text, edge)));
                         switch.entry::<Node>().and_modify(|mut node| node.flex_grow = 1.0);
                     }
                 });
             } else {
-                card.spawn(ui_text(view.mode.label(), 13.0, palette::HAZE));
+                card.spawn(ui_text(view.mode.label(), 13.0, palette::ui::LICHEN));
             }
         });
 
@@ -536,7 +596,7 @@ fn show_room(
             Mode::Teams => spawn_teams(card, view, my_id),
         });
 
-        let leave = button("Leave lobby", 12.0, palette::INK.with_alpha(0.88), palette::STONE, palette::STONE.with_alpha(0.3));
+        let leave = button("Leave lobby", 12.0, palette::ui::HOLLOW.with_alpha(0.88), palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.3));
         panel.spawn((RoomButton(RoomRequest::Leave), leave));
     });
 }
@@ -589,13 +649,13 @@ fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
             header.margin.top = px(GAP);
             grid.spawn(header).with_children(|header| {
                 header.spawn(ui_text(team_name(team).to_uppercase(), 13.0, color));
-                header.spawn(ui_text(format!("{}/{MAX_PER_TEAM}", view.on_team(team)), 12.0, palette::STONE));
+                header.spawn(ui_text(format!("{}/{MAX_PER_TEAM}", view.on_team(team)), 12.0, palette::ui::MUTED));
             });
             for place in 0..places {
                 match members.get(place) {
                     Some(member) => member_row(grid, cell(column, place + 1), view, member, my_id),
                     None => {
-                        grid.spawn((cell(column, place + 1), BackgroundColor(palette::HUNTER_DARK.with_alpha(0.2))));
+                        grid.spawn((cell(column, place + 1), BackgroundColor(palette::ui::SHADOW.with_alpha(0.2))));
                     }
                 }
             }
@@ -618,16 +678,16 @@ fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
 fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, member: &Member, my_id: u32) {
     let is_me = member.guest_id == my_id;
     let row = Node { flex_direction: FlexDirection::Column, row_gap: px(2.0), padding: UiRect::axes(px(GAP), px(GAP * 0.5)), ..node };
-    let tint = if is_me { ACCENT.with_alpha(0.14) } else { palette::HUNTER_DARK.with_alpha(0.5) };
+    let tint = if is_me { ACCENT.with_alpha(0.14) } else { palette::ui::SHADOW.with_alpha(0.5) };
     parent.spawn((row, BackgroundColor(tint))).with_children(|row| {
         if member.guest_id == view.leader {
             row.spawn(ui_text("LEADER", 9.0, palette::TORCH_FLAME));
         }
         // Ours in the accent: no team's color, so it reads as "you" on either side.
-        row.spawn(ui_text(member.name.clone(), 13.0, if is_me { ACCENT } else { palette::HAZE }));
+        row.spawn(ui_text(member.name.clone(), 13.0, if is_me { ACCENT } else { palette::ui::LICHEN }));
         let fighter = member.class.map_or("Picking...".to_string(), |c| c.def().name.clone());
         row.spawn(Node { column_gap: px(GAP * 0.75), flex_wrap: FlexWrap::Wrap, ..default() }).with_children(|line| {
-            line.spawn(ui_text(fighter, 11.0, palette::STONE));
+            line.spawn(ui_text(fighter, 11.0, palette::ui::MUTED));
             if member.in_arena {
                 line.spawn(ui_text("in arena", 11.0, ACCENT));
             }
@@ -712,7 +772,7 @@ fn enter_arena(
     hint.set_if_neq(shown(way != WayIn::Wait));
     let (interaction, mut background) = button.into_inner();
     let fill = match (way, *interaction) {
-        (WayIn::Wait, _) => palette::STONE.with_alpha(0.5),
+        (WayIn::Wait, _) => palette::ui::MUTED.with_alpha(0.5),
         (_, Interaction::None) => ACCENT,
         _ => ACCENT.lighter(0.08),
     };

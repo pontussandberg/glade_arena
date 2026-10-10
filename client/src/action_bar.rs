@@ -29,7 +29,7 @@ impl Plugin for ActionBarPlugin {
 const ICON: f32 = 64.0;
 const BOTTOM: f32 = 18.0;
 /// The cooldown wipe's shade.
-const SHADE: Color = Color::srgba(0.02, 0.03, 0.04, 0.8);
+const SHADE: Color = Color::srgba(0.165, 0.176, 0.106, 0.8);
 /// The passive's icon size, and its gap from the Q icon.
 const PASSIVE: f32 = 46.0;
 const PASSIVE_GAP: f32 = 10.0;
@@ -60,7 +60,7 @@ fn spawn_icon(mut commands: Commands, me: Query<&ClassId, Added<Predicted>>, par
     let fill = || Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() };
     let centered = || Node { justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..fill() };
     let wipe = commands.spawn((fill(), BackgroundGradient::default(), Visibility::Hidden)).id();
-    let seconds = commands.spawn(ui_text("", 22.0, palette::HAZE)).id();
+    let seconds = commands.spawn(ui_text("", 22.0, palette::ui::LICHEN)).id();
     let seconds_box = commands.spawn(centered()).add_child(seconds).id();
     let picture = match ability.kind {
         // A spear, point up and to the right.
@@ -93,7 +93,7 @@ fn spawn_icon(mut commands: Commands, me: Query<&ClassId, Added<Predicted>>, par
     };
     let key = commands
         .spawn(Node { position_type: PositionType::Absolute, left: px(4.0), top: px(1.0), ..default() })
-        .with_child(ui_text("Q", 13.0, palette::HAZE))
+        .with_child(ui_text("Q", 13.0, palette::ui::LICHEN))
         .id();
     let name = commands
         .spawn(Node {
@@ -104,7 +104,7 @@ fn spawn_icon(mut commands: Commands, me: Query<&ClassId, Added<Predicted>>, par
             justify_content: JustifyContent::Center,
             ..default()
         })
-        .with_child(ui_text(ability.name.clone(), 12.0, palette::HAZE))
+        .with_child(ui_text(ability.name.clone(), 12.0, palette::ui::LICHEN))
         .id();
     let tip = tooltip(&mut commands, stat_frame::ability_blurb(class.def()), ICON);
     commands
@@ -140,7 +140,7 @@ fn spawn_passive(commands: &mut Commands, blurb: Blurb) {
         ))
         .id();
     commands
-        .spawn((ActionBarPart, GameUi, icon_frame(tip, PASSIVE, -ICON / 2.0 - PASSIVE_GAP - PASSIVE, palette::STONE)))
+        .spawn((ActionBarPart, GameUi, icon_frame(tip, PASSIVE, -ICON / 2.0 - PASSIVE_GAP - PASSIVE, palette::ui::MUTED)))
         .add_children(&[diamond, tip]);
 }
 
@@ -159,7 +159,7 @@ fn icon_frame(tip: Entity, size: f32, from_center: f32, border: Color) -> impl B
             border: UiRect::all(px(2.0)),
             ..default()
         },
-        BackgroundColor(palette::INK.with_alpha(0.9)),
+        BackgroundColor(palette::ui::HOLLOW.with_alpha(0.9)),
         BorderColor::all(border),
     )
 }
@@ -196,7 +196,7 @@ fn update_icon(
     let cooldown = class.def().ability.cooldown_ticks as f32;
     let left = (ability.ready_at as f32 - clock.now(true)).max(0.0);
     let cooling = left > 0.0;
-    border.set_if_neq(BorderColor::all(if cooling { palette::STONE } else { palette::SPIRIT }));
+    border.set_if_neq(BorderColor::all(if cooling { palette::ui::MUTED } else { palette::SPIRIT }));
     // What the icon should show, quantized: the wipe's step, and the label in tenths of a second
     // under one second (whole seconds, rounded up, above).
     let seconds = left / TICK_HZ as f32;

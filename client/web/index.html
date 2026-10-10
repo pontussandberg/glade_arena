@@ -5,25 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Arena</title>
   <style>
-    html, body { margin: 0; height: 100%; background: #15171b; color: #ddd; font: 14px system-ui, sans-serif; overflow: hidden; }
+    html, body { margin: 0; height: 100%; background: #2a2d1b; color: #bac095; font: 14px system-ui, sans-serif; overflow: hidden; }
     #game { width: 100%; height: 100%; display: block; outline: none; }
     /* The loading screen, over the canvas until the game says it's up (window.arenaReady). */
     #loader {
-      position: fixed; inset: 0; display: grid; place-items: center; background: #15171b;
+      position: fixed; inset: 0; display: grid; place-items: center; background: #2a2d1b;
       transition: opacity 0.4s ease; z-index: 1;
     }
     #loader.done { opacity: 0; pointer-events: none; }
     #loader .box { width: min(360px, calc(100vw - 32px)); display: grid; gap: 14px; }
     #loader h1 {
       margin: 0; font: 600 28px/1 system-ui, sans-serif; letter-spacing: 0.35em; text-transform: uppercase;
-      color: #a9b8b6; text-align: center;
+      color: #bac095; text-align: center;
     }
-    #loader .bar { height: 6px; background: #1e2a23; border: 1px solid #2a3a30; overflow: hidden; position: relative; }
-    #loader .fill { height: 100%; width: 0%; background: #8aa05a; transition: width 0.15s linear; }
+    #loader .bar { height: 6px; background: #3d4127; border: 1px solid #636b2f; overflow: hidden; position: relative; }
+    #loader .fill { height: 100%; width: 0%; background: #d4de95; transition: width 0.15s linear; }
     /* No size to go by: a sliver sweeping across instead. */
     #loader .bar.unknown .fill { position: absolute; width: 30%; animation: sweep 1.2s ease-in-out infinite; }
     @keyframes sweep { from { left: -30%; } to { left: 100%; } }
-    #loader .phase { display: flex; justify-content: space-between; color: #848a93; font-size: 13px; min-height: 1.2em; }
+    #loader .phase { display: flex; justify-content: space-between; color: #8e9562; font-size: 13px; min-height: 1.2em; }
     #loader.failed .phase { color: #d9453b; }
     #loader.failed .bar { display: none; }
     @media (prefers-reduced-motion: reduce) {
