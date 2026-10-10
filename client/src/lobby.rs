@@ -48,6 +48,36 @@ impl Plugin for LobbyPlugin {
             )
                 .run_if(in_lobby),
         );
+        #[cfg(target_family = "wasm")]
+        app.add_systems(Update, tell_page_ready);
+    }
+}
+
+/// Frames the lobby's fighter has to have been drawn before the page's loading screen goes: by
+/// then what it needed (shaders above all) is ready, so the loader gives way to the lobby rather
+/// than to a dark screen that fills in.
+#[cfg(target_family = "wasm")]
+const READY_AFTER_FRAMES: u32 = 8;
+
+/// Tells the page (`index.html`'s loading screen, through `window.arenaReady`) the game is up,
+/// once: `READY_AFTER_FRAMES` frames after the lobby's fighter first stands on the stage (or,
+/// without a lobby, after start).
+#[cfg(target_family = "wasm")]
+fn tell_page_ready(lobby: Option<Res<Lobby>>, mut frames: Local<u32>) {
+    use wasm_bindgen::JsCast;
+
+    if lobby.is_some_and(|lobby| lobby.shown.is_none()) {
+        return;
+    }
+    *frames = frames.saturating_add(1);
+    if *frames != READY_AFTER_FRAMES + 1 {
+        return;
+    }
+    let Some(window) = web_sys::window() else { return };
+    if let Ok(ready) = js_sys::Reflect::get(&window, &"arenaReady".into())
+        && let Ok(ready) = ready.dyn_into::<js_sys::Function>()
+    {
+        let _ = ready.call0(&window);
     }
 }
 
