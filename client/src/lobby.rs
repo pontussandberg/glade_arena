@@ -66,11 +66,11 @@ const READY_AFTER_FRAMES: u32 = 8;
 fn tell_page_ready(lobby: Option<Res<Lobby>>, mut frames: Local<u32>) {
     use wasm_bindgen::JsCast;
 
-    if lobby.is_some_and(|lobby| lobby.shown.is_none()) || *frames > READY_AFTER_FRAMES {
+    if lobby.is_some_and(|lobby| lobby.shown.is_none()) {
         return;
     }
-    *frames += 1;
-    if *frames <= READY_AFTER_FRAMES {
+    *frames = frames.saturating_add(1);
+    if *frames != READY_AFTER_FRAMES + 1 {
         return;
     }
     let Some(window) = web_sys::window() else { return };

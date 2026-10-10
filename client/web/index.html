@@ -48,6 +48,7 @@
     const phase = document.getElementById('phase');
     const amount = document.getElementById('amount');
     let failed = false;
+    let ready = false;
 
     // What the loader says, and how far along the bar is (`null`: no telling, it sweeps).
     function show(text, progress = null, detail = '') {
@@ -63,8 +64,11 @@
       failed = true;
       loader.classList.add('failed');
     }
+    // Bevy uses an exception for control flow when the winit loop starts: that one means the
+    // game is running, not that it failed.
+    const isBevyControlFlow = (error) => String(error).includes('Using exceptions for control flow');
+
     // Called by the game (lobby.rs) once the lobby is drawn.
-    let ready = false;
     window.arenaReady = () => {
       if (failed || ready) return;
       ready = true;
@@ -74,44 +78,51 @@
     };
     // A panic after start (the game logs it and stops) would leave the loader up forever.
     window.addEventListener('error', (e) => {
-      if (!loader.classList.contains('done') && !String(e.message).includes('Using exceptions for control flow')) {
-        fail(e.message);
-      }
+      if (!ready && !isBevyControlFlow(e.message)) fail(e.message);
     });
 
     const mb = (bytes) => (bytes / 1048576).toFixed(1);
     // How long after the game starts the loader goes even if the game never says it's ready.
     const READY_FALLBACK_MS = 20000;
 
-    // How big the module is: written next to it by build-web.sh, since a compressed response
-    // doesn't say (its Content-Length, if any, counts compressed bytes).
-    async function sizeOf(url, res) {
+    // How big the module is (0: no telling): written next to it by build-web.sh, since a
+    // compressed response doesn't say.
+    async function sizeOf(url) {
       try {
         const size = await fetch(`${url}.size`, { cache: 'no-store' });
         if (size.ok) return Number((await size.text()).trim()) || 0;
       } catch {}
-      return res.headers.get('content-encoding') ? 0 : Number(res.headers.get('content-length')) || 0;
+      return 0;
     }
 
-    // The game's module, downloaded here rather than by its loader, to show how far along it
-    // is. Without a size the bar sweeps and only the MB so far show.
+    // The game's module, streamed straight on to be compiled as it arrives, counting the bytes
+    // on the way to show how far along it is (at most once a frame). Without a size the bar
+    // sweeps and only the MB so far show.
     async function download(url) {
-      const res = await fetch(url);
+      const [res, total] = await Promise.all([fetch(url), sizeOf(url)]);
       if (!res.ok) throw new Error(`${url}: ${res.status} ${res.statusText}`);
-      const total = await sizeOf(url, res);
-      if (!res.body) return res;
-      const reader = res.body.getReader();
-      const chunks = [];
       let received = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        received += value.length;
+      let drawing = false;
+      const draw = () => {
+        drawing = false;
         if (total) show('Downloading', Math.min(received / total, 1), `${mb(received)} / ${mb(total)} MB`);
         else show('Downloading', null, `${mb(received)} MB`);
-      }
-      return new Response(new Blob(chunks), { headers: { 'Content-Type': 'application/wasm' } });
+      };
+      const counted = res.body.pipeThrough(new TransformStream({
+        transform(chunk, out) {
+          received += chunk.length;
+          if (!drawing) {
+            drawing = true;
+            requestAnimationFrame(draw);
+          }
+          out.enqueue(chunk);
+        },
+        // All there: what's left is compiling the rest and starting it.
+        flush() {
+          requestAnimationFrame(() => show('Starting'));
+        },
+      }));
+      return new Response(counted, { headers: { 'Content-Type': 'application/wasm' } });
     }
 
     try {
@@ -132,13 +143,10 @@
         import('./pkg/arena-client.js'),
         download('./pkg/arena-client_bg.wasm'),
       ]);
-      show('Starting');
       try {
         await init({ module_or_path: wasm });
       } catch (e) {
-        // Bevy uses an exception for control flow when the winit loop starts; that one means
-        // the game is running.
-        if (!String(e).includes('Using exceptions for control flow')) throw e;
+        if (!isBevyControlFlow(e)) throw e;
       }
       // The game loop has started; the arena is being built until the game calls `arenaReady`.
       // Should that call never come, the game is running anyway: don't hide it forever.
