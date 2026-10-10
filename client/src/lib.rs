@@ -25,11 +25,11 @@ pub mod bot;
 #[cfg(feature = "render")]
 pub mod camera;
 #[cfg(feature = "render")]
-pub mod dev;
-#[cfg(feature = "render")]
 pub mod feedback;
 #[cfg(feature = "render")]
 pub mod glade;
+#[cfg(feature = "render")]
+pub mod inspect;
 #[cfg(feature = "render")]
 pub mod lobby;
 #[cfg(feature = "render")]

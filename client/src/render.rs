@@ -31,6 +31,7 @@ impl Plugin for RenderPlugin {
             crate::rig::RigPlugin,
             crate::action_bar::ActionBarPlugin,
             crate::minimap::MinimapPlugin,
+            crate::inspect::InspectPlugin,
         ));
         app.add_systems(Startup, setup_scene);
         app.add_systems(
@@ -340,14 +341,10 @@ fn read_local_input(
         move_to = None;
     }
     *last_pos = me;
-    // Once per click: holding the button doesn't keep re-targeting. With the free camera, on
-    // release, and only if it wasn't dragged (dragging turns the camera).
-    let clicked = if mode.free {
-        mouse.just_released(MouseButton::Right) && !mode.turning()
-    } else {
-        mouse.just_pressed(MouseButton::Right)
-    };
-    if clicked
+    // Once per click: holding the button doesn't keep re-targeting. Not with the free camera:
+    // there the right button turns the camera, and WASD walks.
+    if !mode.free
+        && mouse.just_pressed(MouseButton::Right)
         && let Some(cursor) = cursor
         && let Some(tile) = map().nearest_walkable(Map::tile_of(cursor), 4)
     {
@@ -825,9 +822,9 @@ fn update_hud(
             .ok();
         }
         text.push_str(if mode.free {
-            "WASD or right click: move | left click: attack | Q: ability\nhold right mouse: turn camera | wheel: zoom | V: MOBA camera"
+            "WASD: move | left click: attack | Q: ability\nhold right mouse or arrows: turn camera | wheel or + -: zoom | Tab: watch next fighter\nF2: fighter info | V: MOBA camera"
         } else {
-            "right click: move | S: stop | left click: attack | Q: ability\nwheel: zoom | V: free camera"
+            "right click: move | S: stop | left click: attack | Q: ability\nwheel: zoom | F2: fighter info | V: free camera"
         });
     }
     // Only touch the component when the text changed, so Bevy doesn't re-layout it every frame.
