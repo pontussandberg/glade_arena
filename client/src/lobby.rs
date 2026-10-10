@@ -252,7 +252,7 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                 },
             ));
             screen.spawn(Node { align_items: AlignItems::FlexEnd, ..default() }).with_children(|bottom| {
-                bottom.spawn(side(JustifyContent::FlexStart)).with_child(ui_text("Drag to turn   1-9 to pick", 12.0, palette::STONE));
+                bottom.spawn(side(JustifyContent::FlexStart));
                 bottom.spawn(Node { column_gap: px(GAP * 1.5), ..default() }).with_children(|tiles| {
                     for (n, id) in ClassId::all().enumerate() {
                         spawn_tile(tiles, n + 1, id);

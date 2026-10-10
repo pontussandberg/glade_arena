@@ -81,7 +81,6 @@
       if (!ready && !isBevyControlFlow(e.message)) fail(e.message);
     });
 
-    const mb = (bytes) => (bytes / 1048576).toFixed(1);
     // How long after the game starts the loader goes even if the game never says it's ready.
     const READY_FALLBACK_MS = 20000;
 
@@ -97,7 +96,8 @@
 
     // The game's module, streamed straight on to be compiled as it arrives, counting the bytes
     // on the way to show how far along it is (at most once a frame). Without a size the bar
-    // sweeps and only the MB so far show.
+    // sweeps. A percentage rather than MB: the module comes from the browser's cache after the
+    // first visit, and "46 MB" there reads like a fresh download every time.
     async function download(url) {
       const [res, total] = await Promise.all([fetch(url), sizeOf(url)]);
       if (!res.ok) throw new Error(`${url}: ${res.status} ${res.statusText}`);
@@ -105,8 +105,9 @@
       let drawing = false;
       const draw = () => {
         drawing = false;
-        if (total) show('Downloading', Math.min(received / total, 1), `${mb(received)} / ${mb(total)} MB`);
-        else show('Downloading', null, `${mb(received)} MB`);
+        if (!total) return show('Loading');
+        const progress = Math.min(received / total, 1);
+        show('Loading', progress, `${Math.round(progress * 100)}%`);
       };
       const counted = res.body.pipeThrough(new TransformStream({
         transform(chunk, out) {
