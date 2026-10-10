@@ -3,3 +3,4 @@
 /client/web/digest.txt
 /target-test
 /.env.local
+/.claude/settings.local.json
