@@ -1,7 +1,7 @@
 //! A software preview of each fighter's figure, for working on models without running the game:
 //! `cargo test -p arena-client --lib preview -- --ignored` writes `fighter-<class>.png` (front,
-//! three-quarter, side and game-camera views of the rest pose, and the same of the head close up
-//! in `head-<class>.png`) into `PREVIEW_DIR` (default the
+//! three-quarter, back three-quarter and game-camera views of the rest pose, and the same of the body and head closer up
+//! in `body-` and `head-<class>.png`) into `PREVIEW_DIR` (default the
 //! system temp folder). Flat z-buffered triangles in vertex colors, sunlit from the upper left.
 
 use bevy::mesh::{Indices, VertexAttributeValues};
@@ -15,6 +15,8 @@ struct Tri {
     at: [Vec3; 3],
     normal: [Vec3; 3],
     color: Vec3,
+    /// Drawn at full brightness, whatever the light.
+    glow: bool,
 }
 
 fn triangles(mesh: &Mesh, place: Mat4, out: &mut Vec<Tri>, glow: bool) {
@@ -34,8 +36,7 @@ fn triangles(mesh: &Mesh, place: Mat4, out: &mut Vec<Tri>, glow: bool) {
         let at = t.map(|i| place.transform_point3(Vec3::from(p[i as usize])));
         let normal = t.map(|i| place.transform_vector3(Vec3::from(n[i as usize])).normalize_or_zero());
         let c = t.iter().map(|&i| Vec3::from_slice(&colors[i as usize][..3])).sum::<Vec3>() / 3.0;
-        // Glowing parts are drawn bright, whatever the light.
-        out.push(Tri { at: [at[0], at[1], at[2]], normal: [normal[0], normal[1], normal[2]], color: if glow { -c - Vec3::ONE } else { c } });
+        out.push(Tri { at, normal, color: c, glow });
     }
 }
 
@@ -104,8 +105,8 @@ fn render(tris: &[Tri], from: Vec3, center: Vec3, span: f32, image: &mut [[u8; 3
                 if n.dot(forward) > 0.0 {
                     n = -n;
                 }
-                let lit = if t.color.x < 0.0 {
-                    -t.color - Vec3::ONE
+                let lit = if t.glow {
+                    t.color
                 } else {
                     // Brightened so near-black cloth still shows its form.
                     t.color * (0.45 + 1.6 * n.dot(sun).max(0.0)) * 3.0
@@ -168,7 +169,7 @@ fn png(width: usize, height: usize, pixels: &[[u8; 3]]) -> Vec<u8> {
 #[ignore = "writes images; run by hand when working on models"]
 fn preview_fighters() {
     let dir = std::env::var("PREVIEW_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
-    let views = [Vec3::X, Vec3::new(1.0, 0.25, 0.9), Vec3::Z, Vec3::new(0.0, 30.0, 16.0)];
+    let views = [Vec3::X, Vec3::new(1.0, 0.25, 0.9), Vec3::new(-1.0, 0.3, -0.8), Vec3::new(0.0, 30.0, 16.0)];
     for class in arena::FIGHTER_LOOKS {
         // The weapon alone, flat on and edge on.
         let rig = arena::fighter_rig(class);
@@ -185,7 +186,7 @@ fn preview_fighters() {
 
         let tris = figure(class);
         let width = SIZE * views.len();
-        for (name, center, span) in [("fighter", Vec3::Y * 1.0, 2.6), ("head", Vec3::Y * 1.6, 0.9)] {
+        for (name, center, span) in [("fighter", Vec3::Y * 1.0, 2.6), ("body", Vec3::Y * 0.85, 1.7), ("head", Vec3::Y * 1.6, 0.9)] {
             let mut image = vec![[200u8, 204, 200]; width * SIZE];
             for (i, from) in views.into_iter().enumerate() {
                 render(&tris, from, center, span, &mut image, width, i * SIZE);
