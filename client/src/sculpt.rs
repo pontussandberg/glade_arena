@@ -288,6 +288,51 @@ pub fn sweep(points: &[Vec3], radii: &[f32], sides: u32, color: Color) -> Mesh {
     tube(&sections, sides, (true, !pointed))
 }
 
+/// A thin sheet of cloth (a coat's skirt, a streamer, a band of trim) through a grid of points:
+/// `rows` from the top down, each a line of points across it, all the same length. Each row's
+/// span to the next is in its color (`colors[row]`). Two layers `thickness` apart, facing away
+/// from each other, so it shows from both sides; shaded softly faceted, like a tube.
+pub fn sheet(rows: &[Vec<Vec3>], colors: &[Color], thickness: f32) -> Mesh {
+    let (n, m) = (rows.len(), rows[0].len());
+    assert!(n >= 2 && m >= 2 && rows.iter().all(|row| row.len() == m), "a sheet needs an even grid");
+    let at = |i: usize, j: usize| rows[i][j];
+    // A smooth normal at each point: across the sheet crossed with down it.
+    let normals: Vec<Vec<Vec3>> = (0..n)
+        .map(|i| {
+            (0..m)
+                .map(|j| {
+                    let across = at(i, (j + 1).min(m - 1)) - at(i, j.saturating_sub(1));
+                    let down = at((i + 1).min(n - 1), j) - at(i.saturating_sub(1), j);
+                    across.cross(down).normalize_or(Vec3::X)
+                })
+                .collect()
+        })
+        .collect();
+    let mut b = Builder::default();
+    for side in [1.0f32, -1.0] {
+        for i in 0..n - 1 {
+            let color = colors[i.min(colors.len() - 1)];
+            for j in 0..m - 1 {
+                let corners = [(i, j), (i, j + 1), (i + 1, j + 1), (i + 1, j)];
+                let [p0, p1, p2, p3] = corners.map(|(r, c)| at(r, c));
+                let face = ((p2 - p0).cross(p1 - p0) + (p3 - p0).cross(p2 - p0)).normalize_or_zero() * -side;
+                let base = b.positions.len() as u32;
+                for (r, c) in corners {
+                    let smooth = normals[r][c] * side;
+                    b.vertex(at(r, c) + smooth * thickness / 2.0, smooth.lerp(face, FACET).normalize_or(smooth), color);
+                }
+                // Wound to face the way this layer is pushed out.
+                if side > 0.0 {
+                    b.indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+                } else {
+                    b.indices.extend([base, base + 2, base + 1, base, base + 3, base + 2]);
+                }
+            }
+        }
+    }
+    b.build()
+}
+
 /// A box of `size` in `color`, centered on the origin, its edges and corners cut off `bevel` deep,
 /// flat shaded so each bevel catches the light as a thin highlight.
 pub fn bevel_box(size: Vec3, bevel: f32, color: Color) -> Mesh {

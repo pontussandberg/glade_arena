@@ -27,6 +27,8 @@ pub mod browser;
 #[cfg(feature = "render")]
 pub mod camera;
 #[cfg(feature = "render")]
+pub mod cloth;
+#[cfg(feature = "render")]
 pub mod casting;
 #[cfg(feature = "render")]
 pub mod esc_menu;

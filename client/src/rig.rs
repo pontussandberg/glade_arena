@@ -29,10 +29,12 @@ use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 use arena_shared::classes::{AbilityKind, AttackKind};
 use arena_shared::protocol::*;
+use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
+use crate::cloth::WardrobeAssets;
 use crate::feedback::AttackClock;
 use crate::arena::{self, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER, RIG_TAIL};
 use crate::render::shown;
@@ -41,6 +43,7 @@ pub struct RigPlugin;
 
 impl Plugin for RigPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(crate::cloth::ClothPlugin);
         app.add_systems(Startup, load_rigs);
         app.add_systems(Update, (add_rigs, see_throws, turn_fighters, pose_rigs).chain().in_set(Posing));
     }
@@ -146,7 +149,7 @@ const JAVELINIST: Moves = Moves {
     head_dip: [0.0, 0.2, -0.15, 0.0],
     held: Held::OnTarget,
     throws: true,
-    scale: 1.12,
+    scale: 1.16,
 };
 
 const REVENANT: Moves = Moves {
@@ -160,7 +163,7 @@ const REVENANT: Moves = Moves {
     head_dip: [0.0, 0.15, -0.25, 0.0],
     held: Held::InHand(0.45),
     throws: false,
-    scale: 1.0,
+    scale: 1.04,
 };
 
 const FROST_MAGE: Moves = Moves {
@@ -224,10 +227,12 @@ struct RigHandles {
     leg: Handle<Mesh>,
     held: Handle<Mesh>,
     eyes: Handle<Mesh>,
+    eye_glow: Handle<StandardMaterial>,
     glow: Handle<StandardMaterial>,
     held_glow: Option<Handle<Mesh>>,
     body_glow: Option<Handle<Mesh>>,
     tail: Option<Handle<Mesh>>,
+    wardrobe: Option<WardrobeAssets>,
 }
 
 /// Which way a fighter faces, where it was last frame, and how far it moved and turned
@@ -303,7 +308,12 @@ struct Joints {
     tail_sway: Spring,
 }
 
-fn load_rigs(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn load_rigs(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
+) {
     let rigs = ClassId::all()
         .map(|c| {
             let rig = arena::fighter_rig(&c.def().id);
@@ -314,10 +324,12 @@ fn load_rigs(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mater
                 leg: add(rig.leg),
                 held: add(rig.held),
                 eyes: add(rig.eyes),
+                eye_glow: materials.add(arena::glow(rig.eye_glow, EYE_GLOW)),
                 glow: materials.add(arena::glow(rig.glow, EYE_GLOW)),
                 held_glow: rig.held_glow.map(|mesh| meshes.add(mesh)),
                 body_glow: rig.body_glow.map(|mesh| meshes.add(mesh)),
                 tail: rig.tail.map(|tail| meshes.add(tail)),
+                wardrobe: rig.wardrobe.map(|wardrobe| WardrobeAssets::load(wardrobe, &mut meshes, &mut bindposes, &mut materials)),
             };
             (c, handles)
         })
@@ -353,7 +365,7 @@ fn add_rigs(
             walking: 0.0,
             joints: Joints::default(),
         };
-        let eyes = part(&handles.eyes, &handles.glow, Vec3::ZERO);
+        let eyes = part(&handles.eyes, &handles.eye_glow, Vec3::ZERO);
         let held_glow = handles.held_glow.as_ref().map(|mesh| part(mesh, &handles.glow, Vec3::ZERO));
         let body_glow = handles.body_glow.as_ref().map(|mesh| part(mesh, &handles.glow, Vec3::ZERO));
         commands.entity(rig.head).add_child(eyes);
@@ -367,6 +379,9 @@ fn add_rigs(
         commands.entity(player).add_children(&[rig.head, rig.arms[0], rig.arms[1], rig.legs[0], rig.legs[1]]);
         if let Some(tail) = rig.tail {
             commands.entity(player).add_child(tail);
+        }
+        if let Some(wardrobe) = &handles.wardrobe {
+            crate::cloth::dress(&mut commands, player, rig.legs, own, wardrobe);
         }
         commands.entity(player).insert((
             rig,

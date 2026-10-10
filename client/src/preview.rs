@@ -65,6 +65,13 @@ fn figure(class: &str) -> Vec<Tri> {
     if let Some(tail) = &rig.tail {
         triangles(tail, at(RIG_TAIL), &mut tris, false);
     }
+    // Cloth at rest.
+    for drape in rig.wardrobe.iter().flat_map(|wardrobe| &wardrobe.drapes) {
+        triangles(&drape.mesh, Mat4::IDENTITY, &mut tris, false);
+        if let Some(glow) = &drape.glow {
+            triangles(glow, Mat4::IDENTITY, &mut tris, true);
+        }
+    }
     tris
 }
 
