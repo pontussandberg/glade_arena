@@ -11,7 +11,7 @@ use crate::config::*;
 use crate::map::{Map, SPAWN_POINTS, map};
 use crate::protocol::{AbilityState, AttackState, Chilled, Dash, LastSwing, PlayerInput, Projectile, Windup};
 
-/// Advance a player one tick: straight the way its keys walk it, or else toward the tile it
+/// Advance a player one tick: straight the way its keys walk it, or else toward the point it
 /// was told to walk to (point-and-click). Pathfinding runs here, in the shared sim, so the
 /// client predicts exactly the route the server walks. Unreachable or missing targets mean
 /// standing still.
@@ -68,9 +68,10 @@ fn dash_step(pos: Vec2, dir: Vec2, class: ClassId, speed: f32) -> Vec2 {
     if map().line_walkable(pos, next) { next } else { pos }
 }
 
-/// True once a player stands on the clicked tile. Exact: `step_player` snaps onto it.
-pub fn arrived(pos: Vec2, target: IVec2) -> bool {
-    pos == Map::center(target)
+/// True once a player stands on the clicked point (pulled in, if it hugs a wall: where the walk
+/// ends, see `Map::next_waypoint`). Exact: `step_player` snaps onto it.
+pub fn arrived(pos: Vec2, target: Vec2) -> bool {
+    pos == target || (target.is_finite() && pos == map().standing_point(target))
 }
 
 /// What an auto-attack produces.
@@ -83,7 +84,9 @@ pub enum Attack {
 
 /// One tick of the auto-attack. Holding fire while the attack is ready starts a windup: the aim
 /// locks and the cooldown starts. When the windup is over the attack goes off (returned here)
-/// from wherever the player stands then (it can't have moved: winding up roots it).
+/// from wherever the player stands then (it can't have moved: winding up roots it). Released
+/// before a new one may start, so with a windup as long as the cooldown, holding fire winds the
+/// next one up on the very tick the last goes off: rooted throughout, one attack per cooldown.
 pub fn step_attack(
     tick: u32,
     owner: PeerId,
@@ -93,6 +96,18 @@ pub fn step_attack(
     mut state: AttackState,
 ) -> (AttackState, Option<Attack>) {
     let attack = &class.def().attack;
+    let mut released = None;
+    if let Some(Windup { dir, .. }) = state.windup.filter(|windup| tick >= windup.releases_at(class)) {
+        state.windup = None;
+        state.released_at = Some(tick);
+        released = Some(match attack.kind {
+            AttackKind::Projectile { radius, .. } => {
+                let origin = shot_spawn(pos, dir, radius);
+                Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: false })
+            }
+            AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir }),
+        });
+    }
     if state.windup.is_none()
         && input.fire
         && tick >= state.ready_at
@@ -101,21 +116,7 @@ pub fn step_attack(
         state.windup = Some(Windup { started_at: tick, dir });
         state.ready_at = tick + attack.cooldown_ticks;
     }
-    let Some(windup) = state.windup else { return (state, None) };
-    if tick < windup.releases_at(class) {
-        return (state, None);
-    }
-    let dir = windup.dir;
-    state.windup = None;
-    state.released_at = Some(tick);
-    let released = match attack.kind {
-        AttackKind::Projectile { radius, .. } => {
-            let origin = shot_spawn(pos, dir, radius);
-            Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: false })
-        }
-        AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir }),
-    };
-    (state, Some(released))
+    (state, released)
 }
 
 /// Where a shot starts: at the edge of the shooter, so it doesn't start inside them.
@@ -267,7 +268,11 @@ mod tests {
     }
 
     fn walk_to(t: IVec2) -> PlayerInput {
-        PlayerInput { move_to: Some(t), ..default() }
+        walk_to_point(Map::center(t))
+    }
+
+    fn walk_to_point(p: Vec2) -> PlayerInput {
+        PlayerInput { move_to: Some(p), ..default() }
     }
 
     /// The first class whose auto-attack is a projectile / melee (tests don't hard-code classes).
@@ -280,9 +285,13 @@ mod tests {
 
     /// Walks until arrival (or `max_ticks`), checking every step on the way.
     fn walk(from: Vec2, to: IVec2, max_ticks: u32) -> (Vec2, u32) {
+        walk_point(from, Map::center(to), max_ticks)
+    }
+
+    fn walk_point(from: Vec2, to: Vec2, max_ticks: u32) -> (Vec2, u32) {
         let mut p = from;
         for tick in 0..max_ticks {
-            let next = step_player(p, &walk_to(to), SPEED);
+            let next = step_player(p, &walk_to_point(to), SPEED);
             assert!(next.distance(p) <= SPEED * TICK_DT + 1e-5, "too fast at tick {tick}");
             assert!(map().walkable_at(next), "walked onto a blocked tile at {next}");
             if next == p {
@@ -296,7 +305,7 @@ mod tests {
     #[test]
     fn walks_where_its_keys_point_overriding_a_click_and_slides_along_walls() {
         let from = SPAWN_POINTS[0];
-        let keys = PlayerInput { walk: Vec2::new(0.0, 2.0), move_to: Some(Map::tile_of(from) + IVec2::new(3, 0)), ..default() };
+        let keys = PlayerInput { walk: Vec2::new(0.0, 2.0), move_to: Some(from + Vec2::new(3.0, 0.0)), ..default() };
         let next = step_player(from, &keys, SPEED);
         assert!(next.abs_diff_eq(from + Vec2::Y * SPEED * TICK_DT, 1e-5), "walked to {next}");
 
@@ -322,6 +331,25 @@ mod tests {
         assert_eq!(end, Map::center(target));
         // 3 m at 6 m/s is 0.5 s = 32 ticks.
         assert!((31..=34).contains(&ticks), "took {ticks} ticks");
+    }
+
+    #[test]
+    fn walks_to_exactly_the_clicked_point_even_against_a_wall() {
+        let from = SPAWN_POINTS[0];
+        let off_center = from + Vec2::new(0.27, 2.81);
+        assert_eq!(walk_point(from, off_center, 500).0, off_center);
+        // A click right against a wall is pulled in to where a body fits, and reached.
+        let m = map();
+        let wall = m.tiles().find(|(t, tile)| *tile == crate::map::Tile::Wall && m.walkable(*t + IVec2::X)).unwrap().0;
+        let clicked = m.walk_target(Map::center(wall + IVec2::X) - Vec2::new(0.49, 0.0), 4).unwrap();
+        let (end, ticks) = walk_point(SPAWN_POINTS[3], clicked, 64 * 30);
+        assert!(arrived(end, clicked), "stuck at {end} after {ticks} ticks, short of {clicked}");
+        // A point the client didn't pull in gets pulled in by the sim the same way: never stuck,
+        // and arrival is recognized.
+        let hugging = Map::center(wall + IVec2::X) - Vec2::new(0.49, 0.0);
+        let end = walk_point(SPAWN_POINTS[3], hugging, 64 * 30).0;
+        assert!(end == clicked && arrived(end, hugging));
+        assert_eq!(step_player(from, &walk_to_point(Vec2::NAN), SPEED), from);
     }
 
     #[test]
@@ -375,6 +403,17 @@ mod tests {
             let expected = vec![10 + windup, 10 + cooldown + windup, 10 + 2 * cooldown + windup];
             assert_eq!(released, expected, "{}", class.def().id);
             assert_eq!(state.released_at, released.last().copied(), "{}: last release", class.def().id);
+        }
+    }
+
+    #[test]
+    fn holding_fire_with_a_full_length_windup_keeps_you_rooted() {
+        for class in ClassId::all().filter(|c| c.def().attack.windup_ticks == c.def().attack.cooldown_ticks) {
+            let mut state = AttackState::default();
+            for tick in 10..10 + 3 * class.def().attack.cooldown_ticks {
+                state = step_attack(tick, PeerId::Netcode(1), class, Vec2::ZERO, &aim(Vec2::X, true), state).0;
+                assert!(state.windup.is_some(), "{}: free to walk at tick {tick} while holding fire", class.def().id);
+            }
         }
     }
 

@@ -60,7 +60,7 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     let (a_start_server, _) = server_player(&mut h.server, A);
     let (a_start_local, ..) = client_view(&mut h.a, A).unwrap();
     let a_target = map().nearest_walkable(Map::tile_of(a_start_local) + IVec2::new(0, 4), 3).unwrap();
-    set_input(&mut h.a, PlayerInput { move_to: Some(a_target), ..default() });
+    set_input(&mut h.a, PlayerInput { move_to: Some(Map::center(a_target)), ..default() });
     let t0 = Instant::now();
     h.until(Duration::from_secs(2), "A's predicted position moves", |h| {
         client_view(&mut h.a, A).unwrap().0.distance(a_start_local) > 0.01
@@ -85,11 +85,11 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     // normal speed (the client only sends a target, never a position or speed).
     let (b_before, _) = server_player(&mut h.server, B);
     let water = map().tiles().find(|(_, t)| *t == Tile::Water).unwrap().0;
-    set_input(&mut h.b, PlayerInput { move_to: Some(water), ..default() });
+    set_input(&mut h.b, PlayerInput { move_to: Some(Map::center(water)), ..default() });
     h.run(Duration::from_millis(400));
     assert_eq!(server_player(&mut h.server, B).0, b_before, "B walked toward an unreachable tile");
     let far = Map::tile_of(-b_before); // the mirrored spot across the river
-    set_input(&mut h.b, PlayerInput { move_to: Some(far), ..default() });
+    set_input(&mut h.b, PlayerInput { move_to: Some(Map::center(far)), ..default() });
     let t0 = Instant::now();
     h.run(Duration::from_millis(500));
     set_input(&mut h.b, PlayerInput::default());

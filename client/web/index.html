@@ -7,14 +7,124 @@
   <style>
     html, body { margin: 0; height: 100%; background: #15171b; color: #ddd; font: 14px system-ui, sans-serif; overflow: hidden; }
     #game { width: 100%; height: 100%; display: block; outline: none; }
-    #status { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; }
+    /* The loading screen, over the canvas until the game says it's up (window.arenaReady). */
+    #loader {
+      position: fixed; inset: 0; display: grid; place-items: center; background: #15171b;
+      transition: opacity 0.4s ease; z-index: 1;
+    }
+    #loader.done { opacity: 0; pointer-events: none; }
+    #loader .box { width: min(360px, calc(100vw - 32px)); display: grid; gap: 14px; }
+    #loader h1 {
+      margin: 0; font: 600 28px/1 system-ui, sans-serif; letter-spacing: 0.35em; text-transform: uppercase;
+      color: #a9b8b6; text-align: center;
+    }
+    #loader .bar { height: 6px; background: #1e2a23; border: 1px solid #2a3a30; overflow: hidden; position: relative; }
+    #loader .fill { height: 100%; width: 0%; background: #8aa05a; transition: width 0.15s linear; }
+    /* No size to go by: a sliver sweeping across instead. */
+    #loader .bar.unknown .fill { position: absolute; width: 30%; animation: sweep 1.2s ease-in-out infinite; }
+    @keyframes sweep { from { left: -30%; } to { left: 100%; } }
+    #loader .phase { display: flex; justify-content: space-between; color: #848a93; font-size: 13px; min-height: 1.2em; }
+    #loader.failed .phase { color: #d9453b; }
+    #loader.failed .bar { display: none; }
+    @media (prefers-reduced-motion: reduce) {
+      #loader, #loader .fill { transition: none; }
+      #loader .bar.unknown .fill { animation: none; left: 0; width: 100%; opacity: 0.5; }
+    }
   </style>
 </head>
 <body>
   <canvas id="game" tabindex="0"></canvas>
-  <div id="status">Loading…</div>
+  <div id="loader" role="status" aria-live="polite">
+    <div class="box">
+      <h1>Arena</h1>
+      <div class="bar unknown"><div class="fill"></div></div>
+      <div class="phase"><span id="phase">Loading…</span><span id="amount"></span></div>
+    </div>
+  </div>
   <script type="module">
-    const status = document.getElementById('status');
+    const loader = document.getElementById('loader');
+    const bar = loader.querySelector('.bar');
+    const fill = loader.querySelector('.fill');
+    const phase = document.getElementById('phase');
+    const amount = document.getElementById('amount');
+    let failed = false;
+    let ready = false;
+
+    // What the loader says, and how far along the bar is (`null`: no telling, it sweeps).
+    function show(text, progress = null, detail = '') {
+      if (failed) return;
+      phase.textContent = text;
+      amount.textContent = detail;
+      bar.classList.toggle('unknown', progress === null);
+      fill.style.width = progress === null ? '' : `${Math.round(progress * 100)}%`;
+    }
+    function fail(error) {
+      if (failed) return;
+      show(`Failed to start: ${error}`);
+      failed = true;
+      loader.classList.add('failed');
+    }
+    // Bevy uses an exception for control flow when the winit loop starts: that one means the
+    // game is running, not that it failed.
+    const isBevyControlFlow = (error) => String(error).includes('Using exceptions for control flow');
+
+    // Called by the game (lobby.rs) once the lobby is drawn.
+    window.arenaReady = () => {
+      if (failed || ready) return;
+      ready = true;
+      loader.classList.add('done');
+      loader.addEventListener('transitionend', () => loader.remove(), { once: true });
+      document.getElementById('game').focus();
+    };
+    // A panic after start (the game logs it and stops) would leave the loader up forever.
+    window.addEventListener('error', (e) => {
+      if (!ready && !isBevyControlFlow(e.message)) fail(e.message);
+    });
+
+    const mb = (bytes) => (bytes / 1048576).toFixed(1);
+    // How long after the game starts the loader goes even if the game never says it's ready.
+    const READY_FALLBACK_MS = 20000;
+
+    // How big the module is (0: no telling): written next to it by build-web.sh, since a
+    // compressed response doesn't say.
+    async function sizeOf(url) {
+      try {
+        const size = await fetch(`${url}.size`, { cache: 'no-store' });
+        if (size.ok) return Number((await size.text()).trim()) || 0;
+      } catch {}
+      return 0;
+    }
+
+    // The game's module, streamed straight on to be compiled as it arrives, counting the bytes
+    // on the way to show how far along it is (at most once a frame). Without a size the bar
+    // sweeps and only the MB so far show.
+    async function download(url) {
+      const [res, total] = await Promise.all([fetch(url), sizeOf(url)]);
+      if (!res.ok) throw new Error(`${url}: ${res.status} ${res.statusText}`);
+      let received = 0;
+      let drawing = false;
+      const draw = () => {
+        drawing = false;
+        if (total) show('Downloading', Math.min(received / total, 1), `${mb(received)} / ${mb(total)} MB`);
+        else show('Downloading', null, `${mb(received)} MB`);
+      };
+      const counted = res.body.pipeThrough(new TransformStream({
+        transform(chunk, out) {
+          received += chunk.length;
+          if (!drawing) {
+            drawing = true;
+            requestAnimationFrame(draw);
+          }
+          out.enqueue(chunk);
+        },
+        // All there: what's left is compiling the rest and starting it.
+        flush() {
+          requestAnimationFrame(() => show('Starting'));
+        },
+      }));
+      return new Response(counted, { headers: { 'Content-Type': 'application/wasm' } });
+    }
+
     try {
       const params = new URLSearchParams(location.search);
       if (['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
@@ -28,16 +138,23 @@
         // Deployed: the game server runs on this page's host, with the same real certificate.
         window.ARENA_SERVER_URL = params.get('server_url') ?? `https://${location.hostname}:5888`;
       }
-      const { default: init } = await import('./pkg/arena-client.js');
-      status.remove();
-      document.getElementById('game').focus();
-      await init();
-    } catch (e) {
-      // Bevy uses an exception for control flow when the winit loop starts; ignore that one.
-      if (!String(e).includes('Using exceptions for control flow')) {
-        status.textContent = 'Failed to start: ' + e;
-        throw e;
+      show('Downloading');
+      const [{ default: init }, wasm] = await Promise.all([
+        import('./pkg/arena-client.js'),
+        download('./pkg/arena-client_bg.wasm'),
+      ]);
+      try {
+        await init({ module_or_path: wasm });
+      } catch (e) {
+        if (!isBevyControlFlow(e)) throw e;
       }
+      // The game loop has started; the arena is being built until the game calls `arenaReady`.
+      // Should that call never come, the game is running anyway: don't hide it forever.
+      show('Building the arena');
+      setTimeout(window.arenaReady, READY_FALLBACK_MS);
+    } catch (e) {
+      fail(e);
+      throw e;
     }
   </script>
 </body>

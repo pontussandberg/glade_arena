@@ -57,7 +57,8 @@ pub struct AttackDef {
     /// Damage on hit (for projectiles with `far_damage`: point blank).
     pub damage: i32,
     pub cooldown_ticks: u32,
-    /// Ticks from starting an attack to it going off; you stand still meanwhile.
+    /// Ticks from starting an attack to it going off; you stand still meanwhile. At most
+    /// `cooldown_ticks`: as long as it, the attack roots you for its whole cycle.
     pub windup_ticks: u32,
     pub kind: AttackKind,
     /// Crowd control each hit applies (none by default).
@@ -294,7 +295,7 @@ mod tests {
             assert!((1..=1000).contains(&c.max_hp), "{}: max_hp", c.id);
             assert!((1.0..=12.0).contains(&c.move_speed), "{}: move_speed", c.id);
             assert!(c.attack.damage > 0 && c.attack.cooldown_ticks > 0, "{}: attack", c.id);
-            assert!(c.attack.windup_ticks < c.attack.cooldown_ticks, "{}: windup as long as the cooldown", c.id);
+            assert!(c.attack.windup_ticks <= c.attack.cooldown_ticks, "{}: windup longer than the cooldown", c.id);
             match c.attack.kind {
                 AttackKind::Melee { range, arc_degrees } => {
                     assert!((0.5..=4.0).contains(&range) && (10.0..=360.0).contains(&arc_degrees), "{}: melee", c.id);
