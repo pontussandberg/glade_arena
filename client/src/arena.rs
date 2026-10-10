@@ -1,4 +1,4 @@
-//! "The Glade" art direction: a low-poly forest clearing at dusk, with a river, a stone bridge,
+//! The arena's look: a low-poly forest clearing at dusk, with a river, a stone bridge,
 //! ruined walls and torches. See `docs/art-direction.md`. The layout itself comes from the shared
 //! `arena_shared::map`, so what you see is exactly what blocks movement and shots.
 //!
@@ -1018,13 +1018,13 @@ pub fn haze() -> DistanceFog {
     DistanceFog { color: HAZE, falloff: FogFalloff::Linear { start: 40.0, end: 95.0 }, ..default() }
 }
 
-pub struct GladePlugin;
+pub struct ArenaPlugin;
 
-impl Plugin for GladePlugin {
+impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClearColor(HAZE));
         app.insert_resource(GlobalAmbientLight { color: SKY, brightness: 160.0, ..default() });
-        app.add_systems(Startup, build_glade);
+        app.add_systems(Startup, build_arena);
         app.add_systems(Update, flicker_torches);
     }
 }
@@ -1032,7 +1032,7 @@ impl Plugin for GladePlugin {
 const WATER_LEVEL: f32 = -0.3;
 const RIVERBED_LEVEL: f32 = -0.65;
 
-/// Deterministic, so the glade looks the same for every player and every run.
+/// Deterministic, so the arena looks the same for every player and every run.
 struct Lcg(u64);
 
 impl Lcg {
@@ -1312,7 +1312,7 @@ fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight,
     }
 }
 
-fn build_glade(
+fn build_arena(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -1432,7 +1432,7 @@ impl Props {
     }
 
     fn into_mesh(self) -> Mesh {
-        self.out.expect("the glade has props")
+        self.out.expect("the arena has props")
     }
 
     /// Ruined walls: stacked stone blocks of uneven height, some with a block on top. Returns the

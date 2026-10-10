@@ -33,7 +33,7 @@ pub mod esc_menu;
 #[cfg(feature = "render")]
 pub mod feedback;
 #[cfg(feature = "render")]
-pub mod glade;
+pub mod arena;
 #[cfg(feature = "render")]
 pub mod lobby;
 #[cfg(feature = "render")]

@@ -12,7 +12,7 @@ use arena_shared::protocol::*;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
-use crate::glade::palette;
+use crate::arena::palette;
 use crate::lobby;
 use crate::render::{GameUi, ui_text};
 use crate::tooltip::{Side, hover_shows, tip, tip_text};

@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::feedback::AttackClock;
-use crate::glade::palette;
+use crate::arena::palette;
 use crate::render::{GameUi, shown, ui_text};
 use crate::stat_frame::{self, Blurb};
 use crate::tooltip::{Side, hover_shows, tip, tip_note, tip_text, tip_title};

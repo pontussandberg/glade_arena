@@ -1,6 +1,6 @@
 //! Fighters, projectiles, melee swings, dash streaks, nova bursts and windup telegraphs, frost on
 //! slowed and frozen fighters, the destination marker and the HUD, plus mouse and keyboard input.
-//! The scene itself is in `glade.rs`, the camera in `camera.rs`, the server browser in
+//! The scene itself is in `arena.rs`, the camera in `camera.rs`, the server browser in
 //! `browser.rs`, a room's lobby in `lobby.rs` and the ESC menu in `esc_menu.rs`.
 
 use std::fmt::Write;
@@ -20,7 +20,7 @@ use crate::camera::{CameraMode, CameraPlaced, key_axis};
 use crate::casting::{Aiming, CastMode};
 use crate::rooms::{load_setting, save_setting};
 use crate::feedback::AttackClock;
-use crate::glade::{self, palette, to_gameplay, to_world};
+use crate::arena::{self, palette, to_gameplay, to_world};
 use crate::rig::{HeldAt, SeenThrows};
 
 pub struct RenderPlugin;
@@ -28,7 +28,7 @@ pub struct RenderPlugin;
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
-            glade::GladePlugin,
+            arena::ArenaPlugin,
             crate::camera::CameraPlugin,
             crate::casting::CastingPlugin,
             crate::browser::BrowserPlugin,
@@ -142,19 +142,19 @@ pub(crate) struct Visuals {
     swing_fans: HashMap<ClassId, Handle<Mesh>>,
     /// A circle at the edge of a projectile class's auto-attack range, shown around you.
     range_circles: HashMap<ClassId, Handle<Mesh>>,
-    /// The swoosh a melee class's swing leaves in the air (`glade::swoosh_mesh`), and its
+    /// The swoosh a melee class's swing leaves in the air (`arena::swoosh_mesh`), and its
     /// material as it fades out, brightest first.
     swooshes: HashMap<ClassId, Handle<Mesh>>,
     swoosh_fades: Vec<Handle<StandardMaterial>>,
     /// The ground a dash covers, for its streak.
     dash_streaks: HashMap<ClassId, Handle<Mesh>>,
-    /// A nova's burst (see `glade::NovaMeshes`).
-    novas: HashMap<ClassId, glade::NovaMeshes<Handle<Mesh>>>,
+    /// A nova's burst (see `arena::NovaMeshes`).
+    novas: HashMap<ClassId, arena::NovaMeshes<Handle<Mesh>>>,
     /// The ice around a frozen (rooted) fighter's feet, and the frost under a slowed one's.
     ice_prison: Handle<Mesh>,
     frost_rune: Handle<Mesh>,
     /// Per class and shot (auto-attack: false, Q: true).
-    projectiles: HashMap<(ClassId, bool), glade::ShotLook<Handle<Mesh>>>,
+    projectiles: HashMap<(ClassId, bool), arena::ShotLook<Handle<Mesh>>>,
     shot_tip: Handle<Mesh>,
     wind: Handle<Mesh>,
     /// Per owner (`None` for looks that are the same for everyone: all but bodies, so a hit
@@ -207,18 +207,18 @@ impl Visuals {
                 materials.add(match look {
                     // Fighters wear their own colors (in the mesh); who they are to you shows in
                     // their health bars.
-                    Look::Body => glade::matte(Color::WHITE),
-                    Look::Shot => glade::glow(palette::SILVER, 4.0),
-                    Look::Ice => glade::glow(Color::WHITE, 4.0),
-                    Look::Aura => glade::translucent(palette::FROST_GLOW, 0.35, 2.0),
-                    Look::Spirit => glade::glow(palette::SPIRIT, 6.0),
-                    Look::Plain => glade::matte(Color::WHITE),
-                    Look::Wind => glade::translucent(Color::WHITE, 0.6, 1.5),
-                    Look::Spark => glade::glow(Color::WHITE, 5.0),
-                    Look::Telegraph => glade::translucent(palette::SUN, 0.22, 1.2),
-                    Look::Range => glade::translucent(Color::WHITE, 0.2, 1.0),
-                    Look::Frost => glade::translucent(palette::ICE, 0.45, 1.6),
-                    Look::Chill => glade::translucent(palette::FROST_GLOW, 0.75, 2.5),
+                    Look::Body => arena::matte(Color::WHITE),
+                    Look::Shot => arena::glow(palette::SILVER, 4.0),
+                    Look::Ice => arena::glow(Color::WHITE, 4.0),
+                    Look::Aura => arena::translucent(palette::FROST_GLOW, 0.35, 2.0),
+                    Look::Spirit => arena::glow(palette::SPIRIT, 6.0),
+                    Look::Plain => arena::matte(Color::WHITE),
+                    Look::Wind => arena::translucent(Color::WHITE, 0.6, 1.5),
+                    Look::Spark => arena::glow(Color::WHITE, 5.0),
+                    Look::Telegraph => arena::translucent(palette::SUN, 0.22, 1.2),
+                    Look::Range => arena::translucent(Color::WHITE, 0.2, 1.0),
+                    Look::Frost => arena::translucent(palette::ICE, 0.45, 1.6),
+                    Look::Chill => arena::translucent(palette::FROST_GLOW, 0.75, 2.5),
                 })
             })
             .clone()
@@ -341,16 +341,16 @@ fn setup_scene(
     commands.spawn((
         DestinationMarker,
         Mesh3d(meshes.add(Annulus::new(0.28, 0.4).mesh().resolution(12).build())),
-        MeshMaterial3d(materials.add(glade::glow(palette::YOU, 2.0))),
+        MeshMaterial3d(materials.add(arena::glow(palette::YOU, 2.0))),
         Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
         Visibility::Hidden,
     ));
     commands.insert_resource(Visuals {
-        fighters: ClassId::all().map(|c| (c, meshes.add(glade::fighter_mesh(&c.def().id)))).collect(),
+        fighters: ClassId::all().map(|c| (c, meshes.add(arena::fighter_mesh(&c.def().id)))).collect(),
         swing_fans: ClassId::all()
             .filter_map(|c| match c.def().attack.kind {
                 AttackKind::Melee { range, arc_degrees } => {
-                    Some((c, meshes.add(glade::swing_mesh(range + PLAYER_RADIUS, arc_degrees))))
+                    Some((c, meshes.add(arena::swing_mesh(range + PLAYER_RADIUS, arc_degrees))))
                 }
                 AttackKind::Projectile { .. } => None,
             })
@@ -369,7 +369,7 @@ fn setup_scene(
             .collect(),
         swooshes: ClassId::all()
             .filter_map(|c| match c.def().attack.kind {
-                AttackKind::Melee { range, arc_degrees } => Some((c, meshes.add(glade::swoosh_mesh(range, arc_degrees)))),
+                AttackKind::Melee { range, arc_degrees } => Some((c, meshes.add(arena::swoosh_mesh(range, arc_degrees)))),
                 AttackKind::Projectile { .. } => None,
             })
             .collect(),
@@ -377,37 +377,37 @@ fn setup_scene(
         swoosh_fades: (0..SWOOSH_FADES)
             .map(|i| {
                 let left = 1.0 - ((i as f32 / SWOOSH_FADES as f32 - 0.3) / 0.7).max(0.0);
-                materials.add(glade::translucent(palette::SILVER, 0.9 * left, 2.5))
+                materials.add(arena::translucent(palette::SILVER, 0.9 * left, 2.5))
             })
             .collect(),
         dash_streaks: ClassId::all()
             .filter_map(|c| match c.def().ability.kind {
-                AbilityKind::Dash { distance, .. } => Some((c, meshes.add(glade::lane_mesh(0.0, distance, 0.9)))),
+                AbilityKind::Dash { distance, .. } => Some((c, meshes.add(arena::lane_mesh(0.0, distance, 0.9)))),
                 AbilityKind::Projectile { .. } | AbilityKind::Nova { .. } => None,
             })
             .collect(),
         novas: ClassId::all()
             .filter_map(|c| match c.def().ability.kind {
                 AbilityKind::Nova { radius, .. } => {
-                    let glade::NovaMeshes { disc, ring, shard, eruption } = glade::nova_meshes(radius);
+                    let arena::NovaMeshes { disc, ring, shard, eruption } = arena::nova_meshes(radius);
                     let mut add = |mesh| meshes.add(mesh);
-                    Some((c, glade::NovaMeshes { disc: add(disc), ring: add(ring), shard: add(shard), eruption: add(eruption) }))
+                    Some((c, arena::NovaMeshes { disc: add(disc), ring: add(ring), shard: add(shard), eruption: add(eruption) }))
                 }
                 AbilityKind::Projectile { .. } | AbilityKind::Dash { .. } => None,
             })
             .collect(),
-        ice_prison: meshes.add(glade::ice_prison_mesh()),
-        frost_rune: meshes.add(glade::frost_rune_mesh()),
+        ice_prison: meshes.add(arena::ice_prison_mesh()),
+        frost_rune: meshes.add(arena::frost_rune_mesh()),
         projectiles: ClassId::all()
             .flat_map(|c| [false, true].map(|ability| (c, ability)))
             .filter_map(|(c, ability)| {
-                let glade::ShotLook { mesh, glow, thrown, aura, spin } = glade::shot_look(c.def(), c.def().shot(ability)?, ability);
-                let look = glade::ShotLook { mesh: meshes.add(mesh), glow, thrown, aura: aura.map(|a| meshes.add(a)), spin };
+                let arena::ShotLook { mesh, glow, thrown, aura, spin } = arena::shot_look(c.def(), c.def().shot(ability)?, ability);
+                let look = arena::ShotLook { mesh: meshes.add(mesh), glow, thrown, aura: aura.map(|a| meshes.add(a)), spin };
                 Some(((c, ability), look))
             })
             .collect(),
-        shot_tip: meshes.add(glade::shot_tip_mesh()),
-        wind: meshes.add(glade::wind_mesh()),
+        shot_tip: meshes.add(arena::shot_tip_mesh()),
+        wind: meshes.add(arena::wind_mesh()),
         materials: HashMap::default(),
     });
     commands
@@ -681,17 +681,17 @@ fn add_visuals(
         }
     }
     for (entity, projectile, pos) in &projectiles {
-        let Some(glade::ShotLook { mesh, glow, thrown, aura, spin }) =
+        let Some(arena::ShotLook { mesh, glow, thrown, aura, spin }) =
             visuals.projectiles.get(&(projectile.class, projectile.ability)).cloned()
         else {
             continue;
         };
         // Never in its owner's colors: a shot looks the same whoever throws it.
         let look = match glow {
-            glade::ShotGlow::Weapon => Look::Plain,
-            glade::ShotGlow::Spirit => Look::Spirit,
-            glade::ShotGlow::Ice => Look::Ice,
-            glade::ShotGlow::Pale => Look::Shot,
+            arena::ShotGlow::Weapon => Look::Plain,
+            arena::ShotGlow::Spirit => Look::Spirit,
+            arena::ShotGlow::Ice => Look::Ice,
+            arena::ShotGlow::Pale => Look::Shot,
         };
         let body = visuals.material(&mut materials, projectile.owner, look);
         let mut shot = commands.entity(entity);
@@ -705,7 +705,7 @@ fn add_visuals(
             shot.insert(Spin(spin));
         }
         // A real weapon, in its own colors, gets a white glow on its point.
-        if glow == glade::ShotGlow::Weapon {
+        if glow == arena::ShotGlow::Weapon {
             let spark = visuals.material(&mut materials, projectile.owner, Look::Spark);
             shot.with_child((Mesh3d(visuals.shot_tip.clone()), MeshMaterial3d(spark)));
         }
@@ -1102,7 +1102,7 @@ fn fly_shots(
                     Some((to_world(projectile.origin, height), along))
                 } else {
                     holders.iter().find(|(id, _)| id.0 == projectile.owner).map(|(_, held)| {
-                        let from = held.0.translation + held.0.rotation * Vec3::Y * glade::GRIP_TO_TIP;
+                        let from = held.0.translation + held.0.rotation * Vec3::Y * arena::GRIP_TO_TIP;
                         (from, held.0.rotation * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2))
                     })
                 };

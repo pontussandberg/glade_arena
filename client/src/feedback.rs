@@ -11,7 +11,7 @@ use lightyear::interpolation::timeline::InterpolationTimeline;
 use lightyear::prelude::*;
 
 use crate::camera::CameraPlaced;
-use crate::glade::{palette, to_world};
+use crate::arena::{palette, to_world};
 use crate::render::{Relation, set_fill, shown, ui_text};
 use crate::render::GameUi;
 use crate::rig::SeenThrows;

@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::feedback::AttackClock;
-use crate::glade::{self, palette, to_world};
+use crate::arena::{self, palette, to_world};
 use crate::render::shown;
 
 pub struct PickupsPlugin;
@@ -105,7 +105,7 @@ pub(crate) fn icon(kind: PickupKind) -> &'static str {
 fn load_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     let mut kind = |kind| {
         let c = color(kind);
-        (materials.add(glade::glow(c, GLOW)), materials.add(glade::translucent(c, 0.3, 1.5)))
+        (materials.add(arena::glow(c, GLOW)), materials.add(arena::translucent(c, 0.3, 1.5)))
     };
     let (heal, haste) = (kind(PickupKind::Heal), kind(PickupKind::Haste));
     commands.insert_resource(PickupLooks {
@@ -116,11 +116,11 @@ fn load_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mate
         boot_shaft: meshes.add(Cuboid::new(0.16, 0.32, 0.17)),
         boot_foot: meshes.add(Cuboid::new(0.36, 0.12, 0.17)),
         feather: meshes.add(Cuboid::new(1.0, 0.05, 0.025)),
-        wing: materials.add(glade::glow(palette::ICE, GLOW)),
+        wing: materials.add(arena::glow(palette::ICE, GLOW)),
         ring: meshes.add(Annulus::new(0.8, 1.0).mesh().resolution(40).build()),
         spark: meshes.add(Cuboid::new(0.08, 0.08, 0.08)),
         streak: meshes.add(Cuboid::new(1.0, 0.03, 0.03)),
-        streak_material: materials.add(glade::translucent(palette::HASTE, 0.7, 2.5)),
+        streak_material: materials.add(arena::translucent(palette::HASTE, 0.7, 2.5)),
     });
 }
 
