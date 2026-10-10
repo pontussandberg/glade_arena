@@ -48,8 +48,7 @@ server/   headless authoritative server (spawning, hit decisions, lag compensati
           tests/integration/ has the end-to-end tests (one test binary: each links all of Bevy)
 client/   ClientNetPlugin (networking + prediction, headless-capable), bot (sparring AI);
           render (fighters, shots, swings, telegraphs, dash streaks, novas, frost, HUD, input), camera,
-          action_bar (your ability icon and cooldown), minimap,
-          dev (dev mode: the inspect camera),
+          action_bar (your ability icon and cooldown), minimap, inspect (F2's fighter panel),
           glade (the 3D scene and all meshes), rig (animated fighters: facing, walk cycle,
           windup and throw), lobby (character select), feedback (health and cast bars, hit flash)
 client/web/  index.html for the browser build (pkg/ and digest.txt are generated)
@@ -148,10 +147,8 @@ cargo run -p arena-client
 # a sparring partner: a native client played by a simple bot
 ARENA_BOT=1 cargo run -p arena-client -- 99 revenant
 
-# dev mode (natively ARENA_DEV=1, in the browser add ?dev to the URL): F2 toggles an inspect
-# camera that orbits close around one fighter as it plays. Tab: next fighter, middle-drag or [ ]: orbit,
-# wheel: zoom; a panel shows what it's doing. Handy with two bots fighting:
-ARENA_DEV=1 ARENA_BOT=1 cargo run -p arena-client -- 98 javelinist
+# to watch two bots fight, start a second one, then in your client press V and Tab to them
+ARENA_BOT=1 cargo run -p arena-client -- 98 javelinist
 ```
 
 The server makes a new self-signed certificate (valid 14 days) on every start. The page reads
@@ -164,8 +161,11 @@ click to attack toward the cursor, Q for your ability toward the cursor. The cam
 you; the mouse wheel zooms.
 
 V toggles a free, WoW-style camera that follows behind you: WASD walks relative to it, holding
-the right mouse button and dragging turns it, the wheel zooms. Click to move still works there:
-a right click without dragging walks to where you clicked. V again goes back.
+the right mouse button and dragging (or the arrow keys) turns it, the wheel (or + / -) zooms,
+down to arm's length. There the right button only turns the camera: click to move is off. Tab
+moves it on to the next fighter, to watch them play (and after the last, back to
+you). V again goes back. F2 shows a panel about the fighter the camera is on: health, what
+it's doing (winding up, dashing, frozen...) and where.
 
 Two tabs work: a hidden tab keeps simulating and networking without rendering (see
 `client/src/hidden_tab.rs`, which works around Bevy 0.19 ignoring Lightyear's keepalive). If a

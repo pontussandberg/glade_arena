@@ -28,7 +28,6 @@
         // Deployed: the game server runs on this page's host, with the same real certificate.
         window.ARENA_SERVER_URL = params.get('server_url') ?? `https://${location.hostname}:5888`;
       }
-      if (params.has('dev')) window.ARENA_DEV = '1';
       const { default: init } = await import('./pkg/arena-client.js');
       status.remove();
       document.getElementById('game').focus();
