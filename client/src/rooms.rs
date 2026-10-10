@@ -201,23 +201,32 @@ fn enter_game(
 const GUEST_NAME_KEY: &str = "arena.guest";
 
 pub fn load_guest_name() -> Option<String> {
+    load_setting(GUEST_NAME_KEY)
+}
+
+fn save_guest_name(name: &str) {
+    save_setting(GUEST_NAME_KEY, name);
+}
+
+/// Something the browser keeps for us (`localStorage`) across reloads. Nothing outside a browser.
+pub fn load_setting(key: &str) -> Option<String> {
     #[cfg(target_family = "wasm")]
     {
         let storage = web_sys::window()?.local_storage().ok()??;
-        storage.get_item(GUEST_NAME_KEY).ok()?
+        storage.get_item(key).ok()?
     }
     #[cfg(not(target_family = "wasm"))]
     {
-        let _ = GUEST_NAME_KEY;
+        let _ = key;
         None
     }
 }
 
-fn save_guest_name(name: &str) {
+pub fn save_setting(key: &str, value: &str) {
     #[cfg(target_family = "wasm")]
     if let Some(Ok(Some(storage))) = web_sys::window().map(|w| w.local_storage()) {
-        let _ = storage.set_item(GUEST_NAME_KEY, name);
+        let _ = storage.set_item(key, value);
     }
     #[cfg(not(target_family = "wasm"))]
-    let _ = name;
+    let _ = (key, value);
 }

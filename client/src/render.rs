@@ -15,7 +15,10 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::DesiredInput;
+use crate::action_bar::AbilityIcon;
 use crate::camera::{CameraMode, CameraPlaced, key_axis};
+use crate::casting::{Aiming, CastMode};
+use crate::rooms::{load_setting, save_setting};
 use crate::feedback::AttackClock;
 use crate::glade::{self, palette, to_gameplay, to_world};
 use crate::rig::{HeldAt, SeenThrows};
@@ -27,6 +30,7 @@ impl Plugin for RenderPlugin {
         app.add_plugins((
             glade::GladePlugin,
             crate::camera::CameraPlugin,
+            crate::casting::CastingPlugin,
             crate::browser::BrowserPlugin,
             crate::lobby::LobbyPlugin,
             crate::esc_menu::EscMenuPlugin,
@@ -36,7 +40,9 @@ impl Plugin for RenderPlugin {
             crate::minimap::MinimapPlugin,
             crate::pickups::PickupsPlugin,
             crate::stat_frame::StatFramePlugin,
+            crate::tooltip::TooltipPlugin,
         ));
+        app.insert_resource(ControlsOpen(load_setting(CONTROLS_KEY).as_deref() == Some("open")));
         app.add_systems(Startup, setup_scene);
         app.add_systems(
             Update,
@@ -47,7 +53,7 @@ impl Plugin for RenderPlugin {
                 (show_swings, sweep_swooshes, show_dashes, show_novas, grow_bursts, fade_swings, show_frost),
                 (show_telegraphs, align_to_world).chain().after(crate::rig::Posing),
                 toggle_range_circle,
-                (update_status, update_key_hints),
+                (update_status, update_key_hints, fold_controls),
                 (mark_relations, light_buttons),
             ),
         );
@@ -296,6 +302,24 @@ struct Status;
 #[derive(Component)]
 struct KeyHints;
 
+/// Whether the key hints are unfolded (folded away by default, so they're out of the way in a
+/// fight). The browser keeps it, as "open" or "closed".
+#[derive(Resource)]
+struct ControlsOpen(bool);
+
+const CONTROLS_KEY: &str = "arena.controls";
+
+/// "Controls", over the key hints: clicking it folds them away or out. Its chevron (a corner of a
+/// square, turned) points right while folded and down while open.
+#[derive(Component)]
+struct ControlsHeader {
+    chevron: Entity,
+}
+
+/// A HUD control a left click is for: clicking it never attacks (`read_local_input`).
+#[derive(Component)]
+pub(crate) struct HudButton;
+
 /// The in-game UI (HUD, minimap): hidden while the lobby is open.
 #[derive(Component)]
 pub(crate) struct GameUi;
@@ -403,6 +427,26 @@ fn setup_scene(
         ))
         .with_children(|corner| {
             corner.spawn((Status, ui_text("connecting...", 12.0, palette::HAZE)));
+            let chevron = corner
+                .spawn((
+                    Node {
+                        width: px(5.0),
+                        height: px(5.0),
+                        border: UiRect { right: px(1.5), bottom: px(1.5), ..default() },
+                        ..default()
+                    },
+                    BorderColor::all(palette::STONE),
+                ))
+                .id();
+            let label = corner.spawn(ui_text("Controls", 12.0, palette::STONE)).id();
+            corner
+                .spawn((
+                    ControlsHeader { chevron },
+                    HudButton,
+                    Interaction::default(),
+                    Node { column_gap: px(8.0), align_items: AlignItems::Center, ..default() },
+                ))
+                .add_children(&[chevron, label]);
             // Two columns: the keys, as wide as the widest, then what they do, all left-aligned.
             corner.spawn((
                 KeyHints,
@@ -420,20 +464,43 @@ fn setup_scene(
 }
 
 /// Mouse -> `DesiredInput`, LoL-style: right click walks to the clicked point, left click
-/// attacks toward the cursor.
+/// attacks toward the cursor. Q casts right away (quick cast) or first shows where it will go,
+/// cast by the next left click and dropped by a right click (normal cast); Shift+Q is the other
+/// one (see `casting.rs`). Clicking the Q icon is always a normal cast.
+#[allow(clippy::too_many_arguments)]
 fn read_local_input(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     window: Option<Single<&Window>>,
     camera: Single<(&Camera, &GlobalTransform)>,
-    me: Query<&Pos, (With<Predicted>, With<PlayerId>)>,
-    mode: Res<CameraMode>,
+    me: Query<(&Pos, &AbilityState), (With<Predicted>, With<PlayerId>)>,
+    (mode, cast_mode, clock): (Res<CameraMode>, Res<CastMode>, AttackClock),
+    hud: Query<
+        (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Has<AbilityIcon>),
+        Or<(With<HudButton>, With<AbilityIcon>)>,
+    >,
+    mut aiming: ResMut<Aiming>,
+    mut held_click: Local<bool>,
     mut last_pos: Local<Option<Vec2>>,
     mut desired: ResMut<DesiredInput>,
 ) {
+    let me = me.single().ok();
+    // A normal cast only aims while Q is ready, as in LoL.
+    let ability_ready = me.is_some_and(|(_, ability)| ability.ready_at as f32 <= clock.now(true));
+    let me = me.map(|(p, _)| p.0);
     let (camera, camera_transform) = *camera;
+    // Whether the cursor is on a HUD control, or on the Q icon. Tested on the nodes themselves,
+    // so nothing drawn over them can get in the way.
+    let screen = window.as_ref().and_then(|w| w.physical_cursor_position());
+    let on = |icon: bool| {
+        screen.is_some_and(|at| {
+            hud.iter().any(|(node, transform, visible, is_icon)| {
+                is_icon == icon && visible.get() && node.contains_point(*transform, at)
+            })
+        })
+    };
+    let (on_control, on_icon) = (on(false), on(true));
     let cursor = window.and_then(|w| w.cursor_position()).and_then(|c| ground_at(camera, camera_transform, c));
-    let me = me.single().ok().map(|p| p.0);
 
     let mut move_to = desired.0.move_to;
     // A jump (respawn or server correction) cancels the old destination. (So does attacking:
@@ -464,7 +531,38 @@ fn read_local_input(
         (Some(cursor), Some(me)) => cursor - me,
         _ => desired.0.aim,
     };
-    let fire = mouse.pressed(MouseButton::Left);
+    let mut ability = desired.0.ability;
+    if keys.just_pressed(KeyCode::KeyQ) {
+        let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+        if cast_mode.casts_now(shift) {
+            ability = true;
+            aiming.0 = false;
+        } else if ability_ready {
+            aiming.0 = true;
+        }
+    }
+    // A left click that casts, aims (on the Q icon) or is for a HUD control doesn't also
+    // attack: no attacking until it's let go. A right click (MOBA camera) drops the aim, and
+    // walks as usual; ESC drops it too (`esc_menu`).
+    if mouse.just_pressed(MouseButton::Left) {
+        if on_control {
+            *held_click = true;
+        } else if on_icon {
+            aiming.0 = ability_ready;
+            *held_click = true;
+        } else if aiming.0 {
+            ability = true;
+            aiming.0 = false;
+            *held_click = true;
+        }
+    }
+    if !mode.free && mouse.just_pressed(MouseButton::Right) {
+        aiming.0 = false;
+    }
+    if !mouse.pressed(MouseButton::Left) {
+        *held_click = false;
+    }
+    let fire = mouse.pressed(MouseButton::Left) && !aiming.0 && !*held_click;
     // With the free camera, WASD walks relative to it, dropping any destination; otherwise S
     // stops: drops the destination (as in LoL).
     let walk = if mode.free {
@@ -476,8 +574,8 @@ fn read_local_input(
     if walk != Vec2::ZERO || (!mode.free && keys.just_pressed(KeyCode::KeyS)) {
         move_to = None;
     }
-    // Kept until it's been sent (`write_input` clears it), so a short tap isn't missed.
-    let ability = desired.0.ability || keys.just_pressed(KeyCode::KeyQ);
+    // `ability` is kept until it's been sent (`write_input` clears it), so a short tap isn't
+    // missed.
     desired.0 = PlayerInput { move_to, walk, aim, fire, ability };
 }
 
@@ -1081,16 +1179,39 @@ fn update_status(
 
 /// The keys for the camera you're using, one per row: the key in a chip, then what it does.
 /// Rebuilt when the camera changes.
+/// A click on "Controls" folds the key hints away or out (and the browser remembers it).
+fn fold_controls(
+    header: Single<(Ref<Interaction>, &ControlsHeader)>,
+    mut open: ResMut<ControlsOpen>,
+    mut hints: Single<&mut Node, With<KeyHints>>,
+    mut chevrons: Query<&mut UiTransform>,
+) {
+    let (interaction, header) = header.into_inner();
+    if clicked(interaction) {
+        open.0 = !open.0;
+        save_setting(CONTROLS_KEY, if open.0 { "open" } else { "closed" });
+    }
+    if !open.is_changed() {
+        return;
+    }
+    hints.display = if open.0 { Display::Grid } else { Display::None };
+    if let Ok(mut chevron) = chevrons.get_mut(header.chevron) {
+        // Its corner points down while open, right while folded.
+        *chevron = UiTransform::from_rotation(Rot2::degrees(if open.0 { 45.0 } else { -45.0 }));
+    }
+}
+
 fn update_key_hints(
     mut commands: Commands,
     mode: Res<CameraMode>,
+    cast_mode: Res<CastMode>,
     hints: Single<Entity, With<KeyHints>>,
-    mut built_for: Local<Option<bool>>,
+    mut built_for: Local<Option<(bool, bool)>>,
 ) {
-    if *built_for == Some(mode.free) {
+    if *built_for == Some((mode.free, cast_mode.quick)) {
         return;
     }
-    *built_for = Some(mode.free);
+    *built_for = Some((mode.free, cast_mode.quick));
     let keys: &[(&str, &str)] = if mode.free {
         &[
             ("WASD", "move"),
@@ -1115,5 +1236,6 @@ fn update_key_hints(
             grid.spawn(key_chip(*key, 11.0, palette::HAZE, palette::STONE.with_alpha(0.5)));
             grid.spawn(ui_text(*action, 12.0, palette::STONE));
         }
+        crate::casting::spawn_toggle_row(grid, cast_mode.quick);
     });
 }

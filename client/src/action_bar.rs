@@ -15,12 +15,13 @@ use crate::feedback::AttackClock;
 use crate::glade::palette;
 use crate::render::{shown, ui_text};
 use crate::stat_frame::{self, Blurb};
+use crate::tooltip::{Side, hover_shows, tip, tip_note, tip_text, tip_title};
 
 pub struct ActionBarPlugin;
 
 impl Plugin for ActionBarPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, ((spawn_icon, update_icon).chain(), show_tooltips));
+        app.add_systems(Update, (spawn_icon, update_icon).chain());
     }
 }
 
@@ -35,13 +36,10 @@ const PASSIVE_GAP: f32 = 10.0;
 /// A tooltip's width (pixels).
 const TIP_WIDTH: f32 = 280.0;
 
-/// Hovering this (with an `Interaction`) shows that tooltip.
+/// The Q icon (this entity) and the parts that change: the wipe and the seconds. Clicking it
+/// aims Q, a normal cast whatever quick cast is set to (`render::read_local_input`).
 #[derive(Component)]
-pub(crate) struct Tooltip(pub Entity);
-
-/// The Q icon (this entity) and the parts that change: the wipe and the seconds.
-#[derive(Component)]
-struct AbilityIcon {
+pub(crate) struct AbilityIcon {
     wipe: Entity,
     seconds: Entity,
 }
@@ -143,8 +141,7 @@ fn spawn_passive(commands: &mut Commands, blurb: Blurb) {
 /// the screen, bottoms all lined up; hovering it shows `tip`.
 fn icon_frame(tip: Entity, size: f32, from_center: f32, border: Color) -> impl Bundle {
     (
-        Tooltip(tip),
-        Interaction::default(),
+        hover_shows(tip),
         Node {
             position_type: PositionType::Absolute,
             bottom: px(BOTTOM + 14.0),
@@ -160,48 +157,16 @@ fn icon_frame(tip: Entity, size: f32, from_center: f32, border: Color) -> impl B
     )
 }
 
-/// A tooltip above an icon `size` pixels wide, centered on it, hidden until it's hovered: the
-/// name, what kind it is, and what it does.
+/// A tooltip above an icon `size` pixels wide, centered on it: the name, what kind it is, and
+/// what it does.
 fn tooltip(commands: &mut Commands, blurb: Blurb, size: f32) -> Entity {
+    let kind = blurb.cooldown.map_or("Passive".to_string(), |cooldown| format!("Q ability, {cooldown}"));
     commands
-        .spawn(tip_panel(Node {
-            position_type: PositionType::Absolute,
-            bottom: px(size + 10.0),
-            left: px((size - TIP_WIDTH) / 2.0),
-            width: px(TIP_WIDTH),
-            flex_direction: FlexDirection::Column,
-            row_gap: px(4.0),
-            padding: UiRect::all(px(10.0)),
-            ..default()
-        }))
-        .with_children(|tip| {
-            tip.spawn(ui_text(blurb.name, 15.0, palette::HAZE));
-            let kind = blurb.cooldown.map_or("Passive".to_string(), |cooldown| format!("Q ability, {cooldown}"));
-            tip.spawn(ui_text(kind, 11.0, palette::STONE));
-            tip.spawn(ui_text(blurb.description, 13.0, palette::HAZE));
-        })
+        .spawn((
+            tip(Side::Above, (size - TIP_WIDTH) / 2.0, TIP_WIDTH),
+            children![tip_title(blurb.name), tip_note(kind), tip_text(blurb.description)],
+        ))
         .id()
-}
-
-/// A tooltip's panel, laid out by `node` (where it sits, its size): dark, thinly bordered, over
-/// everything, hidden until hovered.
-pub(crate) fn tip_panel(node: Node) -> impl Bundle {
-    (
-        Node { border: UiRect::all(px(1.0)), ..node },
-        BackgroundColor(palette::INK.with_alpha(0.95)),
-        BorderColor::all(palette::STONE.with_alpha(0.4)),
-        GlobalZIndex(30),
-        Visibility::Hidden,
-    )
-}
-
-/// Shows a tooltip while its icon (or stat) is hovered.
-fn show_tooltips(icons: Query<(&Interaction, &Tooltip), Changed<Interaction>>, mut tips: Query<&mut Visibility>) {
-    for (interaction, tooltip) in &icons {
-        if let Ok(mut visibility) = tips.get_mut(tooltip.0) {
-            visibility.set_if_neq(shown(*interaction != Interaction::None));
-        }
-    }
 }
 
 /// Steps the wipe moves in per turn: finer than a pixel at the icon's edge, so it looks smooth

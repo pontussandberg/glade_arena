@@ -27,6 +27,8 @@ pub mod browser;
 #[cfg(feature = "render")]
 pub mod camera;
 #[cfg(feature = "render")]
+pub mod casting;
+#[cfg(feature = "render")]
 pub mod esc_menu;
 #[cfg(feature = "render")]
 pub mod feedback;
@@ -45,6 +47,8 @@ pub mod rig;
 pub mod rooms;
 #[cfg(feature = "render")]
 pub mod stat_frame;
+#[cfg(feature = "render")]
+pub mod tooltip;
 
 #[derive(Clone)]
 pub struct ClientSettings {
