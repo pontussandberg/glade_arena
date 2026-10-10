@@ -15,8 +15,8 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use crate::glade::palette;
-use crate::lobby::{SidePanel, card, label};
-use crate::render::{ButtonFill, button, button_fill, clicked, key_chip, ui_text};
+use crate::lobby::{SidePanel, card, fold_chip, label, pane_header};
+use crate::render::{ButtonFill, button, clicked, key_chip, ui_text};
 use crate::rooms::{Me, RoomList, Screen, request};
 use crate::stat_frame::ACCENT;
 
@@ -370,37 +370,22 @@ fn flash_header(time: Res<Time>, mut flash: ResMut<HeaderFlash>, header: Query<(
     }
 }
 
-/// The pane's header, one line, a button the whole width: "Lobbies" and how many are open, how
-/// many of them are live if any, and whether a click shows or hides the rest. Open, it joins the cards under it with an accent edge.
+/// The pane's header (`pane_header`), one line: "Lobbies" and how many are open, how many of them
+/// are live if any, and whether a click shows or hides the rest.
 fn spawn_header(panel: &mut ChildSpawnerCommands, list: &[RoomSummary], open: bool) {
     let live = list.iter().filter(|room| room.started).count();
-    let edge = if open { ACCENT } else { palette::ui::MUTED.with_alpha(0.3) };
-    panel
-        .spawn((
-            PaneHeader,
-            button_fill(palette::ui::HOLLOW.with_alpha(0.88)),
-            Node {
-                justify_content: JustifyContent::SpaceBetween,
-                align_items: AlignItems::Center,
-                padding: UiRect::axes(px(GAP * 2.0), px(GAP * 1.5)),
-                border: UiRect::left(px(3.0)),
-                ..default()
-            },
-            BorderColor::all(edge),
-        ))
-        .with_children(|header| {
-            header.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Center, ..default() }).with_children(|left| {
-                left.spawn(ui_text("Lobbies", 18.0, palette::ui::LICHEN));
-                left.spawn(key_chip(list.len().to_string(), 11.0, palette::ui::LICHEN, palette::ui::MUTED.with_alpha(0.5)));
-            });
-            header.spawn(Node { column_gap: px(GAP * 1.5), align_items: AlignItems::Center, ..default() }).with_children(|right| {
-                if live > 0 {
-                    right.spawn(ui_text(format!("{live} live"), 12.0, ACCENT));
-                }
-                let (toggle, color) = if open { ("Hide", palette::ui::MUTED) } else { ("Show", ACCENT) };
-                right.spawn(key_chip(toggle, 11.0, color, color.with_alpha(0.5)));
-            });
+    panel.spawn((PaneHeader, pane_header(open))).with_children(|header| {
+        header.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Center, ..default() }).with_children(|left| {
+            left.spawn(ui_text("Lobbies", 18.0, palette::ui::LICHEN));
+            left.spawn(key_chip(list.len().to_string(), 11.0, palette::ui::LICHEN, palette::ui::MUTED.with_alpha(0.5)));
         });
+        header.spawn(Node { column_gap: px(GAP * 1.5), align_items: AlignItems::Center, ..default() }).with_children(|right| {
+            if live > 0 {
+                right.spawn(ui_text(format!("{live} live"), 12.0, ACCENT));
+            }
+            right.spawn(fold_chip(open));
+        });
+    });
 }
 
 /// Lobbies listed at most; the rest are counted.
