@@ -45,7 +45,8 @@ fn default_server_addr() -> SocketAddr {
 }
 
 /// Native dev client: `arena-client [client_id] [class]`, no certificate validation. Without a
-/// class (e.g. `javelinist`) it opens the lobby. `ARENA_SERVER=ip:port` picks another server
+/// class (e.g. `javelinist`) it opens the server browser; with one, it joins (or makes and
+/// starts) the room `ARENA_ROOM` (default "Sparring") as it. `ARENA_SERVER=ip:port` picks another server
 /// (like the page's `?server=`), `ARENA_SERVER_URL=https://host:port` a deployed one by name;
 /// `ARENA_BOT=1` lets a simple bot play this client.
 #[cfg(not(target_family = "wasm"))]
@@ -66,6 +67,8 @@ fn client_settings() -> ClientSettings {
         server_url: std::env::var("ARENA_SERVER_URL").ok(),
         conditioner: None,
         class,
+        quick_join: class.map(|_| std::env::var("ARENA_ROOM").unwrap_or_else(|_| "Sparring".into())),
+        guest_name: None,
     }
 }
 
@@ -100,5 +103,7 @@ fn client_settings() -> ClientSettings {
         server_url: get("ARENA_SERVER_URL"),
         conditioner: None,
         class: None,
+        quick_join: None,
+        guest_name: arena_client::rooms::load_guest_name(),
     }
 }

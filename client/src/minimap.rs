@@ -22,7 +22,7 @@ pub struct MinimapPlugin;
 impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_minimap);
-        app.add_systems(Update, (spawn_dots, place_dots, (spawn_markers, update_markers).chain(), frame_view.in_set(CameraPlaced)));
+        app.add_systems(Update, ((spawn_dots, color_dots).chain(), place_dots, (spawn_markers, update_markers).chain(), frame_view.in_set(CameraPlaced)));
     }
 }
 
@@ -130,11 +130,27 @@ fn spawn_dots(
                     border_radius: BorderRadius::MAX,
                     ..default()
                 },
-                BackgroundColor(Relation::of(is_me).color()),
+                BackgroundColor(Relation::of(is_me, false).color()),
                 BorderColor::all(palette::INK),
             ))
             .id();
         commands.entity(*minimap).add_child(dot);
+    }
+}
+
+/// A dot is in its fighter's `Relation` color: ours, an ally's or an enemy's.
+fn color_dots(
+    players: Query<&Relation>,
+    changed: Query<(), Changed<Relation>>,
+    mut dots: Query<(Ref<Dot>, &mut BackgroundColor)>,
+) {
+    for (dot, mut fill) in &mut dots {
+        if !(changed.contains(dot.player) || dot.is_added()) {
+            continue;
+        }
+        if let Ok(relation) = players.get(dot.player) {
+            fill.set_if_neq(BackgroundColor(relation.color()));
+        }
     }
 }
 

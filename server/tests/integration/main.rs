@@ -9,3 +9,4 @@ mod combat;
 mod inputs;
 mod netcode;
 mod pickups;
+mod rooms;

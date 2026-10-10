@@ -21,8 +21,11 @@ pub fn start_server(port: u16, setup: impl FnOnce(&mut App)) -> App {
     server
 }
 
-/// A headless client that connects to the server on `port` on its first update and joins as
-/// `class` (a key from `classes.ron`).
+/// The room test clients join (made and started by the first to arrive).
+pub const TEST_ROOM: &str = "Test";
+
+/// A headless client that connects to the server on `port` on its first update, joins
+/// `TEST_ROOM` and enters the arena as `class` (a key from `classes.ron`).
 pub fn start_client(id: u64, port: u16, class: &str, conditioner: Option<LinkConditionerConfig>) -> App {
     let mut client = build_headless_client_app(ClientSettings {
         client_id: id,
@@ -31,6 +34,26 @@ pub fn start_client(id: u64, port: u16, class: &str, conditioner: Option<LinkCon
         server_url: None,
         conditioner,
         class: Some(class_id(class)),
+        quick_join: Some(TEST_ROOM.into()),
+        guest_name: None,
+    });
+    client.finish();
+    client.cleanup();
+    client
+}
+
+/// A headless client that connects and waits in the server browser (the test tells it what to
+/// do about rooms); it enters the arena as `class` once its room has started.
+pub fn start_guest(id: u64, port: u16, class: &str) -> App {
+    let mut client = build_headless_client_app(ClientSettings {
+        client_id: id,
+        server_addr: SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port),
+        cert_digest: String::new(),
+        server_url: None,
+        conditioner: None,
+        class: Some(class_id(class)),
+        quick_join: None,
+        guest_name: None,
     });
     client.finish();
     client.cleanup();
