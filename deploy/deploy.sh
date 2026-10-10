@@ -5,6 +5,7 @@
 #   bash deploy/deploy.sh setup    one-time server setup (runs deploy/setup-server.sh on the server)
 #   bash deploy/deploy.sh app      build the web client here and the server there, then restart it
 #   bash deploy/deploy.sh logs     follow the game server's logs
+#   bash deploy/deploy.sh ci-setup let GitHub Actions deploy pushes to `prod` (needs gh, logged in)
 #
 # Settings come from the environment or .env.local: DEPLOY_HOST (SSH target, e.g.
 # root@157.180.80.31) and DEPLOY_DOMAIN (e.g. arena.example.com, its A record pointing there).
@@ -14,8 +15,8 @@ cd "$(dirname "$0")/.."
 APP_DIR=/opt/arena
 
 case "${1:-}" in
-  setup | app | logs) ;;
-  *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  setup | app | logs | ci-setup) ;;
+  *) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
 
 # Value of KEY from the environment, else from .env.local.
@@ -72,6 +73,42 @@ case "${1:-}" in
       systemctl is-active arena
       journalctl -u arena -n 5 --no-pager"
     echo "Deployed $commit: https://$DEPLOY_DOMAIN"
+    ;;
+
+  ci-setup)
+    # A key that may only run deploy/arena-deploy.sh on the server (no shell), and the GitHub
+    # secrets for .github/workflows/deploy.yml, in an environment only the `prod` branch can use.
+    # Re-running replaces the key.
+    command -v gh >/dev/null || { echo "Needs the GitHub CLI (gh), logged in."; exit 1; }
+    host="$(ssh -G "$DEPLOY_HOST" | sed -n 's/^hostname //p')"
+    user="$(ssh -G "$DEPLOY_HOST" | sed -n 's/^user //p')"
+    port="$(ssh -G "$DEPLOY_HOST" | sed -n 's/^port //p')"
+    [ "$port" = 22 ] || { echo "The workflow assumes SSH on port 22, $DEPLOY_HOST uses $port."; exit 1; }
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    ssh-keygen -q -t ed25519 -N "" -C arena-ci -f "$tmp/key"
+    echo "Installing the deploy command and the CI key on $DEPLOY_HOST ..."
+    upload deploy/arena-deploy.sh /usr/local/bin/arena-deploy
+    { echo "restrict,command=\"/usr/local/bin/arena-deploy\" $(cat "$tmp/key.pub")"; } | ssh "$DEPLOY_HOST" "set -e
+      chmod 755 /usr/local/bin/arena-deploy
+      touch /root/.ssh/authorized_keys
+      { grep -v ' arena-ci\$' /root/.ssh/authorized_keys || true; cat; } > /root/.ssh/authorized_keys.new
+      chmod 600 /root/.ssh/authorized_keys.new
+      mv /root/.ssh/authorized_keys.new /root/.ssh/authorized_keys"
+    # The server's host keys, read over the SSH connection you already trust.
+    ssh "$DEPLOY_HOST" "cat /etc/ssh/ssh_host_*_key.pub" | awk -v h="$host" '{ print h, $1, $2 }' > "$tmp/known_hosts"
+    echo "Setting up the GitHub environment 'production' (prod branch only) and its secrets ..."
+    repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+    gh api -X PUT "repos/$repo/environments/production" --input - >/dev/null <<'JSON'
+{"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
+JSON
+    policies="repos/$repo/environments/production/deployment-branch-policies"
+    gh api "$policies" -q '.branch_policies[].name' | grep -qx prod \
+      || gh api -X POST "$policies" -f name=prod >/dev/null
+    gh secret set DEPLOY_HOST --env production --body "$user@$host"
+    gh secret set DEPLOY_SSH_KEY --env production < "$tmp/key"
+    gh secret set DEPLOY_KNOWN_HOSTS --env production < "$tmp/known_hosts"
+    echo "Done. Pushing to the prod branch now deploys it (Actions tab: the Deploy workflow)."
     ;;
 
   logs)

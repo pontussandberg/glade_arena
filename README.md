@@ -205,6 +205,11 @@ bash deploy/deploy.sh app     # build the web client here, the server there (fro
 bash deploy/deploy.sh logs    # follow the server's logs
 ```
 
+Or let GitHub Actions deploy: `bash deploy/deploy.sh ci-setup` once (needs `gh`, logged in), and
+from then on every push to the `prod` branch builds the client and the server on GitHub and
+installs them (`.github/workflows/deploy.yml`). The key it gets can only run that install
+(`deploy/arena-deploy.sh`), and only the `prod` branch can use it.
+
 If your provider has its own firewall (Hetzner Cloud Firewall), open the same ports there. A
 deploy restarts the server, which disconnects everyone playing.
 
