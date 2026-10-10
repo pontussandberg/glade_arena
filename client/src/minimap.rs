@@ -12,7 +12,7 @@ use lightyear::prelude::*;
 
 use crate::camera::CameraPlaced;
 use crate::glade::{self, palette};
-use crate::render::{ground_at, player_color, shown};
+use crate::render::{Relation, ground_at, shown};
 
 pub struct MinimapPlugin;
 
@@ -101,9 +101,9 @@ fn spawn_minimap(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 fn spawn_dots(
     mut commands: Commands,
     minimap: Single<Entity, With<Minimap>>,
-    new: Query<(Entity, &PlayerId, Has<Predicted>), Added<Mesh3d>>,
+    new: Query<(Entity, Has<Predicted>), (With<PlayerId>, Added<Mesh3d>)>,
 ) {
-    for (player, id, is_me) in &new {
+    for (player, is_me) in &new {
         let dot = commands
             .spawn((
                 Dot { player },
@@ -115,7 +115,7 @@ fn spawn_dots(
                     border_radius: BorderRadius::MAX,
                     ..default()
                 },
-                BackgroundColor(player_color(id.0, is_me)),
+                BackgroundColor(Relation::of(is_me).color()),
                 BorderColor::all(palette::INK),
             ))
             .id();

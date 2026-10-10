@@ -3,8 +3,9 @@
 A low-poly forest clearing at dusk, medieval-fantasy ruins in nature: a river with a stone bridge
 and fords, ruined walls, boulders and torches. Faceted shapes, muted greens and grey stone.
 The fighters are low-poly dark-fantasy figures, each in its own fixed colors (the
-same for every player). Teams show only in what marks them: their ground rings, health bars,
-shots and swings, the only full-strength color. A fight reads at a glance.
+same for every player). Who a fighter is to you shows only in its health bar and minimap dot,
+the only team color (you blue, enemies red, allies green). Its shots, swings and telegraph look
+the same whoever's they are. A fight reads at a glance.
 The layout lives in `shared/src/map.rs`; the scene is built from it, so what you see is exactly
 what blocks movement and shots.
 
@@ -24,7 +25,7 @@ Code: `client/src/glade.rs` (palette, scene, mesh helpers), used by `client/src/
    segments where curves show. Grim, believable proportions; menace from bone and shadow: bone
    plague masks with long beaks, glowing wisp-green eyes, bone ribs, pauldrons, claws and spurs,
    charred antlers, deep hoods, tatters. Near-black cloth and fur; pale cold bone and steel are
-   the only light parts. Never in team colors: rings and bars do that.
+   the only light parts. Never in team colors: health bars do that.
 5. **Animation is smooth, modern and deliberate.** Fighters are rigged (body, head, arms, legs,
    weapon) and move continuously in distinct beats: anticipation (draw back), a clear hold, then
    a fast, committed action that slows into place. Joints are firm and barely overshoot (no
@@ -67,16 +68,15 @@ Code: `client/src/glade.rs` (palette, scene, mesh helpers), used by `client/src/
 | Silver | `#DCE4E8` | The javelinist's spearhead and grip bands |
 | Iron | `#5E666E` | Spear shafts |
 | Wisp | `#B8FFD6` | The glow in every fighter's eyes |
-| **You** | `#4C9EE0` | Your fighter and shots |
-| **Ember** | `#E8803A` | Rival |
-| **Marigold** | `#E6B23A` | Rival |
-| **Coral** | `#E35F5A` | Rival |
+| **You** | `#4C9EE0` | Your health bar and minimap dot; your destination marker |
+| **Enemy** | `#D9453B` | Every other fighter's health bar and minimap dot |
+| **Ally** | `#5CC46A` | Teammates' (once there are teams) |
 | **Spirit** | `#8FD8FF` | Abilities, whoever uses them (spirit spear, rift-step streak) |
 | **Ice** | `#C4EEFF` | Frost, whoever casts it: the frost mage's nova (frost over the ground, an eruption where the staff strikes and two rings of shards bursting up as its spirit-blue shockwave passes) and the ice around a frozen fighter (see-through); slowed fighters are tinted `#8CB8FF` |
 
-Warm saturated hues mean an opponent, and you are the only saturated blue. Spirit is the one
-exception: a pale, cold spectral cyan-blue that means "an ability", never a team; keep it lighter
-and colder than You so the two don't blur. Keep world colors
+Red means an enemy, green an ally, and you are the only saturated blue. Spirit is a pale, cold
+spectral cyan-blue that means "an ability", never a team; keep it lighter and colder than You so
+the two don't blur. Keep world colors
 away from both: no autumn oranges, and the river stays a quiet teal. The one exception is fire:
 torch flames (`#FFB257`, light `#FF9443`) are small, static and flicker, so they never read as a
 fighter.
@@ -87,7 +87,7 @@ fighter.
 - Sky fill `#8FA4C2` as ambient light, kept low so torches matter.
 - Torches: warm point lights (range 12 m, no shadows) that flicker, on the bridge and the ruins.
 - Haze `#A9B8B6`: linear fog 40–95 m, same color as the clear color.
-- Everything matte (roughness 0.95, no metal). What glows: projectiles (owner color × 4),
+- Everything matte (roughness 0.95, no metal). What glows: projectiles (in their own look, never their owner's color),
   fighters' eyes (Wisp × 6) and abilities (Spirit × 6).
 
 ## Shape language
@@ -102,15 +102,16 @@ fighter.
 | Tree | 5-sided trunk, 2–3 stacked 7-sided cones | ≤ 60 tris |
 | Rock | Unsubdivided icosahedron, stretched unevenly | 20 tris |
 | Fighter | One silhouette per class, readable from above, about 2 m tall, rigged (`glade::fighter_rig`): a body plus separate head, arms, legs, weapon and (optionally) a swinging tail or cape. Javelinist (smooth, about 12% larger than the base rig): a deep hood with only a bone plague mask inside (glowing wisp-green slit eyes slanting down outward in deep dark sockets; a long beak curving down to a point, a strap around the hood) and a charred antler crown growing from it; a long belted near-black moss robe split up the front, bone ribs strapped over the chest, an executioner's shoulders (a dark iron plate each, studded, a spike curving up and back), vertebrae with spurs down the spine; robe sleeves with dark cuffs ending in bony claws, baggy trousers with bone knee plates into narrow boots; a spear of thin metal: the weapon fantasy, so the brightest thing on it: an open diamond frame of thin silver rods with knobbed joints and a spine, its front filled by a heavy, sharp, flat-faceted point, on an iron shaft bound in silver at the grip, with a butt spike. Revenant (smooth too): a cold near-black hooded robe fraying into tatters below the knee, a swinging tattered cape, ash pauldrons and gauntlets, wrapped legs, an empty hood with wisp eyes, and a long pale steel sword. Frost Mage (smooth): a long deep navy robe flaring to the ground, rimed at the hem, with a frost-blue sash, front panel and band above the hem and a ring of glowing runes just above it, a heavy rime mantle with glowing ice shards growing out of the shoulders, a long narrow cape; a pointed hood, empty but for frost-glow eyes, crowned with a ring of ice shards (it reads from above); wide bell sleeves banded in blue and rimed at the cuff; a dark staff bound in blue and shod in a steel spike, two steel crescents crossing at the top like an open cage around a long glowing crystal, a slivered crystal at each crescent tip | not yet measured |
-| Fighter ring | Flat ring in the owner's color under the feet, so fighters read even in deep shade | 40 tris |
+| Range circle | Your own fighter only, projectile classes, shown with A until the next key or click: a thin, faint white circle on the ground where your auto-attack's front edge stops, so you can see who you can reach | 192 tris |
 | Animation (`rig.rs`, per class `Moves`) | Smooth but deliberate: eased keyframes in distinct beats (draw back, a clear hold at full draw, then a fast, committed strike that slows into place), every joint on a firm, nearly critically damped spring (smoothed, never wobbly), a walk with long slow steps and a light bob and sway, and a tail or cape on a looser spring swinging back as it walks and out as it turns. Fighters snap quickly to face where they walk, aim or dash; the ground ring and telegraph stay flat. Javelinist: always carries the spear raised overhead, the arm straight up and the spear level, pointed at the target; windup is a deep twist back, lean back and a wide, lowered stance with the lead arm on the target, then a lunge through an overhand throw and a held follow-through, head and javelin on the target throughout, empty-handed until halfway through the cooldown; Q is a quick flick through the throw. Revenant: sword held low and ready; windup raises it up and back over the shoulder, the strike chops it down through the target stepping in; a dash is a forward lunge with the blade swept back. Frost Mage: staff carried upright at its side; windup raises it high toward the target, the off hand reaching out; the cast thrusts the crystal forward at the target; a nova slams the staff down into the ground in a deep crouch, the off hand flung back, held a moment before rising. Driven by the same ticks as the cast bar | - |
 | Abilities | Spectral blue (`SPIRIT`), whoever uses them: the spirit spear glows it, and a rift step leaves a fading streak of it along the dash for 0.3 s | - |
-| Melee swing | Flat translucent fan in the owner's color, showing the real reach and arc, for 0.16 s | 12 tris |
-| Windup telegraph | The attack's real shape (swing fan, or a strip down the shot's lane) in the owner's color, faint, while the attack winds up | 12 / 2 tris |
+| Melee swing | A swoosh: a pale silver crescent of light in the air where the blade swept, its outer edge at the swing's real reach, high on the weapon side and low on the other like a diagonal chop; thick and bright at its pointed leading end, thinning and fading behind. It sweeps on through the last third of the arc, spreading a little, and fades out over 0.26 s | ≈ 130 tris |
+| Frostbolt | A six-sided ice crystal, point first (pale Ice), a ring of five frost-glow shards splaying back from its waist and two slivers behind the point; it spins about its flight inside a see-through frost-glow halo that stretches back into a fading trail | ≈ 200 tris |
+| Windup telegraph | Melee only: the swing's real fan, faint and pale sunlit (whoever's it is), while it winds up. Shots show no lane: you see them fly | 12 tris |
 | Cast bar | Pale sunlit fill in a thin ink frame, hanging under the health bar while winding up | UI |
 | Projectile | Glowing icosahedron sized to the class's projectile radius. The Javelinist throws the very frame spear it carries, unchanged except for a small white glint on its point; its spirit spear is the same frame glowing Spirit. Both leave the hand where the spear is held at release and ease onto their real path within 0.2 s, trailing one faint white wind streak right behind the spear: a thin straight line (two crossed ribbons) fading out toward the back, which stretches back toward where the spear left the hand (up to 2.4 m) on a loose spring, pulsing as it goes, so it overshoots and snaps back like rubber | bolt 20 tris; wind 24 tris; spear not yet measured |
 | Ability icon | Your own screen only, bottom center: a square Ink tile framed in Spirit (Stone while cooling down), a simple picture of the ability, its key and name; while it cools down a dark clock-wipe sweeps away clockwise from twelve o'clock over the seconds left | UI |
-| Minimap | Bottom right: the tile map drawn in the scene's palette (deep forest darkened), every fighter a dot in its ring color, and a pale frame around what the camera sees | UI |
+| Minimap | Bottom right: the tile map drawn in the scene's palette (deep forest darkened), every fighter a dot in its health bar color, and a pale frame around what the camera sees | UI |
 
 - Anything that blocks movement or shots must sit on a blocking tile in `map.rs`; decoration on
   walkable tiles stays below knee height (flowers, rubble, stepping stones).

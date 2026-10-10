@@ -7,8 +7,9 @@ The fight happens in a forest clearing on a 1 m tile grid: a river through the m
 a stone bridge and two fords, with ruined walls, boulders and trees for cover. Movement is
 point-and-click like LoL or OSRS: **right click** walks to a tile (pathfinding around obstacles),
 **left click** auto-attacks toward the cursor (a skillshot), **Q** uses your class's ability
-toward the cursor, **S** stops. Your ability's cooldown shows on an icon at the bottom of your
-screen, and a minimap in the corner shows everyone.
+toward the cursor, **S** stops, **A** rings how far your shots fly (until the next key or
+click). Your ability's cooldown shows on an icon at the bottom of your screen, and a minimap in
+the corner shows everyone.
 
 Before joining you pick a **class** in the lobby, where it stands on a stage to look at (drag
 to turn it) next to its numbers and Q ability; then enter the arena. Each class has its own HP, speed, auto-attack (melee or
@@ -26,9 +27,9 @@ progress stops) but it can still attack. Slowed fighters take on a cold blue cas
 under their feet; frozen ones stand in ice.
 
 Every attack has a short windup (`windup_ticks`): you stand still with your aim locked while a
-cast bar fills under your health bar and a faint telegraph shows what it will cover (the swing's
-fan, or the shot's lane), then it goes off. Everyone sees it, so attacks can be read and dodged,
-and kiting takes skill. Attacking also cancels your walk: afterwards you stand still until you
+cast bar fills under your health bar (and, for a swing, a faint telegraph shows the fan it will
+cover), then it goes off. Everyone sees the windup, so attacks can be read and dodged, and kiting
+takes skill. Attacking also cancels your walk: afterwards you stand still until you
 right click again (a click during the windup is kept and walked to once the attack is off);
 so does a dash. Abilities have their own cooldown (shown in the HUD) and are predicted like
 everything else: your spear flies and your dash moves the moment you press Q, the server
