@@ -158,21 +158,17 @@ fn read_lobby_events(
     }
 }
 
-/// Our class, to the server: when it's picked, and when we join a room with one already picked.
+/// Our class, to the server, which keeps it for whatever room we go into: when it's picked (at
+/// home too, so practice and quick join go in as it), and once we're welcomed (again after a
+/// reconnect). Not before: the server doesn't know us yet.
 fn send_class_choice(
     chosen: Res<ChosenClass>,
-    room: Res<CurrentRoom>,
-    mut joined: Local<Option<RoomKey>>,
+    me: Option<Res<Me>>,
     mut sender: Single<&mut MessageSender<ChooseClass>, With<Client>>,
 ) {
-    let key = room.0.as_ref().map(|r| r.key);
-    let just_joined = key.is_some() && *joined != key;
-    *joined = key;
-    if key.is_none() {
-        return;
-    }
+    let Some(me) = me else { return };
     if let Some(class) = chosen.0
-        && (chosen.is_changed() || just_joined)
+        && (chosen.is_changed() || me.is_changed())
     {
         sender.send::<Reliable>(ChooseClass(class));
     }
