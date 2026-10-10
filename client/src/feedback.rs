@@ -1,6 +1,7 @@
 //! Combat feedback: a health bar over every fighter with a cast bar under it while it winds up
 //! an attack, a white flash and a damage number when one takes damage (a crit's bigger and
-//! golden), and dead fighters disappearing until they respawn.
+//! golden), a green number when one is healed, and dead fighters disappearing until they
+//! respawn.
 
 use arena_shared::protocol::*;
 use bevy::ecs::system::SystemParam;
@@ -256,7 +257,8 @@ fn hide_the_dead(
 
 /// A number for each new hit in a fighter's `RecentHits` (server-confirmed, like the flash). The
 /// hits already there when we first see a fighter are only noted. Damage to us is in our
-/// enemies' red; a crit is bigger, flame-gold, and ends in "!".
+/// enemies' red; a crit is bigger, flame-gold, and ends in "!". A heal (a negative hit) is a
+/// green "+".
 fn spawn_damage_numbers(
     mut commands: Commands,
     time: Res<Time>,
@@ -270,6 +272,7 @@ fn spawn_damage_numbers(
         let last = std::mem::replace(&mut shown.0, recent.seq());
         for (i, hit) in recent.0.iter().filter(|hit| hit.seq > last).enumerate() {
             let (text, size, color) = match (hit.crit, is_me) {
+                _ if hit.amount < 0 => (format!("+{}", -hit.amount), NUMBER_SIZE, palette::HEAL),
                 (true, _) => (format!("{}!", hit.amount), CRIT_NUMBER_SIZE, palette::TORCH_FLAME),
                 (false, true) => (hit.amount.to_string(), NUMBER_SIZE, palette::ENEMY),
                 (false, false) => (hit.amount.to_string(), NUMBER_SIZE, palette::SUN),

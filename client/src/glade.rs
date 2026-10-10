@@ -88,6 +88,10 @@ pub mod palette {
     pub const SKY: Color = Color::srgb_u8(0x8F, 0xA4, 0xC2);
     pub const TORCH_FLAME: Color = Color::srgb_u8(0xFF, 0xB2, 0x57);
     pub const TORCH_LIGHT: Color = Color::srgb_u8(0xFF, 0x94, 0x43);
+
+    // Pickups glow like spirits do: a heal's fresh green and a haste's gold.
+    pub const HEAL: Color = Color::srgb_u8(0x7C, 0xF2, 0x9A);
+    pub const HASTE: Color = Color::srgb_u8(0xFF, 0xD4, 0x4A);
 }
 
 use palette::*;
