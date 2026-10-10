@@ -23,7 +23,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -42,7 +42,7 @@ jobs:
           tool: wasm-bindgen@${{ steps.bindgen.outputs.version }}
 
       - name: Build the web client
-        run: ./scripts/build-web.sh
+        run: bash scripts/build-web.sh
 
       - name: Build the server
         run: cargo build --release --locked -p arena-server
