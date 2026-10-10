@@ -18,7 +18,7 @@ projectile) and Q ability; all of it lives in `shared/assets/classes.ron`:
 | Class | Role | Auto-attack | Q |
 |---|---|---|---|
 | Javelinist | Hunter | Slow, heavy javelins that hit harder the farther they fly (`far_damage`) | **Spirit Spear**: a fast spectral spear, thrown instantly (no windup, no root) |
-| Revenant | Duelist | Quick, short-windup blade swings | **Rift Step**: dash through enemies, cutting each one; a hit readies the blade at once |
+| Revenant | Duelist | Blade swings with a medium windup | **Rift Step**: dash through enemies, cutting each one; a hit readies the blade at once |
 | Frost Mage | Controller | Frostbolts: little damage and shorter range (mid range), but each hit slows (40% for 2 s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5 s (no walking, no dashing) |
 
 Hits can carry **crowd control** (`chill` in `classes.ron`): a slow takes a share off walking
@@ -26,10 +26,12 @@ and dashing speed, a root freezes a fighter in place (it can't walk or dash, and
 progress stops) but it can still attack. Slowed fighters take on a cold blue cast and frost turns
 under their feet; frozen ones stand in ice.
 
-Every attack has a short windup (`windup_ticks`): you stand still with your aim locked while a
-cast bar fills under your health bar (and, for a swing, a faint telegraph shows the fan it will
-cover), then it goes off. Everyone sees the windup, so attacks can be read and dodged, and kiting
-takes skill. Attacking also cancels your walk: afterwards you stand still until you
+Every attack has a windup (`windup_ticks`): you stand still with your aim locked while a cast
+bar fills under your health bar (and, for a swing, a faint telegraph shows the fan it will
+cover), then it goes off. For the Javelinist and the Frost Mage the windup is the whole cooldown:
+the bar is the attack, and holding fire keeps you planted, so to kite you have to stop firing.
+The Revenant's swing winds up for part of its cooldown. Everyone sees the windup, so attacks can
+be read and dodged. Attacking also cancels your walk: afterwards you stand still until you
 right click again (a click during the windup is kept and walked to once the attack is off);
 so does a dash. Abilities have their own cooldown (shown in the HUD) and are predicted like
 everything else: your spear flies and your dash moves the moment you press Q, the server
