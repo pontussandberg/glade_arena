@@ -80,12 +80,29 @@ const RUNE_TURN_RATE: f32 = 0.8;
 /// Thin shots still get a lane wide enough to see.
 const TELEGRAPH_MIN_WIDTH: f32 = 0.45;
 
-/// You are always blue; rivals get one of the warm fighter colors.
-pub(crate) fn player_color(id: PeerId, is_me: bool) -> Color {
-    if is_me {
-        return palette::YOU;
+/// Who a fighter is to you. Only what marks a fighter shows it (its health bar, ground ring,
+/// minimap dot and telegraph); its body, shots and swings look the same whoever's they are.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Relation {
+    You,
+    #[expect(dead_code, reason = "no teams yet")]
+    Ally,
+    Enemy,
+}
+
+impl Relation {
+    /// Everyone else is an enemy until there are teams.
+    pub(crate) fn of(is_me: bool) -> Self {
+        if is_me { Self::You } else { Self::Enemy }
     }
-    palette::RIVALS[(id.to_bits() % palette::RIVALS.len() as u64) as usize]
+
+    pub(crate) fn color(self) -> Color {
+        match self {
+            Self::You => palette::YOU,
+            Self::Ally => palette::ALLY,
+            Self::Enemy => palette::ENEMY,
+        }
+    }
 }
 
 /// Meshes shared by every player/projectile/swing (one figure and one attack shape per class),
@@ -108,8 +125,9 @@ pub(crate) struct Visuals {
     shot_tip: Handle<Mesh>,
     wind: Handle<Mesh>,
     ring: Handle<Mesh>,
-    /// Per owner (`None` for looks that are the same for everyone) and look.
-    materials: HashMap<(Option<PeerId>, Look), Handle<StandardMaterial>>,
+    /// Per owner (bodies, so a hit flashes just that fighter), per relation (what marks a
+    /// fighter) or shared, and look.
+    materials: HashMap<(Option<PeerId>, Option<Relation>, Look), Handle<StandardMaterial>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -150,17 +168,21 @@ impl Visuals {
         is_me: bool,
         look: Look,
     ) -> Handle<StandardMaterial> {
-        // Everything but spirit is per player: in the owner's color, or (bodies) so the hit flash
-        // brightens just that fighter.
-        let key = (!matches!(look, Look::Spirit | Look::Plain | Look::Wind | Look::Spark | Look::Frost | Look::Chill)).then_some(owner);
+        let relation = Relation::of(is_me);
+        let key = match look {
+            Look::Body => (Some(owner), None, look),
+            Look::Ring | Look::Telegraph => (None, Some(relation), look),
+            _ => (None, None, look),
+        };
         self.materials
-            .entry((key, look))
+            .entry(key)
             .or_insert_with(|| {
-                let color = player_color(owner, is_me);
+                let color = relation.color();
                 materials.add(match look {
-                    // Fighters wear their own colors (in the mesh); teams show in rings and bars.
+                    // Fighters wear their own colors (in the mesh); who they are to you shows in
+                    // rings and bars.
                     Look::Body => glade::matte(Color::WHITE),
-                    Look::Shot => glade::glow(color, 4.0),
+                    Look::Shot => glade::glow(palette::SILVER, 4.0),
                     Look::Spirit => glade::glow(palette::SPIRIT, 6.0),
                     Look::Plain => glade::matte(Color::WHITE),
                     Look::Wind => glade::translucent(Color::WHITE, 0.6, 1.5),

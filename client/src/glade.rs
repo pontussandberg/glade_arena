@@ -69,8 +69,12 @@ pub mod palette {
     /// HUD text.
     pub const INK: Color = Color::srgb_u8(0x1E, 0x2A, 0x23);
 
-    // Fighters: the only saturated colors. You are the only blue; rivals are warm.
+    // Who a fighter is to you, in what marks it (health bar, ground ring, minimap dot,
+    // telegraph): never in its model, its shots or its swings. You are blue, enemies red and
+    // allies (once there are teams) green.
     pub const YOU: Color = Color::srgb_u8(0x4C, 0x9E, 0xE0);
+    pub const ENEMY: Color = Color::srgb_u8(0xD9, 0x45, 0x3B);
+    pub const ALLY: Color = Color::srgb_u8(0x5C, 0xC4, 0x6A);
     /// Spectral blue: spirit spears (whoever throws them) and rift-step streaks glow with it.
     pub const SPIRIT: Color = Color::srgb_u8(0x8F, 0xD8, 0xFF);
     /// Ice: the frost mage's crystals, its nova, and the ice that freezes a fighter in place.
@@ -78,11 +82,6 @@ pub mod palette {
     pub const ICE: Color = Color::srgb_u8(0xC4, 0xEE, 0xFF);
     /// What a slowed fighter's colors are multiplied by: a cold blue cast.
     pub const FROSTBITE: Color = Color::srgb_u8(0x8C, 0xB8, 0xFF);
-    pub const RIVALS: [Color; 3] = [
-        Color::srgb_u8(0xE8, 0x80, 0x3A), // ember
-        Color::srgb_u8(0xE6, 0xB2, 0x3A), // marigold
-        Color::srgb_u8(0xE3, 0x5F, 0x5A), // coral
-    ];
 
     // Light. Fire is the one warm, saturated thing in the world: small, static and flickering.
     pub const SUN: Color = Color::srgb_u8(0xFF, 0xE2, 0xC4);

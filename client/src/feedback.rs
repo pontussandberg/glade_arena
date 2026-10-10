@@ -11,7 +11,7 @@ use lightyear::prelude::*;
 
 use crate::camera::CameraPlaced;
 use crate::glade::{palette, to_world};
-use crate::render::{player_color, shown};
+use crate::render::{Relation, shown};
 use crate::rig::SeenThrows;
 
 pub struct FeedbackPlugin;
@@ -54,7 +54,7 @@ struct HitFlash {
 }
 
 /// Each fighter gets its bars once it has a body.
-fn spawn_bars(mut commands: Commands, new: Query<(Entity, &PlayerId, Has<Predicted>), Added<Mesh3d>>) {
+fn spawn_bars(mut commands: Commands, new: Query<(Entity, Has<Predicted>), (With<PlayerId>, Added<Mesh3d>)>) {
     let fill = |color: Color| (Node { width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(color));
     let frame = |node: Node| {
         (
@@ -63,8 +63,8 @@ fn spawn_bars(mut commands: Commands, new: Query<(Entity, &PlayerId, Has<Predict
             BorderColor::all(palette::INK),
         )
     };
-    for (player, id, is_me) in &new {
-        let health_fill = commands.spawn(fill(player_color(id.0, is_me))).id();
+    for (player, is_me) in &new {
+        let health_fill = commands.spawn(fill(Relation::of(is_me).color())).id();
         // Pale, so it never reads as a (colored) health bar.
         let cast_fill = commands.spawn(fill(palette::SUN)).id();
         // Absolute inside the health bar's border, so shift left by it to line the two up.
