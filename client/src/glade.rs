@@ -675,7 +675,7 @@ pub fn fighter_mesh(class_key: &str) -> Mesh {
     // Drawn in a white material: these are the real colors, the same for every player (ground
     // rings and health bars tell who is who).
     match class_key {
-        // Hunter, dark and bony: a long, belted hunter's robe in near-black moss green, split up
+        // Marksman, dark and bony: a long, belted hunter's robe in near-black moss green, split up
         // the front; bone ribs strapped over the chest, an executioner's spiked iron shoulder
         // plates, vertebrae down the spine. Smoothly shaded. Head, arms, legs, tail and spear
         // are separate, animated parts (`fighter_rig`).

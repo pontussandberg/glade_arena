@@ -42,7 +42,7 @@
     (
         id: "javelinist",
         name: "Javelinist",
-        role: "Hunter",
+        role: "Marksman",
         blurb: "Hurls heavy javelins. The farther they fly, the harder they hit.",
         max_hp: 95,
         move_speed: 5.0,
