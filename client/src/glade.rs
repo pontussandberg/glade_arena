@@ -92,6 +92,25 @@ pub mod palette {
     // Pickups glow like spirits do: a heal's fresh green and a haste's quick blue.
     pub const HEAL: Color = Color::srgb_u8(0x7C, 0xF2, 0x9A);
     pub const HASTE: Color = Color::srgb_u8(0x58, 0xA8, 0xFF);
+
+    /// The UI's own theme, "Mossy Hollow": panels, text and accents, apart from the world's.
+    /// What marks a fighter, an ability or a pickup keeps its world color.
+    pub mod ui {
+        use bevy::color::Color;
+
+        /// The backdrop behind full-screen menus: a shade below `HOLLOW`.
+        pub const SHADOW: Color = Color::srgb_u8(0x2A, 0x2D, 0x1B);
+        /// Panels, cards and tooltips; text on a `SPROUT` fill.
+        pub const HOLLOW: Color = Color::srgb_u8(0x3D, 0x41, 0x27);
+        /// What's selected, and filled buttons that aren't the main one.
+        pub const OLIVE: Color = Color::srgb_u8(0x63, 0x6B, 0x2F);
+        /// Secondary text and thin borders: halfway from `OLIVE` to `LICHEN`.
+        pub const MUTED: Color = Color::srgb_u8(0x8E, 0x95, 0x62);
+        /// Text.
+        pub const LICHEN: Color = Color::srgb_u8(0xBA, 0xC0, 0x95);
+        /// The one accent: the role, what's selected, the main button.
+        pub const SPROUT: Color = Color::srgb_u8(0xD4, 0xDE, 0x95);
+    }
 }
 
 use palette::*;
@@ -1041,6 +1060,139 @@ impl FlatMesh {
             .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
             .with_computed_flat_normals()
     }
+}
+
+/// The lobby's backdrop: a sphere of `radius` around the stage, lit from within by a soft olive
+/// glow along the horizon that fades into shadow above and below, mottled so it doesn't read as
+/// one flat color. Vertex-colored: draw it unlit, on white, from the inside.
+pub fn hollow_sky_mesh(radius: f32) -> Mesh {
+    let mut mesh = Sphere::new(radius).mesh().ico(5).unwrap();
+    let positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION).and_then(|p| p.as_float3()).expect("a sphere has positions");
+    let (deep, glow) = (ui::SHADOW.darker(0.06).to_linear(), ui::OLIVE.darker(0.12).to_linear());
+    let colors: Vec<[f32; 4]> = positions
+        .iter()
+        .map(|p| {
+            let d = Vec3::from_array(*p).normalize();
+            // A band of light just above the horizon, wider on the top side.
+            let above = (d.y - 0.08) / if d.y > 0.08 { 0.38 } else { 0.16 };
+            let band = (-above * above).exp();
+            // Slow, overlapping waves around the sphere: clouds of mist, without a texture.
+            let mist = 0.5 + 0.25 * (d.x * 4.1 + d.z * 2.3 + d.y * 3.0).sin() + 0.25 * (d.z * 6.7 - d.x * 3.1 + d.y * 5.0).sin();
+            let lit = band * (0.45 + 0.55 * mist);
+            // Darker straight down, so the floor's edge sinks into it.
+            let floor = (-d.y).max(0.0);
+            let c = deep.mix(&glow, lit) * (1.0 - 0.5 * floor);
+            [c.red, c.green, c.blue, 1.0]
+        })
+        .collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh
+}
+
+/// The lobby's floor: a low-poly disc of `radius`, mossy and lit at the middle, darkening into
+/// the backdrop at its edge, its facets nudged up and down so the lights catch them.
+pub fn hollow_floor_mesh(radius: f32) -> Mesh {
+    const RINGS: usize = 14;
+    const SEGMENTS: usize = 40;
+    let mut rng = Lcg(0x40_11_0F);
+    // Ring 0 is the center; every ring after it is a circle of SEGMENTS points.
+    let mut points = vec![vec![Vec3::ZERO]];
+    for ring in 1..=RINGS {
+        let r = radius * (ring as f32 / RINGS as f32).powf(1.3);
+        let twist = rng.next();
+        points.push(
+            (0..SEGMENTS)
+                .map(|s| {
+                    let a = (s as f32 + twist * 0.5) / SEGMENTS as f32 * std::f32::consts::TAU;
+                    let r = r + rng.range(-0.12, 0.12) * r / radius;
+                    // Flat under the fighter, rolling further out.
+                    let lift = if r < 1.6 { 0.0 } else { rng.range(-0.05, 0.08) * (r / radius + 0.3) };
+                    Vec3::new(r * a.cos(), lift, r * a.sin())
+                })
+                .collect(),
+        );
+    }
+    let (moss, olive, deep) = (ui::HOLLOW, ui::OLIVE.darker(0.08), ui::SHADOW.darker(0.12));
+    let color = |at: Vec3, rng: &mut Lcg| {
+        let out = (at.length() / radius).min(1.0);
+        let base = olive.mix(&moss, (out * 2.2).min(1.0)).mix(&deep, ((out - 0.35) / 0.65).max(0.0));
+        Color::from(base.to_linear() * rng.range(0.9, 1.1))
+    };
+    let mut b = FlatMesh::default();
+    for s in 0..SEGMENTS {
+        let (p, q) = (points[1][s], points[1][(s + 1) % SEGMENTS]);
+        let c = color((p + q) / 3.0, &mut rng);
+        b.tri([Vec3::ZERO, q, p], c);
+    }
+    for ring in 1..RINGS {
+        for s in 0..SEGMENTS {
+            let n = (s + 1) % SEGMENTS;
+            let (a, b1, c1, d) = (points[ring][s], points[ring][n], points[ring + 1][n], points[ring + 1][s]);
+            let first = color((a + b1 + c1) / 3.0, &mut rng);
+            let second = color((a + c1 + d) / 3.0, &mut rng);
+            b.tri([a, b1, c1], first);
+            b.tri([a, c1, d], second);
+        }
+    }
+    b.build()
+}
+
+/// What stands around the lobby's stage: a ring of dark trunks fading into the backdrop, and
+/// stones, moss clumps and grass tufts scattered on the floor (not too close to the dais, so
+/// the fighter's feet stay clear). Vertex-colored, for one matte white material.
+pub fn hollow_props_mesh() -> Mesh {
+    use std::f32::consts::TAU;
+    let mut rng = Lcg(0xB0_55_E5);
+    let mut parts = Vec::new();
+    let mut add = |mesh: Mesh, at: Transform, color: Color| parts.push(tinted(faceted(mesh.transformed_by(at)), color));
+    // Trunks: wide, leaning a little, rising out of sight; a couple of roots at each foot.
+    for i in 0..13 {
+        let a = (i as f32 + rng.range(-0.3, 0.3)) / 13.0 * TAU;
+        let r = rng.range(9.5, 15.0);
+        let foot = Vec3::new(r * a.cos(), 0.0, r * a.sin());
+        let width = rng.range(0.35, 0.75);
+        let lean = Quat::from_rotation_z(rng.range(-0.12, 0.12)) * Quat::from_rotation_x(rng.range(-0.12, 0.12));
+        let bark = ui::SHADOW.mix(&BARK.darker(0.2), rng.range(0.2, 0.5));
+        add(cylinder(width, 30.0, 7), Transform::from_translation(foot + Vec3::Y * 15.0).with_rotation(lean), bark);
+        for k in 0..3 {
+            let out = a + TAU * (k as f32 / 3.0 + rng.range(0.0, 0.2));
+            let dir = Vec3::new(out.cos(), 0.0, out.sin());
+            let root = Quat::from_rotation_arc(Vec3::Y, (dir + Vec3::Y * 0.45).normalize());
+            add(cone(width * 0.45, width * 3.0, 5), Transform::from_translation(foot + dir * width * 0.9).with_rotation(root), bark);
+        }
+    }
+    // Scatter at a random spot between `near` and `far` from the stage's center.
+    let spot = |rng: &mut Lcg, near: f32, far: f32| {
+        let (a, r) = (rng.range(0.0, TAU), rng.range(near, far));
+        Vec3::new(r * a.cos(), 0.0, r * a.sin())
+    };
+    for _ in 0..18 {
+        let at = spot(&mut rng, 2.0, 8.5);
+        let size = rng.range(0.12, 0.38);
+        let squash = Vec3::new(rng.range(0.9, 1.5), rng.range(0.45, 0.8), rng.range(0.9, 1.4)) * size;
+        let stone = WALL.darker(0.3).mix(&ui::HOLLOW, rng.range(0.1, 0.4));
+        add(Sphere::new(1.0).mesh().ico(0).unwrap(), Transform::from_translation(at).with_rotation(Quat::from_rotation_y(rng.range(0.0, TAU))).with_scale(squash), stone);
+        // Moss on top.
+        add(Sphere::new(1.0).mesh().ico(0).unwrap(), Transform::from_translation(at + Vec3::Y * squash.y * 0.45).with_scale(squash * Vec3::new(0.8, 0.5, 0.8)), ui::OLIVE.darker(0.05));
+    }
+    for _ in 0..26 {
+        let at = spot(&mut rng, 1.8, 9.0);
+        let size = rng.range(0.25, 0.6);
+        let clump = ui::HOLLOW.mix(&ui::OLIVE, rng.range(0.3, 0.9));
+        add(Sphere::new(1.0).mesh().ico(1).unwrap(), Transform::from_translation(at).with_scale(Vec3::new(size, size * 0.3, size * rng.range(0.7, 1.2))), clump);
+    }
+    for _ in 0..70 {
+        let at = spot(&mut rng, 1.7, 9.0);
+        let blades = 3 + (rng.next() * 3.0) as usize;
+        let tall = rng.range(0.18, 0.42);
+        let grass = ui::OLIVE.mix(&ui::MUTED, rng.range(0.0, 0.5));
+        for _ in 0..blades {
+            let tilt = Quat::from_rotation_y(rng.range(0.0, TAU)) * Quat::from_rotation_x(rng.range(0.1, 0.45));
+            let h = tall * rng.range(0.7, 1.1);
+            add(cone(0.025, h, 3), Transform::from_translation(at + tilt * Vec3::Y * h * 0.5).with_rotation(tilt), grass);
+        }
+    }
+    sculpted(parts)
 }
 
 /// A torch flame; flickers its light.

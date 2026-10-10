@@ -83,22 +83,22 @@ fn toggle_menu(
                 row_gap: px(12.0),
                 ..default()
             },
-            BackgroundColor(palette::HUNTER_DARK.with_alpha(0.7)),
+            BackgroundColor(palette::ui::SHADOW.with_alpha(0.7)),
             GlobalZIndex(30),
         ))
         .with_children(|menu| {
             menu.spawn(ui_text("MENU", 12.0, ACCENT));
-            menu.spawn(ui_text(title, 20.0, palette::HAZE));
+            menu.spawn(ui_text(title, 20.0, palette::ui::LICHEN));
             menu.spawn(Node { height: px(12.0), ..default() });
-            menu.spawn((ResumeButton, button("Back to the fight", 16.0, ACCENT, palette::INK, ACCENT)));
-            let quiet = |label: &'static str| button(label, 16.0, palette::INK, palette::HAZE, palette::STONE.with_alpha(0.5));
+            menu.spawn((ResumeButton, button("Back to the fight", 16.0, ACCENT, palette::ui::HOLLOW, ACCENT)));
+            let quiet = |label: &'static str| button(label, 16.0, palette::ui::HOLLOW, palette::ui::LICHEN, palette::ui::MUTED.with_alpha(0.5));
             if practice {
                 menu.spawn((LeaveButton, quiet("Leave practice")));
             } else {
                 menu.spawn((LobbyButton, quiet("Back to the lobby")));
                 menu.spawn((LeaveButton, quiet("Leave the lobby")));
             }
-            menu.spawn(ui_text("ESC to close", 11.0, palette::STONE));
+            menu.spawn(ui_text("ESC to close", 11.0, palette::ui::MUTED));
         });
 }
 

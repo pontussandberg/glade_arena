@@ -28,7 +28,7 @@ impl Plugin for StatFramePlugin {
 /// The frame's width (pixels).
 const WIDTH: f32 = 260.0;
 /// The one accent of the lobby and the frame: the role, what's selected.
-pub(crate) const ACCENT: Color = palette::MEADOW;
+pub(crate) const ACCENT: Color = palette::ui::SPROUT;
 
 /// The bottom-left corner your stat frame sits in.
 #[derive(Component)]
@@ -72,29 +72,29 @@ pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, named: boo
                 border: UiRect::all(px(1.0)),
                 ..default()
             },
-            BackgroundColor(palette::INK.with_alpha(0.85)),
-            BorderColor::all(palette::STONE.with_alpha(0.3)),
+            BackgroundColor(palette::ui::HOLLOW.with_alpha(0.85)),
+            BorderColor::all(palette::ui::MUTED.with_alpha(0.3)),
         ))
         .with_children(|frame| {
             if named {
                 frame
                     .spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Baseline, ..default() })
                     .with_children(|row| {
-                        row.spawn(ui_text(def.name.clone(), 16.0, palette::HAZE));
+                        row.spawn(ui_text(def.name.clone(), 16.0, palette::ui::LICHEN));
                         row.spawn(ui_text(def.role.to_uppercase(), 11.0, ACCENT));
                     });
             }
             frame.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
-                row.spawn(ui_text("HEALTH", 11.0, palette::STONE));
-                parts.text = row.spawn(ui_text(def.max_hp.to_string(), 11.0, palette::HAZE)).id();
+                row.spawn(ui_text("HEALTH", 11.0, palette::ui::MUTED));
+                parts.text = row.spawn(ui_text(def.max_hp.to_string(), 11.0, palette::ui::LICHEN)).id();
             });
             for (label, value, tip) in stats(def) {
                 let name = frame
                     .spawn(Node { column_gap: px(5.0), align_items: AlignItems::Center, ..default() })
-                    .with_child(ui_text(label, 11.0, palette::STONE))
+                    .with_child(ui_text(label, 11.0, palette::ui::MUTED))
                     .id();
                 let mut row = frame.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() });
-                row.add_child(name).with_child(ui_text(value, 11.0, palette::HAZE));
+                row.add_child(name).with_child(ui_text(value, 11.0, palette::ui::LICHEN));
                 if let Some(text) = tip {
                     let tip = row.commands().spawn(tooltip(text)).id();
                     row.commands().entity(name).with_child(info_badge());
@@ -118,8 +118,8 @@ fn info_badge() -> impl Bundle {
             align_items: AlignItems::Center,
             ..default()
         },
-        BorderColor::all(palette::STONE.with_alpha(0.7)),
-        children![ui_text("i", 9.0, palette::STONE)],
+        BorderColor::all(palette::ui::MUTED.with_alpha(0.7)),
+        children![ui_text("i", 9.0, palette::ui::MUTED)],
     )
 }
 

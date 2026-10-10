@@ -423,10 +423,10 @@ fn setup_scene(
                 padding: UiRect::axes(px(10.0), px(8.0)),
                 ..default()
             },
-            BackgroundColor(palette::INK.with_alpha(0.6)),
+            BackgroundColor(palette::ui::HOLLOW.with_alpha(0.6)),
         ))
         .with_children(|corner| {
-            corner.spawn((Status, ui_text("connecting...", 12.0, palette::HAZE)));
+            corner.spawn((Status, ui_text("connecting...", 12.0, palette::ui::LICHEN)));
             let chevron = corner
                 .spawn((
                     Node {
@@ -435,10 +435,10 @@ fn setup_scene(
                         border: UiRect { right: px(1.5), bottom: px(1.5), ..default() },
                         ..default()
                     },
-                    BorderColor::all(palette::STONE),
+                    BorderColor::all(palette::ui::MUTED),
                 ))
                 .id();
-            let label = corner.spawn(ui_text("Controls", 12.0, palette::STONE)).id();
+            let label = corner.spawn(ui_text("Controls", 12.0, palette::ui::MUTED)).id();
             corner
                 .spawn((
                     ControlsHeader { chevron },
@@ -1233,8 +1233,8 @@ fn update_key_hints(
     };
     commands.entity(*hints).despawn_children().with_children(|grid| {
         for (key, action) in keys {
-            grid.spawn(key_chip(*key, 11.0, palette::HAZE, palette::STONE.with_alpha(0.5)));
-            grid.spawn(ui_text(*action, 12.0, palette::STONE));
+            grid.spawn(key_chip(*key, 11.0, palette::ui::LICHEN, palette::ui::MUTED.with_alpha(0.5)));
+            grid.spawn(ui_text(*action, 12.0, palette::ui::MUTED));
         }
         crate::casting::spawn_toggle_row(grid, cast_mode.quick);
     });
