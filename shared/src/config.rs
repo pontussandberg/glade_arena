@@ -29,6 +29,6 @@ pub const PICKUP_RESPAWN_TICKS: u32 = 15 * TICK_HZ as u32;
 pub const PICKUP_RADIUS: f32 = 0.9;
 /// A heal restores this share of the fighter's max health.
 pub const HEAL_FRACTION: f32 = 0.5;
-/// A haste makes its taker walk this many times as fast, for this long (3 s).
-pub const HASTE_FACTOR: f32 = 2.0;
-pub const HASTE_TICKS: u32 = 3 * TICK_HZ as u32;
+/// A haste makes its taker walk this many times as fast, for this long (2 s).
+pub const HASTE_FACTOR: f32 = 1.5;
+pub const HASTE_TICKS: u32 = 2 * TICK_HZ as u32;
