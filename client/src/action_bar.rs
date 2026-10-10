@@ -13,7 +13,7 @@ use lightyear::prelude::*;
 
 use crate::feedback::AttackClock;
 use crate::glade::palette;
-use crate::render::{shown, ui_text};
+use crate::render::{GameUi, shown, ui_text};
 use crate::stat_frame::{self, Blurb};
 use crate::tooltip::{Side, hover_shows, tip, tip_note, tip_text, tip_title};
 
@@ -44,12 +44,17 @@ pub(crate) struct AbilityIcon {
     seconds: Entity,
 }
 
-/// Builds the icon once our own player exists: its frame, a picture for the ability, the key,
-/// the wipe and the seconds, and the ability's name under it.
-fn spawn_icon(mut commands: Commands, me: Query<&ClassId, Added<Predicted>>, icons: Query<(), With<AbilityIcon>>) {
+/// The Q icon and the passive's: hidden outside the arena (`GameUi`), rebuilt for each fighter.
+#[derive(Component)]
+struct ActionBarPart;
+
+/// Builds the icon each time our own player appears (any old one replaced, in case it was for
+/// another class): its frame, a picture for the ability, the key, the wipe and the seconds, and
+/// the ability's name under it.
+fn spawn_icon(mut commands: Commands, me: Query<&ClassId, Added<Predicted>>, parts: Query<Entity, With<ActionBarPart>>) {
     let Ok(class) = me.single() else { return };
-    if !icons.is_empty() {
-        return;
+    for part in &parts {
+        commands.entity(part).despawn();
     }
     let ability = &class.def().ability;
     let fill = || Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() };
@@ -105,6 +110,8 @@ fn spawn_icon(mut commands: Commands, me: Query<&ClassId, Added<Predicted>>, ico
     commands
         .spawn((
             AbilityIcon { wipe, seconds },
+            ActionBarPart,
+            GameUi,
             icon_frame(tip, ICON, -ICON / 2.0, palette::SPIRIT),
         ))
         .add_children(&[picture, wipe, seconds_box, key, name, tip]);
@@ -133,7 +140,7 @@ fn spawn_passive(commands: &mut Commands, blurb: Blurb) {
         ))
         .id();
     commands
-        .spawn(icon_frame(tip, PASSIVE, -ICON / 2.0 - PASSIVE_GAP - PASSIVE, palette::STONE))
+        .spawn((ActionBarPart, GameUi, icon_frame(tip, PASSIVE, -ICON / 2.0 - PASSIVE_GAP - PASSIVE, palette::STONE)))
         .add_children(&[diamond, tip]);
 }
 

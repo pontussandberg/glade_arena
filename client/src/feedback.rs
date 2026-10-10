@@ -13,22 +13,25 @@ use lightyear::prelude::*;
 use crate::camera::CameraPlaced;
 use crate::glade::{palette, to_world};
 use crate::render::{Relation, set_fill, shown, ui_text};
+use crate::render::GameUi;
 use crate::rig::SeenThrows;
+use crate::rooms::Screen;
 
 pub struct FeedbackPlugin;
 
 impl Plugin for FeedbackPlugin {
     fn build(&self, app: &mut App) {
+        app.add_systems(Startup, spawn_world_ui);
         app.add_systems(
             Update,
             (
                 (spawn_bars, color_bars).chain(),
-                place_bars.in_set(CameraPlaced),
+                place_bars.in_set(CameraPlaced).run_if(in_state(Screen::InGame)),
                 flash_on_hit,
                 end_flashes,
                 hide_the_dead,
                 spawn_damage_numbers,
-                float_damage_numbers.in_set(CameraPlaced),
+                float_damage_numbers.in_set(CameraPlaced).run_if(in_state(Screen::InGame)),
             ),
         );
     }
@@ -91,8 +94,22 @@ struct DamageNumber {
     dx: f32,
 }
 
+/// What floats over the fighters (bars, damage numbers): under one screen-filling `GameUi` root,
+/// so it's all hidden outside the arena, where others can still be fighting.
+#[derive(Component)]
+struct WorldUi;
+
+fn spawn_world_ui(mut commands: Commands) {
+    commands.spawn((
+        WorldUi,
+        GameUi,
+        Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() },
+        Pickable::IGNORE,
+    ));
+}
+
 /// Each fighter gets its bars once it has a body.
-fn spawn_bars(mut commands: Commands, new: Query<(Entity, Has<Predicted>), (With<PlayerId>, Added<Mesh3d>)>) {
+fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, new: Query<(Entity, Has<Predicted>), (With<PlayerId>, Added<Mesh3d>)>) {
     let fill = |color: Color| (Node { width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(color));
     let frame = |node: Node| {
         (
@@ -116,6 +133,7 @@ fn spawn_bars(mut commands: Commands, new: Query<(Entity, Has<Predicted>), (With
         commands
             .spawn((
                 Bars { player, health_fill, cast, cast_fill },
+                ChildOf(*world_ui),
                 frame(Node { width: px(BAR_SIZE.x), height: px(BAR_SIZE.y), ..default() }),
                 Visibility::Hidden,
             ))
@@ -279,6 +297,7 @@ fn hide_the_dead(
 fn spawn_damage_numbers(
     mut commands: Commands,
     time: Res<Time>,
+    world_ui: Single<Entity, With<WorldUi>>,
     mut players: Query<(Entity, &RecentHits, Option<&mut ShownHits>, Has<Predicted>), Changed<RecentHits>>,
 ) {
     for (player, recent, shown, is_me) in &mut players {
@@ -300,6 +319,7 @@ fn spawn_damage_numbers(
             let lasts = if crit { CRIT_NUMBER_SECONDS } else { NUMBER_SECONDS };
             commands.spawn((
                 DamageNumber { player, born: time.elapsed_secs(), lasts, crit, dx: side * NUMBER_SPREAD * i.div_ceil(2) as f32 },
+                ChildOf(*world_ui),
                 ui_text(text, size, color),
                 TextShadow { offset: Vec2::splat(2.0), color: palette::INK },
                 Node { position_type: PositionType::Absolute, ..default() },
