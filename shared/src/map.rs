@@ -353,23 +353,56 @@ impl Map {
         None
     }
 
-    /// Where to head next on the way from `pos` to the center of tile `target`: the farthest
-    /// point on the A* path reachable in a straight line, so movement looks direct (LoL-style)
-    /// instead of zig-zagging along tiles. `None` if the target can't be reached.
-    pub fn next_waypoint(&self, pos: Vec2, target: IVec2) -> Option<Vec2> {
-        if !self.walkable(target) {
+    /// Where a click at `p` sends a walker: `p` itself if a body fits there; pulled toward its
+    /// tile's center if it's too close to something blocked to stand on; or, if `p` isn't on
+    /// walkable ground, the center of the nearest walkable tile (up to `max_radius` tiles out).
+    /// `next_waypoint` reaches whatever this returns.
+    pub fn walk_target(&self, p: Vec2, max_radius: i32) -> Option<Vec2> {
+        if !p.is_finite() {
             return None;
         }
-        let goal = Map::center(target);
+        let tile = self.nearest_walkable(Map::tile_of(p), max_radius)?;
+        Some(if tile == Map::tile_of(p) { self.standing_point(p) } else { Map::center(tile) })
+    }
+
+    /// `p` (on a walkable tile) if a body fits there, else the farthest point toward it from its
+    /// tile's center that one does. From that center it's always in a straight line.
+    pub(crate) fn standing_point(&self, p: Vec2) -> Vec2 {
+        let center = Map::center(Map::tile_of(p));
+        if self.line_walkable(center, p) {
+            return p;
+        }
+        let (mut reachable, mut blocked) = (0.0, 1.0);
+        for _ in 0..12 {
+            let mid = (reachable + blocked) / 2.0;
+            if self.line_walkable(center, center.lerp(p, mid)) {
+                reachable = mid;
+            } else {
+                blocked = mid;
+            }
+        }
+        center.lerp(p, reachable)
+    }
+
+    /// Where to head next on the way from `pos` to `target`: the farthest point on the A* path
+    /// reachable in a straight line, so movement looks direct (LoL-style) instead of zig-zagging
+    /// along tiles. A target too close to a wall to stand on is pulled in first, the same way
+    /// `walk_target` does, so whatever sends the target, the walk ends exactly on a point
+    /// `sim::arrived` recognizes. `None` if the target can't be reached.
+    pub fn next_waypoint(&self, pos: Vec2, target: Vec2) -> Option<Vec2> {
+        let target_tile = Map::tile_of(target);
+        if !target.is_finite() || !self.walkable(target_tile) {
+            return None;
+        }
+        let goal = self.standing_point(target);
         let Some(mut blocker) = self.line_blocker(pos, goal) else { return Some(goal) };
         let start = Map::tile_of(pos);
-        let path = self.cached_path(start, target)?;
-        // The goal (the path's last tile) is out of sight: find the farthest tile before it
-        // that isn't. Tiles next to each other on the path are mostly hidden by the same
-        // obstacle, so the one that hid the last tile is tried first. Exactly what checking
+        let path = self.cached_path(start, target_tile)?;
+        // The goal is out of sight: find the farthest tile center on the path that isn't, the
+        // target tile's first. Tiles next to each other on the path are mostly hidden by the
+        // same obstacle, so the one that hid the last tile is tried first. Exactly what checking
         // every line in full would find, only cheaper.
-        let before_goal = path.get(1..path.len() - 1).unwrap_or_default();
-        let farthest_visible = before_goal.iter().rev().map(|t| Map::center(*t)).find(|&p| {
+        let farthest_visible = path.get(1..).unwrap_or_default().iter().rev().map(|t| Map::center(*t)).find(|&p| {
             if self.blocks_line(blocker, pos, p) {
                 return false;
             }
@@ -514,13 +547,17 @@ mod tests {
     #[test]
     fn next_waypoint_matches_a_plain_search() {
         let m = map();
-        let plain = |pos: Vec2, target: IVec2| {
-            let goal = Map::center(target);
-            if m.walkable(target) && m.line_walkable(pos, goal) {
+        let plain = |pos: Vec2, target: Vec2| {
+            let tile = Map::tile_of(target);
+            if !m.walkable(tile) {
+                return None;
+            }
+            let goal = m.standing_point(target);
+            if m.line_walkable(pos, goal) {
                 return Some(goal);
             }
             let start = Map::tile_of(pos);
-            let path = m.find_path(start, target)?;
+            let path = m.find_path(start, tile)?;
             let farthest = path[1..].iter().rev().map(|t| Map::center(*t)).find(|p| m.line_walkable(pos, *p));
             Some(farthest.unwrap_or(Map::center(start)))
         };
@@ -534,12 +571,13 @@ mod tests {
         for _ in 0..2000 {
             // Anywhere inside a walkable tile, to any tile: mostly walkable ones, sometimes
             // water, walls or off the map.
-            let offset = Vec2::new(pick(1000) as f32, pick(1000) as f32) / 1000.0 - 0.5;
-            let pos = Map::center(walkable[pick(walkable.len())]) + offset;
+            let offsets = [0, 1, 2, 3].map(|_| pick(1000) as f32 / 1000.0 - 0.5);
+            let pos = Map::center(walkable[pick(walkable.len())]) + Vec2::new(offsets[0], offsets[1]);
+            let to = Vec2::new(offsets[2], offsets[3]);
             let target = match pick(10) {
-                0 => all[pick(all.len())],
-                1 => IVec2::new(-50, 3),
-                _ => walkable[pick(walkable.len())],
+                0 => Map::center(all[pick(all.len())]) + to,
+                1 => Vec2::new(-50.0, 3.0),
+                _ => Map::center(walkable[pick(walkable.len())]) + to,
             };
             assert_eq!(m.next_waypoint(pos, target), plain(pos, target), "{pos} -> {target}");
         }
@@ -552,5 +590,23 @@ mod tests {
             assert!((wave(t) + wave(-t)).abs() < 1e-5);
             assert!(wave(t).abs() <= 1.0 + 1e-6);
         }
+    }
+
+    #[test]
+    fn walk_target_keeps_open_points_and_pulls_wall_huggers_in() {
+        let m = map();
+        let wall = m.tiles().find(|(t, tile)| *tile == Tile::Wall && m.walkable(*t + IVec2::X)).unwrap().0;
+        let beside = wall + IVec2::X;
+        // Open ground: the very point clicked.
+        let open = Map::center(Map::tile_of(SPAWN_POINTS[0])) + Vec2::new(0.2, -0.3);
+        assert_eq!(m.walk_target(open, 4), Some(open));
+        // Right against the wall: pulled in to where a body fits, still in that tile.
+        let hugging = Map::center(beside) - Vec2::new(0.45, 0.0);
+        let fixed = m.walk_target(hugging, 4).unwrap();
+        assert_eq!(Map::tile_of(fixed), beside);
+        assert!(m.line_walkable(Map::center(beside), fixed) && fixed.x > hugging.x);
+        // In the wall: the nearest walkable tile's center.
+        assert!(m.walk_target(Map::center(wall), 4).is_some_and(|p| m.walkable_at(p) && p == Map::center(Map::tile_of(p))));
+        assert_eq!(m.walk_target(Vec2::NAN, 4), None);
     }
 }

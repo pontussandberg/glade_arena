@@ -53,7 +53,7 @@ fn melee_hits_where_the_attacker_saw_the_target() {
     // B runs away. A's swing goes off with B at the edge of reach *as A sees it*, which is
     // already out of reach on the server: only lag compensation can land this hit. A starts
     // winding up early by the distance B covers during the windup.
-    set_input(&mut d.b, PlayerInput { move_to: Some(Map::tile_of(b_goal)), ..default() });
+    set_input(&mut d.b, PlayerInput { move_to: Some(Map::center(Map::tile_of(b_goal))), ..default() });
     let lead = class_id(B_CLASS).def().move_speed * windup(A_CLASS).as_secs_f32();
     d.until(Duration::from_secs(3), "B nearly at the edge of A's reach, as A sees it", |d| {
         sees(&mut d.a, B).unwrap().distance(A_SPOT) > reach() - 0.3 - lead
@@ -94,7 +94,7 @@ fn the_dead_sit_out_then_respawn_at_full_health() {
     let died_at = Instant::now();
 
     // Dead: B's clicks go nowhere on the server.
-    set_input(&mut d.b, PlayerInput { move_to: Some(Map::tile_of(B_SPOT) + IVec2::new(4, 0)), ..default() });
+    set_input(&mut d.b, PlayerInput { move_to: Some(Map::center(Map::tile_of(B_SPOT) + IVec2::new(4, 0))), ..default() });
     d.run(Duration::from_millis(1000));
     assert_eq!(server_player(&mut d.server, B), (B_SPOT, 0), "a dead player moved or healed");
     set_input(&mut d.b, PlayerInput::default());
