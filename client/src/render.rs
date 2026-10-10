@@ -51,6 +51,14 @@ impl Plugin for RenderPlugin {
 
 /// Shots fly at chest height; fighters stand on the floor (their feet are at the mesh origin).
 const PROJECTILE_HEIGHT: f32 = 0.9;
+/// Thrown spears fly a little higher, at the height the throw lets go of them, so they leave the
+/// hand straight down their line instead of sinking onto it.
+const THROWN_HEIGHT: f32 = 1.2;
+
+/// How high a shot flies: a thrown spear at `THROWN_HEIGHT`, the rest at `PROJECTILE_HEIGHT`.
+fn shot_height(thrown: bool) -> f32 {
+    if thrown { THROWN_HEIGHT } else { PROJECTILE_HEIGHT }
+}
 /// How long a thrown spear takes to ease from the hand onto its real path (seconds).
 const SETTLE_SECONDS: f32 = 0.2;
 /// Others' spears reach us a round trip (and a bit) after they're thrown, when their real path
@@ -583,7 +591,7 @@ fn add_visuals(
         shot.insert((
             Mesh3d(mesh),
             MeshMaterial3d(body),
-            Transform::from_translation(to_world(pos.0, PROJECTILE_HEIGHT))
+            Transform::from_translation(to_world(pos.0, shot_height(thrown)))
                 .with_rotation(Quat::from_rotation_y(projectile.dir.to_angle())),
         ));
         if spin != 0.0 {
@@ -888,14 +896,15 @@ fn sync_transforms(mut q: Query<(&Pos, &mut Transform), (Changed<Pos>, Without<P
 /// ticks too, so it glides instead of stepping). Every shot is predicted, ours and others'.
 ///
 /// A thrown spear leaves the hand: the first frame it's drawn (after the thrower is posed,
-/// releasing) it takes over the held javelin's place, then eases onto its real path (which
-/// starts at the thrower's center, where hits are judged), across and up/down within
-/// `SETTLE_SECONDS`, turning from how it was held to the way it flies. A hand ahead of the real
-/// path is given back more slowly, so the spear never seems to slow below 3/4 speed; one behind
-/// it is caught up within `SETTLE_SECONDS` however far behind it is, so others' spears (which
-/// reach us late, already meters down their path) shoot out of the hand fast and are where they
-/// really are almost at once. Its wind stretches back to where it left the hand, up to
-/// `WIND_LENGTH`.
+/// releasing) it takes over the held javelin's place (where the throw sends it, see `HeldAt`),
+/// then eases onto its real path (which starts at the thrower's center, where hits are judged),
+/// across and up/down within `SETTLE_SECONDS`, turning from how it was held to the way it flies.
+/// A hand ahead of the real path is given back more slowly, so the spear never seems to slow
+/// below 3/4 speed; one behind it is caught up within `SETTLE_SECONDS` however far behind it is,
+/// so others' spears (which reach us late, already meters down their path) shoot out of the hand
+/// fast and are where they really are almost at once. Its wind stretches back to where it left
+/// the hand, up to `WIND_LENGTH`. A thrown Q isn't the held javelin (that stays in the hand): it
+/// shoots straight out from where the sim threw it, already pointing the way it flies.
 fn fly_shots(
     time: Res<Time>,
     clock: AttackClock,
@@ -907,7 +916,8 @@ fn fly_shots(
     let tick = clock.now(true);
     for (projectile, mut transform, thrown, spin) in &mut shots {
         let speed = projectile.class.def().shot(projectile.ability).map_or(0.0, |s| s.speed);
-        let on_path = to_world(sim::projectile_pos(projectile, tick), PROJECTILE_HEIGHT);
+        let height = shot_height(thrown.is_some());
+        let on_path = to_world(sim::projectile_pos(projectile, tick), height);
         let along = Quat::from_rotation_y(projectile.dir.to_angle());
         let forward_dir = along * Vec3::X;
         let Some(mut thrown) = thrown else {
@@ -918,12 +928,19 @@ fn fly_shots(
         let launch = match thrown.launch {
             Some(launch) => launch,
             None => {
-                let held = holders.iter().find(|(id, _)| id.0 == projectile.owner).map(|(_, held)| held.0);
-                *thrown.launch.insert(match held {
-                    Some(held) => {
-                        let from = held.translation + held.rotation * Vec3::Y * glade::GRIP_TO_TIP;
-                        // The held javelin points up (+Y), a shot along +X.
-                        let rotation = held.rotation * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+                // Where it starts and which way it points: a Q where the sim threw it (just outside
+                // the thrower's body), along its flight; an auto-attack from the held javelin's
+                // point, as it's held (which points up, +Y, a shot along +X).
+                let start = if projectile.ability {
+                    Some((to_world(projectile.origin, height), along))
+                } else {
+                    holders.iter().find(|(id, _)| id.0 == projectile.owner).map(|(_, held)| {
+                        let from = held.0.translation + held.0.rotation * Vec3::Y * glade::GRIP_TO_TIP;
+                        (from, held.0.rotation * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2))
+                    })
+                };
+                *thrown.launch.insert(match start {
+                    Some((from, rotation)) => {
                         // No more than `MAX_CATCH_UP` behind its real path.
                         let mut offset = from - on_path;
                         let excess = offset.dot(forward_dir) + MAX_CATCH_UP;

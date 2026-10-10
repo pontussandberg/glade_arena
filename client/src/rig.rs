@@ -100,9 +100,13 @@ const TAIL_TURN: f32 = 0.06;
 
 /// How a rigged class moves. Keyframes are (carrying, fully drawn back, released, dashing),
 /// radians. Limbs: positive swings forward. Twist: negative turns the weapon (right, +Z)
-/// shoulder back. Lean: positive leans back.
+/// shoulder back. Lean: positive leans back (along the facing, whatever the twist).
 struct Moves {
     weapon_arm: [f32; 4],
+    /// How much of the body's twist the weapon arm undoes (0 to 1), so it swings along the
+    /// facing rather than across the twisted chest: an overhand throw draws straight back behind
+    /// the shoulder and whips straight through, instead of round behind the head.
+    weapon_arm_untwist: f32,
     lead_arm: [f32; 4],
     lead_leg: [f32; 4],
     back_leg: [f32; 4],
@@ -131,10 +135,13 @@ enum Held {
 
 const JAVELINIST: Moves = Moves {
     weapon_arm: [-2.9, -2.8, 1.9, -2.1],
+    weapon_arm_untwist: 1.0,
     lead_arm: [0.35, 1.5, -0.9, -0.8],
     lead_leg: [0.12, 0.55, 0.4, 0.6],
     back_leg: [-0.1, -0.5, -0.75, -0.6],
-    twist: [0.0, -1.0, 0.55, 0.0],
+    // Drawn: the shoulder turned back only so far that the javelin, held on target, stays clear
+    // of the head. Released: the shoulder comes round, the javelin in front of the chest.
+    twist: [0.0, -0.8, 0.55, 0.0],
     lean: [0.0, 0.28, -0.38, -0.45],
     head_dip: [0.0, 0.2, -0.15, 0.0],
     held: Held::OnTarget,
@@ -144,6 +151,7 @@ const JAVELINIST: Moves = Moves {
 
 const REVENANT: Moves = Moves {
     weapon_arm: [0.65, -2.7, 1.0, -1.5],
+    weapon_arm_untwist: 0.0,
     lead_arm: [-0.2, 0.7, -0.6, -1.1],
     lead_leg: [0.1, 0.45, 0.6, 0.65],
     back_leg: [-0.1, -0.4, -0.65, -0.7],
@@ -157,6 +165,7 @@ const REVENANT: Moves = Moves {
 
 const FROST_MAGE: Moves = Moves {
     weapon_arm: [0.3, 1.9, 1.25, 0.75],
+    weapon_arm_untwist: 0.0,
     lead_arm: [-0.1, 1.25, 0.8, -1.0],
     lead_leg: [0.1, 0.3, 0.5, 0.55],
     back_leg: [-0.1, -0.3, -0.5, -0.5],
@@ -195,6 +204,9 @@ const SLAM: (f32, f32) = (8.0, 24.0);
 /// (per second, exponential).
 const TURN_RATE: f32 = 28.0;
 const WALK_RATE: f32 = 10.0;
+/// How much the head turns and leans with the body (0: it stays square on the aim), so it moves
+/// with the shoulders through a strike instead of hanging still while the body turns under it.
+const HEAD_FOLLOW: f32 = 0.3;
 /// How brightly the eyes (and other glowing parts) glow.
 const EYE_GLOW: f32 = 6.0;
 
@@ -228,8 +240,10 @@ struct Facing {
     turned: f32,
 }
 
-/// Where a fighter's held weapon is in the world as posed this frame: its grip, the weapon
-/// pointing along +Y. A thrown javelin leaves the hand from here (`render::fly_shots`).
+/// Where a fighter's held weapon is in the world in the pose it's heading for this frame (its
+/// joints' targets, not where their springs have got to): its grip, the weapon pointing along
+/// +Y. A thrown javelin leaves the hand from here (`render::fly_shots`): where the throw sends
+/// it, out in front, rather than from an arm the springs still hold halfway through the swing.
 #[derive(Component, Default, PartialEq)]
 pub(crate) struct HeldAt(pub Transform);
 
@@ -476,13 +490,14 @@ fn pose_rigs(
         // Every angle chases its pose on a spring.
         let spring = |joint: &mut Spring, target: f32| joint.follow(target, dt, JOINT_STIFFNESS, JOINT_DAMPING);
         let joints = &mut rig.joints;
-        let twist = spring(&mut joints.twist, pose(moves.twist));
-        let lean = spring(&mut joints.lean, pose(moves.lean));
+        let (twist_to, lean_to, weapon_arm_to) = (pose(moves.twist), pose(moves.lean), pose(moves.weapon_arm));
+        let twist = spring(&mut joints.twist, twist_to);
+        let lean = spring(&mut joints.lean, lean_to);
         let legs = [
             spring(&mut joints.back_leg, pose(moves.back_leg) - step * LEG_SWING * (1.0 - braced)),
             spring(&mut joints.lead_leg, pose(moves.lead_leg) + step * LEG_SWING * (1.0 - braced)),
         ];
-        let weapon_arm = spring(&mut joints.weapon_arm, pose(moves.weapon_arm) - step * ARM_SWING * 0.3);
+        let weapon_arm = spring(&mut joints.weapon_arm, weapon_arm_to - step * ARM_SWING * 0.3);
         let lead_arm = spring(&mut joints.lead_arm, pose(moves.lead_arm) + step * ARM_SWING);
         let head_dip = spring(&mut joints.head_dip, pose(moves.head_dip));
 
@@ -491,10 +506,19 @@ fn pose_rigs(
         // walks.
         let walk = rig.walking * (1.0 - braced);
         let sway = phase.sin() * SWAY * walk;
-        let lean = Quat::from_rotation_y(twist) * Quat::from_rotation_z(lean) * Quat::from_rotation_x(sway);
+        // Leaning along the facing, then twisting: leaning back about the twisted body's own axis
+        // would tip it sideways, across the line of the strike.
+        let leaning = |twist: f32, lean: f32, sway: f32| {
+            Quat::from_rotation_z(lean) * Quat::from_rotation_y(twist) * Quat::from_rotation_x(sway)
+        };
+        let arm_turn = |twist: f32, swing: f32| {
+            Quat::from_rotation_y(-moves.weapon_arm_untwist * twist) * Quat::from_rotation_z(swing)
+        };
+        let facing_turn = Quat::from_rotation_y(facing.look.to_angle());
+        let lean = leaning(twist, lean, sway);
         let spread = legs[0].abs().max(legs[1].abs());
         let mut posed = *body;
-        posed.rotation = Quat::from_rotation_y(facing.look.to_angle()) * lean;
+        posed.rotation = facing_turn * lean;
         posed.scale = Vec3::splat(moves.scale);
         posed.translation.y = (-RIG_HIP.y * (1.0 - spread.cos()) + (2.0 * phase).cos().abs() * BOB * walk) * moves.scale;
         body.set_if_neq(posed);
@@ -508,26 +532,33 @@ fn pose_rigs(
         });
 
         let unlean = lean.inverse();
-        let weapon_arm = Quat::from_rotation_z(weapon_arm);
-        let held = match moves.held {
+        let weapon_arm = arm_turn(twist, weapon_arm);
+        let held_in = |weapon_arm: Quat, unlean: Quat| match moves.held {
             Held::OnTarget => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-(FRAC_PI_2 - 0.12)),
             Held::InHand(forward) => Quat::from_rotation_z(PI + forward),
             Held::Upright(tip) => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-pose(tip)),
         };
+        let held = held_in(weapon_arm, unlean);
         let rotations = [
-            (rig.head, unlean * Quat::from_rotation_z(-head_dip)),
+            (rig.head, unlean.slerp(Quat::IDENTITY, HEAD_FOLLOW) * Quat::from_rotation_z(-head_dip)),
             (rig.arms[0], weapon_arm),
             (rig.arms[1], Quat::from_rotation_z(lead_arm)),
             (rig.legs[0], Quat::from_rotation_z(legs[0])),
             (rig.legs[1], Quat::from_rotation_z(legs[1])),
             (rig.held, held),
         ];
-        // The held weapon's world pose, rebuilt from the same joints it hangs from (it's a child
-        // of the weapon arm at the hand, see `add_rigs`): child transforms aren't propagated
-        // until after this frame's shots are placed.
-        let hand = Transform::from_translation(RIG_SHOULDER).with_rotation(weapon_arm)
-            * Transform::from_translation(RIG_HAND).with_rotation(held);
-        held_at.set_if_neq(HeldAt(posed * hand));
+        // For a fighter that throws its weapon: the held weapon's world pose in the pose the joints
+        // are heading for (see `HeldAt`), rebuilt from the joints it hangs from (it's a child of
+        // the weapon arm at the hand, see `add_rigs`): child transforms aren't propagated until
+        // after this frame's shots are placed.
+        if moves.throws {
+            let aimed_lean = leaning(twist_to, lean_to, 0.0);
+            let aimed_arm = arm_turn(twist_to, weapon_arm_to);
+            let aimed_body = Transform { rotation: facing_turn * aimed_lean, ..posed };
+            let hand = Transform::from_translation(RIG_SHOULDER).with_rotation(aimed_arm)
+                * Transform::from_translation(RIG_HAND).with_rotation(held_in(aimed_arm, aimed_lean.inverse()));
+            held_at.set_if_neq(HeldAt(aimed_body * hand));
+        }
         for (part, rotation) in rotations.into_iter().chain(tail) {
             if let Ok((mut transform, mut visibility)) = parts.get_mut(part) {
                 if transform.rotation != rotation {
