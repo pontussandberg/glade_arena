@@ -13,4 +13,6 @@ esac
 cargo build -p arena-client --target wasm32-unknown-unknown --profile "$profile"
 wasm-bindgen --target web --no-typescript --out-dir client/web/pkg \
   "target/wasm32-unknown-unknown/$dir/arena-client.wasm"
+# The wasm's size, for the page's loading bar: a compressed response (Caddy's) doesn't say it.
+wc -c < client/web/pkg/arena-client_bg.wasm | tr -d ' ' > client/web/pkg/arena-client_bg.wasm.size
 ls -la client/web/pkg

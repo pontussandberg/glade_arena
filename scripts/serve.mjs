@@ -19,7 +19,12 @@ createServer(async (req, res) => {
   if (path.startsWith('..')) return res.writeHead(403).end();
   try {
     const body = await readFile(join(root, path || 'index.html'));
-    res.writeHead(200, { 'content-type': types[extname(path || 'index.html')] ?? 'application/octet-stream', 'cache-control': 'no-store' });
+    res.writeHead(200, {
+      'content-type': types[extname(path || 'index.html')] ?? 'application/octet-stream',
+      'cache-control': 'no-store',
+      // Lets the page's loader show how far along the (large, in dev) wasm download is.
+      'content-length': body.length,
+    });
     res.end(body);
   } catch {
     res.writeHead(404).end('not found');
