@@ -8,6 +8,7 @@ use std::f32::consts::TAU;
 use arena_shared::classes::AbilityKind;
 use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
+use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
@@ -196,11 +197,22 @@ pub(crate) fn tip_panel(node: Node) -> impl Bundle {
     )
 }
 
-/// Shows a tooltip while its icon (or stat) is hovered.
-fn show_tooltips(icons: Query<(&Interaction, &Tooltip), Changed<Interaction>>, mut tips: Query<&mut Visibility>) {
+/// Shows a tooltip while its icon (or stat, or anything else pointing at it) is hovered.
+fn show_tooltips(
+    changed: Query<(), (With<Tooltip>, Changed<Interaction>)>,
+    icons: Query<(&Interaction, &Tooltip)>,
+    mut tips: Query<&mut Visibility>,
+) {
+    if changed.is_empty() {
+        return;
+    }
+    let mut wanted = EntityHashMap::<bool>::default();
     for (interaction, tooltip) in &icons {
-        if let Ok(mut visibility) = tips.get_mut(tooltip.0) {
-            visibility.set_if_neq(shown(*interaction != Interaction::None));
+        *wanted.entry(tooltip.0).or_default() |= *interaction != Interaction::None;
+    }
+    for (tip, show) in wanted {
+        if let Ok(mut visibility) = tips.get_mut(tip) {
+            visibility.set_if_neq(shown(show));
         }
     }
 }

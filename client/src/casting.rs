@@ -1,9 +1,9 @@
 //! Quick cast and normal cast, LoL-style. Quick cast sends Q off toward the cursor the moment
 //! it's pressed; normal cast first shows where it will go (the aim indicator, on the ground at
-//! your feet) and casts it on the next left click (a right click drops it). The pill beside the Q
-//! icon picks which one plain Q is; Shift+Q is always the other.
-//! Clicking the Q icon is always a normal cast. The choice is kept in the
-//! browser (`localStorage`). The keys themselves are read in `render::read_local_input`.
+//! your feet) and casts it on the next left click (a right click drops it). The quick cast switch,
+//! in the key hints, picks which one plain Q is; Shift+Q is always the other. Clicking the Q icon
+//! is always a normal cast. The choice is kept in the browser (`localStorage`). The keys
+//! themselves are read in `render::read_local_input`.
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -16,7 +16,6 @@ use lightyear::prelude::*;
 use crate::DesiredInput;
 use crate::action_bar::{Tooltip, tip_panel};
 use crate::glade::{self, palette};
-use crate::minimap;
 use crate::render::{clicked, shown, ui_text};
 
 pub struct CastingPlugin;
@@ -28,7 +27,7 @@ impl Plugin for CastingPlugin {
         app.add_systems(
             Update,
             (
-                (spawn_toggle, flip_toggle, light_toggle).chain(),
+                flip_toggle,
                 (spawn_indicator, show_indicator).chain().after(crate::rig::Posing),
             ),
         );
@@ -53,100 +52,84 @@ impl CastMode {
 #[derive(Resource, Default)]
 pub(crate) struct Aiming(pub bool);
 
-/// The quick cast pill, just above the minimap, at its right edge (a button).
+/// The quick cast switch and its label, a row of the key hints (`render::update_key_hints`):
+/// clicking either turns it on or off.
 #[derive(Component)]
-pub(crate) struct QuickCastToggle {
-    label: Entity,
-}
+pub(crate) struct QuickCastToggle;
 
-/// The pill's size and its gap above the minimap (pixels).
-const PILL_WIDTH: f32 = 84.0;
-const PILL_HEIGHT: f32 = 22.0;
-const PILL_GAP: f32 = 6.0;
+/// The switch's size, and its knob's (pixels).
+const SWITCH: Vec2 = Vec2::new(28.0, 14.0);
+const KNOB: f32 = 8.0;
 const TIP_WIDTH: f32 = 280.0;
 
-/// Builds the pill once our own player exists, over the minimap's top right corner.
-fn spawn_toggle(mut commands: Commands, me: Query<(), Added<Predicted>>, toggles: Query<(), With<QuickCastToggle>>) {
-    if me.is_empty() || !toggles.is_empty() {
-        return;
-    }
-    let label = commands.spawn(ui_text("Quick cast", 11.0, palette::HAZE)).id();
-    let tip = commands
-        .spawn(tip_panel(Node {
+/// The quick cast row of the key hints grid: a switch where the key goes (its knob right and
+/// glowing while on, left and dim while off), then what it is; hovering either explains it.
+/// The hints are rebuilt when it's flipped, so it's drawn as it is now.
+pub(crate) fn spawn_toggle_row(grid: &mut ChildSpawnerCommands, quick: bool) {
+    let color = if quick { palette::SPIRIT } else { palette::STONE };
+    let mut tip = Entity::PLACEHOLDER;
+    let switch = grid
+        .spawn((
+            QuickCastToggle,
+            Interaction::default(),
+            Node {
+                width: px(SWITCH.x),
+                height: px(SWITCH.y),
+                border: UiRect::all(px(1.0)),
+                border_radius: BorderRadius::MAX,
+                padding: UiRect::horizontal(px(2.0)),
+                align_items: AlignItems::Center,
+                justify_content: if quick { JustifyContent::FlexEnd } else { JustifyContent::FlexStart },
+                ..default()
+            },
+            BackgroundColor(if quick { palette::SPIRIT.with_alpha(0.18) } else { Color::NONE }),
+            BorderColor::all(color),
+        ))
+        .with_children(|switch| {
+            switch.spawn((
+                Node { width: px(KNOB), height: px(KNOB), border_radius: BorderRadius::MAX, ..default() },
+                BackgroundColor(color),
+            ));
+            tip = switch.spawn(toggle_tip()).id();
+        })
+        .id();
+    grid.commands().entity(switch).insert(Tooltip(tip));
+    grid.spawn((QuickCastToggle, Interaction::default(), Tooltip(tip), ui_text("quick cast", 12.0, palette::STONE)));
+}
+
+/// What quick cast does, under the switch, hidden until it's hovered.
+fn toggle_tip() -> impl Bundle {
+    (
+        tip_panel(Node {
             position_type: PositionType::Absolute,
-            bottom: px(PILL_HEIGHT + 10.0),
-            // Right edges lined up, so it stays on the screen.
-            right: px(0.0),
+            top: px(SWITCH.y + 6.0),
+            left: px(-1.0),
             width: px(TIP_WIDTH),
             flex_direction: FlexDirection::Column,
             row_gap: px(4.0),
             padding: UiRect::all(px(10.0)),
             ..default()
-        }))
-        .with_children(|tip| {
-            tip.spawn(ui_text("Quick cast", 15.0, palette::HAZE));
-            tip.spawn(ui_text("Click to turn on or off", 11.0, palette::STONE));
-            tip.spawn(ui_text(
+        }),
+        children![
+            ui_text("Quick cast", 15.0, palette::HAZE),
+            ui_text("Click to turn on or off", 11.0, palette::STONE),
+            ui_text(
                 "On: Q casts your ability right away, toward the cursor. Shift+Q shows where it will \
-                 go first: left click casts it, right click cancels. Clicking the ability's icon \
-                 always shows where it will go.",
+                 go first: left click casts it, right click cancels.",
                 13.0,
                 palette::HAZE,
-            ));
-            tip.spawn(ui_text("Off: the other way round. Q shows where it will go, Shift+Q casts right away.", 13.0, palette::HAZE));
-        })
-        .id();
-    commands
-        .spawn((
-            QuickCastToggle { label },
-            crate::render::GameUi,
-            Button,
-            Tooltip(tip),
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: px(minimap::MARGIN + minimap::picture_size().y + PILL_GAP),
-                right: px(minimap::MARGIN),
-                width: px(PILL_WIDTH),
-                height: px(PILL_HEIGHT),
-                border: UiRect::all(px(1.0)),
-                border_radius: BorderRadius::MAX,
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(palette::INK.with_alpha(0.9)),
-            BorderColor::all(palette::STONE),
-        ))
-        .add_children(&[label, tip]);
+            ),
+            ui_text("Off: the other way round. Q shows where it will go, Shift+Q casts right away.", 13.0, palette::HAZE),
+            ui_text("Clicking the ability's icon always shows where it will go.", 13.0, palette::HAZE),
+        ],
+    )
 }
 
-/// A click on the pill turns quick cast on or off, and remembers it.
-fn flip_toggle(toggle: Query<Ref<Interaction>, With<QuickCastToggle>>, mut mode: ResMut<CastMode>) {
-    if toggle.single().is_ok_and(clicked) {
+/// A click on the switch (or its label) turns quick cast on or off, and remembers it.
+fn flip_toggle(toggles: Query<Ref<Interaction>, With<QuickCastToggle>>, mut mode: ResMut<CastMode>) {
+    if toggles.iter().any(clicked) {
         mode.quick = !mode.quick;
         save_quick_cast(mode.quick);
-    }
-}
-
-/// The pill glows spirit blue while quick cast is on, and is dim stone while it's off; a little
-/// brighter under the mouse.
-fn light_toggle(
-    mode: Res<CastMode>,
-    toggles: Query<(Ref<Interaction>, &QuickCastToggle, &mut BackgroundColor, &mut BorderColor)>,
-    mut texts: Query<&mut TextColor>,
-) {
-    for (interaction, toggle, mut background, mut border) in toggles {
-        if !mode.is_changed() && !interaction.is_changed() {
-            continue;
-        }
-        let color = if mode.quick { palette::SPIRIT } else { palette::STONE };
-        let fill = if mode.quick { palette::SPIRIT.with_alpha(0.18) } else { palette::INK.with_alpha(0.9) };
-        let fill = if *interaction == Interaction::None { fill } else { fill.lighter(0.08) };
-        background.set_if_neq(BackgroundColor(fill));
-        border.set_if_neq(BorderColor::all(color));
-        if let Ok(mut text) = texts.get_mut(toggle.label) {
-            text.set_if_neq(TextColor(color));
-        }
     }
 }
 

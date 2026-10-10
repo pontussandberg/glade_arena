@@ -1175,6 +1175,10 @@ fn update_key_hints(
         for (key, action) in keys {
             grid.spawn(key_chip(*key, 11.0, palette::HAZE, palette::STONE.with_alpha(0.5)));
             grid.spawn(ui_text(*action, 12.0, palette::STONE));
+            // Which of the two Q is, right under them.
+            if *key == "Shift+Q" {
+                crate::casting::spawn_toggle_row(grid, cast_mode.quick);
+            }
         }
     });
 }
