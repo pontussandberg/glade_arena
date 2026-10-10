@@ -1,6 +1,6 @@
 //! Combat feedback: a health bar over every fighter with a cast bar under it while it winds up
-//! an attack, a white flash when one takes damage, and dead fighters disappearing until they
-//! respawn.
+//! an attack, a white flash and a damage number when one takes damage (a crit's bigger and
+//! golden), and dead fighters disappearing until they respawn.
 
 use arena_shared::protocol::*;
 use bevy::ecs::system::SystemParam;
@@ -11,7 +11,7 @@ use lightyear::prelude::*;
 
 use crate::camera::CameraPlaced;
 use crate::glade::{palette, to_world};
-use crate::render::{Relation, shown};
+use crate::render::{Relation, shown, ui_text};
 use crate::rig::SeenThrows;
 
 pub struct FeedbackPlugin;
@@ -20,7 +20,15 @@ impl Plugin for FeedbackPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (spawn_bars, place_bars.in_set(CameraPlaced), flash_on_hit, end_flashes, hide_the_dead),
+            (
+                spawn_bars,
+                place_bars.in_set(CameraPlaced),
+                flash_on_hit,
+                end_flashes,
+                hide_the_dead,
+                spawn_damage_numbers,
+                float_damage_numbers.in_set(CameraPlaced),
+            ),
         );
     }
 }
@@ -33,6 +41,20 @@ const CAST_BAR_HEIGHT: f32 = 5.0;
 const FLASH_SECONDS: f32 = 0.12;
 /// How bright the flash is (emissive white on the fighter's own material).
 const FLASH_GLOW: f32 = 3.0;
+
+/// Damage numbers: text size in pixels (a crit's, and how much bigger it pops in at, settling
+/// over the first `CRIT_POP_PART` of its life), how long one shows (fading out over the last
+/// `NUMBER_FADE_PART`), how far it rises above the health bar meanwhile, and how far apart
+/// numbers landing together spread sideways.
+const NUMBER_SIZE: f32 = 16.0;
+const CRIT_NUMBER_SIZE: f32 = 26.0;
+const CRIT_POP: f32 = 0.6;
+const CRIT_POP_PART: f32 = 0.15;
+const NUMBER_SECONDS: f32 = 0.9;
+const CRIT_NUMBER_SECONDS: f32 = 1.2;
+const NUMBER_FADE_PART: f32 = 0.4;
+const NUMBER_RISE: f32 = 36.0;
+const NUMBER_SPREAD: f32 = 14.0;
 
 /// A fighter's bars: the health bar (this entity) and its parts.
 #[derive(Component)]
@@ -51,6 +73,21 @@ struct ShownHealth(i32);
 #[derive(Component)]
 struct HitFlash {
     until: f32,
+}
+
+/// The running number (`RecentHits::seq`) of the last hit on this fighter we showed a number for.
+#[derive(Component)]
+struct ShownHits(u32);
+
+/// A damage number floating up from over `player`'s health bar, from `born` for `lasts` seconds.
+#[derive(Component)]
+struct DamageNumber {
+    player: Entity,
+    born: f32,
+    lasts: f32,
+    crit: bool,
+    /// Sideways from the bar's center, in pixels.
+    dx: f32,
 }
 
 /// Each fighter gets its bars once it has a body.
@@ -83,6 +120,11 @@ fn spawn_bars(mut commands: Commands, new: Query<(Entity, Has<Predicted>), (With
             ))
             .add_children(&[health_fill, cast]);
     }
+}
+
+/// Where a fighter's health bar is centered on screen (`None` off camera).
+fn over_bar(camera: &Camera, camera_transform: &GlobalTransform, pos: &Pos) -> Option<Vec2> {
+    camera.world_to_viewport(camera_transform, to_world(pos.0, BAR_HEIGHT)).ok()
 }
 
 /// "Now" in fractional ticks, on the timeline a fighter is shown on, to compare with its
@@ -122,8 +164,7 @@ fn place_bars(
             continue;
         };
         let alive = health.is_none_or(Health::alive);
-        let screen = camera.world_to_viewport(camera_transform, to_world(pos.0, BAR_HEIGHT)).ok();
-        let Some(screen) = screen.filter(|_| alive) else {
+        let Some(screen) = over_bar(camera, camera_transform, pos).filter(|_| alive) else {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
@@ -213,5 +254,78 @@ fn hide_the_dead(
 ) {
     for (health, mut visibility) in &mut players {
         visibility.set_if_neq(shown(health.alive()));
+    }
+}
+
+/// A number for each new hit in a fighter's `RecentHits` (server-confirmed, like the flash). The
+/// hits already there when we first see a fighter are only noted. Damage to us is in our
+/// enemies' red; a crit is bigger, flame-gold, and ends in "!".
+fn spawn_damage_numbers(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut players: Query<(Entity, &RecentHits, Option<&mut ShownHits>, Has<Predicted>), Changed<RecentHits>>,
+) {
+    for (player, recent, shown, is_me) in &mut players {
+        let Some(mut shown) = shown else {
+            commands.entity(player).insert(ShownHits(recent.seq()));
+            continue;
+        };
+        let last = std::mem::replace(&mut shown.0, recent.seq());
+        for (i, hit) in recent.0.iter().filter(|hit| hit.seq > last).enumerate() {
+            let (text, size, color) = match (hit.crit, is_me) {
+                (true, _) => (format!("{}!", hit.amount), CRIT_NUMBER_SIZE, palette::TORCH_FLAME),
+                (false, true) => (hit.amount.to_string(), NUMBER_SIZE, palette::ENEMY),
+                (false, false) => (hit.amount.to_string(), NUMBER_SIZE, palette::SUN),
+            };
+            // Alternate sides from the second on, so numbers landing together don't overlap.
+            let side = if i % 2 == 0 { 1.0 } else { -1.0 };
+            let lasts = if hit.crit { CRIT_NUMBER_SECONDS } else { NUMBER_SECONDS };
+            commands.spawn((
+                DamageNumber { player, born: time.elapsed_secs(), lasts, crit: hit.crit, dx: side * NUMBER_SPREAD * i.div_ceil(2) as f32 },
+                ui_text(text, size, color),
+                TextShadow { offset: Vec2::splat(2.0), color: palette::INK },
+                Node { position_type: PositionType::Absolute, ..default() },
+                GlobalZIndex(5),
+                Visibility::Hidden,
+            ));
+        }
+    }
+}
+
+/// Damage numbers follow their fighter's health bar, rising from just over it and fading out; a
+/// crit pops in big and settles. The rise and pop are `UiTransform`s, which don't make Bevy lay
+/// out the UI again, and like `place_bars` only what changed is written.
+fn float_damage_numbers(
+    mut commands: Commands,
+    time: Res<Time>,
+    camera: Single<(&Camera, &GlobalTransform)>,
+    players: Query<&Pos>,
+    mut numbers: Query<(Entity, &DamageNumber, &ComputedNode, &mut Node, &mut UiTransform, &mut TextColor, &mut Visibility)>,
+) {
+    let (camera, camera_transform) = *camera;
+    for (number, info, computed, mut node, mut transform, mut color, mut visibility) in &mut numbers {
+        let t = (time.elapsed_secs() - info.born) / info.lasts;
+        let (Ok(pos), true) = (players.get(info.player), t < 1.0) else {
+            commands.entity(number).despawn();
+            continue;
+        };
+        let screen = over_bar(camera, camera_transform, pos);
+        visibility.set_if_neq(shown(screen.is_some()));
+        let Some(screen) = screen else { continue };
+        let size = computed.size() * computed.inverse_scale_factor();
+        let (left, top) = (px(screen.x + info.dx - size.x / 2.0), px(screen.y - BAR_SIZE.y - size.y));
+        if node.left != left || node.top != top {
+            node.left = left;
+            node.top = top;
+        }
+        // Eased out: quick off the bar, slowing as it fades.
+        let rise = NUMBER_RISE * (1.0 - (1.0 - t).powi(2));
+        let pop = if info.crit { 1.0 + CRIT_POP * (1.0 - t / CRIT_POP_PART).max(0.0).powi(2) } else { 1.0 };
+        let next = UiTransform { translation: Val2::px(0.0, -rise), scale: Vec2::splat(pop), ..default() };
+        transform.set_if_neq(next);
+        let alpha = ((1.0 - t) / NUMBER_FADE_PART).min(1.0);
+        if color.0.alpha() != alpha {
+            color.0.set_alpha(alpha);
+        }
     }
 }

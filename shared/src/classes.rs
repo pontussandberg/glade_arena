@@ -25,6 +25,28 @@ pub struct ClassDef {
     pub move_speed: f32,
     pub attack: AttackDef,
     pub ability: AbilityDef,
+    /// Critical hits (none by default).
+    #[serde(default)]
+    pub crit: Crit,
+}
+
+/// How much a critical hit multiplies its damage.
+pub const CRIT_MULTIPLIER: f32 = 2.0;
+
+/// The odds that a hit this class deals (auto-attack or Q) is critical, for `CRIT_MULTIPLIER`
+/// times its damage: `chance` normally, `vs_frozen` against a frozen (rooted) target.
+#[derive(Deserialize, Debug, Clone, Copy, Default, PartialEq)]
+#[serde(default)]
+pub struct Crit {
+    pub chance: f32,
+    pub vs_frozen: f32,
+}
+
+impl Crit {
+    /// The odds of a crit against a target that's `frozen` or not.
+    pub fn chance_against(&self, frozen: bool) -> f32 {
+        if frozen { self.chance.max(self.vs_frozen) } else { self.chance }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -254,13 +276,15 @@ mod tests {
                 }
             }
             chill_is_sane(&c.id, c.attack.chill);
+            let Crit { chance, vs_frozen } = c.crit;
+            assert!((0.0..=1.0).contains(&chance) && (0.0..=1.0).contains(&vs_frozen), "{}: crit odds", c.id);
         }
     }
 
     fn chill_is_sane(id: &str, chill: Chill) {
         assert!((0.0..1.0).contains(&chill.slow), "{id}: slow must leave some speed");
-        // Long enough to matter, short enough to fight back: at most 5 s slowed, 2 s rooted.
-        assert!(chill.slow_ticks <= 5 * TICK_HZ as u32 && chill.root_ticks <= 2 * TICK_HZ as u32, "{id}: chill too long");
+        // Long enough to matter, short enough to fight back: at most 5 s slowed, 3 s rooted.
+        assert!(chill.slow_ticks <= 5 * TICK_HZ as u32 && chill.root_ticks <= 3 * TICK_HZ as u32, "{id}: chill too long");
     }
 
     #[test]

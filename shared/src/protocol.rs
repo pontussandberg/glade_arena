@@ -37,6 +37,37 @@ impl Health {
     }
 }
 
+/// The last few hits a player took, for the damage numbers over it. Server-authoritative and
+/// replicated like `Health`. Every hit gets the next running number, so a client shows each one
+/// once, even when updates arrive bunched or skip a state.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default, Reflect)]
+pub struct RecentHits(pub Vec<Hit>);
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct Hit {
+    pub seq: u32,
+    pub amount: i32,
+    pub crit: bool,
+}
+
+impl RecentHits {
+    /// How many hits are kept: more than can land between two updates (every 50 ms).
+    const KEEP: usize = 4;
+
+    /// The running number of the latest hit (0 before the first).
+    pub fn seq(&self) -> u32 {
+        self.0.last().map_or(0, |hit| hit.seq)
+    }
+
+    pub fn push(&mut self, amount: i32, crit: bool) {
+        let seq = self.seq() + 1;
+        if self.0.len() == Self::KEEP {
+            self.0.remove(0);
+        }
+        self.0.push(Hit { seq, amount, crit });
+    }
+}
+
 /// The auto-attack's state: when the next one may start, the windup in progress (if any), and
 /// when the last one went off. Predicted, so your own windup starts instantly and rollbacks
 /// restore it; replicated (and shown on the same delayed timeline as others' positions), so
@@ -244,6 +275,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<ClassId>().replicate();
         app.component::<Health>().replicate();
         app.component::<Chilled>().replicate();
+        app.component::<RecentHits>().replicate();
         app.component::<Pos>()
             .replicate()
             .predict()
