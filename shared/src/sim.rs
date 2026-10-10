@@ -83,7 +83,9 @@ pub enum Attack {
 
 /// One tick of the auto-attack. Holding fire while the attack is ready starts a windup: the aim
 /// locks and the cooldown starts. When the windup is over the attack goes off (returned here)
-/// from wherever the player stands then (it can't have moved: winding up roots it).
+/// from wherever the player stands then (it can't have moved: winding up roots it). Released
+/// before a new one may start, so with a windup as long as the cooldown, holding fire winds the
+/// next one up on the very tick the last goes off: rooted throughout, one attack per cooldown.
 pub fn step_attack(
     tick: u32,
     owner: PeerId,
@@ -93,6 +95,18 @@ pub fn step_attack(
     mut state: AttackState,
 ) -> (AttackState, Option<Attack>) {
     let attack = &class.def().attack;
+    let released = state.windup.filter(|windup| tick >= windup.releases_at(class)).map(|windup| {
+        let dir = windup.dir;
+        state.windup = None;
+        state.released_at = Some(tick);
+        match attack.kind {
+            AttackKind::Projectile { radius, .. } => {
+                let origin = shot_spawn(pos, dir, radius);
+                Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: false })
+            }
+            AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir }),
+        }
+    });
     if state.windup.is_none()
         && input.fire
         && tick >= state.ready_at
@@ -101,21 +115,7 @@ pub fn step_attack(
         state.windup = Some(Windup { started_at: tick, dir });
         state.ready_at = tick + attack.cooldown_ticks;
     }
-    let Some(windup) = state.windup else { return (state, None) };
-    if tick < windup.releases_at(class) {
-        return (state, None);
-    }
-    let dir = windup.dir;
-    state.windup = None;
-    state.released_at = Some(tick);
-    let released = match attack.kind {
-        AttackKind::Projectile { radius, .. } => {
-            let origin = shot_spawn(pos, dir, radius);
-            Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: false })
-        }
-        AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir }),
-    };
-    (state, Some(released))
+    (state, released)
 }
 
 /// Where a shot starts: at the edge of the shooter, so it doesn't start inside them.
@@ -375,6 +375,17 @@ mod tests {
             let expected = vec![10 + windup, 10 + cooldown + windup, 10 + 2 * cooldown + windup];
             assert_eq!(released, expected, "{}", class.def().id);
             assert_eq!(state.released_at, released.last().copied(), "{}: last release", class.def().id);
+        }
+    }
+
+    #[test]
+    fn holding_fire_with_a_full_length_windup_keeps_you_rooted() {
+        for class in ClassId::all().filter(|c| c.def().attack.windup_ticks == c.def().attack.cooldown_ticks) {
+            let mut state = AttackState::default();
+            for tick in 10..10 + 3 * class.def().attack.cooldown_ticks {
+                state = step_attack(tick, PeerId::Netcode(1), class, Vec2::ZERO, &aim(Vec2::X, true), state).0;
+                assert!(state.windup.is_some(), "{}: free to walk at tick {tick} while holding fire", class.def().id);
+            }
         }
     }
 
