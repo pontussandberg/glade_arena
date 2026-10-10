@@ -52,19 +52,21 @@ impl CastMode {
 #[derive(Resource, Default)]
 pub(crate) struct Aiming(pub bool);
 
-/// The quick cast switch and its label, a row of the key hints (`render::update_key_hints`):
-/// clicking either turns it on or off.
+/// The quick cast switch and its label, the last row of the key hints
+/// (`render::update_key_hints`): clicking either turns it on or off.
 #[derive(Component)]
 pub(crate) struct QuickCastToggle;
 
 /// The switch's size, and its knob's (pixels).
 const SWITCH: Vec2 = Vec2::new(28.0, 14.0);
 const KNOB: f32 = 8.0;
-const TIP_WIDTH: f32 = 280.0;
+/// The extra gap between the keys and the switch (pixels).
+const ROW_GAP: f32 = 6.0;
+const TIP_WIDTH: f32 = 220.0;
 
-/// The quick cast row of the key hints grid: a switch where the key goes (its knob right and
-/// glowing while on, left and dim while off), then what it is; hovering either explains it.
-/// The hints are rebuilt when it's flipped, so it's drawn as it is now.
+/// The quick cast row under the key hints: a switch where the key goes (its knob right and
+/// glowing while on, left and dim while off), then its name; hovering either explains it. Set a
+/// little apart from the keys. The hints are rebuilt when it's flipped, so it's drawn as it is now.
 pub(crate) fn spawn_toggle_row(grid: &mut ChildSpawnerCommands, quick: bool) {
     let color = if quick { palette::SPIRIT } else { palette::STONE };
     let mut tip = Entity::PLACEHOLDER;
@@ -78,6 +80,7 @@ pub(crate) fn spawn_toggle_row(grid: &mut ChildSpawnerCommands, quick: bool) {
                 border: UiRect::all(px(1.0)),
                 border_radius: BorderRadius::MAX,
                 padding: UiRect::horizontal(px(2.0)),
+                margin: UiRect::top(px(ROW_GAP)),
                 align_items: AlignItems::Center,
                 justify_content: if quick { JustifyContent::FlexEnd } else { JustifyContent::FlexStart },
                 ..default()
@@ -94,11 +97,26 @@ pub(crate) fn spawn_toggle_row(grid: &mut ChildSpawnerCommands, quick: bool) {
         })
         .id();
     grid.commands().entity(switch).insert(Tooltip(tip));
-    grid.spawn((QuickCastToggle, Interaction::default(), Tooltip(tip), ui_text("quick cast", 12.0, palette::STONE)));
+    grid.spawn((
+        QuickCastToggle,
+        Interaction::default(),
+        Tooltip(tip),
+        Node { margin: UiRect::top(px(ROW_GAP)), ..default() },
+        ui_text("Quick cast", 12.0, palette::HAZE),
+    ));
 }
 
-/// What quick cast does, under the switch, hidden until it's hovered.
+/// What quick cast does, under the switch, hidden until it's hovered: Q with it on, and off.
 fn toggle_tip() -> impl Bundle {
+    let line = |state: &'static str, color: Color, what: &'static str| {
+        (
+            Node { column_gap: px(8.0), ..default() },
+            children![
+                (Node { width: px(24.0), ..default() }, children![ui_text(state, 12.0, color)]),
+                ui_text(what, 12.0, palette::HAZE),
+            ],
+        )
+    };
     (
         tip_panel(Node {
             position_type: PositionType::Absolute,
@@ -112,15 +130,8 @@ fn toggle_tip() -> impl Bundle {
         }),
         children![
             ui_text("Quick cast", 15.0, palette::HAZE),
-            ui_text("Click to turn on or off", 11.0, palette::STONE),
-            ui_text(
-                "On: Q casts your ability right away, toward the cursor. Shift+Q shows where it will \
-                 go first: left click casts it, right click cancels.",
-                13.0,
-                palette::HAZE,
-            ),
-            ui_text("Off: the other way round. Q shows where it will go, Shift+Q casts right away.", 13.0, palette::HAZE),
-            ui_text("Clicking the ability's icon always shows where it will go.", 13.0, palette::HAZE),
+            line("On", palette::SPIRIT, "Q casts instantly"),
+            line("Off", palette::STONE, "Q aims first, click to cast"),
         ],
     )
 }

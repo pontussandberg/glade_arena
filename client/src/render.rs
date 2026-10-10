@@ -1149,13 +1149,11 @@ fn update_key_hints(
         return;
     }
     *built_for = Some((mode.free, cast_mode.quick));
-    let (q, shift_q) = if cast_mode.quick { ("ability", "aim ability") } else { ("aim ability", "ability") };
     let keys: &[(&str, &str)] = if mode.free {
         &[
             ("WASD", "move"),
             ("Left click", "attack"),
-            ("Q", q),
-            ("Shift+Q", shift_q),
+            ("Q", "ability"),
             ("Right drag, arrows", "turn camera"),
             ("Wheel, + -", "zoom"),
             ("Tab", "watch next fighter"),
@@ -1165,8 +1163,7 @@ fn update_key_hints(
             ("Right click", "move"),
             ("S", "stop"),
             ("Left click", "attack"),
-            ("Q", q),
-            ("Shift+Q", shift_q),
+            ("Q", "ability"),
             ("A", "show range"),
             ("Wheel", "zoom"),
         ]
@@ -1175,10 +1172,7 @@ fn update_key_hints(
         for (key, action) in keys {
             grid.spawn(key_chip(*key, 11.0, palette::HAZE, palette::STONE.with_alpha(0.5)));
             grid.spawn(ui_text(*action, 12.0, palette::STONE));
-            // Which of the two Q is, right under them.
-            if *key == "Shift+Q" {
-                crate::casting::spawn_toggle_row(grid, cast_mode.quick);
-            }
         }
+        crate::casting::spawn_toggle_row(grid, cast_mode.quick);
     });
 }
