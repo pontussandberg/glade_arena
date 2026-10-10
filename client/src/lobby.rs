@@ -1,7 +1,7 @@
 //! The character select: home (once connected, and back from practice or a lobby) and a room's
 //! lobby. Pick a fighter, see it up close, and go. Laid out like a classic character select:
 //!
-//! - the fighter stands on a stage filling the screen (drag to turn it)
+//! - the fighter stands on a stage filling the screen (drag to turn it), our name at its feet
 //! - what it is and does on the left: name, role, a line on how it plays, its stat frame (as in
 //!   the arena), its passive and Q ability
 //! - the fighters to pick from in a row of tiles at the bottom (click, or press the number)
@@ -55,7 +55,7 @@ impl Plugin for LobbyPlugin {
             (
                 (pick_fighter, show_fighter, (show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena).chain(),
                 show_status,
-                turn_stage_camera.in_set(CameraMoves),
+                (turn_stage_camera.in_set(CameraMoves), place_name_tag).chain(),
             )
                 .run_if(in_state(Picking)),
         );
@@ -81,7 +81,7 @@ const ACCENT: Color = stat_frame::ACCENT;
 const GAP: f32 = 8.0;
 const MARGIN: f32 = 40.0;
 /// The side panel's width.
-const SIDE_WIDTH: f32 = 380.0;
+const SIDE_WIDTH: f32 = 456.0;
 
 /// What the lobby shows, while it's open.
 #[derive(Resource)]
@@ -127,9 +127,17 @@ struct RoomButton(RoomRequest);
 #[derive(Component)]
 struct Status;
 
+/// Our name, at the fighter's feet: whose fighter it is.
+#[derive(Component)]
+struct NameTag;
+
+/// How far under the fighter's feet our name is (pixels).
+const NAME_TAG_DROP: f32 = 14.0;
+
 fn open_lobby(
     mut commands: Commands,
     chosen: Res<ChosenClass>,
+    me: Option<Res<Me>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -139,6 +147,36 @@ fn open_lobby(
     commands.insert_resource(Lobby { selected, shown: None, view, facing: FRONT });
     spawn_stage(&mut commands, &mut meshes, &mut materials);
     spawn_screen(&mut commands);
+    spawn_name_tag(&mut commands, me.as_ref().map_or("", |me| &me.name));
+}
+
+/// Our name on a dark plate, centered on a point `place_name_tag` keeps under the fighter: a
+/// zero-wide anchor whose content overflows it evenly both ways.
+fn spawn_name_tag(commands: &mut Commands, name: &str) {
+    commands
+        .spawn((
+            LobbyPart,
+            NameTag,
+            Node { position_type: PositionType::Absolute, width: px(0.0), justify_content: JustifyContent::Center, ..default() },
+            GlobalZIndex(10),
+        ))
+        .with_child((
+            Node { padding: UiRect::axes(px(12.0), px(4.0)), border: UiRect::bottom(px(2.0)), flex_shrink: 0.0, ..default() },
+            BackgroundColor(palette::INK.with_alpha(0.7)),
+            BorderColor::all(ACCENT),
+            children![ui_text(name, 16.0, ACCENT)],
+        ));
+}
+
+/// Keeps our name under the fighter's feet as the camera sways and turns.
+fn place_name_tag(camera: Single<(&Camera, &Transform), With<Camera3d>>, mut tag: Single<&mut Node, With<NameTag>>) {
+    let (camera, transform) = *camera;
+    let Ok(feet) = camera.world_to_viewport(&GlobalTransform::from(*transform), to_world(STAGE, 0.0)) else { return };
+    let (left, top) = (px(feet.x.round()), px((feet.y + NAME_TAG_DROP).round()));
+    if tag.left != left || tag.top != top {
+        tag.left = left;
+        tag.top = top;
+    }
 }
 
 fn close_lobby(mut commands: Commands, parts: Query<Entity, With<LobbyPart>>) {
@@ -481,8 +519,8 @@ pub(crate) fn label(text: &str) -> impl Bundle {
 /// the left, red on the right, each with its way to switch to it. Then the way out. Rebuilt when
 /// the room changes, or we come to it.
 ///
-/// Names are all in one neutral color, so a team's color stays the team's: the column, its header
-/// and each member's stripe carry it, and we're marked by a tinted row and a "YOU" tag instead.
+/// Names are in one neutral color, so a team's color stays the team's: the column and its header
+/// carry it. Ours is in the accent (on a tinted row), as at our fighter's feet.
 fn show_room(
     mut commands: Commands,
     room: Res<CurrentRoom>,
@@ -502,12 +540,12 @@ fn show_room(
         panel.spawn(card()).with_children(|card| {
             card.spawn(label("Lobby"));
             card.spawn(ui_text(view.name.clone(), 24.0, palette::HAZE));
-            card.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Center, ..default() }).with_children(|row| {
-                let (state, color) = if view.started { ("LIVE", ACCENT) } else { ("WAITING", palette::STONE) };
-                row.spawn(key_chip(state, 10.0, color, color));
-                let line = if view.started { "Match in progress" } else if leading { "Start when you're ready" } else { "Waiting for the leader" };
-                row.spawn(ui_text(line, 12.0, palette::STONE));
-            });
+            let (line, color) = match (view.started, leading) {
+                (true, _) => ("Match in progress", ACCENT),
+                (false, true) => ("Start when you're ready", palette::STONE),
+                (false, false) => ("Waiting for the leader", palette::STONE),
+            };
+            card.spawn(ui_text(line, 12.0, color));
             if leading && !view.started {
                 card.spawn(Node { height: px(GAP * 0.5), ..default() });
                 card.spawn(label("Mode"));
@@ -530,18 +568,10 @@ fn show_room(
             Mode::Ffa => {
                 card.spawn(label(&format!("Fighters  {}/{}", view.members.len(), view.mode.capacity())));
                 for member in &view.members {
-                    member_row(card, view, member, my_id);
+                    member_row(card, Node::default(), view, member, my_id);
                 }
             }
-            Mode::Teams => {
-                let my_team = view.member(my_id).map_or(NO_TEAM, |m| m.team);
-                card.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Stretch, ..default() }).with_children(|sides| {
-                    // Blue on the left, red on the right.
-                    for team in [BLUE, RED] {
-                        team_column(sides, view, team, my_team, my_id);
-                    }
-                });
-            }
+            Mode::Teams => spawn_teams(card, view, my_id),
         });
 
         let leave = button("Leave lobby", 12.0, palette::INK.with_alpha(0.88), palette::STONE, palette::STONE.with_alpha(0.3));
@@ -549,74 +579,92 @@ fn show_room(
     });
 }
 
-/// How tall a team's member list is at least: four members (a row is about 38 pixels), so the
-/// sides don't grow as the first few join.
-const TEAM_ROWS_HEIGHT: f32 = 4.0 * 38.0 + 3.0 * GAP * 0.75;
+/// Places each team shows at least, taken or open: room for the first few to join without the
+/// teams growing.
+const MIN_PLACES: usize = 4;
 
-/// A team's side: its colored header and count, its members, and (unless we're on it, or it's
-/// full) the way onto it.
-fn team_column(sides: &mut ChildSpawnerCommands, view: &RoomView, team: u8, my_team: u8, my_id: u32) {
-    let color = team_color(team);
-    let column = Node {
-        flex_direction: FlexDirection::Column,
-        flex_grow: 1.0,
-        flex_basis: px(0.0),
+/// The two teams side by side, blue on the left, red on the right, as one grid: a row for the
+/// headers, one for each place on a team (at least `MIN_PLACES`; open ones drawn faintly), and
+/// the ways onto a team. The places' rows are equal flexible tracks in a grid as tall as its
+/// content, so every one is as tall as the tallest member anywhere: the sides line up in a grid
+/// however names wrap, and how many are on each shows at a glance. Each side's color is a block
+/// behind its whole column.
+fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
+    let my_team = view.member(my_id).map_or(NO_TEAM, |m| m.team);
+    let sides = [BLUE, RED];
+    let members = sides.map(|team| view.members.iter().filter(|m| m.team == team).collect::<Vec<_>>());
+    let places = members.iter().map(Vec::len).max().unwrap_or(0).max(MIN_PLACES);
+    let grid = Node {
+        display: Display::Grid,
+        grid_template_columns: RepeatedGridTrack::flex(2, 1.0),
+        grid_template_rows: vec![RepeatedGridTrack::auto(1), RepeatedGridTrack::fr(places as u16, 1.0), RepeatedGridTrack::auto(1)],
+        column_gap: px(GAP),
         row_gap: px(GAP * 0.75),
-        padding: UiRect::all(px(GAP)),
-        border: UiRect::top(px(3.0)),
         ..default()
     };
-    sides.spawn((column, BorderColor::all(color), BackgroundColor(color.with_alpha(0.07)))).with_children(|column| {
-        column.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|header| {
-            header.spawn(ui_text(team_name(team).to_uppercase(), 13.0, color));
-            header.spawn(ui_text(format!("{}/{MAX_PER_TEAM}", view.on_team(team)), 12.0, palette::STONE));
-        });
-        // Room for a few members before the side grows, and the rest pushed to the bottom: both
-        // sides' buttons line up.
-        let rows = Node { flex_direction: FlexDirection::Column, row_gap: px(GAP * 0.75), flex_grow: 1.0, min_height: px(TEAM_ROWS_HEIGHT), ..default() };
-        column.spawn(rows).with_children(|rows| {
-            let mut members = view.members.iter().filter(|m| m.team == team).peekable();
-            if members.peek().is_none() {
-                rows.spawn(ui_text("Empty", 12.0, palette::STONE.with_alpha(0.6)));
+    // Every cell sits in the column's block, inset from its sides.
+    let cell = |column: usize, row: usize| Node {
+        grid_column: GridPlacement::start(column as i16 + 1),
+        grid_row: GridPlacement::start(row as i16 + 1),
+        margin: UiRect::horizontal(px(GAP)),
+        ..default()
+    };
+    card.spawn(grid).with_children(|grid| {
+        for (column, (&team, members)) in sides.iter().zip(&members).enumerate() {
+            let color = team_color(team);
+            // The block, behind the column's every row (spawned first, so drawn under them).
+            grid.spawn((
+                Node {
+                    grid_column: GridPlacement::start(column as i16 + 1),
+                    grid_row: GridPlacement::start_end(1, -1),
+                    border: UiRect::top(px(3.0)),
+                    ..default()
+                },
+                BorderColor::all(color),
+                BackgroundColor(color.with_alpha(0.07)),
+            ));
+            let mut header = Node { justify_content: JustifyContent::SpaceBetween, ..cell(column, 0) };
+            header.margin.top = px(GAP);
+            grid.spawn(header).with_children(|header| {
+                header.spawn(ui_text(team_name(team).to_uppercase(), 13.0, color));
+                header.spawn(ui_text(format!("{}/{MAX_PER_TEAM}", view.on_team(team)), 12.0, palette::STONE));
+            });
+            for place in 0..places {
+                match members.get(place) {
+                    Some(member) => member_row(grid, cell(column, place + 1), view, member, my_id),
+                    None => {
+                        grid.spawn((cell(column, place + 1), BackgroundColor(palette::HUNTER_DARK.with_alpha(0.2))));
+                    }
+                }
             }
-            for member in members {
-                member_row(rows, view, member, my_id);
+            let mut bottom = Node { flex_direction: FlexDirection::Column, ..cell(column, places + 1) };
+            bottom.margin.bottom = px(GAP);
+            if team != my_team && view.on_team(team) < MAX_PER_TEAM {
+                let join = button(format!("Join {}", team_name(team)), 11.0, color.with_alpha(0.15), color, color.with_alpha(0.6));
+                grid.spawn(bottom).with_child((RoomButton(RoomRequest::SetTeam(team)), join));
+            } else if team == my_team {
+                let bottom = Node { align_items: AlignItems::Center, padding: UiRect::vertical(px(5.0)), ..bottom };
+                grid.spawn(bottom).with_child(ui_text("Your team", 11.0, color.with_alpha(0.8)));
             }
-        });
-        if team != my_team && view.on_team(team) < MAX_PER_TEAM {
-            let join = button(format!("Join {}", team_name(team)), 11.0, color.with_alpha(0.15), color, color.with_alpha(0.6));
-            column.spawn((RoomButton(RoomRequest::SetTeam(team)), join));
-        } else if team == my_team {
-            column.spawn(Node { justify_content: JustifyContent::Center, padding: UiRect::vertical(px(5.0)), ..default() })
-                .with_child(ui_text("Your team", 11.0, color.with_alpha(0.8)));
         }
     });
 }
 
-/// A member: their name (and tags: leader, you) over their fighter and whether they're in the
-/// arena, with a stripe in their team's color. Our own row is tinted.
-fn member_row(column: &mut ChildSpawnerCommands, view: &RoomView, member: &Member, my_id: u32) {
+/// A member, in `node`'s place, in one column however narrow the side: the leader's tag if they
+/// lead, their name, then their fighter and whether they're in the arena (both wrapping as they
+/// need). Our own row is tinted.
+fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, member: &Member, my_id: u32) {
     let is_me = member.guest_id == my_id;
-    let row = Node {
-        flex_direction: FlexDirection::Column,
-        row_gap: px(2.0),
-        padding: UiRect::new(px(GAP), px(GAP * 0.5), px(GAP * 0.5), px(GAP * 0.5)),
-        border: UiRect::left(px(2.0)),
-        ..default()
-    };
+    let row = Node { flex_direction: FlexDirection::Column, row_gap: px(2.0), padding: UiRect::axes(px(GAP), px(GAP * 0.5)), ..node };
     let tint = if is_me { ACCENT.with_alpha(0.14) } else { palette::HUNTER_DARK.with_alpha(0.5) };
-    column.spawn((row, BorderColor::all(team_color(member.team)), BackgroundColor(tint))).with_children(|row| {
-        row.spawn(Node { column_gap: px(GAP * 0.75), align_items: AlignItems::Center, ..default() }).with_children(|line| {
-            line.spawn(ui_text(member.name.clone(), 13.0, palette::HAZE));
-            if member.guest_id == view.leader {
-                line.spawn(ui_text("LEADER", 9.0, palette::TORCH_FLAME));
-            }
-            if is_me {
-                line.spawn(ui_text("YOU", 9.0, ACCENT));
-            }
-        });
+    parent.spawn((row, BackgroundColor(tint))).with_children(|row| {
+        if member.guest_id == view.leader {
+            row.spawn(ui_text("LEADER", 9.0, palette::TORCH_FLAME));
+        }
+        // Ours in the accent: no team's color, so it reads as "you" on either side.
+        row.spawn(ui_text(member.name.clone(), 13.0, if is_me { ACCENT } else { palette::HAZE }));
         let fighter = member.class.map_or("Picking...".to_string(), |c| c.def().name.clone());
-        row.spawn(Node { column_gap: px(GAP * 0.75), ..default() }).with_children(|line| {
+        row.spawn(Node { column_gap: px(GAP * 0.75), flex_wrap: FlexWrap::Wrap, ..default() }).with_children(|line| {
             line.spawn(ui_text(fighter, 11.0, palette::STONE));
             if member.in_arena {
                 line.spawn(ui_text("in arena", 11.0, ACCENT));

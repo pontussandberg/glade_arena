@@ -131,13 +131,62 @@ pub fn clean_room_name(name: &str) -> Option<String> {
     (!clean.is_empty()).then(|| clean.to_string())
 }
 
-/// Guests are called `Guest-` and four digits, until there are accounts.
-pub fn guest_name(number: u16) -> String {
-    format!("Guest-{:04}", number % 10_000)
+/// What guest names are made of (plain ASCII, as the UI's font has it).
+const NORSE_FIRST_NAMES: [&str; 80] = [
+    "Agnar", "Alfhild", "Arne", "Asa", "Asgeir", "Askel", "Astrid", "Bergljot", "Bjarke", "Bjorn", "Bodil", "Bolli",
+    "Brynja", "Dagny", "Egil", "Einar", "Eir", "Eirik", "Erling", "Eyvind", "Finnr", "Freydis", "Frida", "Geir",
+    "Gisli", "Gorm", "Grim", "Gudrun", "Gunhild", "Gunnar", "Halfdan", "Hakon", "Hallbjorn", "Harald", "Hedda",
+    "Helga", "Hervor", "Hilda", "Hjalmar", "Hrafn", "Ingrid", "Ivar", "Jarl", "Kari", "Ketil", "Knut", "Kolbein",
+    "Leif", "Liv", "Magnus", "Njal", "Odd", "Olaf", "Orm", "Ragna", "Ragnar", "Ragnhild", "Rolf", "Runa", "Sigrid",
+    "Sigurd", "Sigvald", "Skadi", "Snorri", "Solveig", "Steinar", "Sten", "Svala", "Sven", "Thora", "Thorfinn",
+    "Thorgrim", "Thorstein", "Thyra", "Toke", "Torvald", "Ulf", "Valdis", "Vigdis", "Yrsa",
+];
+const NORSE_BYNAMES: [&str; 80] = [
+    "Ironside", "Bloodaxe", "Fairhair", "Forkbeard", "Bluetooth", "the Boneless", "Snakeeye", "Longsword",
+    "Shieldbreaker", "Stormborn", "Ravenfeeder", "Wolfsbane", "Frostbeard", "Skullsplitter", "the Red", "the Black",
+    "the Bold", "the Grim", "the Tall", "the Stout", "the Unruly", "the Wise", "the Lucky", "Halfhand", "Oneeye",
+    "Ironfist", "Stonearm", "Thunderfoot", "Ashwalker", "Mistborn", "Seaborn", "Wavebreaker", "Oakheart",
+    "Firebeard", "Goldtooth", "Silvertongue", "Bearclaw", "Elkhorn", "Hammerhand", "Spearshaker", "Helmcleaver",
+    "Ringgiver", "Shipburner", "Wormtongue", "Trollslayer", "Giantbane", "Rimeheart", "Hrafnsson", "Bjornsson",
+    "Ulfsson", "Ivarsson", "Haraldsson", "Sigurdsson", "Olafsson", "Ketilsson", "Egilsson", "Gunnarsson",
+    "Thorsson", "Leifsson", "Ragnarsdottir", "Sigridsdottir", "Ingridsdottir", "Astridsdottir", "Helgasdottir",
+    "of the Fjord", "of the Glade", "of the North", "the Wanderer", "the Skald", "the Berserk", "the Shieldmaiden",
+    "Crowbeard", "Sootface", "Coldsnap", "Deepdelver", "Beardless", "Gapetooth", "Barefoot", "Squint", "Hairybreeks",
+];
+
+/// How many guest names there are without a number.
+pub const GUEST_NAMES: u32 = (NORSE_FIRST_NAMES.len() * NORSE_BYNAMES.len()) as u32;
+
+/// Guests get a Norse name, until there are accounts: a first name and a byname ("Bjorn
+/// Ironside"), `seed` picking which. The server hands out only names no one connected has; when
+/// nearly every pair is taken, a number goes on the end ("Bjorn Ironside 12").
+pub fn guest_name(seed: u32) -> String {
+    let seed = seed as usize;
+    let first = NORSE_FIRST_NAMES[seed % NORSE_FIRST_NAMES.len()];
+    let byname = NORSE_BYNAMES[seed / NORSE_FIRST_NAMES.len() % NORSE_BYNAMES.len()];
+    format!("{first} {byname}")
 }
 
+/// A guest's first name ("Bjorn" of "Bjorn Ironside"), for where the whole name is too long.
+pub fn first_name(name: &str) -> &str {
+    name.split(' ').next().unwrap_or(name)
+}
+
+/// Whether `name` is one `guest_name` gives (with or without a number on the end), so a returning
+/// guest may have it again.
 pub fn is_guest_name(name: &str) -> bool {
-    name.strip_prefix("Guest-").is_some_and(|n| n.len() == 4 && n.bytes().all(|b| b.is_ascii_digit()))
+    let Some((first, rest)) = name.split_once(' ') else { return false };
+    if !NORSE_FIRST_NAMES.contains(&first) {
+        return false;
+    }
+    // Bynames have spaces of their own ("the Boneless"): any byname, then maybe a number.
+    NORSE_BYNAMES.iter().any(|byname| match rest.strip_prefix(byname) {
+        Some("") => true,
+        Some(number) => number
+            .strip_prefix(' ')
+            .is_some_and(|n| (1..=4).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit())),
+        None => false,
+    })
 }
 
 #[cfg(test)]
@@ -153,9 +202,15 @@ mod tests {
 
     #[test]
     fn guest_names() {
-        assert!(is_guest_name(&guest_name(7)));
-        assert_eq!(guest_name(7), "Guest-0007");
-        assert!(!is_guest_name("Guest-12a4"));
+        assert_eq!(guest_name(0), "Agnar Ironside");
+        assert_eq!(guest_name(GUEST_NAMES - 1), "Yrsa Hairybreeks");
+        assert!((0..GUEST_NAMES).all(|seed| is_guest_name(&guest_name(seed))));
+        let all: std::collections::HashSet<String> = (0..GUEST_NAMES).map(guest_name).collect();
+        assert_eq!(all.len(), GUEST_NAMES as usize, "two seeds give the same name");
+        assert!(is_guest_name("Ivar the Boneless 12"));
+        assert!(!is_guest_name("Ivar the Boneless 12a"));
+        assert!(!is_guest_name("Ivar  the Boneless"));
+        assert!(!is_guest_name("Ivar the"));
         assert!(!is_guest_name("Admin"));
     }
 }

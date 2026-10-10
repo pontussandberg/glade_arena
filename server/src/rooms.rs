@@ -184,12 +184,14 @@ fn greet(
             let taken = |name: &str| lobby.guests.values().any(|g| g.name == name);
             let name = match stored {
                 Some(name) if is_guest_name(&name) && !taken(&name) => name,
-                _ => loop {
-                    let name = guest_name(fastrand::u16(..10_000));
-                    if !taken(&name) {
-                        break name;
-                    }
-                },
+                // A free pair, or once they're nearly all taken, one with a number.
+                _ => (0..)
+                    .map(|tries| {
+                        let name = guest_name(fastrand::u32(..GUEST_NAMES));
+                        if tries < 64 { name } else { format!("{name} {}", fastrand::u16(2..10_000)) }
+                    })
+                    .find(|name| !taken(name))
+                    .expect("a free name"),
             };
             lobby.next_guest += 1;
             let id = lobby.next_guest;

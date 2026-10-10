@@ -1,12 +1,13 @@
 //! Home's lobbies: a pane beside the character select that folds open and shut. Its header is
-//! always there (how many lobbies are open, how many live, who we're playing as), and a click on
-//! it opens or folds it. "Create / join lobby" only ever opens it: while it's open, that button
-//! is marked as where we are, and a click on it flashes the header. Open, it shows every lobby there is (name, mode, how full,
-//! whether its match is on), each with a way in, and below them a form to create one: a name
-//! (click it to type) and the mode. Before home, while connecting, a plain screen saying so.
+//! always there (how many lobbies are open, how many live), and a click on it opens or folds it.
+//! "Create / join lobby" only ever opens it: while it's open, that button is marked as where we
+//! are, and a click on it flashes the header. Open, it shows every lobby there is (name, mode,
+//! how full, whether its match is on), each with a way in, and below them a form to create one:
+//! a name (click it to type) and the mode. Before home, while connecting, a plain screen saying
+//! so.
 
 use arena_shared::protocol::RoomRequest;
-use arena_shared::rooms::{Mode, ROOM_NAME_MAX, RoomKey, RoomSummary};
+use arena_shared::rooms::{Mode, ROOM_NAME_MAX, RoomKey, RoomSummary, first_name};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
@@ -158,8 +159,9 @@ struct ModeButton(Mode);
 struct CreateButton;
 
 fn open_home(mut commands: Commands, me: Option<Res<Me>>) {
-    let name = me.as_ref().map_or("Guest".to_string(), |me| me.name.clone());
-    commands.insert_resource(Home { name: format!("{name}'s lobby"), mode: Mode::Ffa });
+    // The first name only: a whole one with its byname can be too long for a lobby's.
+    let first = me.as_ref().map_or("Guest", |me| first_name(&me.name));
+    commands.insert_resource(Home { name: format!("{first}'s lobby"), mode: Mode::Ffa });
 }
 
 fn close_home(mut commands: Commands, mut typing: ResMut<Typing>) {
@@ -264,7 +266,6 @@ fn show_lobbies(
     home: Res<Home>,
     open: Res<LobbiesOpen>,
     list: Res<RoomList>,
-    me: Option<Res<Me>>,
     panel: Single<(Entity, Ref<SidePanel>, &mut Visibility)>,
 ) {
     let (panel, fresh, mut visibility) = panel.into_inner();
@@ -274,9 +275,8 @@ fn show_lobbies(
     visibility.set_if_neq(Visibility::Inherited);
     let mut panel = commands.entity(panel);
     panel.despawn_children();
-    let name = me.as_ref().map_or(String::new(), |me| me.name.clone());
     panel.with_children(|panel| {
-        spawn_header(panel, &list.0, &name, open.0);
+        spawn_header(panel, &list.0, open.0);
         if !open.0 {
             return;
         }
@@ -370,16 +370,10 @@ fn flash_header(time: Res<Time>, mut flash: ResMut<HeaderFlash>, header: Query<(
     }
 }
 
-/// The pane's header, a button the whole width: "Lobbies", what's on (how many open, how many
-/// live) and who we're playing as, and whether a click shows or hides the rest. Open, it joins
-/// the cards under it with an accent edge.
-fn spawn_header(panel: &mut ChildSpawnerCommands, list: &[RoomSummary], name: &str, open: bool) {
+/// The pane's header, one line, a button the whole width: "Lobbies" and how many are open, how
+/// many of them are live if any, and whether a click shows or hides the rest. Open, it joins the cards under it with an accent edge.
+fn spawn_header(panel: &mut ChildSpawnerCommands, list: &[RoomSummary], open: bool) {
     let live = list.iter().filter(|room| room.started).count();
-    let summary = match (list.len(), live) {
-        (0, _) => "None open yet".to_string(),
-        (n, 0) => format!("{n} open"),
-        (n, live) => format!("{n} open  ·  {live} live"),
-    };
     let edge = if open { ACCENT } else { palette::STONE.with_alpha(0.3) };
     panel
         .spawn((
@@ -395,15 +389,17 @@ fn spawn_header(panel: &mut ChildSpawnerCommands, list: &[RoomSummary], name: &s
             BorderColor::all(edge),
         ))
         .with_children(|header| {
-            header.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2.0), ..default() }).with_children(|left| {
+            header.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Center, ..default() }).with_children(|left| {
                 left.spawn(ui_text("Lobbies", 18.0, palette::HAZE));
-                left.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|line| {
-                    line.spawn(ui_text(summary, 11.0, if live > 0 { ACCENT } else { palette::STONE }));
-                    line.spawn(ui_text(format!("·  playing as {name}"), 11.0, palette::STONE));
-                });
+                left.spawn(key_chip(list.len().to_string(), 11.0, palette::HAZE, palette::STONE.with_alpha(0.5)));
             });
-            let (toggle, color) = if open { ("Hide", palette::STONE) } else { ("Show", ACCENT) };
-            header.spawn(key_chip(toggle, 11.0, color, color.with_alpha(0.5)));
+            header.spawn(Node { column_gap: px(GAP * 1.5), align_items: AlignItems::Center, ..default() }).with_children(|right| {
+                if live > 0 {
+                    right.spawn(ui_text(format!("{live} live"), 12.0, ACCENT));
+                }
+                let (toggle, color) = if open { ("Hide", palette::STONE) } else { ("Show", ACCENT) };
+                right.spawn(key_chip(toggle, 11.0, color, color.with_alpha(0.5)));
+            });
         });
 }
 
