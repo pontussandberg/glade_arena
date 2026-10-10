@@ -15,6 +15,8 @@ use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
+use crate::sculpt::{Section, bevel_box, smoothed, sweep, tube};
+
 pub mod palette {
     use bevy::color::Color;
 
@@ -168,9 +170,13 @@ pub fn translucent(color: Color, alpha: f32, strength: f32) -> StandardMaterial 
     StandardMaterial { alpha_mode: AlphaMode::Blend, ..glow(color.with_alpha(alpha), strength) }
 }
 
-/// One normal per face: the low-poly look.
+/// One normal per face: the low-poly look. Indexed again afterwards (each vertex once), so it
+/// merges with indexed meshes: `Mesh::merge` drops or scrambles triangles when one side is indexed
+/// and the other isn't.
 pub fn faceted(mesh: Mesh) -> Mesh {
-    mesh.with_duplicated_vertices().with_computed_flat_normals()
+    let flat = mesh.with_duplicated_vertices().with_computed_flat_normals();
+    let count = flat.count_vertices() as u32;
+    flat.with_inserted_indices(bevy::mesh::Indices::U32((0..count).collect()))
 }
 
 /// Class ids that have their own figure in `fighter_mesh`. Every class in `classes.ron` needs
@@ -246,7 +252,7 @@ fn frame_spear(shaft: Color, frame: Color) -> Mesh {
     parts.push(faceted(point.scaled_by(Vec3::new(0.7, 1.0, 1.0))));
     parts.push(taper(0.038, 0.03, 0.08, 14, Vec3::Y * (base - 0.035), frame));
     // The shaft, bound in silver at the grip, and a short spike at its butt.
-    parts.push(rod(Vec3::Y * (base - 0.07), Vec3::Y * -(LENGTH - 0.12), 0.024, shaft));
+    parts.push(sweep(&[Vec3::Y * (base - 0.07), Vec3::Y * -(LENGTH * 0.6), Vec3::Y * -(LENGTH - 0.12)], &[0.026, 0.024, 0.021], 12, shaft));
     for at in [-1.12, -1.32] {
         parts.push(taper(0.03, 0.03, 0.035, 14, Vec3::Y * at, frame));
     }
@@ -260,11 +266,6 @@ fn rod(a: Vec3, b: Vec3, radius: f32, color: Color) -> Mesh {
     let mesh = Cylinder::new(radius, along.length()).mesh().resolution(10).build();
     let turn = Quat::from_rotation_arc(Vec3::Y, along.normalize());
     tinted(mesh.rotated_by(turn).translated_by((a + b) / 2.0), color)
-}
-
-/// A box of `size` centered at `at`, in one color.
-fn block(size: Vec3, at: Vec3, color: Color) -> Mesh {
-    tinted(Cuboid::from_size(size).mesh().build().translated_by(at), color)
 }
 
 /// A tapered prism (`sides` sides; with enough, a smooth taper) standing on Y, centered at `at`, in one color: what
@@ -310,9 +311,6 @@ pub const RIG_HAND: Vec3 = Vec3::new(0.0, -0.52, 0.0);
 /// Where a tail or cape hangs from, on the upper back.
 pub const RIG_TAIL: Vec3 = Vec3::new(-0.15, 1.38, 0.0);
 
-/// Where the javelinist's eyes sit in its mask (and ±z, the other one).
-const EYE: Vec3 = Vec3::new(0.2, 0.26, 0.07);
-
 /// A class's moving parts. The javelinist's are smooth (a plague-masked hood, robe sleeves
 /// ending in bone claws, baggy trousers with bone knee plates, the frame
 /// spear); the revenant's are smooth too (a void hood, tattered sleeves and ash gauntlets,
@@ -320,82 +318,38 @@ const EYE: Vec3 = Vec3::new(0.2, 0.26, 0.07);
 pub fn fighter_rig(class_key: &str) -> RigMeshes {
     match class_key {
         "javelinist" => RigMeshes {
-            head: bone_mask_head(),
-            // Robe sleeves with a dark cuff and a leather bracer, ending in bony claws.
-            arm: sculpted(vec![
-                taper(0.07, 0.092, 0.3, 18, Vec3::Y * -0.15, palette::HUNTER),
-                taper(0.1, 0.078, 0.07, 18, Vec3::Y * -0.31, palette::HUNTER_DARK),
-                taper(0.062, 0.072, 0.15, 18, Vec3::Y * -0.41, palette::DARK_LEATHER),
-                tinted(ball(0.06).scaled_by(Vec3::new(1.0, 0.8, 0.9)).translated_by(RIG_HAND), palette::DARK_LEATHER),
-                claws(),
-            ]),
-            // Baggy trousers gathered at the ankle into narrow boots, a bone plate on the knee.
-            leg: sculpted(vec![
-                taper(0.13, 0.105, 0.56, 18, Vec3::Y * -0.28, palette::LEATHER),
-                taper(0.088, 0.105, 0.06, 18, Vec3::Y * -0.58, palette::DARK_LEATHER),
-                taper(0.08, 0.088, 0.14, 18, Vec3::Y * -0.68, palette::DARK_LEATHER),
-                tinted(ball(0.085).scaled_by(Vec3::new(1.9, 0.55, 1.0)).translated_by(Vec3::new(0.07, -0.76, 0.0)), palette::DARK_LEATHER),
-                tinted(ball(0.07).scaled_by(Vec3::new(0.55, 1.0, 1.0)).translated_by(Vec3::new(0.1, -0.3, 0.0)), palette::BONE),
-            ]),
+            head: javelinist_hood(),
+            arm: javelinist_arm(),
+            leg: javelinist_leg(),
             held: held_spear(),
-            eyes: eye_slits(EYE.x + 0.01, EYE.y, EYE.z),
+            eyes: eye_slits(0.165, 0.2, 0.055),
             glow: palette::WISP,
             held_glow: None,
             body_glow: None,
             tail: None,
         },
         "revenant" => RigMeshes {
-            head: hooded_void(),
-            // Robe sleeves with a tattered hang, an ash gauntlet.
-            arm: sculpted(vec![
-                taper(0.075, 0.105, 0.32, 16, Vec3::Y * -0.15, palette::ROBE),
-                tinted(hanging_cone(0.09, 0.22, 10).translated_by(Vec3::new(-0.04, -0.28, 0.0)), palette::TATTERS),
-                taper(0.065, 0.08, 0.2, 16, Vec3::Y * -0.39, palette::ASH),
-                tinted(ball(0.062).translated_by(RIG_HAND), palette::ASH),
-            ]),
-            // Wrapped legs, boots.
-            leg: sculpted(vec![
-                taper(0.07, 0.095, 0.48, 16, Vec3::Y * -0.24, palette::TATTERS),
-                taper(0.08, 0.088, 0.2, 16, Vec3::Y * -0.6, palette::DARK_LEATHER),
-                tinted(ball(0.085).scaled_by(Vec3::new(1.7, 0.55, 0.9)).translated_by(Vec3::new(0.06, -0.755, 0.0)), palette::DARK_LEATHER),
-            ]),
+            head: revenant_hood(),
+            arm: revenant_arm(),
+            leg: booted_leg(palette::TATTERS, palette::DARK_LEATHER, 0.095, 0.075),
             held: sword(),
-            eyes: eye_slits(0.13, 0.2, 0.06),
+            eyes: eye_slits(0.165, 0.2, 0.055),
             glow: palette::WISP,
-            held_glow: None,
+            held_glow: Some(sword_glow()),
             body_glow: None,
-            // The tattered cape.
-            tail: Some(tinted(
-                hanging_cone(0.22, 0.9, 14).scaled_by(Vec3::new(0.45, 1.0, 1.1)).translated_by(Vec3::Y * -0.45),
-                palette::TATTERS,
-            )),
+            tail: Some(cape(palette::ROBE, palette::TATTERS, 0.98, 0.3, 0.16, 0.13)),
         },
         "frost_mage" => RigMeshes {
             head: frost_crowned_hood(),
-            // Wide bell sleeves, banded in blue and rimed at the cuff, over a slim dark glove.
-            arm: sculpted(vec![
-                taper(0.07, 0.095, 0.3, 16, Vec3::Y * -0.15, palette::FROST_ROBE),
-                taper(0.15, 0.08, 0.16, 16, Vec3::Y * -0.36, palette::FROST_ROBE),
-                taper(0.149, 0.144, 0.045, 16, Vec3::Y * -0.41, palette::FROST_BLUE),
-                taper(0.155, 0.15, 0.03, 16, Vec3::Y * -0.45, palette::RIME),
-                taper(0.05, 0.06, 0.1, 16, Vec3::Y * -0.46, palette::DARK_LEATHER),
-                tinted(ball(0.055).translated_by(RIG_HAND), palette::DARK_LEATHER),
-            ]),
-            // Mostly under the robe: dark legs and soft boots.
-            leg: sculpted(vec![
-                taper(0.075, 0.1, 0.5, 16, Vec3::Y * -0.25, palette::FROST_DARK),
-                taper(0.075, 0.085, 0.2, 16, Vec3::Y * -0.62, palette::DARK_LEATHER),
-                tinted(ball(0.08).scaled_by(Vec3::new(1.7, 0.55, 0.9)).translated_by(Vec3::new(0.06, -0.755, 0.0)), palette::DARK_LEATHER),
-            ]),
+            arm: frost_mage_arm(),
+            leg: booted_leg(palette::FROST_DARK, palette::DARK_LEATHER, 0.1, 0.08),
             held: ice_staff(),
-            eyes: eye_slits(0.14, 0.19, 0.06),
+            eyes: eye_slits(0.165, 0.2, 0.055),
             glow: palette::FROST_GLOW,
             held_glow: Some(staff_crystals()),
             body_glow: Some(frost_mage_glow()),
             // A long, narrow cape, rimed along its hem.
-            tail: Some(sculpted(vec![
-                tinted(hanging_cone(0.22, 1.05, 14).scaled_by(Vec3::new(0.4, 1.0, 1.15)).translated_by(Vec3::Y * -0.52), palette::FROST_DARK),
-            ])),
+            tail: Some(cape(palette::FROST_DARK, palette::RIME, 1.05, 0.26, 0.06, 0.0)),
         },
         _ => unreachable!("no rig for class {class_key:?} (add it to FIGHTER_LOOKS)"),
     }
@@ -415,68 +369,11 @@ fn eye_slits(x: f32, y: f32, z: f32) -> Mesh {
     )
 }
 
-/// The revenant's head: a tall, pointed hood with nothing inside but the eyes.
-fn hooded_void() -> Mesh {
-    sculpted(vec![
-        taper(0.21, 0.05, 0.58, 18, Vec3::new(-0.05, 0.25, 0.0), palette::ROBE),
-        tinted(ball(0.12).scaled_by(Vec3::new(0.5, 1.0, 0.9)).translated_by(Vec3::new(0.08, 0.18, 0.0)), palette::TATTERS),
-    ])
-}
-
-/// The frost mage's head: a pointed hood, empty but for the eyes, with a crown of ice shards
-/// rising around it (so it reads from above).
-fn frost_crowned_hood() -> Mesh {
-    let mut parts = vec![
-        taper(0.2, 0.05, 0.5, 18, Vec3::new(-0.05, 0.24, 0.0), palette::FROST_ROBE),
-        tinted(ball(0.12).scaled_by(Vec3::new(0.5, 1.0, 0.9)).translated_by(Vec3::new(0.08, 0.18, 0.0)), palette::FROST_DARK),
-        taper(0.205, 0.2, 0.04, 18, Vec3::new(-0.04, 0.03, 0.0), palette::RIME),
-    ];
-    // Shards fanning up and out from the crown, tallest at the front.
-    for i in 0..7 {
-        let around = i as f32 / 7.0 * std::f32::consts::TAU;
-        let height = 0.22 + 0.1 * (around.cos() * 0.5 + 0.5);
-        let shard = ice_shard(0.035, height).rotated_by(Quat::from_rotation_z(-0.45));
-        let turned = shard.rotated_by(Quat::from_rotation_y(around));
-        parts.push(tinted(turned.translated_by(Vec3::new(-0.04, 0.32, 0.0)), palette::ICE));
-    }
-    sculpted(parts)
-}
-
 /// A long crystal standing on Y, base at the origin: a narrow prism ending in a point.
 fn ice_shard(radius: f32, height: f32) -> Mesh {
     let body = cylinder(radius, height * 0.7, 5).translated_by(Vec3::Y * height * 0.35);
     let point = cone(radius, height * 0.3, 5).translated_by(Vec3::Y * height * 0.85);
     faceted(sculpted(vec![body, point]))
-}
-
-/// The frost mage's staff, gripped at the origin, standing up (+Y): a dark shaft bound in blue and
-/// shod in steel, and at the top two steel crescents crossing like an open cage around its
-/// crystals (`staff_crystals`, drawn glowing).
-fn ice_staff() -> Mesh {
-    let wood = palette::BARK.darker(0.15);
-    let mut parts = vec![
-        rod(Vec3::Y * -0.62, Vec3::Y * 1.04, 0.024, wood),
-        // The steel butt spike and its collar.
-        tinted(hanging_cone(0.03, 0.16, 10).translated_by(Vec3::Y * -0.7), palette::STEEL),
-        taper(0.034, 0.03, 0.05, 12, Vec3::Y * -0.6, palette::STEEL),
-        // Blue bindings either side of the grip and up the shaft.
-        taper(0.032, 0.032, 0.06, 12, Vec3::Y * 0.12, palette::FROST_BLUE),
-        taper(0.032, 0.032, 0.06, 12, Vec3::Y * -0.12, palette::FROST_BLUE),
-        taper(0.03, 0.03, 0.03, 12, Vec3::Y * 0.6, palette::FROST_BLUE),
-        taper(0.03, 0.03, 0.03, 12, Vec3::Y * 0.68, palette::FROST_BLUE),
-        // The collar holding the head.
-        taper(0.03, 0.05, 0.1, 12, Vec3::Y * 1.02, palette::STEEL),
-        taper(0.052, 0.052, 0.025, 12, Vec3::Y * 1.08, palette::FROST_BLUE),
-    ];
-    for side in CRESCENTS {
-        let steps = 7;
-        for i in 0..steps {
-            let (a, b) = (crescent(side, i as f32 / steps as f32), crescent(side, (i + 1) as f32 / steps as f32));
-            parts.push(rod(a, b, 0.013, palette::STEEL));
-        }
-        parts.push(tinted(ball(0.022).translated_by(crescent(side, 1.0)), palette::STEEL));
-    }
-    sculpted(parts)
 }
 
 /// The middle of the staff's head (above the grip), and how far its crescents reach out.
@@ -523,14 +420,14 @@ fn frost_mage_glow() -> Mesh {
         }
     }
     let gem = faceted(Sphere::new(0.045).mesh().ico(0).unwrap()).scaled_by(Vec3::new(0.6, 1.4, 1.0));
-    parts.push(tinted(gem.translated_by(Vec3::new(0.165, 0.88, 0.0)), Color::WHITE));
+    parts.push(tinted(gem.translated_by(Vec3::new(0.205, 0.88, 0.0)), Color::WHITE));
     // Runes: small upright diamonds just above the hem, following the robe's curve.
     for i in 0..10 {
         let around = (i as f32 + 0.5) / 10.0 * std::f32::consts::TAU;
         let (sin, cos) = around.sin_cos();
         let rune = faceted(Sphere::new(0.03).mesh().ico(0).unwrap()).scaled_by(Vec3::new(0.35, 1.5, 1.0));
         let turned = rune.rotated_by(Quat::from_rotation_y(-around));
-        parts.push(tinted(turned.translated_by(Vec3::new(cos * 0.385 * 0.85, 0.17, sin * 0.385)), Color::WHITE));
+        parts.push(tinted(turned.translated_by(Vec3::new(cos * 0.345, 0.17, sin * 0.405)), Color::WHITE));
     }
     sculpted(parts)
 }
@@ -627,87 +524,546 @@ pub fn frost_rune_mesh() -> Mesh {
     b.build()
 }
 
-/// A long, straight sword, gripped at the origin, blade up (+Y).
-fn sword() -> Mesh {
-    let tip = cone(0.06, 0.2, 4).scaled_by(Vec3::new(0.6, 1.0, 1.6));
-    sculpted(vec![
-        tinted(ball(0.045).translated_by(Vec3::Y * -0.17), palette::ASH),
-        tinted(cylinder(0.032, 0.24, 12).translated_by(Vec3::Y * -0.04), palette::DARK_LEATHER),
-        block(Vec3::new(0.07, 0.05, 0.3), Vec3::Y * 0.1, palette::ASH),
-        block(Vec3::new(0.035, 1.0, 0.11), Vec3::Y * 0.62, palette::STEEL),
-        tinted(tip.translated_by(Vec3::Y * 1.22), palette::STEEL),
-    ])
-}
-
-/// A deep hood with nothing in it but a bone plague mask: glowing slit eyes in sunken sockets,
-/// a long beak curving down to a point, a strap around the hood, and a charred, branching
-/// antler crown growing out of it, so the javelinist reads from above.
-fn bone_mask_head() -> Mesh {
-    use std::f32::consts::FRAC_PI_2;
-    let mut parts = vec![
-        // The hood, and the darkness inside it.
-        taper(0.22, 0.06, 0.5, 18, Vec3::new(-0.07, 0.24, 0.0), palette::HUNTER_DARK),
-        tinted(ball(0.15).translated_by(Vec3::new(0.0, 0.2, 0.0)), palette::TATTERS),
-        // The mask's face plate, and a strap holding it on around the hood.
-        tinted(ball(0.15).scaled_by(Vec3::new(0.55, 1.1, 0.85)).translated_by(Vec3::new(0.12, 0.22, 0.0)), palette::BONE),
-        taper(0.165, 0.16, 0.035, 20, Vec3::new(0.0, 0.31, 0.0), palette::DARK_LEATHER),
-    ];
-    // The beak: two segments, the second bending further down to a point.
-    let mut at = Vec3::new(0.19, 0.17, 0.0);
-    for (down, length, (from, to)) in [(0.25, 0.2, (0.07, 0.048)), (0.75, 0.2, (0.048, 0.006))] {
-        let dir = Vec3::new(f32::cos(down), -f32::sin(down), 0.0);
-        let segment = taper(from, to, length, 18, Vec3::ZERO, palette::BONE)
-            .rotated_by(Quat::from_rotation_z(-(FRAC_PI_2 + down)))
-            .translated_by(at + dir * length / 2.0);
-        parts.push(segment);
-        at += dir * length;
-    }
-    for side in [1.0, -1.0] {
-        // A sunken socket around the glowing eye.
-        let socket = ball(0.045).scaled_by(Vec3::new(0.6, 0.8, 1.3));
-        parts.push(tinted(socket.translated_by(EYE.with_z(side * EYE.z) - Vec3::X * 0.01), palette::DARK_LEATHER));
-        // Main beam: three segments narrowing to a point, rising and curving out wide to the
-        // side (a crown from above) and sweeping back, the tip hooking forward; pointed tines
-        // rise off its joints, and a brow tine juts forward from the base.
-        let mut at = Vec3::new(0.06, 0.36, side * 0.09);
-        let radii = [0.05, 0.038, 0.027, 0.01];
-        let bends = [(0.7, 0.35), (1.0, 0.18), (1.25, -0.08)];
-        let lengths = [0.32, 0.3, 0.26];
-        let mut joints = Vec::new();
-        for (i, ((out, back), length)) in bends.into_iter().zip(lengths).enumerate() {
-            let tilt = Quat::from_rotation_x(side * out) * Quat::from_rotation_z(back);
-            let segment = taper(radii[i], radii[i + 1], length, 8, Vec3::Y * length / 2.0, palette::ASH);
-            parts.push(segment.rotated_by(tilt).translated_by(at));
-            at += tilt * Vec3::Y * length;
-            joints.push(at);
-        }
-        let tine = |length: f32, tilt: Quat, from: Vec3| {
-            let point = taper(0.024, 0.003, length, 8, Vec3::Y * length / 2.0, palette::ASH);
-            point.rotated_by(tilt).translated_by(from)
-        };
-        let upward = Quat::from_rotation_x(side * 0.3) * Quat::from_rotation_z(-0.5);
-        parts.push(tine(0.3, upward, joints[0]));
-        parts.push(tine(0.26, upward, joints[1]));
-        let brow = Quat::from_rotation_x(side * 0.45) * Quat::from_rotation_z(-1.15);
-        parts.push(tine(0.2, brow, Vec3::new(0.1, 0.4, side * 0.11)));
-    }
-    sculpted(parts)
-}
-
-/// Bony claws for fingers, curling down and forward from the hand.
-fn claws() -> Mesh {
-    let mut parts = Vec::new();
-    for (i, side) in [-0.035, 0.0, 0.035].into_iter().enumerate() {
-        let length = 0.1 + 0.02 * (i % 2) as f32;
-        let claw = hanging_cone(0.016, length, 6).rotated_by(Quat::from_rotation_z(0.35));
-        parts.push(tinted(claw.translated_by(RIG_HAND + Vec3::new(0.04, -0.07, side)), palette::BONE));
-    }
-    sculpted(parts)
-}
-
 /// The spear in hand, gripped a little behind its middle.
 fn held_spear() -> Mesh {
     frame_spear(palette::IRON, palette::SILVER).translated_by(Vec3::Y * GRIP_TO_TIP)
+}
+
+/// A section of a fighter part: `half` (depth, width) across at height `y`, offset `x` forward.
+fn ring(x: f32, y: f32, half: (f32, f32), color: Color) -> Section {
+    Section::new(Vec3::new(x, y, 0.0), Vec2::new(half.0, half.1), color)
+}
+
+/// A deep hood, its rim (in `rim`) sunk over the collar, rising through `top` (the sections
+/// above the brow: `drooping` for one falling back to a point), its opening dark (`void`) and
+/// framed by a heavy lip of cloth, in the head's space (the neck at the origin, facing +X). The
+/// eyes go at about (0.165, 0.2, ±0.055).
+fn deep_hood(cloth: Color, rim: Color, void: Color, top: &[Section]) -> Vec<Mesh> {
+    let mut sections = vec![
+        ring(-0.03, -0.05, (0.17, 0.19), rim),
+        ring(-0.035, 0.01, (0.18, 0.195), cloth),
+        ring(-0.04, 0.08, (0.19, 0.2), cloth),
+    ];
+    sections.extend_from_slice(top);
+    let hood = tube(&smoothed(&sections, 3), 36, (true, false));
+    let dark = tinted(ball(1.0).scaled_by(Vec3::new(0.07, 0.13, 0.12)).translated_by(Vec3::new(0.1, 0.19, 0.0)), void);
+    // The lip: an arch of cloth round the opening, thickest over the brow.
+    let arch: Vec<f32> = (0..=10).map(|i| -1.95 + 3.9 * i as f32 / 10.0).collect();
+    let lip_points: Vec<Vec3> = arch.iter().map(|a| Vec3::new(0.125 + 0.03 * a.cos(), 0.17 + 0.155 * a.cos(), 0.135 * a.sin())).collect();
+    let lip_radii: Vec<f32> = arch.iter().map(|a| 0.02 + 0.014 * a.cos().max(0.0)).collect();
+    vec![hood, dark, sweep(&lip_points, &lip_radii, 10, cloth)]
+}
+
+/// A hood's top falling back to a point.
+fn drooping(cloth: Color) -> [Section; 5] {
+    [
+        ring(-0.05, 0.22, (0.19, 0.19), cloth),
+        ring(-0.08, 0.36, (0.15, 0.14), cloth),
+        ring(-0.13, 0.48, (0.08, 0.07), cloth),
+        ring(-0.2, 0.56, (0.025, 0.022), cloth),
+        ring(-0.25, 0.58, (0.0, 0.0), cloth),
+    ]
+}
+
+/// A shoulder plate in `color`: a low dome over a thick, darker rim, stacked on a second plate
+/// below it. Centered on the shoulder, rising up (+Y).
+fn pauldron(color: Color) -> Mesh {
+    let plate = |r: f32, y: f32| {
+        tube(
+            &[
+                Section::round(Vec3::Y * (y - 0.05), r, color.darker(0.06)),
+                Section::round(Vec3::Y * (y - 0.02), r * 1.03, color),
+                Section::round(Vec3::Y * (y + 0.04), r * 0.85, color),
+                Section::round(Vec3::Y * (y + 0.085), r * 0.48, color),
+                Section::round(Vec3::Y * (y + 0.1), 0.0, color),
+            ],
+            20,
+            (true, false),
+        )
+    };
+    sculpted(vec![plate(0.15, 0.0), plate(0.13, -0.07)])
+}
+
+/// A leg hanging from the hip in `cloth`, `thigh` and `knee` thick (wide for baggy trousers),
+/// into a soft `boot` with a toe.
+fn booted_leg(cloth: Color, boot: Color, thigh: f32, knee: f32) -> Mesh {
+    tube(
+        &[
+            ring(0.0, 0.05, (thigh * 0.95, thigh * 0.95), cloth),
+            ring(0.0, -0.2, (thigh, thigh * 0.95), cloth),
+            ring(0.01, -0.4, (knee, knee * 0.96), cloth),
+            ring(0.0, -0.55, (knee * 0.92, knee * 0.88), cloth),
+            ring(0.0, -0.6, (0.078, 0.076), boot),
+            ring(0.015, -0.7, (0.085, 0.078), boot),
+            ring(0.04, -0.76, (0.11, 0.082), boot).squared(3.0),
+            ring(0.05, -0.8, (0.115, 0.08), boot).squared(3.0),
+        ],
+        16,
+        (true, true),
+    )
+}
+
+/// A cape hanging from the upper back: heavy cloth curving round the shoulders and widening as
+/// it falls, `length` long and `width` wide at the hem, the last `hem` of it (a fraction) in
+/// `edge`, frayed `jag` deep.
+fn cape(cloth: Color, edge: Color, length: f32, width: f32, hem: f32, jag: f32) -> Mesh {
+    tube(
+        &[
+            ring(0.0, 0.03, (0.04, width * 0.57), cloth).bent(0.09),
+            ring(-0.05, -0.3 * length, (0.035, width * 0.77), cloth).bent(0.1),
+            ring(-0.09, -0.63 * length, (0.03, width * 0.9), cloth).bent(0.1),
+            ring(-0.11, -(1.0 - hem) * length, (0.03, width * 0.95), edge).bent(0.09),
+            ring(-0.13, -length, (0.028, width), edge).bent(0.08).jagged(jag),
+        ],
+        24,
+        (true, true),
+    )
+}
+
+/// A fist closing below a cuff: in `color`, the hand at `RIG_HAND`, from `top` down.
+fn fist(color: Color, top: f32, width: f32) -> Mesh {
+    tube(
+        &[
+            ring(0.0, top, (width * 0.9, width * 0.9), color),
+            ring(0.0, -0.45, (width, width * 0.96), color),
+            ring(0.01, -0.48, (width * 1.04, width * 0.94), color).squared(2.6),
+            ring(0.015, -0.55, (width * 1.08, width * 0.95), color).squared(2.6),
+            ring(0.01, -0.6, (width * 0.68, width * 0.72), color),
+            ring(0.0, -0.62, (0.0, 0.0), color),
+        ],
+        16,
+        (true, false),
+    )
+}
+
+/// The revenant's robe, one piece from the tattered hem up over the chest and shoulders to a
+/// collar the hood sits on, falling in folds that deepen into the tatters; an ash belt with a steel
+/// buckle, a tattered tabard hanging from it down the front, an empty scabbard at the left hip
+/// (its sword long since drawn), and stacked ash pauldrons.
+fn revenant_body() -> Mesh {
+    const FOLDS: u32 = 9;
+    let robe = tube(
+        &smoothed(
+            &[
+                ring(0.0, 0.3, (0.29, 0.32), palette::TATTERS).jagged(0.15).folded(0.06, FOLDS),
+                ring(0.0, 0.42, (0.27, 0.3), palette::ROBE).folded(0.05, FOLDS),
+                ring(0.01, 0.7, (0.2, 0.245), palette::ROBE).folded(0.02, FOLDS),
+                ring(0.01, 0.83, (0.195, 0.24), palette::ASH),
+                ring(0.01, 0.92, (0.2, 0.245), palette::ROBE),
+                ring(0.02, 1.12, (0.2, 0.28), palette::ROBE).squared(2.6),
+                ring(0.0, 1.3, (0.18, 0.29), palette::ROBE).squared(2.6),
+                ring(-0.01, 1.41, (0.14, 0.22), palette::ROBE),
+                ring(-0.01, 1.48, (0.1, 0.13), palette::TATTERS),
+                ring(-0.01, 1.53, (0.09, 0.11), palette::TATTERS),
+            ],
+            3,
+        ),
+        56,
+        (true, true),
+    );
+    let buckle = tinted(bevel_box(Vec3::new(0.04, 0.1, 0.12), 0.012).translated_by(Vec3::new(0.21, 0.875, 0.0)), palette::STEEL);
+    let tabard = [(0.215, 0.85, 0.09), (0.255, 0.6, 0.085), (0.295, 0.4, 0.08), (0.33, 0.22, 0.075)]
+        .map(|(x, y, w)| Section::new(Vec3::new(x, y, 0.0), Vec2::new(0.01, w), palette::ASH));
+    let mut tabard = smoothed(&tabard, 3);
+    if let Some(end) = tabard.last_mut() {
+        end.jag = 0.08;
+    }
+    // The scabbard: wide front to back, hanging from the belt down and back past the left leg.
+    let scabbard = [
+        (0.02, 0.88, -0.26, 0.056, palette::ASH),
+        (0.0, 0.82, -0.268, 0.052, palette::DARK_LEATHER),
+        (-0.1, 0.55, -0.3, 0.048, palette::DARK_LEATHER),
+        (-0.185, 0.3, -0.328, 0.04, palette::ASH),
+        (-0.22, 0.2, -0.34, 0.0, palette::ASH),
+    ]
+    .map(|(x, y, z, w, color)| Section::new(Vec3::new(x, y, z), Vec2::new(w, 0.02), color));
+    let mut parts = vec![robe, buckle, tube(&tabard, 16, (true, true)), tube(&scabbard, 12, (true, false))];
+    for side in [1.0, -1.0] {
+        parts.push(pauldron(palette::ASH).rotated_by(Quat::from_rotation_x(side * 0.4)).translated_by(Vec3::new(-0.01, 1.4, side * 0.26)));
+    }
+    sculpted(parts)
+}
+
+/// The revenant's head: a deep, empty hood, folds down its sides, drooping back to a long point.
+fn revenant_hood() -> Mesh {
+    let cloth = palette::ROBE;
+    let top = [
+        ring(-0.05, 0.22, (0.19, 0.19), cloth).folded(0.035, 5),
+        ring(-0.08, 0.36, (0.15, 0.14), cloth).folded(0.03, 5),
+        ring(-0.14, 0.47, (0.085, 0.075), cloth),
+        ring(-0.23, 0.52, (0.035, 0.03), cloth),
+        ring(-0.32, 0.5, (0.0, 0.0), cloth),
+    ];
+    sculpted(deep_hood(cloth, cloth, palette::TATTERS, &top))
+}
+
+/// One iron link of a chain, `at`, upright and turned across the last one when `turned`.
+fn chain_link(at: Vec3, turned: bool) -> Mesh {
+    let loop_points: Vec<Vec3> = (0..=12)
+        .map(|i| i as f32 / 12.0 * std::f32::consts::TAU)
+        .map(|a| {
+            let (side, up) = (0.013 * a.sin(), 0.022 * a.cos());
+            at + if turned { Vec3::new(side, up, 0.0) } else { Vec3::new(0.0, up, side) }
+        })
+        .collect();
+    sweep(&loop_points, &[0.0055; 13], 6, palette::IRON)
+}
+
+/// A robe sleeve starting inside the pauldron and widening to a tattered cuff, over an ash
+/// gauntlet closing into a fist, an iron manacle round the wrist trailing a broken chain.
+fn revenant_arm() -> Mesh {
+    let sleeve = tube(
+        &smoothed(
+            &[
+                ring(0.0, 0.08, (0.085, 0.085), palette::ROBE),
+                ring(0.0, -0.1, (0.095, 0.095), palette::ROBE).folded(0.02, 6),
+                ring(0.0, -0.22, (0.11, 0.11), palette::ROBE).folded(0.04, 6),
+                ring(0.0, -0.27, (0.12, 0.12), palette::TATTERS).folded(0.05, 6),
+                ring(-0.01, -0.33, (0.13, 0.13), palette::TATTERS).jagged(0.07).folded(0.05, 6),
+            ],
+            2,
+        ),
+        30,
+        (true, true),
+    );
+    let gauntlet = tube(
+        &[
+            ring(0.0, -0.2, (0.062, 0.062), palette::ASH),
+            ring(0.0, -0.36, (0.07, 0.07), palette::ASH),
+            ring(0.0, -0.42, (0.078, 0.074), palette::ASH.darker(0.05)),
+            ring(0.0, -0.44, (0.06, 0.058), palette::ASH),
+        ],
+        20,
+        (true, false),
+    );
+    let manacle = tube(
+        &[
+            ring(0.0, -0.35, (0.08, 0.08), palette::IRON),
+            ring(0.0, -0.36, (0.085, 0.085), palette::IRON),
+            ring(0.0, -0.39, (0.085, 0.085), palette::IRON),
+            ring(0.0, -0.4, (0.08, 0.08), palette::IRON),
+        ],
+        20,
+        (true, true),
+    );
+    let mut parts = vec![sleeve, gauntlet, fist(palette::ASH, -0.44, 0.064), manacle];
+    // The broken chain, hanging from the back of the manacle.
+    for (i, y) in [-0.41, -0.445, -0.48].into_iter().enumerate() {
+        parts.push(chain_link(Vec3::new(-0.092, y, 0.0), i % 2 == 1));
+    }
+    sculpted(parts)
+}
+
+/// The revenant's sword, gripped at the origin, blade up (+Y): a long pale blade widening a little
+/// toward a clipped point set off toward the front edge, a hooked notch on its back edge near the
+/// guard, a crossguard whose arms droop forward to points, a grip bound in ash and leather, and a
+/// faceted pommel spike. A line of wisp light runs down its fuller (`sword_glow`).
+fn sword() -> Mesh {
+    let blade = faceted(tube(
+        &smoothed(
+            &BLADE.map(|(y, depth, width, z)| Section::new(Vec3::new(0.0, y, z), Vec2::new(depth, width), palette::STEEL).squared(1.0)),
+            2,
+        ),
+        4,
+        (true, false),
+    ));
+    let hook = sweep(&[Vec3::new(0.0, 0.22, -0.045), Vec3::new(0.0, 0.27, -0.075), Vec3::new(0.0, 0.33, -0.08)], &[0.014, 0.009, 0.0], 8, palette::STEEL);
+    let mut parts = vec![blade, hook, tinted(bevel_box(Vec3::new(0.07, 0.075, 0.1), 0.015).translated_by(Vec3::Y * 0.1), palette::ASH)];
+    // The guard's arms, out from the middle and drooping forward to points.
+    for side in [1.0, -1.0] {
+        let arm: Vec<Vec3> = (0..=4).map(|i| i as f32 / 4.0).map(|t| Vec3::new(0.0, 0.1 - 0.07 * t * t, side * 0.19 * t)).collect();
+        parts.push(sweep(&arm, &[0.03, 0.027, 0.022, 0.014, 0.0], 10, palette::ASH));
+    }
+    // The grip, bound in bands.
+    for i in 0..6 {
+        let (from, to) = (-0.17 + 0.038 * i as f32, -0.17 + 0.038 * (i + 1) as f32);
+        let (r, color) = if i % 2 == 0 { (0.031, palette::ASH) } else { (0.029, palette::DARK_LEATHER) };
+        parts.push(sweep(&[Vec3::Y * from, Vec3::Y * to], &[r, r], 12, color));
+    }
+    let pommel = faceted(tube(
+        &[
+            Section::round(Vec3::Y * -0.17, 0.034, palette::ASH),
+            Section::round(Vec3::Y * -0.2, 0.045, palette::ASH),
+            Section::round(Vec3::Y * -0.24, 0.04, palette::ASH),
+            Section::round(Vec3::Y * -0.3, 0.0, palette::ASH),
+        ],
+        6,
+        (true, false),
+    ));
+    parts.push(pommel);
+    sculpted(parts)
+}
+
+/// The sword's blade, as (height, half depth, half width, how far its middle is set toward the
+/// front edge).
+const BLADE: [(f32, f32, f32, f32); 6] =
+    [(0.12, 0.02, 0.048, 0.0), (0.4, 0.019, 0.052, 0.0), (0.95, 0.017, 0.06, 0.004), (1.2, 0.015, 0.058, 0.008), (1.34, 0.01, 0.032, 0.022), (1.46, 0.0, 0.0, 0.04)];
+
+/// What glows on the revenant's sword: a line of wisp light down the fuller on both faces, and a
+/// gem on each face of the guard.
+fn sword_glow() -> Mesh {
+    let mut parts = Vec::new();
+    for side in [1.0, -1.0] {
+        let points: Vec<Vec3> = (0..=6)
+            .map(|i| 0.22 + 0.9 * i as f32 / 6.0)
+            .map(|y| {
+                // On the ridge of the blade at this height (between `BLADE`'s sections).
+                let k = BLADE.windows(2).position(|w| y <= w[1].0).unwrap_or(0);
+                let (a, b) = (BLADE[k], BLADE[k + 1]);
+                let t = (y - a.0) / (b.0 - a.0);
+                let (depth, z) = (a.1 + (b.1 - a.1) * t, a.3 + (b.3 - a.3) * t);
+                Vec3::new(side * (depth + 0.003), y, z)
+            })
+            .collect();
+        parts.push(sweep(&points, &[0.004, 0.0055, 0.0055, 0.0055, 0.0055, 0.005, 0.0], 6, Color::WHITE));
+        let gem = faceted(Sphere::new(0.018).mesh().ico(0).unwrap()).scaled_by(Vec3::new(0.6, 1.3, 1.0));
+        parts.push(tinted(gem.translated_by(Vec3::new(side * 0.037, 0.1, 0.0)), Color::WHITE));
+    }
+    sculpted(parts)
+}
+
+/// The frost mage's robe, one piece flaring to the ground: rimed at the hem with a blue band
+/// above it, a blue sash, a blue front panel down the skirt, and a heavy rime mantle over the
+/// shoulders, its edge hanging in short icicles.
+fn frost_mage_body() -> Mesh {
+    let robe = tube(
+        &[
+            ring(0.0, 0.0, (0.36, 0.42), palette::RIME),
+            ring(0.0, 0.05, (0.357, 0.417), palette::FROST_BLUE),
+            ring(0.0, 0.1, (0.352, 0.412), palette::FROST_ROBE),
+            ring(0.01, 0.5, (0.25, 0.3), palette::FROST_ROBE),
+            ring(0.01, 0.84, (0.19, 0.23), palette::FROST_BLUE),
+            ring(0.01, 0.92, (0.19, 0.23), palette::FROST_ROBE),
+            ring(0.01, 1.12, (0.19, 0.26), palette::FROST_ROBE).squared(2.4),
+            ring(0.0, 1.32, (0.17, 0.27), palette::FROST_ROBE).squared(2.4),
+            ring(-0.01, 1.42, (0.13, 0.2), palette::FROST_ROBE),
+            ring(-0.01, 1.5, (0.09, 0.11), palette::FROST_DARK),
+            ring(-0.01, 1.54, (0.08, 0.1), palette::FROST_DARK),
+        ],
+        28,
+        (true, true),
+    );
+    let panel = tube(
+        &[
+            Section::new(Vec3::new(0.358, 0.11, 0.0), Vec2::new(0.008, 0.05), palette::FROST_BLUE),
+            Section::new(Vec3::new(0.262, 0.5, 0.0), Vec2::new(0.008, 0.042), palette::FROST_BLUE),
+            Section::new(Vec3::new(0.204, 0.83, 0.0), Vec2::new(0.008, 0.034), palette::FROST_BLUE),
+        ],
+        8,
+        (true, true),
+    );
+    let mantle = tube(
+        &[
+            ring(-0.01, 1.53, (0.1, 0.13), palette::RIME),
+            ring(-0.01, 1.47, (0.2, 0.28), palette::RIME),
+            ring(-0.01, 1.38, (0.25, 0.36), palette::RIME),
+            ring(-0.01, 1.3, (0.255, 0.37), palette::RIME).jagged(0.06),
+        ],
+        28,
+        (true, true),
+    );
+    sculpted(vec![robe, panel, mantle])
+}
+
+/// The frost mage's head: a deep hood rimed at the rim, empty but for the eyes, with a crown of
+/// ice shards rising around it (so it reads from above).
+fn frost_crowned_hood() -> Mesh {
+    let mut parts = deep_hood(palette::FROST_ROBE, palette::RIME, palette::FROST_DARK, &drooping(palette::FROST_ROBE));
+    // Shards fanning up and out from the crown, tallest at the front.
+    for i in 0..7 {
+        let around = i as f32 / 7.0 * std::f32::consts::TAU;
+        let height = 0.22 + 0.1 * (around.cos() * 0.5 + 0.5);
+        let shard = ice_shard(0.035, height).rotated_by(Quat::from_rotation_z(-0.45));
+        let turned = shard.rotated_by(Quat::from_rotation_y(around));
+        parts.push(tinted(turned.translated_by(Vec3::new(-0.06, 0.32, 0.0)), palette::ICE));
+    }
+    sculpted(parts)
+}
+
+/// Wide bell sleeves, banded in blue and rimed at the cuff (dark inside), over a slim dark glove.
+fn frost_mage_arm() -> Mesh {
+    let sleeve = tube(
+        &[
+            ring(0.0, 0.08, (0.085, 0.085), palette::FROST_ROBE),
+            ring(0.0, -0.1, (0.09, 0.09), palette::FROST_ROBE),
+            ring(0.0, -0.22, (0.1, 0.1), palette::FROST_ROBE),
+            ring(-0.01, -0.36, (0.148, 0.148), palette::FROST_ROBE),
+            ring(-0.01, -0.385, (0.15, 0.15), palette::FROST_BLUE),
+            ring(-0.01, -0.41, (0.152, 0.152), palette::FROST_ROBE),
+            ring(-0.01, -0.43, (0.155, 0.155), palette::RIME),
+            ring(-0.01, -0.47, (0.158, 0.158), palette::FROST_DARK),
+        ],
+        18,
+        (true, true),
+    );
+    let glove = tube(
+        &[ring(0.0, -0.36, (0.05, 0.05), palette::DARK_LEATHER), ring(0.0, -0.44, (0.054, 0.054), palette::DARK_LEATHER)],
+        14,
+        (true, false),
+    );
+    sculpted(vec![sleeve, glove, fist(palette::DARK_LEATHER, -0.44, 0.056)])
+}
+
+/// The frost mage's staff, gripped at the origin, standing up (+Y): a dark shaft swelling a little
+/// toward the head, bound in blue and shod in a steel spike, and at the top two steel crescents
+/// curving up like an open cage around its crystals (`staff_crystals`, drawn glowing).
+fn ice_staff() -> Mesh {
+    let wood = palette::BARK.darker(0.15);
+    let mut parts = vec![
+        sweep(&[Vec3::Y * -0.62, Vec3::Y * 0.2, Vec3::Y * 1.04], &[0.022, 0.024, 0.027], 12, wood),
+        // The steel butt spike and its collar.
+        sweep(&[Vec3::Y * -0.6, Vec3::Y * -0.66, Vec3::Y * -0.8], &[0.034, 0.03, 0.0], 12, palette::STEEL),
+        // Blue bindings either side of the grip and up the shaft.
+        sweep(&[Vec3::Y * 0.09, Vec3::Y * 0.15], &[0.031, 0.031], 12, palette::FROST_BLUE),
+        sweep(&[Vec3::Y * -0.15, Vec3::Y * -0.09], &[0.03, 0.03], 12, palette::FROST_BLUE),
+        sweep(&[Vec3::Y * 0.585, Vec3::Y * 0.615], &[0.032, 0.032], 12, palette::FROST_BLUE),
+        sweep(&[Vec3::Y * 0.665, Vec3::Y * 0.695], &[0.032, 0.032], 12, palette::FROST_BLUE),
+        // The collar holding the head.
+        sweep(&[Vec3::Y * 0.96, Vec3::Y * 1.02, Vec3::Y * 1.07], &[0.03, 0.04, 0.052], 12, palette::STEEL),
+        sweep(&[Vec3::Y * 1.07, Vec3::Y * 1.095], &[0.054, 0.05], 12, palette::FROST_BLUE),
+    ];
+    for side in CRESCENTS {
+        let points: Vec<Vec3> = (0..=6).map(|i| crescent(side, i as f32 / 6.0)).collect();
+        let radii: Vec<f32> = (0..=6).map(|i| 0.017 - 0.007 * i as f32 / 6.0).collect();
+        parts.push(sweep(&points, &radii, 10, palette::STEEL));
+        parts.push(tinted(ball(0.02).translated_by(crescent(side, 1.0)), palette::STEEL));
+    }
+    sculpted(parts)
+}
+
+/// The javelinist's robe: one long, plain near-black robe from the collar down to the ground,
+/// flaring as it falls in soft folds that deepen toward the darker hem; a draped cowl over the
+/// shoulders, a thin cord belt knotted at the front with its ends hanging, and a small leather
+/// pouch at the right hip. Quiet details: the spear overhead is the figure.
+fn javelinist_body() -> Mesh {
+    const FOLDS: u32 = 11;
+    let robe = tube(
+        &smoothed(
+            &[
+                ring(0.0, 0.0, (0.3, 0.36), palette::HUNTER_DARK).folded(0.07, FOLDS),
+                ring(0.0, 0.05, (0.295, 0.355), palette::HUNTER).folded(0.07, FOLDS),
+                ring(0.0, 0.5, (0.22, 0.275), palette::HUNTER).folded(0.045, FOLDS),
+                ring(0.01, 0.9, (0.17, 0.225), palette::HUNTER).folded(0.015, FOLDS),
+                ring(0.01, 1.14, (0.17, 0.25), palette::HUNTER).squared(2.3),
+                ring(0.0, 1.32, (0.155, 0.27), palette::HUNTER).squared(2.3),
+                ring(-0.01, 1.42, (0.12, 0.2), palette::HUNTER),
+                ring(-0.01, 1.49, (0.08, 0.11), palette::HUNTER_DARK),
+                ring(-0.01, 1.53, (0.07, 0.1), palette::HUNTER_DARK),
+            ],
+            4,
+        ),
+        64,
+        (true, true),
+    );
+    let cowl = tube(
+        &smoothed(
+            &[
+                ring(-0.01, 1.56, (0.09, 0.12), palette::HUNTER),
+                ring(-0.01, 1.5, (0.16, 0.22), palette::HUNTER),
+                ring(-0.01, 1.42, (0.2, 0.3), palette::HUNTER).folded(0.04, 9),
+                ring(-0.01, 1.33, (0.205, 0.31), palette::HUNTER_DARK).folded(0.06, 9),
+            ],
+            3,
+        ),
+        54,
+        (true, true),
+    );
+    // The cord, its knot at the front left, and its two ends hanging from it.
+    let cord: Vec<Vec3> = (0..=28).map(|i| i as f32 / 28.0 * std::f32::consts::TAU).map(|a| Vec3::new(0.183 * a.cos(), 0.93, 0.238 * a.sin())).collect();
+    let knot = Vec3::new(0.183 * f32::cos(-0.6), 0.925, 0.238 * f32::sin(-0.6)) + Vec3::new(0.012, 0.0, 0.0);
+    let mut parts = vec![robe, cowl, sweep(&cord, &[0.013; 29], 10, palette::LEATHER), tinted(ball(0.026).translated_by(knot), palette::LEATHER)];
+    for (out, length) in [(0.03, 0.3), (-0.015, 0.24)] {
+        let end = [knot, knot + Vec3::new(0.035, -length * 0.5, out), knot + Vec3::new(0.04, -length, out * 1.4)];
+        parts.push(sweep(&end, &[0.011, 0.01, 0.009], 8, palette::LEATHER));
+        parts.push(tinted(ball(0.017).translated_by(end[2]), palette::DARK_LEATHER));
+    }
+    // The pouch, flat against the right hip, under a darker flap.
+    let pouch = |y: f32, half: (f32, f32), color: Color| Section::new(Vec3::new(-0.05, y, 0.245), Vec2::new(half.0, half.1), color);
+    parts.push(tube(
+        &smoothed(
+            &[
+                pouch(0.93, (0.05, 0.022), palette::DARK_LEATHER),
+                pouch(0.905, (0.066, 0.034), palette::DARK_LEATHER),
+                pouch(0.88, (0.066, 0.036), palette::LEATHER),
+                pouch(0.8, (0.06, 0.036), palette::LEATHER),
+                pouch(0.765, (0.035, 0.024), palette::LEATHER),
+            ],
+            2,
+        ),
+        20,
+        (true, true),
+    ));
+    sculpted(parts)
+}
+
+/// A loose sleeve rounded over the shoulder, widening in soft folds to a darker turned-back cuff
+/// (dark inside), and a bare grey hand.
+fn javelinist_arm() -> Mesh {
+    let sleeve = tube(
+        &smoothed(
+            &[
+                ring(-0.01, 0.1, (0.0, 0.0), palette::HUNTER),
+                ring(-0.01, 0.085, (0.055, 0.06), palette::HUNTER),
+                ring(0.0, 0.04, (0.085, 0.09), palette::HUNTER),
+                ring(0.0, -0.1, (0.09, 0.092), palette::HUNTER).folded(0.015, 7),
+                ring(0.0, -0.25, (0.105, 0.105), palette::HUNTER).folded(0.04, 7),
+                ring(-0.01, -0.35, (0.118, 0.118), palette::HUNTER).folded(0.06, 7),
+                ring(-0.01, -0.36, (0.126, 0.126), palette::HUNTER_DARK).folded(0.05, 7),
+                ring(-0.01, -0.41, (0.128, 0.128), palette::HUNTER_DARK).folded(0.05, 7),
+            ],
+            3,
+        ),
+        36,
+        (true, true),
+    );
+    let wrist = tube(&[ring(0.0, -0.34, (0.045, 0.045), palette::ASH), ring(0.0, -0.44, (0.05, 0.05), palette::ASH)], 20, (true, false));
+    sculpted(vec![sleeve, wrist, fist(palette::ASH, -0.44, 0.055)])
+}
+
+/// The robe hides the legs: dark wraps into soft boots, their toes showing at the hem.
+fn javelinist_leg() -> Mesh {
+    booted_leg(palette::HUNTER_DARK, palette::DARK_LEATHER, 0.085, 0.07)
+}
+
+/// A tall hood whose crown sweeps forward into a peak curling over the face, leaning a little to
+/// the left, soft folds down its sides; inside it only darkness and the eyes, peering out over a
+/// cloth wrapped across the lower face, whose tail falls from under the hood down the chest.
+fn javelinist_hood() -> Mesh {
+    let cloth = palette::HUNTER;
+    let lean = |s: Section, z: f32| Section { at: s.at.with_z(z), ..s };
+    let top = [
+        ring(-0.045, 0.22, (0.2, 0.19), cloth).folded(0.035, 5),
+        lean(ring(-0.03, 0.36, (0.175, 0.16), cloth).folded(0.03, 5), -0.01),
+        lean(ring(0.02, 0.47, (0.13, 0.115), cloth), -0.02),
+        lean(ring(0.09, 0.54, (0.075, 0.065), cloth), -0.035),
+        lean(ring(0.16, 0.55, (0.035, 0.03), cloth), -0.045),
+        lean(ring(0.21, 0.51, (0.0, 0.0), cloth), -0.05),
+    ];
+    let mut parts = deep_hood(cloth, cloth, palette::TATTERS, &top);
+    // The wrap: across the lower face, and a band of it around under the jaw.
+    let wrap = palette::LEATHER;
+    parts.push(tinted(ball(1.0).scaled_by(Vec3::new(0.065, 0.065, 0.125)).translated_by(Vec3::new(0.125, 0.115, 0.0)), wrap));
+    parts.push(tube(
+        &smoothed(
+            &[
+                Section::new(Vec3::new(0.155, 0.06, 0.0), Vec2::new(0.012, 0.11), wrap),
+                Section::new(Vec3::new(0.168, 0.1, 0.0), Vec2::new(0.012, 0.125), wrap),
+                Section::new(Vec3::new(0.172, 0.15, 0.0), Vec2::new(0.01, 0.12), wrap).bent(-0.02),
+            ],
+            2,
+        ),
+        20,
+        (true, true),
+    ));
+    // Its tail, a flat strip falling from the left of the jaw down over the chest.
+    let tail = [(0.13, 0.06, -0.09, 0.04), (0.2, -0.04, -0.11, 0.042), (0.235, -0.18, -0.125, 0.04), (0.25, -0.33, -0.12, 0.034), (0.255, -0.42, -0.115, 0.03)]
+        .map(|(x, y, z, w)| Section::new(Vec3::new(x, y, z), Vec2::new(0.011, w), wrap));
+    let mut tail = smoothed(&tail, 3);
+    if let Some(end) = tail.last_mut() {
+        end.jag = 0.04;
+    }
+    parts.push(tube(&tail, 16, (true, true)));
+    sculpted(parts)
 }
 
 /// A fighter's low-poly figure, feet at the origin, picked by class id so each class has its own
@@ -718,85 +1074,20 @@ pub fn fighter_mesh(class_key: &str) -> Mesh {
     match class_key {
         // Marksman, dark and bony: a long, belted hunter's robe in near-black moss green, split up
         // the front; bone ribs strapped over the chest, an executioner's spiked iron shoulder
-        // plates, vertebrae down the spine. Smoothly shaded. Head, arms, legs, tail and spear
-        // are separate, animated parts (`fighter_rig`).
-        "javelinist" => {
-            let deep = Vec3::new(0.64, 1.0, 1.0);
-            let mut parts = vec![
-                taper(0.2, 0.28, 0.56, 20, Vec3::Y * 1.1, palette::HUNTER).scaled_by(deep),
-                taper(0.33, 0.21, 0.68, 20, Vec3::Y * 0.54, palette::HUNTER).scaled_by(Vec3::new(0.74, 1.0, 1.0)),
-                block(Vec3::new(0.04, 0.6, 0.1), Vec3::new(0.21, 0.52, 0.0), palette::HUNTER_DARK),
-                taper(0.215, 0.215, 0.08, 20, Vec3::Y * 0.9, palette::DARK_LEATHER).scaled_by(deep),
-                tinted(ball(0.04).translated_by(Vec3::new(0.14, 0.9, 0.0)), palette::BONE),
-            ];
-            // Ribs: three curved bones across the chest, longest at the top.
-            for (i, y) in [1.28, 1.16, 1.04].into_iter().enumerate() {
-                let rib = taper(0.018, 0.018, 0.34 - 0.04 * i as f32, 8, Vec3::ZERO, palette::BONE)
-                    .rotated_by(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
-                parts.push(rib.translated_by(Vec3::new(0.17, y, 0.0)));
-            }
-            parts.push(taper(0.022, 0.022, 0.3, 8, Vec3::new(0.18, 1.15, 0.0), palette::BONE));
-            // An executioner's shoulders: a dark iron plate sloping off each shoulder, studded
-            // along the edge, a single spike curving up and back.
-            let iron = palette::IRON.darker(0.18);
-            for side in [1.0, -1.0] {
-                let slope = Quat::from_rotation_x(side * 0.35);
-                let plate = ball(0.12).scaled_by(Vec3::new(1.0, 0.36, 1.05)).rotated_by(slope);
-                parts.push(tinted(plate.translated_by(Vec3::new(0.0, 1.44, side * 0.24)), iron));
-                for x in [-0.06, 0.0, 0.06] {
-                    parts.push(tinted(ball(0.013).translated_by(Vec3::new(x, 1.41, side * 0.34)), palette::STEEL));
-                }
-                let spike = taper(0.03, 0.003, 0.2, 10, Vec3::Y * 0.1, iron)
-                    .rotated_by(Quat::from_rotation_x(side * 0.35) * Quat::from_rotation_z(0.45));
-                parts.push(spike.translated_by(Vec3::new(-0.02, 1.47, side * 0.24)));
-            }
-            // Vertebrae down the spine, each with a spur.
-            for i in 0..5 {
-                let y = 1.45 - 0.11 * i as f32;
-                parts.push(tinted(ball(0.035).translated_by(Vec3::new(-0.17, y, 0.0)), palette::BONE));
-                let spur = cone(0.022, 0.09, 6).rotated_by(Quat::from_rotation_z(1.2)).translated_by(Vec3::new(-0.22, y + 0.02, 0.0));
-                parts.push(tinted(spur, palette::BONE));
-            }
-            sculpted(parts)
-        }
-        // Duelist: a spectral revenant in a cold near-black robe fraying into tatters below the
-        // knee, a tattered cape and ash pauldrons. Head, arms, legs and sword are separate,
-        // animated parts (`fighter_rig`).
-        "revenant" => {
-            let mut parts = vec![
-                taper(0.2, 0.29, 0.5, 18, Vec3::Y * 1.12, palette::ROBE).scaled_by(Vec3::new(0.66, 1.0, 1.0)),
-                taper(0.36, 0.22, 0.5, 20, Vec3::Y * 0.62, palette::ROBE),
-                taper(0.23, 0.23, 0.06, 20, Vec3::Y * 0.88, palette::ASH).scaled_by(Vec3::new(0.7, 1.0, 1.0)),
-            ];
-            for side in [1.0, -1.0] {
-                let pauldron = ball(0.14).scaled_by(Vec3::new(1.0, 0.7, 1.0));
-                parts.push(tinted(pauldron.translated_by(Vec3::new(0.0, 1.4, side * 0.25)), palette::ASH));
-            }
-            for i in 0..10 {
-                let around = Quat::from_rotation_y(i as f32 * std::f32::consts::TAU / 10.0 + 0.2);
-                let shard = hanging_cone(0.065, 0.18 + 0.07 * (i % 3) as f32, 8);
-                parts.push(tinted(shard.translated_by(Vec3::new(0.33, 0.34, 0.0)).rotated_by(around), palette::TATTERS));
-            }
-            sculpted(parts)
-        }
+        // plates, vertebrae down the spine. Head, arms, legs and spear are separate, animated
+        // parts (`fighter_rig`).
+        "javelinist" => javelinist_body(),
+        // Duelist: a spectral revenant: one long, cold near-black robe from the collar to a hem
+        // fraying into tatters below the knee, belted in ash with a steel buckle, under heavy ash
+        // pauldrons. Hood, arms, legs, cape and sword are separate, animated parts
+        // (`fighter_rig`), built to overlap the robe so no joint shows.
+        "revenant" => revenant_body(),
         // Controller: a frost mage in a long, deep navy robe flaring to the ground, rimed at
         // the hem, with a blue sash, front panel and band above the hem, and a heavy rime mantle
         // over the shoulders (the ice shards growing out of it glow: `frost_mage_glow`). Head (an
         // ice-crowned hood), arms, legs, cape and staff are separate, animated parts
         // (`fighter_rig`).
-        "frost_mage" => {
-            let parts = vec![
-                taper(0.19, 0.27, 0.5, 18, Vec3::Y * 1.12, palette::FROST_ROBE).scaled_by(Vec3::new(0.66, 1.0, 1.0)),
-                taper(0.42, 0.21, 0.84, 22, Vec3::Y * 0.44, palette::FROST_ROBE).scaled_by(Vec3::new(0.85, 1.0, 1.0)),
-                // The front panel, down the slope of the robe.
-                rod(Vec3::new(0.35, 0.06, 0.0), Vec3::new(0.18, 0.86, 0.0), 0.032, palette::FROST_BLUE),
-                taper(0.43, 0.42, 0.05, 22, Vec3::Y * 0.03, palette::RIME).scaled_by(Vec3::new(0.85, 1.0, 1.0)),
-                taper(0.415, 0.405, 0.05, 22, Vec3::Y * 0.08, palette::FROST_BLUE).scaled_by(Vec3::new(0.85, 1.0, 1.0)),
-                taper(0.22, 0.22, 0.07, 20, Vec3::Y * 0.88, palette::FROST_BLUE).scaled_by(Vec3::new(0.7, 1.0, 1.0)),
-                tinted(ball(0.3).scaled_by(Vec3::new(0.7, 0.3, 1.1)).translated_by(Vec3::Y * 1.38), palette::RIME),
-            ];
-            sculpted(parts)
-        }
+        "frost_mage" => frost_mage_body(),
         _ => unreachable!("no figure for class {class_key:?} (add it to FIGHTER_LOOKS)"),
     }
 }
@@ -1365,7 +1656,7 @@ fn build_arena(
     for (i, &p) in m.torches.iter().enumerate() {
         let base = wall_tops.get(&Map::tile_of(p)).copied().unwrap_or(0.0);
         let post_height = if base > 0.0 { 0.5 } else { 1.5 };
-        props.add(Shape::Post, BARK, Transform::from_translation(to_world(p, base + post_height / 2.0)).with_scale(Vec3::new(1.0, post_height, 1.0)));
+        props.block(Vec3::new(0.14, post_height, 0.14), BARK, Transform::from_translation(to_world(p, base + post_height / 2.0)));
         commands
             .spawn((
                 Torch { phase: i as f32 * 1.7 },
@@ -1384,9 +1675,7 @@ enum Shape {
     Rock,
     Trunk,
     Cone(usize),
-    Block,
     Flower,
-    Post,
 }
 
 /// Builds every static prop into one vertex-colored mesh.
@@ -1394,9 +1683,7 @@ struct Props {
     rock: Mesh,
     trunk: Mesh,
     cones: [Mesh; 3],
-    block: Mesh,
     flower: Mesh,
-    post: Mesh,
     out: Option<Mesh>,
 }
 
@@ -1406,9 +1693,7 @@ impl Props {
             rock: faceted(Sphere::new(0.6).mesh().ico(0).unwrap()),
             trunk: faceted(Cylinder::new(0.22, 1.2).mesh().resolution(5).build()),
             cones: [0, 1, 2].map(|k| faceted(Cone::new(1.5 - k as f32 * 0.35, 1.7).mesh().resolution(7).build())),
-            block: faceted(Cuboid::new(1.0, 1.0, 1.0).mesh().build()),
             flower: gem_mesh(0.14),
-            post: faceted(Cylinder::new(0.08, 1.0).mesh().resolution(5).build()),
             out: None,
         }
     }
@@ -1418,11 +1703,19 @@ impl Props {
             Shape::Rock => &self.rock,
             Shape::Trunk => &self.trunk,
             Shape::Cone(k) => &self.cones[k],
-            Shape::Block => &self.block,
             Shape::Flower => &self.flower,
-            Shape::Post => &self.post,
         };
-        let mut mesh = base.clone().transformed_by(t);
+        self.push(base.clone().transformed_by(t), color);
+    }
+
+    /// A cut block (stone, timber) of `size`, placed by `t` (rotation and translation only), its
+    /// edges bevelled so they catch the light.
+    fn block(&mut self, size: Vec3, color: Color, t: Transform) {
+        let bevel = (size.min_element() * 0.12).clamp(0.02, 0.07);
+        self.push(bevel_box(size, bevel).transformed_by(t), color);
+    }
+
+    fn push(&mut self, mut mesh: Mesh, color: Color) {
         let c = color.to_linear();
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[c.red, c.green, c.blue, 1.0]; mesh.count_vertices()]);
         match &mut self.out {
@@ -1446,12 +1739,13 @@ impl Props {
             let c = Map::center(t);
             let h = rng.range(0.9, 1.7);
             let color = WALL.mix(&STONE, rng.range(0.0, 0.25));
-            self.add(Shape::Block, color, Transform::from_translation(to_world(c, h / 2.0)).with_scale(Vec3::new(1.0, h, 1.0)));
+            self.block(Vec3::new(1.0, h, 1.0), color, Transform::from_translation(to_world(c, h / 2.0)));
             let mut top = h;
             if rng.next() < 0.45 {
                 let s = rng.range(0.45, 0.7);
                 let off = Vec2::new(rng.range(-0.2, 0.2), rng.range(-0.2, 0.2));
-                self.add(Shape::Block, color, Transform::from_translation(to_world(c + off, h + s / 2.0)).with_scale(Vec3::splat(s)));
+                let turn = Quat::from_rotation_y(rng.range(-0.3, 0.3));
+                self.block(Vec3::splat(s), color, Transform::from_translation(to_world(c + off, h + s / 2.0)).with_rotation(turn));
                 top += s;
             }
             tops.insert(t, top);
@@ -1472,22 +1766,21 @@ impl Props {
         let tiles: Vec<Vec2> = map().tiles().filter(|(_, t)| *t == Tile::Bridge).map(|(t, _)| Map::center(t)).collect();
         for &c in &tiles {
             let color = if rng.next() < 0.5 { STONE } else { SLATE };
-            self.add(Shape::Block, color, Transform::from_translation(to_world(c, -0.18)).with_scale(Vec3::new(0.97, 0.36, 0.97)));
+            self.block(Vec3::new(0.97, 0.36, 0.97), color, Transform::from_translation(to_world(c, -0.18)));
         }
         let span = tiles.iter().map(|c| Rect::from_center_size(*c, Vec2::ONE)).reduce(|a, b| a.union(b)).expect("the map has a bridge");
         let mid = span.center();
         for y in [span.min.y - 0.18, span.max.y + 0.18] {
             // Parapet, with a cap stone on each end.
-            let parapet = Transform::from_translation(to_world(Vec2::new(mid.x, y), 0.25)).with_scale(Vec3::new(span.width() + 0.8, 0.7, 0.36));
-            self.add(Shape::Block, WALL.mix(&STONE, 0.12), parapet);
+            let parapet = Transform::from_translation(to_world(Vec2::new(mid.x, y), 0.25));
+            self.block(Vec3::new(span.width() + 0.8, 0.7, 0.36), WALL.mix(&STONE, 0.12), parapet);
             for x in [span.min.x - 0.3, span.max.x + 0.3] {
-                self.add(Shape::Block, WALL.mix(&STONE, 0.24), Transform::from_translation(to_world(Vec2::new(x, y), 0.45)).with_scale(Vec3::new(0.5, 1.1, 0.5)));
+                self.block(Vec3::new(0.5, 1.1, 0.5), WALL.mix(&STONE, 0.24), Transform::from_translation(to_world(Vec2::new(x, y), 0.45)));
             }
         }
         for x in [mid.x - 1.2, mid.x + 1.2] {
-            let pier = Transform::from_translation(to_world(Vec2::new(x, mid.y), (RIVERBED_LEVEL - 0.36) / 2.0))
-                .with_scale(Vec3::new(0.8, -RIVERBED_LEVEL, span.height()));
-            self.add(Shape::Block, WALL, pier);
+            let pier = Transform::from_translation(to_world(Vec2::new(x, mid.y), (RIVERBED_LEVEL - 0.36) / 2.0));
+            self.block(Vec3::new(0.8, -RIVERBED_LEVEL, span.height()), WALL, pier);
         }
     }
 
