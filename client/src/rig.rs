@@ -163,7 +163,7 @@ const REVENANT: Moves = Moves {
     head_dip: [0.0, 0.15, -0.25, 0.0],
     held: Held::InHand(0.45),
     throws: false,
-    scale: 1.04,
+    scale: 1.13,
 };
 
 const FROST_MAGE: Moves = Moves {
@@ -381,7 +381,7 @@ fn add_rigs(
             commands.entity(player).add_child(tail);
         }
         if let Some(wardrobe) = &handles.wardrobe {
-            crate::cloth::dress(&mut commands, player, rig.legs, own, wardrobe);
+            crate::cloth::dress(&mut commands, player, rig.legs, rig.head, own, wardrobe);
         }
         commands.entity(player).insert((
             rig,

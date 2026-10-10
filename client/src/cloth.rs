@@ -31,14 +31,17 @@ impl Plugin for ClothPlugin {
     }
 }
 
-/// A piece of cloth, in the fighter's space at rest (feet at the origin, facing +X), with its
-/// glowing trim (if any), skinned to `chains`.
+/// A piece of cloth, in the fighter's space at rest (feet at the origin, facing +X), or the
+/// head's if it's tied `on_head` (the neck at the origin), with its glowing trim (if any), skinned
+/// to `chains`.
 pub struct Drape {
     pub mesh: Mesh,
     pub glow: Option<Mesh>,
-    /// Lines of points the cloth hangs from, each from its top (pinned to the body) down.
+    /// Lines of points the cloth hangs from, each from its top (pinned to the body, or the head)
+    /// down.
     pub chains: Vec<Vec<Vec3>>,
     pub weave: Weave,
+    pub on_head: bool,
 }
 
 /// How a drape moves.
@@ -94,7 +97,12 @@ impl Drape {
             skin(&mut glow, &chains, weave.joined);
             glow
         });
-        Drape { mesh, glow, chains, weave }
+        Drape { mesh, glow, chains, weave, on_head: false }
+    }
+
+    /// Tied to the head (and given in its space), so it turns and leans with it.
+    pub fn on_head(self) -> Self {
+        Drape { on_head: true, ..self }
     }
 }
 
@@ -167,6 +175,7 @@ struct DrapeAssets {
     bindposes: Handle<SkinnedMeshInverseBindposes>,
     chains: Vec<Vec<Vec3>>,
     weave: Weave,
+    on_head: bool,
 }
 
 impl WardrobeAssets {
@@ -189,6 +198,7 @@ impl WardrobeAssets {
                     bindposes: bindposes.add(SkinnedMeshInverseBindposes::from(poses)),
                     chains: drape.chains,
                     weave: drape.weave,
+                    on_head: drape.on_head,
                 }
             })
             .collect();
@@ -211,10 +221,11 @@ pub(crate) struct Cloth {
     hangings: Vec<Hanging>,
     body: Vec<Column>,
     leg_radius: f32,
-    /// The (right, left) legs, posed by `rig.rs`.
+    /// The (right, left) legs and the head, posed by `rig.rs`.
     legs: [Entity; 2],
-    /// Where the body was last frame (none before the first).
-    was: Option<Transform>,
+    head: Entity,
+    /// Where the body and the head were in the world last frame (none before the first).
+    was: Option<(Transform, Transform)>,
     mote: Handle<StandardMaterial>,
     /// Motes owed but not yet given off, and a counter for picking where.
     owed: f32,
@@ -222,6 +233,8 @@ pub(crate) struct Cloth {
 }
 
 struct Hanging {
+    /// Tied to the head rather than the body (`rest` in its space).
+    on_head: bool,
     rest: Vec<Vec<Vec3>>,
     weave: Weave,
     joints: Vec<Vec<Entity>>,
@@ -232,7 +245,14 @@ struct Hanging {
 }
 
 /// Hangs a class's cloth on `fighter`, in its own `material` (so it flashes and chills with it).
-pub(crate) fn dress(commands: &mut Commands, fighter: Entity, legs: [Entity; 2], material: &Handle<StandardMaterial>, wardrobe: &WardrobeAssets) {
+pub(crate) fn dress(
+    commands: &mut Commands,
+    fighter: Entity,
+    legs: [Entity; 2],
+    head: Entity,
+    material: &Handle<StandardMaterial>,
+    wardrobe: &WardrobeAssets,
+) {
     let mut hangings = Vec::new();
     for drape in &wardrobe.drapes {
         let mut joints = vec![commands.spawn(Transform::IDENTITY).id()];
@@ -242,7 +262,7 @@ pub(crate) fn dress(commands: &mut Commands, fighter: Entity, legs: [Entity; 2],
             .map(|chain| chain.iter().map(|p| commands.spawn(Transform::from_translation(*p)).id()).collect())
             .collect();
         joints.extend(chain_joints.iter().flatten());
-        commands.entity(fighter).add_children(&joints);
+        commands.entity(if drape.on_head { head } else { fighter }).add_children(&joints);
         let skinned = SkinnedMesh { inverse_bindposes: drape.bindposes.clone(), joints };
         let cloth = commands.spawn((Mesh3d(drape.mesh.clone()), MeshMaterial3d(material.clone()), skinned.clone(), NoFrustumCulling)).id();
         commands.entity(fighter).add_child(cloth);
@@ -251,6 +271,7 @@ pub(crate) fn dress(commands: &mut Commands, fighter: Entity, legs: [Entity; 2],
             commands.entity(fighter).add_child(trim);
         }
         hangings.push(Hanging {
+            on_head: drape.on_head,
             rest: drape.chains.clone(),
             weave: drape.weave,
             joints: chain_joints,
@@ -264,6 +285,7 @@ pub(crate) fn dress(commands: &mut Commands, fighter: Entity, legs: [Entity; 2],
         body: wardrobe.body.clone(),
         leg_radius: wardrobe.leg_radius,
         legs,
+        head,
         was: None,
         mote: wardrobe.mote.clone(),
         owed: 0.0,
@@ -301,11 +323,23 @@ struct Leg {
 }
 
 impl Hanging {
-    /// One step of `dt` with the body at `body` (`inverse` its inverse), having made `motion`
-    /// since the step before, at `time`.
-    fn step(&mut self, body: &Affine3A, inverse: &Affine3A, motion: Motion, dt: f32, time: f32, legs: &[Leg; 2], columns: &[Column], leg_radius: f32) {
+    /// One step of `dt` at `time`, with what it hangs from at `anchor` having made `motion`
+    /// since the step before, and the body at `body` (`inverse` its inverse).
+    #[allow(clippy::too_many_arguments)]
+    fn step(
+        &mut self,
+        anchor: &Affine3A,
+        motion: Motion,
+        body: &Affine3A,
+        inverse: &Affine3A,
+        dt: f32,
+        time: f32,
+        legs: &[Leg; 2],
+        columns: &[Column],
+        leg_radius: f32,
+    ) {
         let w = self.weave;
-        let rest: Vec<Vec<Vec3>> = self.rest.iter().map(|chain| chain.iter().map(|p| body.transform_point3(*p)).collect()).collect();
+        let rest: Vec<Vec<Vec3>> = self.rest.iter().map(|chain| chain.iter().map(|p| anchor.transform_point3(*p)).collect()).collect();
         if self.at.is_empty() {
             self.at = rest.clone();
             self.last = rest.clone();
@@ -433,9 +467,10 @@ fn drape(
     let elapsed = time.elapsed_secs();
     for (mut cloth, &now, visible) in &mut fighters {
         let cloth = &mut *cloth;
-        let mut was = cloth.was.unwrap_or(now);
+        let head_now = now * parts.get(cloth.head).copied().unwrap_or_default();
+        let (mut was, mut head_was) = cloth.was.unwrap_or((now, head_now));
         if was.translation.distance(now.translation) > JUMP {
-            was = now;
+            (was, head_was) = (now, head_now);
             for hanging in &mut cloth.hangings {
                 hanging.at.clear();
             }
@@ -447,27 +482,38 @@ fn drape(
         });
         let steps = (dt * STEPS_PER_SECOND).ceil().clamp(1.0, 8.0);
         let h = dt / steps;
-        let mut rotation = was.rotation;
-        for s in 1..=steps as u32 {
-            let f = s as f32 / steps;
-            let body = Transform {
+        // Where something moving from `was` to `now` is `s` steps along, and how it moved in
+        // that step.
+        let between = |was: Transform, now: Transform, s: u32| {
+            let at = |f: f32| Transform {
                 translation: was.translation.lerp(now.translation, f),
                 rotation: was.rotation.slerp(now.rotation, f),
                 scale: was.scale.lerp(now.scale, f),
             };
-            let motion = Motion { shift: (now.translation - was.translation) / steps, turn: body.rotation * rotation.inverse(), pivot: body.translation };
-            rotation = body.rotation;
-            let body = body.compute_affine();
+            let (before, after) = (at((s - 1) as f32 / steps), at(s as f32 / steps));
+            let motion = Motion {
+                shift: after.translation - before.translation,
+                turn: after.rotation * before.rotation.inverse(),
+                pivot: after.translation,
+            };
+            (after.compute_affine(), motion)
+        };
+        for s in 1..=steps as u32 {
+            let (body, body_motion) = between(was, now, s);
+            let (head, head_motion) = between(head_was, head_now, s);
             let inverse = body.inverse();
             let time = elapsed - dt + h * s as f32;
             for hanging in &mut cloth.hangings {
-                hanging.step(&body, &inverse, motion, h, time, &legs, &cloth.body, cloth.leg_radius);
+                let (anchor, motion) = if hanging.on_head { (&head, head_motion) } else { (&body, body_motion) };
+                hanging.step(anchor, motion, &body, &inverse, h, time, &legs, &cloth.body, cloth.leg_radius);
             }
         }
 
-        // Each joint where its point is, turned as its stretch of chain has turned from rest.
-        let inverse = now.compute_affine().inverse();
+        // Each joint where its point is (in the space of what it hangs from), turned as its
+        // stretch of chain has turned from rest.
+        let (body_inverse, head_inverse) = (now.compute_affine().inverse(), head_now.compute_affine().inverse());
         for hanging in &cloth.hangings {
+            let inverse = if hanging.on_head { head_inverse } else { body_inverse };
             for (c, chain) in hanging.rest.iter().enumerate() {
                 let n = chain.len();
                 for k in 0..n {
@@ -484,7 +530,7 @@ fn drape(
 
         // Motes rising off the ends, more as it moves.
         let speed = was.translation.distance(now.translation) / dt;
-        cloth.was = Some(now);
+        cloth.was = Some((now, head_now));
         if !visible.get() {
             continue;
         }
@@ -565,7 +611,15 @@ mod tests {
         let mut hangings: Vec<Hanging> = wardrobe
             .drapes
             .iter()
-            .map(|d| Hanging { rest: d.chains.clone(), weave: d.weave, joints: Vec::new(), at: Vec::new(), last: Vec::new(), rest_was: Vec::new() })
+            .map(|d| Hanging {
+                on_head: d.on_head,
+                rest: d.chains.clone(),
+                weave: d.weave,
+                joints: Vec::new(),
+                at: Vec::new(),
+                last: Vec::new(),
+                rest_was: Vec::new(),
+            })
             .collect();
         let legs = [RIG_HIP, RIG_HIP * Vec3::new(1.0, 1.0, -1.0)].map(|hip| Leg { hip, sole: hip + Vec3::NEG_Y * LEG_LENGTH });
         let dt = 1.0 / STEPS_PER_SECOND;
@@ -581,13 +635,16 @@ mod tests {
                 time += dt;
                 let m = body.compute_affine();
                 let inverse = m.inverse();
+                let head = (body * Transform::from_translation(arena::RIG_NECK)).compute_affine();
                 let motion = Motion { shift: velocity * dt, turn: Quat::from_rotation_y(turn * dt), pivot: body.translation };
                 for h in &mut hangings {
-                    h.step(&m, &inverse, motion, dt, time, &legs, &wardrobe.body, wardrobe.leg_radius);
+                    let (anchor, pivot) = if h.on_head { (head, head.translation.into()) } else { (m, body.translation) };
+                    h.step(&anchor, Motion { pivot, ..motion }, &m, &inverse, dt, time, &legs, &wardrobe.body, wardrobe.leg_radius);
+                    let anchor_inverse = anchor.inverse();
                     for (c, chain) in h.rest.iter().enumerate() {
                         for (k, rest) in chain.iter().enumerate().skip(1) {
+                            worst = worst.max(anchor_inverse.transform_point3(h.at[c][k]).distance(*rest));
                             let local = inverse.transform_point3(h.at[c][k]);
-                            worst = worst.max(local.distance(*rest));
                             let inside = wardrobe.body.iter().any(|col| {
                                 (col.from..=col.to).contains(&local.y) && ((Vec2::new(local.x, local.z) - col.center) / col.half).length() < 0.98
                             });
@@ -599,10 +656,12 @@ mod tests {
             worst
         };
         assert!(run(2.0, Vec3::ZERO, 0.0) < 0.15, "{class}: hangs still");
-        assert!(run(2.0, Vec3::X * 5.0, 0.0) < 0.25, "{class}: trails a little walking");
+        let walking = run(2.0, Vec3::X * 5.0, 0.0);
+        assert!(walking < 0.25, "{class}: trails a little walking ({walking:.2} m)");
         // About as fast as fighters turn round (`rig::TURN_RATE`), coming to a dead stop.
         assert!(run(0.12, Vec3::X * 5.0, 25.0) < 0.35, "{class}: swings out turning");
-        assert!(run(1.0, Vec3::ZERO, 0.0) < 0.4, "{class}: settles");
+        let settling = run(1.0, Vec3::ZERO, 0.0);
+        assert!(settling < 0.4, "{class}: settles ({settling:.2} m)");
         assert!(run(0.5, Vec3::ZERO, 0.0) < 0.15, "{class}: settled");
     }
 }
