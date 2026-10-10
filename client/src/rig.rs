@@ -477,13 +477,14 @@ fn pose_rigs(
         // Every angle chases its pose on a spring.
         let spring = |joint: &mut Spring, target: f32| joint.follow(target, dt, JOINT_STIFFNESS, JOINT_DAMPING);
         let joints = &mut rig.joints;
-        let twist = spring(&mut joints.twist, pose(moves.twist));
-        let lean = spring(&mut joints.lean, pose(moves.lean));
+        let (twist_to, lean_to, weapon_arm_to) = (pose(moves.twist), pose(moves.lean), pose(moves.weapon_arm));
+        let twist = spring(&mut joints.twist, twist_to);
+        let lean = spring(&mut joints.lean, lean_to);
         let legs = [
             spring(&mut joints.back_leg, pose(moves.back_leg) - step * LEG_SWING * (1.0 - braced)),
             spring(&mut joints.lead_leg, pose(moves.lead_leg) + step * LEG_SWING * (1.0 - braced)),
         ];
-        let weapon_arm = spring(&mut joints.weapon_arm, pose(moves.weapon_arm) - step * ARM_SWING * 0.3);
+        let weapon_arm = spring(&mut joints.weapon_arm, weapon_arm_to - step * ARM_SWING * 0.3);
         let lead_arm = spring(&mut joints.lead_arm, pose(moves.lead_arm) + step * ARM_SWING);
         let head_dip = spring(&mut joints.head_dip, pose(moves.head_dip));
 
@@ -492,10 +493,14 @@ fn pose_rigs(
         // walks.
         let walk = rig.walking * (1.0 - braced);
         let sway = phase.sin() * SWAY * walk;
-        let lean = Quat::from_rotation_y(twist) * Quat::from_rotation_z(lean) * Quat::from_rotation_x(sway);
+        let leaning = |twist: f32, lean: f32, sway: f32| {
+            Quat::from_rotation_y(twist) * Quat::from_rotation_z(lean) * Quat::from_rotation_x(sway)
+        };
+        let facing_turn = Quat::from_rotation_y(facing.look.to_angle());
+        let lean = leaning(twist, lean, sway);
         let spread = legs[0].abs().max(legs[1].abs());
         let mut posed = *body;
-        posed.rotation = Quat::from_rotation_y(facing.look.to_angle()) * lean;
+        posed.rotation = facing_turn * lean;
         posed.scale = Vec3::splat(moves.scale);
         posed.translation.y = (-RIG_HIP.y * (1.0 - spread.cos()) + (2.0 * phase).cos().abs() * BOB * walk) * moves.scale;
         body.set_if_neq(posed);
@@ -524,16 +529,18 @@ fn pose_rigs(
             (rig.legs[1], Quat::from_rotation_z(legs[1])),
             (rig.held, held),
         ];
-        // The held weapon's world pose in the pose the joints are heading for (see `HeldAt`),
-        // rebuilt from the joints it hangs from (it's a child of the weapon arm at the hand, see
-        // `add_rigs`): child transforms aren't propagated until after this frame's shots are
-        // placed.
-        let aimed_lean = Quat::from_rotation_y(pose(moves.twist)) * Quat::from_rotation_z(pose(moves.lean));
-        let aimed_arm = Quat::from_rotation_z(pose(moves.weapon_arm));
-        let aimed_body = Transform { rotation: Quat::from_rotation_y(facing.look.to_angle()) * aimed_lean, ..posed };
-        let hand = Transform::from_translation(RIG_SHOULDER).with_rotation(aimed_arm)
-            * Transform::from_translation(RIG_HAND).with_rotation(held_in(aimed_arm, aimed_lean.inverse()));
-        held_at.set_if_neq(HeldAt(aimed_body * hand));
+        // For a fighter that throws its weapon: the held weapon's world pose in the pose the joints
+        // are heading for (see `HeldAt`), rebuilt from the joints it hangs from (it's a child of
+        // the weapon arm at the hand, see `add_rigs`): child transforms aren't propagated until
+        // after this frame's shots are placed.
+        if moves.throws {
+            let aimed_lean = leaning(twist_to, lean_to, 0.0);
+            let aimed_arm = Quat::from_rotation_z(weapon_arm_to);
+            let aimed_body = Transform { rotation: facing_turn * aimed_lean, ..posed };
+            let hand = Transform::from_translation(RIG_SHOULDER).with_rotation(aimed_arm)
+                * Transform::from_translation(RIG_HAND).with_rotation(held_in(aimed_arm, aimed_lean.inverse()));
+            held_at.set_if_neq(HeldAt(aimed_body * hand));
+        }
         for (part, rotation) in rotations.into_iter().chain(tail) {
             if let Ok((mut transform, mut visibility)) = parts.get_mut(part) {
                 if transform.rotation != rotation {
