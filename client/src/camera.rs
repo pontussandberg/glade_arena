@@ -1,12 +1,11 @@
 //! Two cameras, toggled with V:
 //!
-//! - MOBA-style (the default): free (pan by pushing the mouse against a screen edge or with the
-//!   arrow keys, zoom with the wheel), held on your fighter while Space is down.
+//! - MOBA-style (the default): locked on your fighter, looking down from above; the wheel zooms
+//!   (in a narrow range, so you never see much farther than the fight around you).
 //! - Free (WoW-style): follows behind your fighter; hold the right mouse button and drag to turn
 //!   it, wheel to zoom. WASD walks relative to it (`render::read_local_input`); a right click
 //!   without dragging still walks to where you clicked.
 
-use arena_shared::map::MAP_HALF_EXTENTS;
 use arena_shared::protocol::{PlayerId, Pos};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
@@ -17,12 +16,8 @@ use crate::glade;
 
 /// Camera direction and distance at zoom 1.0: 30 m up, 16 m back from the point it looks at.
 const OFFSET: Vec3 = Vec3::new(0.0, 30.0, 16.0);
-const ZOOM_RANGE: (f32, f32) = (0.55, 1.25);
-/// How close (in pixels) the cursor must be to a window edge to pan.
-const EDGE_PX: f32 = 24.0;
-const PAN_SPEED: f32 = 32.0;
-/// How far inside the map edge the camera's focus must stay (the edge is deep forest).
-const EDGE_INSET: f32 = 4.0;
+/// How far in and out the MOBA camera zooms.
+const ZOOM_RANGE: (f32, f32) = (0.3, 0.91);
 
 /// The free camera: how far it stays (meters), the height it looks at on your fighter, the
 /// pitch it can turn between (radians above the horizon), how fast dragging turns it (radians
@@ -38,8 +33,6 @@ struct CameraRig {
     /// Point on the floor the camera looks at.
     focus: Vec3,
     zoom: f32,
-    /// Jump to our fighter once when it first appears.
-    centered_once: bool,
 }
 
 /// A camera circling a point it looks at: turned around it (yaw), tilted up over it (pitch,
@@ -168,26 +161,19 @@ pub(crate) fn wheel_notches(scroll: &AccumulatedMouseScroll) -> f32 {
 fn spawn_camera(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
-        Transform::from_translation(OFFSET).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_translation(OFFSET * ZOOM_RANGE.1).looking_at(Vec3::ZERO, Vec3::Y),
         glade::haze(),
-        CameraRig { focus: Vec3::ZERO, zoom: 1.0, centered_once: false },
+        CameraRig { focus: Vec3::ZERO, zoom: ZOOM_RANGE.1 },
     ));
 }
 
-/// V switches between the MOBA and the free camera. Back in the MOBA camera, it centers on your
-/// fighter again.
-fn toggle_camera(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut mode: ResMut<CameraMode>,
-    mut rig: Single<&mut CameraRig>,
-    mut cursor: Single<&mut CursorOptions>,
-) {
+/// V switches between the MOBA and the free camera.
+fn toggle_camera(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<CameraMode>, mut cursor: Single<&mut CursorOptions>) {
     if !keys.just_pressed(KeyCode::KeyV) {
         return;
     }
     mode.free = !mode.free;
     mode.dragged = 0.0;
-    rig.centered_once = false;
     release_cursor(&mut cursor);
 }
 
@@ -239,39 +225,16 @@ fn follow_camera(
     camera.set_if_neq(mode.orbit.transform(me.translation.with_y(FREE_AIM_HEIGHT)));
 }
 
+/// The MOBA camera: on your fighter (or the middle of the map until it appears), zoomed by the
+/// wheel.
 fn move_camera(
-    time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
     scroll: Res<AccumulatedMouseScroll>,
-    window: Option<Single<&Window>>,
     me: Query<&Pos, (With<Predicted>, With<PlayerId>)>,
     camera: Single<(&mut Transform, &mut CameraRig)>,
 ) {
     let (mut transform, mut rig) = camera.into_inner();
-    let me = me.single().ok().map(|p| glade::to_world(p.0, 0.0));
-
-    if let Some(me) = me
-        && (keys.pressed(KeyCode::Space) || !rig.centered_once)
-    {
-        rig.focus = me;
-        rig.centered_once = true;
-    } else {
-        // Screen directions: right is +x, up is -z.
-        let mut pan = Vec2::new(
-            key_axis(&keys, KeyCode::ArrowRight, KeyCode::ArrowLeft),
-            key_axis(&keys, KeyCode::ArrowDown, KeyCode::ArrowUp),
-        );
-        if let Some(window) = window.as_deref().filter(|w| w.focused)
-            && let Some(cursor) = window.cursor_position()
-        {
-            let size = window.size();
-            pan.x += (cursor.x >= size.x - EDGE_PX) as i8 as f32 - (cursor.x <= EDGE_PX) as i8 as f32;
-            pan.y += (cursor.y >= size.y - EDGE_PX) as i8 as f32 - (cursor.y <= EDGE_PX) as i8 as f32;
-        }
-        let step = pan.clamp_length_max(1.0) * PAN_SPEED * rig.zoom * time.delta_secs();
-        let limit = MAP_HALF_EXTENTS - Vec2::splat(EDGE_INSET);
-        rig.focus.x = (rig.focus.x + step.x).clamp(-limit.x, limit.x);
-        rig.focus.z = (rig.focus.z + step.y).clamp(-limit.y, limit.y);
+    if let Ok(me) = me.single() {
+        rig.focus = glade::to_world(me.0, 0.0);
     }
 
     let notches = wheel_notches(&scroll);
