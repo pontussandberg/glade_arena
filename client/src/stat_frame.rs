@@ -1,4 +1,5 @@
-//! A fighter's stat frame: health, move speed, crit chance and auto-attack range, in one panel.
+//! A fighter's stat frame: health, move speed, crit chance (hover it for what a crit does), and
+//! the auto-attack's damage, speed and range, in one panel.
 //! The lobby shows it for the selected fighter; in the arena it sits in the bottom-left corner
 //! for your own, its health live.
 //!
@@ -6,10 +7,12 @@
 //! as tooltips.
 
 use arena_shared::classes::{AttackKind, ClassDef, seconds};
+use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
+use crate::action_bar::{Tooltip, tip_panel};
 use crate::glade::palette;
 use crate::render::{GameUi, set_fill, ui_text};
 
@@ -100,29 +103,76 @@ pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, named: boo
                                 .id();
                         });
                 });
-            for (label, value) in stats(def) {
-                frame.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
-                    row.spawn(ui_text(label, 11.0, palette::STONE));
-                    row.spawn(ui_text(value, 11.0, palette::HAZE));
-                });
+            for (label, value, tip) in stats(def) {
+                let name = frame
+                    .spawn(Node { column_gap: px(5.0), align_items: AlignItems::Center, ..default() })
+                    .with_child(ui_text(label, 11.0, palette::STONE))
+                    .id();
+                let mut row = frame.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() });
+                row.add_child(name).with_child(ui_text(value, 11.0, palette::HAZE));
+                if let Some(text) = tip {
+                    let tip = row.commands().spawn(tooltip(text)).id();
+                    row.commands().entity(name).with_child(info_badge());
+                    row.add_child(tip).insert((Interaction::default(), Tooltip(tip)));
+                }
             }
         })
         .id();
     parts
 }
 
-/// The frame's rows under health: what players compare.
-fn stats(def: &ClassDef) -> [(&'static str, String); 3] {
-    let crit = &def.crit;
-    let mut crit_text = format!("{:.0}%", crit.chance * 100.0);
-    if crit.vs_frozen > crit.chance {
-        crit_text += &format!(" ({:.0}% vs frozen)", crit.vs_frozen * 100.0);
-    }
-    let range = match def.attack.kind {
+/// A small circled "i" after a stat's label: hover the row for more.
+fn info_badge() -> impl Bundle {
+    (
+        Node {
+            width: px(12.0),
+            height: px(12.0),
+            border: UiRect::all(px(1.0)),
+            border_radius: BorderRadius::MAX,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BorderColor::all(palette::STONE.with_alpha(0.7)),
+        children![ui_text("i", 9.0, palette::STONE)],
+    )
+}
+
+/// A stat's tooltip, above its row, hidden until the row is hovered.
+fn tooltip(text: String) -> impl Bundle {
+    (
+        tip_panel(Node {
+            position_type: PositionType::Absolute,
+            bottom: percent(100.0),
+            left: px(-4.0),
+            width: px(WIDTH - 16.0),
+            margin: UiRect::bottom(px(4.0)),
+            padding: UiRect::all(px(8.0)),
+            ..default()
+        }),
+        children![ui_text(text, 12.0, palette::HAZE)],
+    )
+}
+
+/// The frame's rows under health, what players compare: a label, a value, and for some what it
+/// means, shown on hover.
+fn stats(def: &ClassDef) -> [(&'static str, String, Option<String>); 5] {
+    // The base odds only: a better chance vs frozen targets is the passive's to tell.
+    let crit_text = def.describe("{crit}");
+    let crit_tip = def.describe("A critical hit deals {crit_multiplier} damage. Only your auto-attacks can crit.");
+    let attack = &def.attack;
+    let per_second = TICK_HZ as f32 / attack.cooldown_ticks as f32;
+    let range = match attack.kind {
         AttackKind::Melee { range, .. } => format!("{range} m, melee"),
         AttackKind::Projectile { range, .. } => format!("{range} m, ranged"),
     };
-    [("MOVE SPEED", format!("{} m/s", def.move_speed)), ("CRIT CHANCE", crit_text), ("ATTACK RANGE", range)]
+    [
+        ("MOVE SPEED", format!("{} m/s", def.move_speed), None),
+        ("CRIT CHANCE", crit_text, Some(crit_tip)),
+        ("ATTACK DAMAGE", attack.damage.to_string(), None),
+        ("ATTACK SPEED", format!("{per_second:.1} hits/s"), None),
+        ("ATTACK RANGE", range, None),
+    ]
 }
 
 /// What a passive or the Q says about itself: its name, its cooldown (the Q's; a passive has

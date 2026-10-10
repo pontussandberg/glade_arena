@@ -36,8 +36,8 @@ pub struct ClassDef {
 /// How much a critical hit multiplies its damage.
 pub const CRIT_MULTIPLIER: f32 = 2.0;
 
-/// The odds that a hit this class deals (auto-attack or Q) is critical, for `CRIT_MULTIPLIER`
-/// times its damage: `chance` normally, `vs_frozen` against a frozen (rooted) target.
+/// The odds that an auto-attack hit this class deals is critical (a Q never is), for
+/// `CRIT_MULTIPLIER` times its damage: `chance` normally, `vs_frozen` against a frozen (rooted) target.
 #[derive(Deserialize, Debug, Clone, Copy, Default, PartialEq)]
 #[serde(default)]
 pub struct Crit {
@@ -54,7 +54,7 @@ impl Crit {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct AttackDef {
-    /// Damage on hit (for projectiles with `far_damage`: point blank).
+    /// Damage on hit (for projectiles with `far_scale`: point blank, the lowest).
     pub damage: i32,
     pub cooldown_ticks: u32,
     /// Ticks from starting an attack to it going off; you stand still meanwhile. At most
@@ -90,14 +90,14 @@ pub enum AttackKind {
     /// Hits everyone in a cone in front of the attacker.
     Melee { range: f32, arc_degrees: f32 },
     /// Flies straight until it hits someone, a blocking tile, or runs out of range. With
-    /// `far_damage`, damage scales linearly from the attack's `damage` (point blank) to it (after
-    /// flying the full range).
+    /// `far_scale`, damage scales linearly from the attack's `damage` (point blank) to `far_scale`
+    /// times it (after flying the full range).
     Projectile {
         speed: f32,
         radius: f32,
         range: f32,
         #[serde(default)]
-        far_damage: Option<i32>,
+        far_scale: Option<f32>,
     },
 }
 
@@ -111,7 +111,7 @@ pub struct AbilityDef {
 }
 
 /// A passive, as players read it. Only words: its effect is in the numbers it describes (e.g.
-/// the attack's `far_damage`, the class's `crit`), which its description names by placeholder
+/// the attack's `far_scale`, the class's `crit`), which its description names by placeholder
 /// (`ClassDef::describe`).
 #[derive(Deserialize, Debug, Clone)]
 pub struct PassiveDef {
@@ -173,21 +173,22 @@ impl ClassDef {
     fn placeholders(&self) -> Vec<(&'static str, String)> {
         let percent = |odds: f32| format!("{:.0}%", odds * 100.0);
         let mut all = vec![
-            ("near_damage", self.attack.damage_at(0.0).to_string()),
-            ("far_damage", self.attack.damage_at(f32::INFINITY).to_string()),
+            ("far_scale", percent(self.attack.far_scale())),
+            ("attack_slow", percent(self.attack.chill.slow)),
+            ("attack_slow_time", seconds(self.attack.chill.slow_ticks)),
             ("crit", percent(self.crit.chance)),
             ("crit_vs_frozen", percent(self.crit.vs_frozen)),
-            ("crit_multiplier", format!("{CRIT_MULTIPLIER}x")),
+            ("crit_multiplier", percent(CRIT_MULTIPLIER)),
         ];
-        let (damage, reach) = match self.ability.kind {
-            AbilityKind::Projectile { damage, range, .. } => (damage, range),
-            AbilityKind::Dash { damage, distance, .. } => (damage, distance),
-            AbilityKind::Nova { damage, radius, chill } => {
+        let reach = match self.ability.kind {
+            AbilityKind::Projectile { range, .. } => range,
+            AbilityKind::Dash { distance, .. } => distance,
+            AbilityKind::Nova { radius, chill, .. } => {
                 all.push(("ability_root", seconds(chill.root_ticks)));
-                (damage, radius)
+                radius
             }
         };
-        all.extend([("ability_damage", damage.to_string()), ("ability_reach", format!("{reach} m"))]);
+        all.extend([("ability_damage", self.ability.kind.damage().to_string()), ("ability_reach", format!("{reach} m"))]);
         all
     }
 }
@@ -199,6 +200,13 @@ pub fn seconds(ticks: u32) -> String {
 }
 
 impl AbilityKind {
+    /// What it deals to each fighter it hits.
+    pub fn damage(&self) -> i32 {
+        match *self {
+            AbilityKind::Projectile { damage, .. } | AbilityKind::Dash { damage, .. } | AbilityKind::Nova { damage, .. } => damage,
+        }
+    }
+
     /// How a thrown ability flies (`None` for a dash or a nova).
     pub fn shot(&self) -> Option<Shot> {
         let AbilityKind::Projectile { speed, radius, range, .. } = *self else { return None };
@@ -207,11 +215,19 @@ impl AbilityKind {
 }
 
 impl AttackDef {
+    /// Damage after the full range as a multiple of point blank (1 without `far_scale`).
+    pub fn far_scale(&self) -> f32 {
+        match self.kind {
+            AttackKind::Projectile { far_scale: Some(scale), .. } => scale,
+            _ => 1.0,
+        }
+    }
+
     /// Damage of a hit after the attack flew `distance`.
     pub fn damage_at(&self, distance: f32) -> i32 {
-        let AttackKind::Projectile { range, far_damage: Some(far), .. } = self.kind else { return self.damage };
+        let AttackKind::Projectile { range, far_scale: Some(scale), .. } = self.kind else { return self.damage };
         let t = (distance / range).clamp(0.0, 1.0);
-        (self.damage as f32 + (far - self.damage) as f32 * t).round() as i32
+        (self.damage as f32 * (1.0 + (scale - 1.0) * t)).round() as i32
     }
 }
 
@@ -300,13 +316,16 @@ mod tests {
                 AttackKind::Melee { range, arc_degrees } => {
                     assert!((0.5..=4.0).contains(&range) && (10.0..=360.0).contains(&arc_degrees), "{}: melee", c.id);
                 }
-                AttackKind::Projectile { speed, radius, range, far_damage } => {
-                    assert!(far_damage.is_none_or(|far| far > 0), "{}: far_damage", c.id);
+                AttackKind::Projectile { speed, radius, range, far_scale } => {
+                    assert!(far_scale.is_none_or(|scale| (1.0..=5.0).contains(&scale)), "{}: far_scale", c.id);
                     assert!((2.0..=60.0).contains(&speed) && (0.05..=1.0).contains(&radius), "{}: projectile", c.id);
                     assert!((1.0..=30.0).contains(&range), "{}: projectile range", c.id);
                 }
             }
             assert!(c.ability.cooldown_ticks > 0, "{}: ability cooldown", c.id);
+            if c.ability.kind.damage() > 0 {
+                assert!(c.ability.description.contains("{ability_damage}"), "{}: Q description doesn't name its damage", c.id);
+            }
             match c.ability.kind {
                 AbilityKind::Projectile { speed, radius, range, damage } => {
                     assert!(damage > 0 && (2.0..=60.0).contains(&speed) && (0.05..=1.0).contains(&radius), "{}: Q", c.id);
@@ -350,10 +369,10 @@ mod tests {
     }
 
     #[test]
-    fn far_damage_scales_with_distance() {
-        let kind = |far_damage| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_damage };
+    fn far_scale_scales_with_distance() {
+        let kind = |far_scale| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_scale };
         let attack = |kind| AttackDef { damage: 10, cooldown_ticks: 40, windup_ticks: 10, kind, chill: Chill::default() };
-        assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(30))).damage_at(d)), [10, 20, 30, 30]);
+        assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(3.0))).damage_at(d)), [10, 20, 30, 30]);
         assert_eq!(attack(kind(None)).damage_at(5.0), 10);
     }
 
@@ -365,7 +384,7 @@ mod tests {
 
     #[test]
     fn projectile_lifetime_covers_its_range() {
-        let kind = AttackKind::Projectile { speed: 16.0, radius: 0.2, range: 8.0, far_damage: None };
+        let kind = AttackKind::Projectile { speed: 16.0, radius: 0.2, range: 8.0, far_scale: None };
         assert_eq!(kind.shot().unwrap().lifetime_ticks(), 32);
     }
 }

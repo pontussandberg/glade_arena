@@ -35,9 +35,9 @@ const PASSIVE_GAP: f32 = 10.0;
 /// A tooltip's width (pixels).
 const TIP_WIDTH: f32 = 280.0;
 
-/// Hovering this shows that tooltip.
+/// Hovering this (with an `Interaction`) shows that tooltip.
 #[derive(Component)]
-struct Tooltip(Entity);
+pub(crate) struct Tooltip(pub Entity);
 
 /// The Q icon (this entity) and the parts that change: the wipe and the seconds.
 #[derive(Component)]
@@ -164,23 +164,16 @@ fn icon_frame(tip: Entity, size: f32, from_center: f32, border: Color) -> impl B
 /// name, what kind it is, and what it does.
 fn tooltip(commands: &mut Commands, blurb: Blurb, size: f32) -> Entity {
     commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: px(size + 10.0),
-                left: px((size - TIP_WIDTH) / 2.0),
-                width: px(TIP_WIDTH),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(4.0),
-                padding: UiRect::all(px(10.0)),
-                border: UiRect::all(px(1.0)),
-                ..default()
-            },
-            BackgroundColor(palette::INK.with_alpha(0.95)),
-            BorderColor::all(palette::STONE.with_alpha(0.4)),
-            GlobalZIndex(30),
-            Visibility::Hidden,
-        ))
+        .spawn(tip_panel(Node {
+            position_type: PositionType::Absolute,
+            bottom: px(size + 10.0),
+            left: px((size - TIP_WIDTH) / 2.0),
+            width: px(TIP_WIDTH),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(4.0),
+            padding: UiRect::all(px(10.0)),
+            ..default()
+        }))
         .with_children(|tip| {
             tip.spawn(ui_text(blurb.name, 15.0, palette::HAZE));
             let kind = blurb.cooldown.map_or("Passive".to_string(), |cooldown| format!("Q ability, {cooldown}"));
@@ -190,7 +183,19 @@ fn tooltip(commands: &mut Commands, blurb: Blurb, size: f32) -> Entity {
         .id()
 }
 
-/// Shows a tooltip while its icon is hovered.
+/// A tooltip's panel, laid out by `node` (where it sits, its size): dark, thinly bordered, over
+/// everything, hidden until hovered.
+pub(crate) fn tip_panel(node: Node) -> impl Bundle {
+    (
+        Node { border: UiRect::all(px(1.0)), ..node },
+        BackgroundColor(palette::INK.with_alpha(0.95)),
+        BorderColor::all(palette::STONE.with_alpha(0.4)),
+        GlobalZIndex(30),
+        Visibility::Hidden,
+    )
+}
+
+/// Shows a tooltip while its icon (or stat) is hovered.
 fn show_tooltips(icons: Query<(&Interaction, &Tooltip), Changed<Interaction>>, mut tips: Query<&mut Visibility>) {
     for (interaction, tooltip) in &icons {
         if let Ok(mut visibility) = tips.get_mut(tooltip.0) {
