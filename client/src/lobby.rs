@@ -1,7 +1,8 @@
 //! The character select: home (once connected, and back from practice or a lobby) and a room's
 //! lobby. Pick a fighter, see it up close, and go. Laid out like a classic character select:
 //!
-//! - the fighter stands on a stage filling the screen (drag to turn it), our name at its feet
+//! - the fighter stands on a stage filling the screen (drag to turn it)
+//! - who we are at the top, over the fighter but apart from it, so our name isn't taken for its name
 //! - what it is and does on the left: name, role, a line on how it plays, its stat frame (as in
 //!   the arena), its passive and Q ability
 //! - the fighters to pick from in a row of tiles at the bottom (click, or press the number)
@@ -52,7 +53,7 @@ impl Plugin for LobbyPlugin {
             (
                 (pick_fighter, show_fighter, (show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena).chain(),
                 show_status,
-                (turn_stage_camera.in_set(CameraMoves), place_name_tag).chain(),
+                turn_stage_camera.in_set(CameraMoves),
             )
                 .run_if(in_state(Picking)),
         );
@@ -124,13 +125,6 @@ struct RoomButton(RoomRequest);
 #[derive(Component)]
 struct Status;
 
-/// Our name, at the fighter's feet: whose fighter it is.
-#[derive(Component)]
-struct NameTag;
-
-/// How far under the fighter's feet our name is (pixels).
-const NAME_TAG_DROP: f32 = 14.0;
-
 fn open_lobby(
     mut commands: Commands,
     chosen: Res<ChosenClass>,
@@ -143,37 +137,7 @@ fn open_lobby(
     let view = Orbit { yaw: FRONT, pitch: 0.1, distance: STAGE_DISTANCE };
     commands.insert_resource(Lobby { selected, shown: None, view, facing: FRONT });
     spawn_stage(&mut commands, &mut meshes, &mut materials);
-    spawn_screen(&mut commands);
-    spawn_name_tag(&mut commands, me.as_ref().map_or("", |me| &me.name));
-}
-
-/// Our name on a dark plate, centered on a point `place_name_tag` keeps under the fighter: a
-/// zero-wide anchor whose content overflows it evenly both ways.
-fn spawn_name_tag(commands: &mut Commands, name: &str) {
-    commands
-        .spawn((
-            LobbyPart,
-            NameTag,
-            Node { position_type: PositionType::Absolute, width: px(0.0), justify_content: JustifyContent::Center, ..default() },
-            GlobalZIndex(10),
-        ))
-        .with_child((
-            Node { padding: UiRect::axes(px(12.0), px(4.0)), border: UiRect::bottom(px(2.0)), flex_shrink: 0.0, ..default() },
-            BackgroundColor(palette::INK.with_alpha(0.7)),
-            BorderColor::all(ACCENT),
-            children![ui_text(name, 16.0, ACCENT)],
-        ));
-}
-
-/// Keeps our name under the fighter's feet as the camera sways and turns.
-fn place_name_tag(camera: Single<(&Camera, &Transform), With<Camera3d>>, mut tag: Single<&mut Node, With<NameTag>>) {
-    let (camera, transform) = *camera;
-    let Ok(feet) = camera.world_to_viewport(&GlobalTransform::from(*transform), to_world(STAGE, 0.0)) else { return };
-    let (left, top) = (px(feet.x.round()), px((feet.y + NAME_TAG_DROP).round()));
-    if tag.left != left || tag.top != top {
-        tag.left = left;
-        tag.top = top;
-    }
+    spawn_screen(&mut commands, me.as_ref().map_or("", |me| &me.name));
 }
 
 fn close_lobby(mut commands: Commands, parts: Query<Entity, With<LobbyPart>>) {
@@ -219,9 +183,10 @@ fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &m
     commands.spawn(light(palette::SPIRIT, 180_000.0, Vec3::new(-2.4, 2.6, 1.6)));
 }
 
-/// The screen over the stage: a top bar, the selected fighter's details on the left, the side
-/// panel on the right, and along the bottom the controls hint, the fighter tiles and the way in.
-fn spawn_screen(commands: &mut Commands) {
+/// The screen over the stage: a top bar with our `name`, the selected fighter's details on the
+/// left, the side panel on the right, and along the bottom the controls hint, the fighter tiles
+/// and the way in.
+fn spawn_screen(commands: &mut Commands, name: &str) {
     commands
         .spawn((
             LobbyPart,
@@ -237,7 +202,29 @@ fn spawn_screen(commands: &mut Commands) {
             GlobalZIndex(10),
         ))
         .with_children(|screen| {
-            screen.spawn(ui_text("GLADE ARENA", 18.0, palette::STONE));
+            // The top bar and the bottom row in three columns: the outer two share what the middle
+            // leaves, so the middle is centered.
+            let side = |justify: JustifyContent| Node { flex_grow: 1.0, flex_basis: px(0.0), justify_content: justify, ..default() };
+            // The game on the left, who we are in the middle, over the fighter.
+            screen.spawn(Node { align_items: AlignItems::Center, ..default() }).with_children(|bar| {
+                bar.spawn(side(JustifyContent::FlexStart)).with_child(ui_text("GLADE ARENA", 18.0, palette::STONE));
+                bar.spawn((
+                    Node {
+                        column_gap: px(GAP * 1.5),
+                        align_items: AlignItems::Center,
+                        padding: UiRect::axes(px(12.0), px(4.0)),
+                        border: UiRect::bottom(px(2.0)),
+                        ..default()
+                    },
+                    BackgroundColor(palette::INK.with_alpha(0.7)),
+                    BorderColor::all(ACCENT),
+                ))
+                .with_children(|badge| {
+                    badge.spawn(label("Guest"));
+                    badge.spawn(ui_text(name, 16.0, ACCENT));
+                });
+                bar.spawn(side(JustifyContent::FlexEnd));
+            });
             screen.spawn((
                 SidePanel,
                 Visibility::Hidden,
@@ -265,8 +252,6 @@ fn spawn_screen(commands: &mut Commands) {
                 },
             ));
             screen.spawn(Node { align_items: AlignItems::FlexEnd, ..default() }).with_children(|bottom| {
-                // Three columns: the outer two share what the tiles leave, so the tiles are centered.
-                let side = |justify: JustifyContent| Node { flex_grow: 1.0, flex_basis: px(0.0), justify_content: justify, ..default() };
                 bottom.spawn(side(JustifyContent::FlexStart)).with_child(ui_text("Drag to turn   1-9 to pick", 12.0, palette::STONE));
                 bottom.spawn(Node { column_gap: px(GAP * 1.5), ..default() }).with_children(|tiles| {
                     for (n, id) in ClassId::all().enumerate() {
@@ -497,7 +482,7 @@ pub(crate) fn label(text: &str) -> impl Bundle {
 /// the room changes, or we come to it.
 ///
 /// Names are in one neutral color, so a team's color stays the team's: the column and its header
-/// carry it. Ours is in the accent (on a tinted row), as at our fighter's feet.
+/// carry it. Ours is in the accent (on a tinted row), as in the top bar.
 fn show_room(
     mut commands: Commands,
     room: Res<CurrentRoom>,
