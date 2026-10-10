@@ -1,5 +1,10 @@
 # Working in this repo
 
+## Branches and PRs
+
+- Start every new feature on a new branch off `main`, never on `main` itself.
+- Usually open a PR against `main` for it once it's ready.
+
 ## After a change: rebuild and run, don't test
 
 - To check a change, rebuild and run the game locally with `./scripts/dev.sh dev` (run it in the
