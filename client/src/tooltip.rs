@@ -5,7 +5,7 @@
 use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
 
-use crate::glade::palette;
+use crate::arena::palette;
 use crate::render::{shown, ui_text};
 
 pub struct TooltipPlugin;
@@ -51,8 +51,8 @@ pub(crate) fn tip(side: Side, left: f32, width: f32) -> impl Bundle {
             border: UiRect::all(px(1.0)),
             ..default()
         },
-        BackgroundColor(palette::INK.with_alpha(0.95)),
-        BorderColor::all(palette::STONE.with_alpha(0.4)),
+        BackgroundColor(palette::ui::HOLLOW.with_alpha(0.95)),
+        BorderColor::all(palette::ui::MUTED.with_alpha(0.4)),
         GlobalZIndex(30),
         Visibility::Hidden,
     )
@@ -60,17 +60,17 @@ pub(crate) fn tip(side: Side, left: f32, width: f32) -> impl Bundle {
 
 /// What a tooltip is about, first.
 pub(crate) fn tip_title(text: impl Into<String>) -> impl Bundle {
-    ui_text(text, 15.0, palette::HAZE)
+    ui_text(text, 15.0, palette::ui::LICHEN)
 }
 
 /// A small, dim line: what kind of thing it is, or how to use it.
 pub(crate) fn tip_note(text: impl Into<String>) -> impl Bundle {
-    ui_text(text, 11.0, palette::STONE)
+    ui_text(text, 11.0, palette::ui::MUTED)
 }
 
 /// What it does.
 pub(crate) fn tip_text(text: impl Into<String>) -> impl Bundle {
-    ui_text(text, 13.0, palette::HAZE)
+    ui_text(text, 13.0, palette::ui::LICHEN)
 }
 
 /// For something that shows `tip` while it's hovered.

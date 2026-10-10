@@ -14,7 +14,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
 use lightyear::prelude::Predicted;
 
-use crate::glade;
+use crate::arena;
 
 /// Camera direction and distance at zoom 1.0: 30 m up, 16 m back from the point it looks at.
 const OFFSET: Vec3 = Vec3::new(0.0, 30.0, 16.0);
@@ -105,7 +105,7 @@ impl CameraMode {
     /// D walk.
     pub fn ground_axes(&self) -> (Vec2, Vec2) {
         let turn = Quat::from_rotation_y(self.orbit.yaw);
-        (glade::to_gameplay(turn * Vec3::NEG_Z), glade::to_gameplay(turn * Vec3::X))
+        (arena::to_gameplay(turn * Vec3::NEG_Z), arena::to_gameplay(turn * Vec3::X))
     }
 }
 
@@ -174,7 +174,7 @@ fn spawn_camera(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
         Transform::from_translation(OFFSET * ZOOM_RANGE.1).looking_at(Vec3::ZERO, Vec3::Y),
-        glade::haze(),
+        arena::haze(),
         CameraRig { focus: Vec3::ZERO, zoom: ZOOM_RANGE.1 },
     ));
 }
@@ -283,7 +283,7 @@ fn move_camera(
 ) {
     let (mut transform, mut rig) = camera.into_inner();
     if let Ok(me) = me.single() {
-        rig.focus = glade::to_world(me.0, 0.0);
+        rig.focus = arena::to_world(me.0, 0.0);
     }
 
     let notches = wheel_notches(&scroll);

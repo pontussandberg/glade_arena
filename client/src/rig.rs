@@ -1,4 +1,4 @@
-//! Fighters with moving parts (see `glade::fighter_rig`), animated smoothly but deliberately:
+//! Fighters with moving parts (see `arena::fighter_rig`), animated smoothly but deliberately:
 //! eased keyframes in distinct beats (draw, hold, a fast committed strike), a walk with a light
 //! bob and sway, and every joint on a firm, nearly critically damped spring so motion is smoothed
 //! without wobbling (a tail, if the class has one, swings on a looser one).
@@ -34,7 +34,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::feedback::AttackClock;
-use crate::glade::{self, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER, RIG_TAIL};
+use crate::arena::{self, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER, RIG_TAIL};
 use crate::render::shown;
 
 pub struct RigPlugin;
@@ -117,7 +117,7 @@ struct Moves {
     // (The fourth keyframe of each is the class's Q pose: a dash, or a nova's slam.)
     /// Throws its weapon with the auto-attack: the hand is empty until a new one is drawn.
     throws: bool,
-    /// How big the fighter is drawn (1 = the joints in `glade`).
+    /// How big the fighter is drawn (1 = the joints in `arena`).
     scale: f32,
 }
 
@@ -177,7 +177,7 @@ const FROST_MAGE: Moves = Moves {
     scale: 1.05,
 };
 
-/// The moves for a class's look (every class has one: `glade::FIGHTER_LOOKS`).
+/// The moves for a class's look (every class has one: `arena::FIGHTER_LOOKS`).
 fn moves(class_key: &str) -> &'static Moves {
     match class_key {
         "javelinist" => &JAVELINIST,
@@ -306,7 +306,7 @@ struct Joints {
 fn load_rigs(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     let rigs = ClassId::all()
         .map(|c| {
-            let rig = glade::fighter_rig(&c.def().id);
+            let rig = arena::fighter_rig(&c.def().id);
             let mut add = |mesh| meshes.add(mesh);
             let handles = RigHandles {
                 head: add(rig.head),
@@ -314,7 +314,7 @@ fn load_rigs(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mater
                 leg: add(rig.leg),
                 held: add(rig.held),
                 eyes: add(rig.eyes),
-                glow: materials.add(glade::glow(rig.glow, EYE_GLOW)),
+                glow: materials.add(arena::glow(rig.glow, EYE_GLOW)),
                 held_glow: rig.held_glow.map(|mesh| meshes.add(mesh)),
                 body_glow: rig.body_glow.map(|mesh| meshes.add(mesh)),
                 tail: rig.tail.map(|tail| meshes.add(tail)),

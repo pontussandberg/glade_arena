@@ -12,7 +12,8 @@ use arena_shared::protocol::*;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
-use crate::glade::palette;
+use crate::arena::palette;
+use crate::lobby;
 use crate::render::{GameUi, ui_text};
 use crate::tooltip::{Side, hover_shows, tip, tip_text};
 
@@ -28,7 +29,7 @@ impl Plugin for StatFramePlugin {
 /// The frame's width (pixels).
 const WIDTH: f32 = 260.0;
 /// The one accent of the lobby and the frame: the role, what's selected.
-pub(crate) const ACCENT: Color = palette::MEADOW;
+pub(crate) const ACCENT: Color = palette::ui::SPROUT;
 
 /// The bottom-left corner your stat frame sits in.
 #[derive(Component)]
@@ -57,44 +58,56 @@ pub struct HealthParts {
     pub text: Entity,
 }
 
-/// A stat frame for `class`, under `parent`: with its name and role on top when `named` (the
-/// lobby shows those bigger itself), its health full.
-pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, named: bool) -> HealthParts {
+/// Where a stat frame is shown, which sets its look.
+#[derive(Clone, Copy, PartialEq)]
+pub enum FrameStyle {
+    /// In the arena's corner: a bordered panel of its own, the fighter's name and role on top.
+    Hud,
+    /// In the lobby's details pane: one of its cards, unnamed (the pane's header names it).
+    Card,
+}
+
+/// A stat frame for `class`, under `parent`, in `style`, its health full.
+pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, style: FrameStyle) -> HealthParts {
     let def = class.def();
+    let (width, padding, border, fill) = match style {
+        FrameStyle::Hud => (px(WIDTH), 12.0, 1.0, palette::ui::HOLLOW.with_alpha(0.85)),
+        FrameStyle::Card => (auto(), lobby::CARD_PADDING, 0.0, lobby::card_fill()),
+    };
     let mut parts = HealthParts { frame: Entity::PLACEHOLDER, text: Entity::PLACEHOLDER };
     parts.frame = parent
         .spawn((
             Node {
-                width: px(WIDTH),
+                width,
                 flex_direction: FlexDirection::Column,
                 row_gap: px(6.0),
-                padding: UiRect::all(px(12.0)),
-                border: UiRect::all(px(1.0)),
+                padding: UiRect::all(px(padding)),
+                border: UiRect::all(px(border)),
                 ..default()
             },
-            BackgroundColor(palette::INK.with_alpha(0.85)),
-            BorderColor::all(palette::STONE.with_alpha(0.3)),
+            BackgroundColor(fill),
+            BorderColor::all(palette::ui::MUTED.with_alpha(0.3)),
         ))
         .with_children(|frame| {
-            if named {
+            if style == FrameStyle::Hud {
                 frame
                     .spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Baseline, ..default() })
                     .with_children(|row| {
-                        row.spawn(ui_text(def.name.clone(), 16.0, palette::HAZE));
+                        row.spawn(ui_text(def.name.clone(), 16.0, palette::ui::LICHEN));
                         row.spawn(ui_text(def.role.to_uppercase(), 11.0, ACCENT));
                     });
             }
             frame.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
-                row.spawn(ui_text("HEALTH", 11.0, palette::STONE));
-                parts.text = row.spawn(ui_text(def.max_hp.to_string(), 11.0, palette::HAZE)).id();
+                row.spawn(ui_text("HEALTH", 11.0, palette::ui::MUTED));
+                parts.text = row.spawn(ui_text(def.max_hp.to_string(), 11.0, palette::ui::LICHEN)).id();
             });
             for (label, value, tip) in stats(def) {
                 let name = frame
                     .spawn(Node { column_gap: px(5.0), align_items: AlignItems::Center, ..default() })
-                    .with_child(ui_text(label, 11.0, palette::STONE))
+                    .with_child(ui_text(label, 11.0, palette::ui::MUTED))
                     .id();
                 let mut row = frame.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() });
-                row.add_child(name).with_child(ui_text(value, 11.0, palette::HAZE));
+                row.add_child(name).with_child(ui_text(value, 11.0, palette::ui::LICHEN));
                 if let Some(text) = tip {
                     let tip = row.commands().spawn(tooltip(text)).id();
                     row.commands().entity(name).with_child(info_badge());
@@ -118,8 +131,8 @@ fn info_badge() -> impl Bundle {
             align_items: AlignItems::Center,
             ..default()
         },
-        BorderColor::all(palette::STONE.with_alpha(0.7)),
-        children![ui_text("i", 9.0, palette::STONE)],
+        BorderColor::all(palette::ui::MUTED.with_alpha(0.7)),
+        children![ui_text("i", 9.0, palette::ui::MUTED)],
     )
 }
 
@@ -183,7 +196,7 @@ fn spawn_my_frame(
         commands.entity(frame).despawn();
     }
     commands.entity(*corner).with_children(|corner| {
-        let parts = spawn_frame(corner, *class, true);
+        let parts = spawn_frame(corner, *class, FrameStyle::Hud);
         corner.commands().entity(parts.frame).insert(MyFrame(parts));
     });
 }

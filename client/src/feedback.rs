@@ -11,7 +11,7 @@ use lightyear::interpolation::timeline::InterpolationTimeline;
 use lightyear::prelude::*;
 
 use crate::camera::CameraPlaced;
-use crate::glade::{palette, to_world};
+use crate::arena::{palette, to_world};
 use crate::render::{Relation, set_fill, shown, ui_text};
 use crate::render::GameUi;
 use crate::rig::SeenThrows;
@@ -114,8 +114,8 @@ fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, n
     let frame = |node: Node| {
         (
             Node { border: UiRect::all(px(1.0)), position_type: PositionType::Absolute, ..node },
-            BackgroundColor(palette::INK.with_alpha(0.8)),
-            BorderColor::all(palette::INK),
+            BackgroundColor(palette::ui::HOLLOW.with_alpha(0.8)),
+            BorderColor::all(palette::ui::HOLLOW),
         )
     };
     for (player, is_me) in &new {
@@ -321,7 +321,7 @@ fn spawn_damage_numbers(
                 DamageNumber { player, born: time.elapsed_secs(), lasts, crit, dx: side * NUMBER_SPREAD * i.div_ceil(2) as f32 },
                 ChildOf(*world_ui),
                 ui_text(text, size, color),
-                TextShadow { offset: Vec2::splat(2.0), color: palette::INK },
+                TextShadow { offset: Vec2::splat(2.0), color: palette::ui::HOLLOW },
                 Node { position_type: PositionType::Absolute, ..default() },
                 GlobalZIndex(5),
                 Visibility::Hidden,

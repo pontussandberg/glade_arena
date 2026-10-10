@@ -1,4 +1,4 @@
-//! "The Glade" art direction: a low-poly forest clearing at dusk, with a river, a stone bridge,
+//! The arena's look: a low-poly forest clearing at dusk, with a river, a stone bridge,
 //! ruined walls and torches. See `docs/art-direction.md`. The layout itself comes from the shared
 //! `arena_shared::map`, so what you see is exactly what blocks movement and shots.
 //!
@@ -92,6 +92,47 @@ pub mod palette {
     // Pickups glow like spirits do: a heal's fresh green and a haste's quick blue.
     pub const HEAL: Color = Color::srgb_u8(0x7C, 0xF2, 0x9A);
     pub const HASTE: Color = Color::srgb_u8(0x58, 0xA8, 0xFF);
+
+    /// The UI's own theme, "Mossy Hollow": panels, text and accents, apart from the world's.
+    /// What marks a fighter, an ability or a pickup keeps its world color.
+    pub mod ui {
+        use bevy::color::Color;
+
+        /// The backdrop behind full-screen menus: a shade below `HOLLOW`.
+        pub const SHADOW: Color = Color::srgb_u8(0x2A, 0x2D, 0x1B);
+        /// Panels, cards and tooltips; text on a `SPROUT` fill.
+        pub const HOLLOW: Color = Color::srgb_u8(0x3D, 0x41, 0x27);
+        /// What's selected, and filled buttons that aren't the main one.
+        pub const OLIVE: Color = Color::srgb_u8(0x63, 0x6B, 0x2F);
+        /// Secondary text and thin borders: halfway from `OLIVE` to `LICHEN`.
+        pub const MUTED: Color = Color::srgb_u8(0x8E, 0x95, 0x62);
+        /// Text.
+        pub const LICHEN: Color = Color::srgb_u8(0xBA, 0xC0, 0x95);
+        /// The one accent: the role, what's selected, the main button.
+        pub const SPROUT: Color = Color::srgb_u8(0xD4, 0xDE, 0x95);
+    }
+
+    /// The lobby stage's warm dusk, behind the green UI (an autumn hollow, so the olive panels
+    /// stand out from it instead of melting into it).
+    pub mod stage {
+        use bevy::color::Color;
+
+        /// The deep warm dark of the sky overhead and the floor's far edge.
+        pub const NIGHT: Color = Color::srgb_u8(0x24, 0x14, 0x0E);
+        /// The backdrop, just after sunset: deep indigo overhead, a cool teal lower down
+        /// (against the warm floor), and an amber afterglow along the horizon, brightest where
+        /// the sun went down.
+        pub const VOID: Color = Color::srgb_u8(0x08, 0x09, 0x14);
+        pub const TWILIGHT: Color = Color::srgb_u8(0x0E, 0x1D, 0x22);
+        pub const DUSK: Color = Color::srgb_u8(0x8A, 0x4C, 0x24);
+        /// The floor where the light falls on it, and the ground further out.
+        pub const OCHRE: Color = Color::srgb_u8(0x7A, 0x52, 0x26);
+        pub const RUST: Color = Color::srgb_u8(0x4A, 0x2A, 0x18);
+        /// Trunks and roots.
+        pub const UMBER: Color = Color::srgb_u8(0x3B, 0x23, 0x16);
+        /// Dry grass and moss in the light.
+        pub const GOLD: Color = Color::srgb_u8(0xB8, 0x8A, 0x2E);
+    }
 }
 
 use palette::*;
@@ -977,13 +1018,13 @@ pub fn haze() -> DistanceFog {
     DistanceFog { color: HAZE, falloff: FogFalloff::Linear { start: 40.0, end: 95.0 }, ..default() }
 }
 
-pub struct GladePlugin;
+pub struct ArenaPlugin;
 
-impl Plugin for GladePlugin {
+impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClearColor(HAZE));
         app.insert_resource(GlobalAmbientLight { color: SKY, brightness: 160.0, ..default() });
-        app.add_systems(Startup, build_glade);
+        app.add_systems(Startup, build_arena);
         app.add_systems(Update, flicker_torches);
     }
 }
@@ -991,7 +1032,7 @@ impl Plugin for GladePlugin {
 const WATER_LEVEL: f32 = -0.3;
 const RIVERBED_LEVEL: f32 = -0.65;
 
-/// Deterministic, so the glade looks the same for every player and every run.
+/// Deterministic, so the arena looks the same for every player and every run.
 struct Lcg(u64);
 
 impl Lcg {
@@ -1029,6 +1070,14 @@ impl FlatMesh {
         }
     }
 
+    /// A triangle with its own color (and opacity) at each corner, blended across it.
+    fn tri_shaded(&mut self, corners: [Vec3; 3], colors: [[f32; 4]; 3]) {
+        for (p, color) in corners.into_iter().zip(colors) {
+            self.positions.push(p.to_array());
+            self.colors.push(color);
+        }
+    }
+
     /// A quad from four corners in order (counter-clockwise seen from its front).
     fn quad(&mut self, [a, b, c, d]: [Vec3; 4], color: Color) {
         self.tri([a, b, c], color);
@@ -1041,6 +1090,205 @@ impl FlatMesh {
             .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
             .with_computed_flat_normals()
     }
+}
+
+/// The lobby's backdrop: a sphere of `radius` around the stage, lit from within by an afterglow
+/// (brightest toward `sunset`, a direction on the ground) along the horizon that fades into shadow above and below, mottled so it doesn't read as
+/// one flat color. Vertex-colored: draw it unlit, on white, from the inside.
+pub fn hollow_sky_mesh(radius: f32, sunset: Vec3) -> Mesh {
+    let mut mesh = Sphere::new(radius).mesh().ico(5).unwrap();
+    let positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION).and_then(|p| p.as_float3()).expect("a sphere has positions");
+    let (deep, mid, glow) = (stage::VOID.to_linear(), stage::TWILIGHT.to_linear(), stage::DUSK.to_linear());
+    let colors: Vec<[f32; 4]> = positions
+        .iter()
+        .map(|p| {
+            let d = Vec3::from_array(*p).normalize();
+            // A band of light just above the horizon, wider on the top side.
+            let above = (d.y - 0.08) / if d.y > 0.08 { 0.38 } else { 0.16 };
+            let band = (-above * above).exp();
+            // Slow, overlapping waves around the sphere: clouds of mist, without a texture.
+            let mist = 0.5 + 0.25 * (d.x * 4.1 + d.z * 2.3 + d.y * 3.0).sin() + 0.25 * (d.z * 6.7 - d.x * 3.1 + d.y * 5.0).sin();
+            // The afterglow, strong toward the sunset, fading to a trace on the far side.
+            let toward = (Vec3::new(d.x, 0.0, d.z).normalize_or_zero().dot(sunset) + 1.0) * 0.5;
+            let lit = band * (0.45 + 0.55 * mist) * (0.2 + 0.8 * toward.powf(2.5));
+            // Twilight slate low in the sky, darkening toward the top, mottled all over.
+            let high = ((d.y - 0.1) / 0.6).clamp(0.0, 1.0);
+            let sky = mid.mix(&deep, high * high * (3.0 - 2.0 * high)) * (0.8 + 0.4 * mist);
+            // Darker straight down, so the floor's edge sinks into it.
+            let floor = (-d.y).max(0.0);
+            let c = sky.mix(&glow, lit) * (1.0 - 0.5 * floor);
+            [c.red, c.green, c.blue, 1.0]
+        })
+        .collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh
+}
+
+/// The lobby's floor: a low-poly disc of `radius`, ochre and lit at the middle, darkening into
+/// the backdrop at its edge, its facets nudged up and down so the lights catch them.
+pub fn hollow_floor_mesh(radius: f32) -> Mesh {
+    const RINGS: usize = 14;
+    const SEGMENTS: usize = 40;
+    let mut rng = Lcg(0x40_11_0F);
+    // Ring 0 is the center; every ring after it is a circle of SEGMENTS points.
+    let mut points = vec![vec![Vec3::ZERO]];
+    for ring in 1..=RINGS {
+        let r = radius * (ring as f32 / RINGS as f32).powf(1.3);
+        let twist = rng.next();
+        points.push(
+            (0..SEGMENTS)
+                .map(|s| {
+                    let a = (s as f32 + twist * 0.5) / SEGMENTS as f32 * std::f32::consts::TAU;
+                    let r = r + rng.range(-0.12, 0.12) * r / radius;
+                    // Flat under the fighter, rolling further out.
+                    let lift = if r < 1.6 { 0.0 } else { rng.range(-0.05, 0.08) * (r / radius + 0.3) };
+                    Vec3::new(r * a.cos(), lift, r * a.sin())
+                })
+                .collect(),
+        );
+    }
+    let (ground, lit, deep) = (stage::RUST, stage::OCHRE, stage::NIGHT);
+    let color = |at: Vec3, rng: &mut Lcg| {
+        let out = (at.length() / radius).min(1.0);
+        let base = lit.mix(&ground, (out * 2.2).min(1.0)).mix(&deep, ((out - 0.35) / 0.65).max(0.0));
+        Color::from(base.to_linear() * rng.range(0.9, 1.1))
+    };
+    let mut b = FlatMesh::default();
+    for s in 0..SEGMENTS {
+        let (p, q) = (points[1][s], points[1][(s + 1) % SEGMENTS]);
+        let c = color((p + q) / 3.0, &mut rng);
+        b.tri([Vec3::ZERO, q, p], c);
+    }
+    for ring in 1..RINGS {
+        for s in 0..SEGMENTS {
+            let n = (s + 1) % SEGMENTS;
+            let (a, b1, c1, d) = (points[ring][s], points[ring][n], points[ring + 1][n], points[ring + 1][s]);
+            let first = color((a + b1 + c1) / 3.0, &mut rng);
+            let second = color((a + c1 + d) / 3.0, &mut rng);
+            b.tri([a, b1, c1], first);
+            b.tri([a, c1, d], second);
+        }
+    }
+    b.build()
+}
+
+/// The lobby dais's radius, which the kerb runs around.
+pub const DAIS_RADIUS: f32 = 1.3;
+
+/// What lies around the lobby's stage: a low kerb of stones around the dais, and stones, moss
+/// clumps and grass tufts scattered on the floor (none tall enough to hide the fighter's feet).
+/// Vertex-colored, for one matte white material.
+pub fn hollow_props_mesh() -> Mesh {
+    use std::f32::consts::TAU;
+    let mut rng = Lcg(0xB0_55_E5);
+    let mut parts = Vec::new();
+    let mut add = |mesh: Mesh, at: Transform, color: Color| parts.push(tinted(faceted(mesh.transformed_by(at)), color));
+    // A low, broken kerb of stones around the dais's edge, some mossy, with gaps where grass
+    // grows through: it frames the fighter without hiding its feet.
+    let kerb = 26;
+    for k in 0..kerb {
+        if rng.next() < 0.22 {
+            continue;
+        }
+        let a = (k as f32 + rng.range(-0.15, 0.15)) / kerb as f32 * TAU;
+        let r = DAIS_RADIUS + rng.range(0.08, 0.16);
+        let (wide, tall, deep) = (rng.range(0.24, 0.34), rng.range(0.16, 0.3), rng.range(0.18, 0.26));
+        let at = Vec3::new(r * a.cos(), tall * 0.5 - 0.04, r * a.sin());
+        let turn = Quat::from_rotation_y(-a - std::f32::consts::FRAC_PI_2) * Quat::from_rotation_z(rng.range(-0.12, 0.12)) * Quat::from_rotation_x(rng.range(-0.15, 0.1));
+        let stone = WALL.darker(0.25).mix(&stage::RUST, rng.range(0.15, 0.4));
+        add(Cuboid::new(wide, tall, deep).mesh().build(), Transform::from_translation(at).with_rotation(turn), stone);
+        if rng.next() < 0.45 {
+            let moss = Transform::from_translation(at + Vec3::Y * tall * 0.5).with_rotation(turn).with_scale(Vec3::new(wide * 0.45, 0.04, deep * 0.45));
+            add(Sphere::new(1.0).mesh().ico(1).unwrap(), moss, stage::GOLD.darker(0.35));
+        }
+    }
+    // Scatter at a random spot between `near` and `far` from the stage's center.
+    let spot = |rng: &mut Lcg, near: f32, far: f32| {
+        let (a, r) = (rng.range(0.0, TAU), rng.range(near, far));
+        Vec3::new(r * a.cos(), 0.0, r * a.sin())
+    };
+    for _ in 0..18 {
+        let at = spot(&mut rng, 2.0, 8.5);
+        let size = rng.range(0.12, 0.38);
+        let squash = Vec3::new(rng.range(0.9, 1.5), rng.range(0.45, 0.8), rng.range(0.9, 1.4)) * size;
+        let stone = WALL.darker(0.3).mix(&stage::RUST, rng.range(0.2, 0.5));
+        add(Sphere::new(1.0).mesh().ico(0).unwrap(), Transform::from_translation(at).with_rotation(Quat::from_rotation_y(rng.range(0.0, TAU))).with_scale(squash), stone);
+        // Moss on top.
+        add(Sphere::new(1.0).mesh().ico(0).unwrap(), Transform::from_translation(at + Vec3::Y * squash.y * 0.45).with_scale(squash * Vec3::new(0.8, 0.5, 0.8)), stage::GOLD.darker(0.3));
+    }
+    for _ in 0..26 {
+        let at = spot(&mut rng, 1.8, 9.0);
+        let size = rng.range(0.25, 0.6);
+        let clump = stage::RUST.mix(&stage::OCHRE, rng.range(0.3, 0.9));
+        add(Sphere::new(1.0).mesh().ico(1).unwrap(), Transform::from_translation(at).with_scale(Vec3::new(size, size * 0.3, size * rng.range(0.7, 1.2))), clump);
+    }
+    for i in 0..94 {
+        // The first ones crowd the kerb's foot.
+        let at = if i < 24 { spot(&mut rng, DAIS_RADIUS + 0.25, DAIS_RADIUS + 0.55) } else { spot(&mut rng, 1.7, 9.0) };
+        let blades = 3 + (rng.next() * 3.0) as usize;
+        let tall = rng.range(0.18, 0.42);
+        let grass = stage::OCHRE.mix(&stage::GOLD, rng.range(0.2, 0.8));
+        for _ in 0..blades {
+            let tilt = Quat::from_rotation_y(rng.range(0.0, TAU)) * Quat::from_rotation_x(rng.range(0.1, 0.45));
+            let h = tall * rng.range(0.7, 1.1);
+            add(cone(0.025, h, 3), Transform::from_translation(at + tilt * Vec3::Y * h * 0.5).with_rotation(tilt), grass);
+        }
+    }
+    sculpted(parts)
+}
+
+/// Streaks of cloud across the lobby's sky, just inside a sphere of `radius`: long and thin, dark
+/// on top and lit from below by the afterglow, brightest and lowest toward `sunset` (a direction
+/// on the ground), and fading out at their ends and edges. Colored and see-through by vertex:
+/// draw it unlit and blended, on white.
+pub fn sunset_clouds_mesh(radius: f32, sunset: Vec3) -> Mesh {
+    use std::f32::consts::{PI, TAU};
+    const STREAKS: usize = 12;
+    const STEPS: usize = 24;
+    let mut rng = Lcg(0xC10_0D5);
+    let base = sunset.z.atan2(sunset.x);
+    let (dark, lit, hot) = (stage::VOID.mix(&stage::TWILIGHT, 0.35).to_linear(), stage::DUSK.to_linear(), stage::DUSK.lighter(0.15).to_linear());
+    let mut b = FlatMesh::default();
+    for _ in 0..STREAKS {
+        // More of them toward the sunset, where they catch the light.
+        let off = rng.range(-1.0, 1.0);
+        let center = base + off * off.abs() * PI;
+        let span = rng.range(0.22, 0.45);
+        let toward = |a: f32| ((a - base).cos() + 1.0) * 0.5;
+        // Low streaks near the horizon, a few higher and fainter.
+        let rise = rng.next().powf(1.8);
+        let (height, thick) = (1.8 + rise * 7.0, rng.range(1.1, 2.2) * (1.0 + rise));
+        // Lumps along it, so it reads as a bank of cloud, not a stripe.
+        let (lumps, lump_phase) = (rng.range(1.5, 3.5), rng.range(0.0, TAU));
+        let opacity = rng.range(0.55, 0.9) * (1.0 - 0.4 * rise);
+        let tilt = rng.range(-0.6, 0.6);
+        let r = radius - rng.range(0.0, 1.5);
+        // Each column: the streak's top, middle and underside, at angle `a`.
+        let column = |k: usize| {
+            let t = k as f32 / STEPS as f32;
+            let a = center + (t - 0.5) * span;
+            let fade = (t * PI).sin().powf(0.7);
+            let lump = 0.5 + 0.5 * (t * lumps * TAU + lump_phase).sin().abs();
+            let swell = thick * (0.25 + 0.75 * fade) * lump;
+            let mid = height + tilt * (t - 0.5);
+            let at = |y: f32| Vec3::new(r * a.cos(), y, r * a.sin());
+            let glow = toward(a).powf(3.0) * (1.0 - 0.6 * rise);
+            let shade = |under: f32, alpha: f32| {
+                let c = dark.mix(&lit, glow * under).mix(&hot, (glow * under - 0.6).max(0.0));
+                [c.red, c.green, c.blue, alpha * fade * opacity]
+            };
+            [(at(mid + swell * 0.85), shade(0.15, 0.0)), (at(mid), shade(0.55, 1.0)), (at(mid - swell * 0.45), shade(1.0, 0.0))]
+        };
+        for k in 0..STEPS {
+            let (left, right) = (column(k), column(k + 1));
+            for row in 0..2 {
+                let (a, b1, c, d) = (left[row], right[row], right[row + 1], left[row + 1]);
+                b.tri_shaded([a.0, b1.0, c.0], [a.1, b1.1, c.1]);
+                b.tri_shaded([a.0, c.0, d.0], [a.1, c.1, d.1]);
+            }
+        }
+    }
+    b.build()
 }
 
 /// A torch flame; flickers its light.
@@ -1064,7 +1312,7 @@ fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight,
     }
 }
 
-fn build_glade(
+fn build_arena(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -1184,7 +1432,7 @@ impl Props {
     }
 
     fn into_mesh(self) -> Mesh {
-        self.out.expect("the glade has props")
+        self.out.expect("the arena has props")
     }
 
     /// Ruined walls: stacked stone blocks of uneven height, some with a block on top. Returns the

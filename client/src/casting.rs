@@ -14,7 +14,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::DesiredInput;
-use crate::glade::{self, palette};
+use crate::arena::{self, palette};
 use crate::render::{HudButton, clicked, shown, ui_text};
 use crate::rooms::{load_setting, save_setting};
 use crate::tooltip::{Side, hover_shows, tip, tip_title};
@@ -69,7 +69,7 @@ const TIP_WIDTH: f32 = 220.0;
 /// glowing while on, left and dim while off), then its name; hovering either explains it. Set a
 /// little apart from the keys. The hints are rebuilt when it's flipped, so it's drawn as it is now.
 pub(crate) fn spawn_toggle_row(grid: &mut ChildSpawnerCommands, quick: bool) {
-    let color = if quick { palette::SPIRIT } else { palette::STONE };
+    let color = if quick { palette::SPIRIT } else { palette::ui::MUTED };
     let mut tip = Entity::PLACEHOLDER;
     let switch = grid
         .spawn((
@@ -103,7 +103,7 @@ pub(crate) fn spawn_toggle_row(grid: &mut ChildSpawnerCommands, quick: bool) {
         HudButton,
         hover_shows(tip),
         Node { margin: UiRect::top(px(ROW_GAP)), ..default() },
-        ui_text("Quick cast", 12.0, palette::HAZE),
+        ui_text("Quick cast", 12.0, palette::ui::LICHEN),
     ));
 }
 
@@ -114,7 +114,7 @@ fn toggle_tip() -> impl Bundle {
             Node { column_gap: px(8.0), ..default() },
             children![
                 (Node { width: px(26.0), ..default() }, children![ui_text(state, 13.0, color)]),
-                ui_text(what, 13.0, palette::HAZE),
+                ui_text(what, 13.0, palette::ui::LICHEN),
             ],
         )
     };
@@ -123,7 +123,7 @@ fn toggle_tip() -> impl Bundle {
         children![
             tip_title("Quick cast"),
             line("On", palette::SPIRIT, "Q casts instantly"),
-            line("Off", palette::STONE, "Q aims first, click to cast"),
+            line("Off", palette::ui::MUTED, "Q aims first, click to cast"),
         ],
     )
 }
@@ -163,9 +163,9 @@ fn spawn_indicator(
     }
     let (mesh, aimed) = match class.def().ability.kind {
         AbilityKind::Projectile { radius, range, .. } => {
-            (glade::lane_mesh(PLAYER_RADIUS, PLAYER_RADIUS + 2.0 * radius + range, (2.0 * radius).max(0.4)), true)
+            (arena::lane_mesh(PLAYER_RADIUS, PLAYER_RADIUS + 2.0 * radius + range, (2.0 * radius).max(0.4)), true)
         }
-        AbilityKind::Dash { distance, .. } => (glade::lane_mesh(0.0, distance + PLAYER_RADIUS, 2.0 * PLAYER_RADIUS), true),
+        AbilityKind::Dash { distance, .. } => (arena::lane_mesh(0.0, distance + PLAYER_RADIUS, 2.0 * PLAYER_RADIUS), true),
         AbilityKind::Nova { radius, .. } => (
             Circle::new(radius).mesh().resolution(64).build().rotated_by(Quat::from_rotation_x(-FRAC_PI_2)),
             false,
@@ -174,7 +174,7 @@ fn spawn_indicator(
     commands.spawn((
         AimIndicator { aimed },
         Mesh3d(meshes.add(mesh)),
-        MeshMaterial3d(materials.add(glade::translucent(palette::SPIRIT, 0.25, 1.5))),
+        MeshMaterial3d(materials.add(arena::translucent(palette::SPIRIT, 0.25, 1.5))),
         Transform::default(),
         Visibility::Hidden,
     ));

@@ -14,7 +14,7 @@ use lightyear::prelude::*;
 
 use crate::camera::CameraPlaced;
 use crate::feedback::AttackClock;
-use crate::glade::{self, palette};
+use crate::arena::{self, palette};
 use crate::render::{Relation, ground_at, shown, ui_text};
 
 pub struct MinimapPlugin;
@@ -71,13 +71,13 @@ fn picture_size() -> Vec2 {
 fn spawn_minimap(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let size = MAP_TILES.as_uvec2();
     // Deep forest everywhere the map doesn't list a tile.
-    let forest = glade::tile_color(Tile::Forest).to_srgba().to_u8_array();
+    let forest = arena::tile_color(Tile::Forest).to_srgba().to_u8_array();
     let mut pixels = forest.repeat((size.x * size.y) as usize);
     for (tile, kind) in map().tiles() {
         // The map's +y is up; the picture's rows go down.
         let row = MAP_TILES.y - 1 - tile.y;
         let at = ((row * MAP_TILES.x + tile.x) * 4) as usize;
-        pixels[at..at + 4].copy_from_slice(&glade::tile_color(kind).to_srgba().to_u8_array());
+        pixels[at..at + 4].copy_from_slice(&arena::tile_color(kind).to_srgba().to_u8_array());
     }
     let mut image = Image::new(
         Extent3d { width: size.x, height: size.y, depth_or_array_layers: 1 },
@@ -102,13 +102,13 @@ fn spawn_minimap(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                 border: UiRect::all(px(2.0)),
                 ..default()
             },
-            BorderColor::all(palette::INK),
+            BorderColor::all(palette::ui::HOLLOW),
             ImageNode::new(images.add(image)),
         ))
         .with_child((
             ViewFrame,
             Node { position_type: PositionType::Absolute, border: UiRect::all(px(1.0)), ..default() },
-            BorderColor::all(palette::HAZE),
+            BorderColor::all(palette::ui::LICHEN),
         ));
 }
 
@@ -131,7 +131,7 @@ fn spawn_dots(
                     ..default()
                 },
                 BackgroundColor(Relation::of(is_me, false).color()),
-                BorderColor::all(palette::INK),
+                BorderColor::all(palette::ui::HOLLOW),
             ))
             .id();
         commands.entity(*minimap).add_child(dot);
@@ -182,7 +182,7 @@ fn spawn_markers(mut commands: Commands, minimap: Single<Entity, With<Minimap>>,
     for (pickup, info) in &new {
         let color = crate::pickups::color(info.kind);
         // Spawned showing its icon, as lying there; `update_markers` turns it into a timer.
-        let text = commands.spawn(ui_text(crate::pickups::icon(info.kind), MARKER_TEXT, palette::INK)).id();
+        let text = commands.spawn(ui_text(crate::pickups::icon(info.kind), MARKER_TEXT, palette::ui::HOLLOW)).id();
         let at = on_minimap(info.at) - Vec2::splat(MARKER / 2.0);
         let marker = commands
             .spawn((
@@ -230,8 +230,8 @@ fn update_markers(
         }
         marker.showing = wanted;
         let (label, text_color, fill) = match wanted {
-            Some(seconds) => (seconds.to_string(), palette::HAZE, palette::INK.with_alpha(0.85)),
-            None => (crate::pickups::icon(pickup.kind).to_string(), palette::INK, crate::pickups::color(pickup.kind)),
+            Some(seconds) => (seconds.to_string(), palette::ui::LICHEN, palette::ui::HOLLOW.with_alpha(0.85)),
+            None => (crate::pickups::icon(pickup.kind).to_string(), palette::ui::HOLLOW, crate::pickups::color(pickup.kind)),
         };
         background.set_if_neq(BackgroundColor(fill));
         if let Ok((mut text, mut current)) = texts.get_mut(marker.text) {
