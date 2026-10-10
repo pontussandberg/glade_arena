@@ -1,7 +1,7 @@
-//! Pickups lying in the arena, and what taking one shows: a glowing green cross (a heal) or
-//! golden chevrons (a haste) floating over a glow on the ground, bobbing and turning, gone while
+//! Pickups lying in the arena, and what taking one shows: a glowing green cross (a heal) or a
+//! blue winged boot (a haste, like a sprint's) floating over a glow on the ground, bobbing and turning, gone while
 //! they're waiting to come back. A heal bursts around whoever takes it, even at full health (a
-//! ring spreading on the ground, sparks spiraling up); a hasted fighter trails golden wind streaks while it runs, like a
+//! ring spreading on the ground, sparks spiraling up); a hasted fighter trails blue wind streaks while it runs, like a
 //! sprint. Who takes a pickup is the server's call (`Pickup`, `Hasted`); a heal's number is in
 //! `feedback`, the timers on the minimap.
 
@@ -62,6 +62,12 @@ struct PickupLooks {
     ground: Handle<Mesh>,
     heal: (Handle<StandardMaterial>, Handle<StandardMaterial>),
     haste: (Handle<StandardMaterial>, Handle<StandardMaterial>),
+    /// The winged boot: its shaft, its foot, a feather of its wings (one meter long along +X,
+    /// scaled to its length), and the wings' pale glow.
+    boot_shaft: Handle<Mesh>,
+    boot_foot: Handle<Mesh>,
+    feather: Handle<Mesh>,
+    wing: Handle<StandardMaterial>,
     /// A heal burst's ring and sparks.
     ring: Handle<Mesh>,
     spark: Handle<Mesh>,
@@ -107,6 +113,10 @@ fn load_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mate
         ground: meshes.add(Circle::new(0.6).mesh().resolution(24).build()),
         heal,
         haste,
+        boot_shaft: meshes.add(Cuboid::new(0.16, 0.32, 0.17)),
+        boot_foot: meshes.add(Cuboid::new(0.36, 0.12, 0.17)),
+        feather: meshes.add(Cuboid::new(1.0, 0.05, 0.025)),
+        wing: materials.add(glade::glow(palette::ICE, GLOW)),
         ring: meshes.add(Annulus::new(0.8, 1.0).mesh().resolution(40).build()),
         spark: meshes.add(Cuboid::new(0.08, 0.08, 0.08)),
         streak: meshes.add(Cuboid::new(1.0, 0.03, 0.03)),
@@ -118,8 +128,9 @@ fn load_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mate
 #[derive(Component)]
 struct Floating(Entity);
 
-/// Gives each pickup its look once it arrives: a cross for a heal (two crossed bars), a double
-/// chevron for a haste (bars bent into two ">"), over a glow on the ground.
+/// Gives each pickup its look once it arrives: a cross for a heal (two crossed bars), a winged
+/// boot for a haste (toe forward, a fan of pale feathers off each side of its heel), over a glow
+/// on the ground.
 fn add_pickup_visuals(mut commands: Commands, looks: Res<PickupLooks>, new: Query<(Entity, &Pickup), Added<Pickup>>) {
     for (entity, pickup) in &new {
         let (body, glow) = looks.of(pickup.kind).clone();
@@ -135,10 +146,23 @@ fn add_pickup_visuals(mut commands: Commands, looks: Res<PickupLooks>, new: Quer
                 });
             }
             PickupKind::Haste => {
-                commands.entity(floating).with_children(|chevrons| {
-                    for x in [-0.12, 0.14] {
-                        chevrons.spawn(bar(Vec3::new(x, 0.09, 0.0), -45.0));
-                        chevrons.spawn(bar(Vec3::new(x, -0.09, 0.0), 45.0));
+                let part = |mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>, transform: Transform| {
+                    (Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), transform)
+                };
+                commands.entity(floating).with_children(|boot| {
+                    boot.spawn(part(&looks.boot_shaft, &body, Transform::from_xyz(-0.06, 0.1, 0.0)));
+                    boot.spawn(part(&looks.boot_foot, &body, Transform::from_xyz(0.04, -0.11, 0.0)));
+                    // Feathers fanning up and back from the top of the heel, longest highest.
+                    for side in [-1.0, 1.0] {
+                        for (degrees, length) in [(25.0f32, 0.22), (45.0, 0.3), (65.0, 0.36)] {
+                            let up_back = Vec2::from_angle((180.0 - degrees).to_radians());
+                            let root = Vec3::new(-0.1, 0.18, side * 0.1);
+                            let center = root + (up_back * length / 2.0).extend(0.0);
+                            let feather = Transform::from_translation(center)
+                                .with_rotation(Quat::from_rotation_z(up_back.to_angle()))
+                                .with_scale(Vec3::new(length, 1.0, 1.0));
+                            boot.spawn(part(&looks.feather, &looks.wing, feather));
+                        }
                     }
                 });
             }
