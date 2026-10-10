@@ -14,7 +14,7 @@ use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
-use crate::glade::palette;
+use crate::arena::palette;
 use crate::lobby::{SidePanel, card, fold_chip, label, pane_header};
 use crate::render::{ButtonFill, button, clicked, key_chip, ui_text};
 use crate::rooms::{Me, RoomList, Screen, request};
@@ -97,7 +97,7 @@ fn spawn_connecting(mut commands: Commands) {
             GlobalZIndex(20),
         ))
         .with_children(|screen| {
-            screen.spawn(ui_text("GLADE ARENA", 18.0, palette::ui::MUTED));
+            screen.spawn(ui_text("ARENA", 18.0, palette::ui::MUTED));
             screen.spawn((ConnectingText, ui_text("Connecting...", 16.0, palette::ui::LICHEN)));
         });
 }

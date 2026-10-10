@@ -14,7 +14,7 @@ use lightyear::prelude::*;
 
 use crate::camera::CameraPlaced;
 use crate::feedback::AttackClock;
-use crate::glade::{self, palette};
+use crate::arena::{self, palette};
 use crate::render::{Relation, ground_at, shown, ui_text};
 
 pub struct MinimapPlugin;
@@ -71,13 +71,13 @@ fn picture_size() -> Vec2 {
 fn spawn_minimap(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let size = MAP_TILES.as_uvec2();
     // Deep forest everywhere the map doesn't list a tile.
-    let forest = glade::tile_color(Tile::Forest).to_srgba().to_u8_array();
+    let forest = arena::tile_color(Tile::Forest).to_srgba().to_u8_array();
     let mut pixels = forest.repeat((size.x * size.y) as usize);
     for (tile, kind) in map().tiles() {
         // The map's +y is up; the picture's rows go down.
         let row = MAP_TILES.y - 1 - tile.y;
         let at = ((row * MAP_TILES.x + tile.x) * 4) as usize;
-        pixels[at..at + 4].copy_from_slice(&glade::tile_color(kind).to_srgba().to_u8_array());
+        pixels[at..at + 4].copy_from_slice(&arena::tile_color(kind).to_srgba().to_u8_array());
     }
     let mut image = Image::new(
         Extent3d { width: size.x, height: size.y, depth_or_array_layers: 1 },

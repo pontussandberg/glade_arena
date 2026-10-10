@@ -5,7 +5,7 @@
 use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
 
-use crate::glade::palette;
+use crate::arena::palette;
 use crate::render::{shown, ui_text};
 
 pub struct TooltipPlugin;

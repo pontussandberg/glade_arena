@@ -53,10 +53,10 @@ client/   ClientNetPlugin (networking + prediction, headless-capable), bot (spar
           render (fighters, shots, swings, telegraphs, dash streaks, novas, frost, HUD, input), camera,
           action_bar (your passive and ability icons, cooldown, hover tooltips), stat_frame (a
           class's stats: in the lobby and bottom left in the arena), minimap,
-          glade (the 3D scene and all meshes), rig (animated fighters: facing, walk cycle,
+          arena (the 3D scene and all meshes), rig (animated fighters: facing, walk cycle,
           windup and throw), lobby (character select), feedback (health and cast bars, hit flash)
 client/web/  index.html for the browser build (pkg/ and digest.txt are generated)
-docs/     art-direction.md: "The Glade" look (palette, light, shape rules, props, fighters)
+docs/     art-direction.md: the look (palette, light, shape rules, props, fighters)
 scripts/  build-web.sh, serve.mjs
 ```
 

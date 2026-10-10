@@ -34,7 +34,7 @@ use lightyear::prelude::*;
 use crate::ChosenClass;
 use crate::browser::{LobbiesButton, Typing};
 use crate::camera::{CameraControl, CameraMoves, Orbit};
-use crate::glade::{self, palette, to_world};
+use crate::arena::{self, palette, to_world};
 use crate::render::{GameUi, Visuals, button, button_fill, clicked, key_chip, shown, ui_text};
 use crate::rooms::{CurrentRoom, Me, Notice, Picking, Screen, request};
 use crate::stat_frame;
@@ -170,7 +170,7 @@ fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &m
     let sky = StandardMaterial { base_color: Color::WHITE, unlit: true, cull_mode: None, ..default() };
     commands.spawn((
         LobbyPart,
-        Mesh3d(meshes.add(glade::hollow_sky_mesh(24.0, sunset))),
+        Mesh3d(meshes.add(arena::hollow_sky_mesh(24.0, sunset))),
         MeshMaterial3d(materials.add(sky)),
         Transform::from_translation(center),
         NotShadowCaster,
@@ -178,20 +178,20 @@ fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &m
     let clouds = StandardMaterial { base_color: Color::WHITE, alpha_mode: AlphaMode::Blend, unlit: true, cull_mode: None, ..default() };
     commands.spawn((
         LobbyPart,
-        Mesh3d(meshes.add(glade::sunset_clouds_mesh(22.5, sunset))),
+        Mesh3d(meshes.add(arena::sunset_clouds_mesh(22.5, sunset))),
         MeshMaterial3d(materials.add(clouds)),
         Transform::from_translation(center),
         NotShadowCaster,
     ));
     commands.spawn((
         LobbyPart,
-        Mesh3d(meshes.add(Cylinder::new(glade::DAIS_RADIUS, 0.16).mesh().resolution(48).build())),
-        MeshMaterial3d(materials.add(glade::matte(palette::WALL.darker(0.25)))),
+        Mesh3d(meshes.add(Cylinder::new(arena::DAIS_RADIUS, 0.16).mesh().resolution(48).build())),
+        MeshMaterial3d(materials.add(arena::matte(palette::WALL.darker(0.25)))),
         Transform::from_translation(center - Vec3::Y * 0.08),
     ));
-    let white = materials.add(glade::matte(Color::WHITE));
-    commands.spawn((LobbyPart, Mesh3d(meshes.add(glade::hollow_floor_mesh(18.0))), MeshMaterial3d(white.clone()), Transform::from_translation(ground)));
-    commands.spawn((LobbyPart, Mesh3d(meshes.add(glade::hollow_props_mesh())), MeshMaterial3d(white), Transform::from_translation(ground)));
+    let white = materials.add(arena::matte(Color::WHITE));
+    commands.spawn((LobbyPart, Mesh3d(meshes.add(arena::hollow_floor_mesh(18.0))), MeshMaterial3d(white.clone()), Transform::from_translation(ground)));
+    commands.spawn((LobbyPart, Mesh3d(meshes.add(arena::hollow_props_mesh())), MeshMaterial3d(white), Transform::from_translation(ground)));
     let light = |color: Color, intensity: f32, at: Vec3| {
         (
             LobbyPart,
@@ -203,7 +203,7 @@ fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &m
     commands.spawn(light(palette::SPIRIT, 180_000.0, Vec3::new(-2.4, 2.6, 1.6)));
 
     let mote = meshes.add(Sphere::new(0.022).mesh().ico(1).unwrap());
-    let glow = materials.add(glade::glow(palette::ui::SPROUT, 6.0));
+    let glow = materials.add(arena::glow(palette::ui::SPROUT, 6.0));
     for i in 0..MOTES {
         // Spread evenly around the stage (golden angle), at varied distances and heights.
         let a = i as f32 * 2.399;
@@ -277,7 +277,7 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
             let side = |justify: JustifyContent| Node { flex_grow: 1.0, flex_basis: px(0.0), justify_content: justify, ..default() };
             // The game on the left, who we are in the middle, over the fighter.
             screen.spawn(Node { align_items: AlignItems::Center, ..default() }).with_children(|bar| {
-                bar.spawn(side(JustifyContent::FlexStart)).with_child(ui_text("GLADE ARENA", 18.0, palette::ui::MUTED));
+                bar.spawn(side(JustifyContent::FlexStart)).with_child(ui_text("ARENA", 18.0, palette::ui::MUTED));
                 bar.spawn((
                     Node {
                         column_gap: px(GAP * 1.5),
@@ -458,7 +458,7 @@ fn show_fighter(mut commands: Commands, mut lobby: ResMut<Lobby>, visuals: Res<V
             AttackState::default(),
             AbilityState::default(),
             Mesh3d(visuals.fighter(selected)),
-            MeshMaterial3d(materials.add(glade::matte(Color::WHITE))),
+            MeshMaterial3d(materials.add(arena::matte(Color::WHITE))),
             Transform::from_translation(to_world(STAGE, 0.0)),
         ))
         .id();

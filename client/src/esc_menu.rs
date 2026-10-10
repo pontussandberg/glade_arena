@@ -9,7 +9,7 @@ use lightyear::prelude::*;
 
 use crate::PlayerControls;
 use crate::camera::CameraControl;
-use crate::glade::palette;
+use crate::arena::palette;
 use crate::render::{button, clicked, ui_text};
 use crate::rooms::{CurrentRoom, Leaving, Screen, leave_room, request};
 use crate::stat_frame::ACCENT;
