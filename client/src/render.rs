@@ -16,6 +16,7 @@ use lightyear::prelude::*;
 
 use crate::DesiredInput;
 use crate::camera::{CameraMode, CameraPlaced, key_axis};
+use crate::casting::{Aiming, CastMode, QuickCastToggle};
 use crate::feedback::AttackClock;
 use crate::glade::{self, palette, to_gameplay, to_world};
 use crate::rig::{HeldAt, SeenThrows};
@@ -27,6 +28,7 @@ impl Plugin for RenderPlugin {
         app.add_plugins((
             glade::GladePlugin,
             crate::camera::CameraPlugin,
+            crate::casting::CastingPlugin,
             crate::browser::BrowserPlugin,
             crate::lobby::LobbyPlugin,
             crate::esc_menu::EscMenuPlugin,
@@ -420,20 +422,29 @@ fn setup_scene(
 }
 
 /// Mouse -> `DesiredInput`, LoL-style: right click walks to the clicked point, left click
-/// attacks toward the cursor.
+/// attacks toward the cursor. Q casts right away (quick cast) or first shows where it will go,
+/// cast by the next left click and dropped by a right click (normal cast); Shift+Q is the other
+/// one (see `casting.rs`).
+#[allow(clippy::too_many_arguments)]
 fn read_local_input(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     window: Option<Single<&Window>>,
     camera: Single<(&Camera, &GlobalTransform)>,
-    me: Query<&Pos, (With<Predicted>, With<PlayerId>)>,
-    mode: Res<CameraMode>,
+    me: Query<(&Pos, &AbilityState), (With<Predicted>, With<PlayerId>)>,
+    (mode, cast_mode, clock): (Res<CameraMode>, Res<CastMode>, AttackClock),
+    toggle: Query<&Interaction, With<QuickCastToggle>>,
+    mut aiming: ResMut<Aiming>,
+    mut held_click: Local<bool>,
     mut last_pos: Local<Option<Vec2>>,
     mut desired: ResMut<DesiredInput>,
 ) {
+    let me = me.single().ok();
+    // A normal cast only aims while Q is ready, as in LoL.
+    let ability_ready = me.is_some_and(|(_, ability)| ability.ready_at as f32 <= clock.now(true));
+    let me = me.map(|(p, _)| p.0);
     let (camera, camera_transform) = *camera;
     let cursor = window.and_then(|w| w.cursor_position()).and_then(|c| ground_at(camera, camera_transform, c));
-    let me = me.single().ok().map(|p| p.0);
 
     let mut move_to = desired.0.move_to;
     // A jump (respawn or server correction) cancels the old destination. (So does attacking:
@@ -464,7 +475,36 @@ fn read_local_input(
         (Some(cursor), Some(me)) => cursor - me,
         _ => desired.0.aim,
     };
-    let fire = mouse.pressed(MouseButton::Left);
+    let on_toggle = toggle.iter().any(|i| *i != Interaction::None);
+    let mut ability = desired.0.ability;
+    if keys.just_pressed(KeyCode::KeyQ) {
+        let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+        if cast_mode.casts_now(shift) {
+            ability = true;
+            aiming.0 = false;
+        } else if ability_ready {
+            aiming.0 = true;
+        }
+    }
+    // A left click that casts (or turns quick cast on or off) doesn't also attack: no attacking
+    // until it's let go. A right click (MOBA camera) drops the aim, and walks as usual; ESC drops
+    // it too (`esc_menu`).
+    if mouse.just_pressed(MouseButton::Left) {
+        if on_toggle {
+            *held_click = true;
+        } else if aiming.0 {
+            ability = true;
+            aiming.0 = false;
+            *held_click = true;
+        }
+    }
+    if !mode.free && mouse.just_pressed(MouseButton::Right) {
+        aiming.0 = false;
+    }
+    if !mouse.pressed(MouseButton::Left) {
+        *held_click = false;
+    }
+    let fire = mouse.pressed(MouseButton::Left) && !aiming.0 && !*held_click;
     // With the free camera, WASD walks relative to it, dropping any destination; otherwise S
     // stops: drops the destination (as in LoL).
     let walk = if mode.free {
@@ -476,8 +516,8 @@ fn read_local_input(
     if walk != Vec2::ZERO || (!mode.free && keys.just_pressed(KeyCode::KeyS)) {
         move_to = None;
     }
-    // Kept until it's been sent (`write_input` clears it), so a short tap isn't missed.
-    let ability = desired.0.ability || keys.just_pressed(KeyCode::KeyQ);
+    // `ability` is kept until it's been sent (`write_input` clears it), so a short tap isn't
+    // missed.
     desired.0 = PlayerInput { move_to, walk, aim, fire, ability };
 }
 
@@ -1084,18 +1124,21 @@ fn update_status(
 fn update_key_hints(
     mut commands: Commands,
     mode: Res<CameraMode>,
+    cast_mode: Res<CastMode>,
     hints: Single<Entity, With<KeyHints>>,
-    mut built_for: Local<Option<bool>>,
+    mut built_for: Local<Option<(bool, bool)>>,
 ) {
-    if *built_for == Some(mode.free) {
+    if *built_for == Some((mode.free, cast_mode.quick)) {
         return;
     }
-    *built_for = Some(mode.free);
+    *built_for = Some((mode.free, cast_mode.quick));
+    let (q, shift_q) = if cast_mode.quick { ("ability", "aim ability") } else { ("aim ability", "ability") };
     let keys: &[(&str, &str)] = if mode.free {
         &[
             ("WASD", "move"),
             ("Left click", "attack"),
-            ("Q", "ability"),
+            ("Q", q),
+            ("Shift+Q", shift_q),
             ("Right drag, arrows", "turn camera"),
             ("Wheel, + -", "zoom"),
             ("Tab", "watch next fighter"),
@@ -1105,7 +1148,8 @@ fn update_key_hints(
             ("Right click", "move"),
             ("S", "stop"),
             ("Left click", "attack"),
-            ("Q", "ability"),
+            ("Q", q),
+            ("Shift+Q", shift_q),
             ("A", "show range"),
             ("Wheel", "zoom"),
         ]

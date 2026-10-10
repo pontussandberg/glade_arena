@@ -24,9 +24,11 @@ impl Plugin for ActionBarPlugin {
     }
 }
 
-/// Icon size in pixels, and its gap from the bottom of the screen.
-const ICON: f32 = 64.0;
+/// Icon size in pixels, and its gap from the bottom of the screen (its name goes under it).
+pub(crate) const ICON: f32 = 64.0;
 const BOTTOM: f32 = 18.0;
+/// Where the icons' bottoms line up, from the bottom of the screen.
+pub(crate) const ICON_BOTTOM: f32 = BOTTOM + 14.0;
 /// The cooldown wipe's shade.
 const SHADE: Color = Color::srgba(0.02, 0.03, 0.04, 0.8);
 /// The passive's icon size, and its gap from the Q icon.
@@ -147,7 +149,7 @@ fn icon_frame(tip: Entity, size: f32, from_center: f32, border: Color) -> impl B
         Interaction::default(),
         Node {
             position_type: PositionType::Absolute,
-            bottom: px(BOTTOM + 14.0),
+            bottom: px(ICON_BOTTOM),
             left: percent(50.0),
             margin: UiRect::left(px(from_center)),
             width: px(size),

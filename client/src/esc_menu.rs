@@ -49,8 +49,14 @@ fn toggle_menu(
     menu: Query<Entity, With<EscMenu>>,
     room: Res<CurrentRoom>,
     mut desired: ResMut<crate::DesiredInput>,
+    mut aiming: ResMut<crate::casting::Aiming>,
 ) {
     if !keys.just_pressed(KeyCode::Escape) {
+        return;
+    }
+    // ESC first drops a normal cast's aim; the next one opens the menu.
+    if aiming.0 {
+        aiming.0 = false;
         return;
     }
     if let Ok(menu) = menu.single() {
