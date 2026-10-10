@@ -434,8 +434,10 @@ fn read_local_input(
     camera: Single<(&Camera, &GlobalTransform)>,
     me: Query<(&Pos, &AbilityState), (With<Predicted>, With<PlayerId>)>,
     (mode, cast_mode, clock): (Res<CameraMode>, Res<CastMode>, AttackClock),
-    toggle: Query<&Interaction, With<QuickCastToggle>>,
-    icon: Query<&Interaction, With<AbilityIcon>>,
+    hud: Query<
+        (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Has<QuickCastToggle>),
+        Or<(With<QuickCastToggle>, With<AbilityIcon>)>,
+    >,
     mut aiming: ResMut<Aiming>,
     mut held_click: Local<bool>,
     mut last_pos: Local<Option<Vec2>>,
@@ -446,6 +448,17 @@ fn read_local_input(
     let ability_ready = me.is_some_and(|(_, ability)| ability.ready_at as f32 <= clock.now(true));
     let me = me.map(|(p, _)| p.0);
     let (camera, camera_transform) = *camera;
+    // Whether the cursor is on the quick cast pill, or on the Q icon. Tested on the nodes
+    // themselves, so nothing drawn over them can get in the way.
+    let screen = window.as_ref().and_then(|w| w.physical_cursor_position());
+    let on = |pill: bool| {
+        screen.is_some_and(|at| {
+            hud.iter().any(|(node, transform, visible, is_pill)| {
+                is_pill == pill && visible.get() && node.contains_point(*transform, at)
+            })
+        })
+    };
+    let (on_toggle, on_icon) = (on(true), on(false));
     let cursor = window.and_then(|w| w.cursor_position()).and_then(|c| ground_at(camera, camera_transform, c));
 
     let mut move_to = desired.0.move_to;
@@ -477,8 +490,6 @@ fn read_local_input(
         (Some(cursor), Some(me)) => cursor - me,
         _ => desired.0.aim,
     };
-    let hovered = |i: &Interaction| *i != Interaction::None;
-    let (on_toggle, on_icon) = (toggle.iter().any(hovered), icon.iter().any(hovered));
     let mut ability = desired.0.ability;
     if keys.just_pressed(KeyCode::KeyQ) {
         let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
@@ -490,8 +501,8 @@ fn read_local_input(
         }
     }
     // A left click that casts, aims (on the Q icon) or turns quick cast on or off doesn't also
-    // attack: no attacking until it's let go. A right click (MOBA camera) drops the aim, and walks as usual; ESC drops
-    // it too (`esc_menu`).
+    // attack: no attacking until it's let go. A right click (MOBA camera) drops the aim, and
+    // walks as usual; ESC drops it too (`esc_menu`).
     if mouse.just_pressed(MouseButton::Left) {
         if on_toggle {
             *held_click = true;
