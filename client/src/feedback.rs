@@ -11,7 +11,7 @@ use lightyear::prelude::*;
 
 use crate::camera::CameraPlaced;
 use crate::glade::{palette, to_world};
-use crate::render::{Relation, shown, ui_text};
+use crate::render::{Relation, set_fill, shown, ui_text};
 use crate::rig::SeenThrows;
 
 pub struct FeedbackPlugin;
@@ -177,10 +177,7 @@ fn place_bars(
 
         let mut fill_to = |part: Entity, fraction: f32| {
             if let Ok((mut fill, _)) = parts.get_mut(part) {
-                let width = percent(fraction.clamp(0.0, 1.0) * 100.0);
-                if fill.width != width {
-                    fill.width = width;
-                }
+                set_fill(&mut fill, fraction);
             }
         };
         fill_to(ids.health_fill, health.map_or(1.0, |h| h.0 as f32 / class.def().max_hp as f32));

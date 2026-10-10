@@ -2,8 +2,8 @@
 //! like a classic character select:
 //!
 //! - the fighter stands on a stage filling the screen (drag to turn it)
-//! - what it is and does on the left: name, role, a line on how it plays, its numbers against
-//!   the others, its Q ability
+//! - what it is and does on the left: name, role, a line on how it plays, its stat frame (as in
+//!   the arena), its passive and Q ability
 //! - the fighters to pick from in a row of tiles at the bottom (click, or press the number)
 //! - the way in at the bottom right (the button, or Enter), with the connection above it
 //!
@@ -15,7 +15,7 @@
 use std::f32::consts::FRAC_PI_2;
 use std::fmt::Write;
 
-use arena_shared::classes::{AttackKind, ClassDef};
+use arena_shared::classes::{ClassDef, seconds};
 use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::{AbilityState, AttackState, ClassId, PlayerId, Pos};
 use bevy::input::mouse::AccumulatedMouseMotion;
@@ -26,7 +26,8 @@ use lightyear::prelude::*;
 use crate::ChosenClass;
 use crate::camera::{CameraControl, CameraMoves, Orbit};
 use crate::glade::{self, palette, to_world};
-use crate::render::{GameUi, Visuals, ui_text};
+use crate::render::{GameUi, Visuals, key_chip, ui_text};
+use crate::stat_frame;
 
 pub struct LobbyPlugin;
 
@@ -62,7 +63,7 @@ const SWAY: (f32, f32) = (0.25, 0.35);
 const STAGE_DRAG: f32 = 0.008;
 
 /// The one accent: what's selected, and the way in.
-const ACCENT: Color = palette::MEADOW;
+const ACCENT: Color = stat_frame::ACCENT;
 /// Spacing steps (pixels).
 const GAP: f32 = 8.0;
 const MARGIN: f32 = 40.0;
@@ -173,7 +174,16 @@ fn spawn_screen(commands: &mut Commands) {
             screen.spawn(ui_text("GLADE ARENA", 18.0, palette::STONE));
             screen.spawn((
                 Details,
-                Node { flex_direction: FlexDirection::Column, row_gap: px(GAP), width: px(340.0), ..default() },
+                // Fills the height between the top bar and the bottom row, its content from the
+                // top: the name stays put whichever fighter is picked, however long its details.
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    flex_grow: 1.0,
+                    row_gap: px(GAP),
+                    width: px(340.0),
+                    margin: UiRect::vertical(px(GAP * 3.0)),
+                    ..default()
+                },
             ));
             screen.spawn(Node { align_items: AlignItems::FlexEnd, ..default() }).with_children(|bottom| {
                 // Three columns: the outer two share what the tiles leave, so the tiles are centered.
@@ -303,65 +313,29 @@ fn show_fighter(
         column.spawn(ui_text(def.name.clone(), 44.0, palette::HAZE));
         column.spawn(ui_text(def.blurb.clone(), 14.0, palette::STONE));
         column.spawn(Node { height: px(GAP * 2.0), ..default() });
-        for (label, value, fraction) in stats(selected) {
-            stat_bar(column, label, value, fraction);
-        }
-        column.spawn(Node { height: px(GAP * 2.0), ..default() });
-        column.spawn(ui_text(attack_summary(def), 13.0, palette::HAZE));
+        stat_frame::spawn_frame(column, selected, false);
         column.spawn(Node { height: px(GAP), ..default() });
-        column.spawn(Node { column_gap: px(GAP * 1.5), align_items: AlignItems::Center, ..default() }).with_children(|row| {
-            row.spawn((
-                Node { padding: UiRect::axes(px(8.0), px(3.0)), border: UiRect::all(px(1.0)), ..default() },
-                BorderColor::all(palette::SPIRIT),
-            ))
-            .with_child(ui_text("Q", 13.0, palette::SPIRIT));
-            row.spawn(ui_text(def.ability.name.clone(), 16.0, palette::HAZE));
-        });
-        column.spawn(ui_text(def.ability.description.clone(), 13.0, palette::STONE));
+        column.spawn(ui_text(attack_summary(def), 13.0, palette::HAZE));
+        if let Some(passive) = stat_frame::passive_blurb(def) {
+            column.spawn(Node { height: px(GAP), ..default() });
+            power(column, "PASSIVE", palette::TORCH_FLAME, passive);
+        }
+        column.spawn(Node { height: px(GAP), ..default() });
+        power(column, "Q", palette::SPIRIT, stat_frame::ability_blurb(def));
     });
 }
 
-/// A labelled bar, `fraction` (0..1) full.
-fn stat_bar(column: &mut ChildSpawnerCommands, label: &str, value: String, fraction: f32) {
-    column
-        .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4.0), ..default() })
-        .with_children(|stat| {
-            stat.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
-                row.spawn(ui_text(label, 11.0, palette::STONE));
-                row.spawn(ui_text(value, 11.0, palette::HAZE));
-            });
-            stat.spawn((Node { height: px(4.0), ..default() }, BackgroundColor(palette::HAZE.with_alpha(0.12))))
-                .with_child((
-                    Node { width: percent(fraction.clamp(0.05, 1.0) * 100.0), height: percent(100.0), ..default() },
-                    BackgroundColor(ACCENT),
-                ));
-        });
-}
-
-/// A class's numbers that players compare, each with how full its bar is (against the best of
-/// any class).
-fn stats(class: ClassId) -> [(&'static str, String, f32); 4] {
-    let best = |of: fn(&ClassDef) -> f32| ClassId::all().map(|c| of(c.def())).fold(f32::MIN, f32::max);
-    let def = class.def();
-    let bar = |of: fn(&ClassDef) -> f32| of(def) / best(of);
-    [
-        ("HEALTH", def.max_hp.to_string(), bar(|d| d.max_hp as f32)),
-        ("SPEED", format!("{} m/s", def.move_speed), bar(|d| d.move_speed)),
-        ("DAMAGE / SECOND", format!("{:.0}", damage_per_second(def)), bar(damage_per_second)),
-        ("REACH", format!("{} m", reach(def)), bar(reach)),
-    ]
-}
-
-/// At its best (for shots that hit harder from afar, at full range).
-fn damage_per_second(def: &ClassDef) -> f32 {
-    let attack = &def.attack;
-    attack.damage_at(f32::INFINITY).max(attack.damage_at(0.0)) as f32 * TICK_HZ as f32 / attack.cooldown_ticks as f32
-}
-
-fn reach(def: &ClassDef) -> f32 {
-    match def.attack.kind {
-        AttackKind::Melee { range, .. } | AttackKind::Projectile { range, .. } => range,
+/// A passive or the Q: a badge (`badge` in `color`), its name, its cooldown if it has one, then
+/// what it does.
+fn power(column: &mut ChildSpawnerCommands, badge: &str, color: Color, blurb: stat_frame::Blurb) {
+    column.spawn(Node { column_gap: px(GAP * 1.5), align_items: AlignItems::Center, ..default() }).with_children(|row| {
+        row.spawn(key_chip(badge, 13.0, color, color));
+        row.spawn(ui_text(blurb.name, 16.0, palette::HAZE));
+    });
+    if let Some(cooldown) = blurb.cooldown {
+        column.spawn(ui_text(cooldown, 11.0, palette::STONE));
     }
+    column.spawn(ui_text(blurb.description, 13.0, palette::STONE));
 }
 
 /// One line on what the auto-attack does, in the units players think in.
@@ -369,11 +343,6 @@ fn attack_summary(def: &ClassDef) -> String {
     let attack = &def.attack;
     let per_second = TICK_HZ as f32 / attack.cooldown_ticks as f32;
     let mut s = String::new();
-    match attack.kind {
-        AttackKind::Melee { range, .. } => write!(s, "Melee, {range} m reach. "),
-        AttackKind::Projectile { range, .. } => write!(s, "Ranged, {range} m. "),
-    }
-    .ok();
     match (attack.damage_at(0.0), attack.damage_at(f32::INFINITY)) {
         (near, far) if near != far => write!(s, "{near}-{far} damage, more at range"),
         (damage, _) => write!(s, "{damage} damage"),
@@ -382,8 +351,7 @@ fn attack_summary(def: &ClassDef) -> String {
     write!(s, ", {per_second:.1} hits/s.").ok();
     let chill = attack.chill;
     if chill.slow > 0.0 && chill.slow_ticks > 0 {
-        let seconds = chill.slow_ticks as f32 / TICK_HZ as f32;
-        write!(s, " Slows {:.0}% for {seconds:.1} s.", chill.slow * 100.0).ok();
+        write!(s, " Slows {:.0}% for {}.", chill.slow * 100.0, seconds(chill.slow_ticks)).ok();
     }
     s
 }

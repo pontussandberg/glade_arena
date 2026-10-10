@@ -29,8 +29,6 @@ pub mod feedback;
 #[cfg(feature = "render")]
 pub mod glade;
 #[cfg(feature = "render")]
-pub mod inspect;
-#[cfg(feature = "render")]
 pub mod lobby;
 #[cfg(feature = "render")]
 pub mod minimap;
@@ -38,6 +36,8 @@ pub mod minimap;
 pub mod render;
 #[cfg(feature = "render")]
 pub mod rig;
+#[cfg(feature = "render")]
+pub mod stat_frame;
 
 #[derive(Clone)]
 pub struct ClientSettings {

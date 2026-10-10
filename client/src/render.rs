@@ -31,7 +31,7 @@ impl Plugin for RenderPlugin {
             crate::rig::RigPlugin,
             crate::action_bar::ActionBarPlugin,
             crate::minimap::MinimapPlugin,
-            crate::inspect::InspectPlugin,
+            crate::stat_frame::StatFramePlugin,
         ));
         app.add_systems(Startup, setup_scene);
         app.add_systems(
@@ -43,7 +43,7 @@ impl Plugin for RenderPlugin {
                 (show_swings, sweep_swooshes, show_dashes, show_novas, grow_bursts, fade_swings, show_frost),
                 (show_telegraphs, align_to_world).chain().after(crate::rig::Posing),
                 toggle_range_circle,
-                update_hud,
+                (update_status, update_key_hints),
             ),
         );
     }
@@ -271,8 +271,13 @@ struct Telegraph(Entity);
 #[derive(Component)]
 struct WorldAligned(Quat, f32);
 
+/// Top left: the connection (ping, or connecting / disconnected) and whether you're dead, with
+/// the keys under it (`KeyHints`).
 #[derive(Component)]
-struct Hud;
+struct Status;
+
+#[derive(Component)]
+struct KeyHints;
 
 /// The in-game UI (HUD, minimap): hidden while the lobby is open.
 #[derive(Component)]
@@ -364,21 +369,37 @@ fn setup_scene(
         wind: meshes.add(glade::wind_mesh()),
         materials: HashMap::default(),
     });
-    commands.spawn((
-        Hud,
-        GameUi,
-        Text::new("connecting..."),
-        TextFont { font_size: FontSize::Px(16.0), ..default() },
-        TextColor(palette::HAZE),
-        BackgroundColor(palette::INK.with_alpha(0.6)),
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(8.0),
-            left: px(8.0),
-            padding: UiRect::axes(px(10.0), px(6.0)),
-            ..default()
-        },
-    ));
+    commands
+        .spawn((
+            GameUi,
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(8.0),
+                left: px(8.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::FlexStart,
+                row_gap: px(8.0),
+                padding: UiRect::axes(px(10.0), px(8.0)),
+                ..default()
+            },
+            BackgroundColor(palette::INK.with_alpha(0.6)),
+        ))
+        .with_children(|corner| {
+            corner.spawn((Status, ui_text("connecting...", 12.0, palette::HAZE)));
+            // Two columns: the keys, as wide as the widest, then what they do, all left-aligned.
+            corner.spawn((
+                KeyHints,
+                Node {
+                    display: Display::Grid,
+                    grid_template_columns: vec![GridTrack::auto(), GridTrack::auto()],
+                    column_gap: px(10.0),
+                    row_gap: px(4.0),
+                    align_items: AlignItems::Center,
+                    justify_items: JustifyItems::Start,
+                    ..default()
+                },
+            ));
+        });
 }
 
 /// Mouse -> `DesiredInput`, LoL/OSRS-style: right click walks to the clicked tile, left click
@@ -835,6 +856,23 @@ pub(crate) fn ui_text(value: impl Into<String>, size: f32, color: Color) -> impl
     (Text::new(value), TextFont { font_size: FontSize::Px(size), ..default() }, TextColor(color))
 }
 
+/// Sets a bar's fill to `fraction` (0..1) of its width, touching the node only if it changed.
+pub(crate) fn set_fill(fill: &mut Node, fraction: f32) {
+    let width = percent(fraction.clamp(0.0, 1.0) * 100.0);
+    if fill.width != width {
+        fill.width = width;
+    }
+}
+
+/// A key (or a badge like it) in a thin box: `text` in `color`, boxed in `border`.
+pub(crate) fn key_chip(text: impl Into<String>, size: f32, color: Color, border: Color) -> impl Bundle {
+    (
+        Node { padding: UiRect::axes(px(6.0), px(2.0)), border: UiRect::all(px(1.0)), ..default() },
+        BorderColor::all(border),
+        children![ui_text(text, size, color)],
+    )
+}
+
 /// Visible (if its parent is) or hidden.
 pub(crate) fn shown(visible: bool) -> Visibility {
     if visible { Visibility::Inherited } else { Visibility::Hidden }
@@ -923,11 +961,13 @@ fn fly_shots(
     }
 }
 
-fn update_hud(
-    mut hud: Single<&mut Text, With<Hud>>,
+/// The ping (with the free camera, for watching the netcode, also the jitter and rollbacks), or
+/// that we're connecting or cut off; and when you're dead, how long until you're back.
+fn update_status(
+    mut status: Single<&mut Text, With<Status>>,
     client: Query<(&Link, Has<Connected>, Option<&Disconnected>), With<Client>>,
     metrics: Option<Res<lightyear::prediction::prelude::PredictionMetrics>>,
-    players: Query<(&PlayerId, &ClassId, Option<&Health>, Has<Predicted>)>,
+    me: Query<&Health, (With<Predicted>, With<PlayerId>)>,
     mode: Res<CameraMode>,
 ) {
     let Ok((link, connected, disconnected)) = client.single() else { return };
@@ -937,35 +977,57 @@ fn update_hud(
     } else if !connected {
         text.push_str("connecting...");
     } else {
-        let _ = writeln!(
-            text,
-            "ping {:.0} ms   jitter {:.0} ms   rollbacks {}",
-            link.stats.rtt.as_secs_f64() * 1000.0,
-            link.stats.jitter.as_secs_f64() * 1000.0,
-            metrics.map_or(0, |m| m.rollbacks),
-        );
-        if players.iter().any(|(_, _, health, is_me)| is_me && health.is_some_and(|h| h.0 == 0)) {
-            writeln!(text, "You died. Back in {} seconds.", RESPAWN_TICKS / TICK_HZ as u32).ok();
+        let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+        let _ = write!(text, "ping {:.0} ms", ms(link.stats.rtt));
+        if mode.free {
+            let rollbacks = metrics.map_or(0, |m| m.rollbacks);
+            let _ = write!(text, "   jitter {:.0} ms   rollbacks {rollbacks}", ms(link.stats.jitter));
         }
-        let mut players: Vec<_> = players.iter().collect();
-        players.sort_by_key(|(id, ..)| id.0.to_bits());
-        for (id, class, health, is_me) in players {
-            let you = if is_me { " (you)" } else { "" };
-            let (name, max) = (&class.def().name, class.def().max_hp);
-            match health {
-                Some(h) => writeln!(text, "{name} {}{you}: {}/{max} hp", id.0.to_bits(), h.0),
-                None => writeln!(text, "{name} {}{you}: ?/{max} hp", id.0.to_bits()),
-            }
-            .ok();
+        if me.single().is_ok_and(|h| !h.alive()) {
+            let _ = write!(text, "\nYou died. Back in {} seconds.", RESPAWN_TICKS / TICK_HZ as u32);
         }
-        text.push_str(if mode.free {
-            "WASD: move | left click: attack | Q: ability\nhold right mouse or arrows: turn camera | wheel or + -: zoom | Tab: watch next fighter\nF2: fighter info | V: MOBA camera"
-        } else {
-            "right click: move | S: stop | left click: attack | Q: ability\nwheel: zoom | F2: fighter info | V: free camera"
-        });
     }
     // Only touch the component when the text changed, so Bevy doesn't re-layout it every frame.
-    if hud.0 != text {
-        hud.0 = text;
+    if status.0 != text {
+        status.0 = text;
     }
+}
+
+/// The keys for the camera you're using, one per row: the key in a chip, then what it does.
+/// Rebuilt when the camera changes.
+fn update_key_hints(
+    mut commands: Commands,
+    mode: Res<CameraMode>,
+    hints: Single<Entity, With<KeyHints>>,
+    mut built_for: Local<Option<bool>>,
+) {
+    if *built_for == Some(mode.free) {
+        return;
+    }
+    *built_for = Some(mode.free);
+    let keys: &[(&str, &str)] = if mode.free {
+        &[
+            ("WASD", "move"),
+            ("Left click", "attack"),
+            ("Q", "ability"),
+            ("Right drag, arrows", "turn camera"),
+            ("Wheel, + -", "zoom"),
+            ("Tab", "watch next fighter"),
+        ]
+    } else {
+        &[
+            ("Right click", "move"),
+            ("S", "stop"),
+            ("Left click", "attack"),
+            ("Q", "ability"),
+            ("A", "show range"),
+            ("Wheel", "zoom"),
+        ]
+    };
+    commands.entity(*hints).despawn_children().with_children(|grid| {
+        for (key, action) in keys {
+            grid.spawn(key_chip(*key, 11.0, palette::HAZE, palette::STONE.with_alpha(0.5)));
+            grid.spawn(ui_text(*action, 12.0, palette::STONE));
+        }
+    });
 }
