@@ -14,9 +14,10 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::DesiredInput;
-use crate::action_bar::{Tooltip, tip_panel};
 use crate::glade::{self, palette};
-use crate::render::{clicked, shown, ui_text};
+use crate::render::{HudButton, clicked, shown, ui_text};
+use crate::rooms::{load_setting, save_setting};
+use crate::tooltip::{Side, hover_shows, tip, tip_title};
 
 pub struct CastingPlugin;
 
@@ -73,7 +74,7 @@ pub(crate) fn spawn_toggle_row(grid: &mut ChildSpawnerCommands, quick: bool) {
     let switch = grid
         .spawn((
             QuickCastToggle,
-            Interaction::default(),
+            HudButton,
             Node {
                 width: px(SWITCH.x),
                 height: px(SWITCH.y),
@@ -96,40 +97,31 @@ pub(crate) fn spawn_toggle_row(grid: &mut ChildSpawnerCommands, quick: bool) {
             tip = switch.spawn(toggle_tip()).id();
         })
         .id();
-    grid.commands().entity(switch).insert(Tooltip(tip));
+    grid.commands().entity(switch).insert(hover_shows(tip));
     grid.spawn((
         QuickCastToggle,
-        Interaction::default(),
-        Tooltip(tip),
+        HudButton,
+        hover_shows(tip),
         Node { margin: UiRect::top(px(ROW_GAP)), ..default() },
         ui_text("Quick cast", 12.0, palette::HAZE),
     ));
 }
 
-/// What quick cast does, under the switch, hidden until it's hovered: Q with it on, and off.
+/// What quick cast does, under the switch: Q with it on, and off.
 fn toggle_tip() -> impl Bundle {
     let line = |state: &'static str, color: Color, what: &'static str| {
         (
             Node { column_gap: px(8.0), ..default() },
             children![
-                (Node { width: px(24.0), ..default() }, children![ui_text(state, 12.0, color)]),
-                ui_text(what, 12.0, palette::HAZE),
+                (Node { width: px(26.0), ..default() }, children![ui_text(state, 13.0, color)]),
+                ui_text(what, 13.0, palette::HAZE),
             ],
         )
     };
     (
-        tip_panel(Node {
-            position_type: PositionType::Absolute,
-            top: px(SWITCH.y + 6.0),
-            left: px(-1.0),
-            width: px(TIP_WIDTH),
-            flex_direction: FlexDirection::Column,
-            row_gap: px(4.0),
-            padding: UiRect::all(px(10.0)),
-            ..default()
-        }),
+        tip(Side::Below, -1.0, TIP_WIDTH),
         children![
-            ui_text("Quick cast", 15.0, palette::HAZE),
+            tip_title("Quick cast"),
             line("On", palette::SPIRIT, "Q casts instantly"),
             line("Off", palette::STONE, "Q aims first, click to cast"),
         ],
@@ -209,29 +201,13 @@ fn show_indicator(
     transform.set_if_neq(wanted);
 }
 
-/// The browser keeps the choice (`localStorage`), "on" or "off".
+/// The browser keeps the choice, "on" or "off".
 const QUICK_CAST_KEY: &str = "arena.quick_cast";
 
 fn load_quick_cast() -> bool {
-    #[cfg(target_family = "wasm")]
-    {
-        let stored = web_sys::window()
-            .and_then(|w| w.local_storage().ok().flatten())
-            .and_then(|s| s.get_item(QUICK_CAST_KEY).ok().flatten());
-        stored.as_deref() != Some("off")
-    }
-    #[cfg(not(target_family = "wasm"))]
-    {
-        let _ = QUICK_CAST_KEY;
-        true
-    }
+    load_setting(QUICK_CAST_KEY).as_deref() != Some("off")
 }
 
 fn save_quick_cast(quick: bool) {
-    #[cfg(target_family = "wasm")]
-    if let Some(Ok(Some(storage))) = web_sys::window().map(|w| w.local_storage()) {
-        let _ = storage.set_item(QUICK_CAST_KEY, if quick { "on" } else { "off" });
-    }
-    #[cfg(not(target_family = "wasm"))]
-    let _ = quick;
+    save_setting(QUICK_CAST_KEY, if quick { "on" } else { "off" });
 }

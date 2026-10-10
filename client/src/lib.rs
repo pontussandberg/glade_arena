@@ -47,6 +47,8 @@ pub mod rig;
 pub mod rooms;
 #[cfg(feature = "render")]
 pub mod stat_frame;
+#[cfg(feature = "render")]
+pub mod tooltip;
 
 #[derive(Clone)]
 pub struct ClientSettings {

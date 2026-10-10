@@ -12,9 +12,9 @@ use arena_shared::protocol::*;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
-use crate::action_bar::{Tooltip, tip_panel};
 use crate::glade::palette;
 use crate::render::{GameUi, ui_text};
+use crate::tooltip::{Side, hover_shows, tip, tip_text};
 
 pub struct StatFramePlugin;
 
@@ -98,7 +98,7 @@ pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, named: boo
                 if let Some(text) = tip {
                     let tip = row.commands().spawn(tooltip(text)).id();
                     row.commands().entity(name).with_child(info_badge());
-                    row.add_child(tip).insert((Interaction::default(), Tooltip(tip)));
+                    row.add_child(tip).insert(hover_shows(tip));
                 }
             }
         })
@@ -123,20 +123,9 @@ fn info_badge() -> impl Bundle {
     )
 }
 
-/// A stat's tooltip, above its row, hidden until the row is hovered.
+/// A stat's tooltip, above its row.
 fn tooltip(text: String) -> impl Bundle {
-    (
-        tip_panel(Node {
-            position_type: PositionType::Absolute,
-            bottom: percent(100.0),
-            left: px(-4.0),
-            width: px(WIDTH - 16.0),
-            margin: UiRect::bottom(px(4.0)),
-            padding: UiRect::all(px(8.0)),
-            ..default()
-        }),
-        children![ui_text(text, 12.0, palette::HAZE)],
-    )
+    (tip(Side::Above, -4.0, WIDTH - 16.0), children![tip_text(text)])
 }
 
 /// The frame's rows under health, what players compare: a label, a value, and for some what it
