@@ -3,8 +3,9 @@
 //!
 //! - the fighter stands on a stage filling the screen (drag to turn it)
 //! - who we are at the top, over the fighter but apart from it, so our name isn't taken for its name
-//! - what it is and does on the left: name, role, a line on how it plays, its stat frame (as in
-//!   the arena), its passive and Q ability
+//! - what it is and does on the left, a pane that folds open and shut like the lobbies: its
+//!   header (role and name) always; open, cards under it with its stat frame (as in the arena),
+//!   and its passive and Q ability
 //! - the fighters to pick from in a row of tiles at the bottom (click, or press the number)
 //! - on the right, the side panel: at home, the lobbies to join or create (`browser.rs`, opened
 //!   with "Create / join lobby"); in a room, its name and mode, who's in it (by team), the team
@@ -34,7 +35,7 @@ use crate::ChosenClass;
 use crate::browser::{LobbiesButton, Typing};
 use crate::camera::{CameraControl, CameraMoves, Orbit};
 use crate::glade::{self, palette, to_world};
-use crate::render::{GameUi, Visuals, button, clicked, key_chip, shown, ui_text};
+use crate::render::{GameUi, Visuals, button, button_fill, clicked, key_chip, shown, ui_text};
 use crate::rooms::{CurrentRoom, Me, Notice, Picking, Screen, request};
 use crate::stat_frame;
 
@@ -46,12 +47,13 @@ impl Plugin for LobbyPlugin {
         // Q pressed here would otherwise be kept until it's sent, and go off the moment we spawn.
         app.configure_sets(Update, CameraControl.run_if(in_state(Screen::InGame)));
         app.configure_sets(Update, crate::PlayerControls.run_if(in_state(Screen::InGame)));
+        app.insert_resource(DetailsOpen(true));
         app.add_systems(OnEnter(Picking), open_lobby);
         app.add_systems(OnExit(Picking), close_lobby);
         app.add_systems(
             Update,
             (
-                (pick_fighter, show_fighter, (show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena).chain(),
+                (pick_fighter, fold_details, show_fighter, show_details, (show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena).chain(),
                 show_status,
                 turn_stage_camera.in_set(CameraMoves),
                 liven_stage,
@@ -115,6 +117,14 @@ struct EnterHint;
 /// The left column's content, rebuilt for the selected fighter.
 #[derive(Component)]
 struct Details;
+
+/// Whether the details pane is open; it stays as it was left, whichever fighter is picked.
+#[derive(Resource)]
+struct DetailsOpen(bool);
+
+/// The details pane's header: a click opens or folds it.
+#[derive(Component)]
+struct DetailsHeader;
 
 /// The column on the right: home's lobbies (`browser.rs`), or the room we're in, rebuilt when it
 /// changes.
@@ -305,7 +315,7 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                 Node {
                     flex_direction: FlexDirection::Column,
                     flex_grow: 1.0,
-                    row_gap: px(GAP),
+                    row_gap: px(GAP * 1.5),
                     width: px(340.0),
                     margin: UiRect::vertical(px(GAP * 3.0)),
                     ..default()
@@ -422,14 +432,15 @@ fn pick_fighter(
     }
 }
 
-/// Puts the selected fighter on the stage and its details on the left, when it changes.
-fn show_fighter(
-    mut commands: Commands,
-    mut lobby: ResMut<Lobby>,
-    visuals: Res<Visuals>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    details: Single<Entity, With<Details>>,
-) {
+/// A click on the details pane's header opens or folds it.
+fn fold_details(header: Query<Ref<Interaction>, With<DetailsHeader>>, mut open: ResMut<DetailsOpen>) {
+    if header.iter().any(clicked) {
+        open.0 = !open.0;
+    }
+}
+
+/// Puts the selected fighter on the stage, when it changes.
+fn show_fighter(mut commands: Commands, mut lobby: ResMut<Lobby>, visuals: Res<Visuals>, mut materials: ResMut<Assets<StandardMaterial>>) {
     let selected = lobby.selected;
     if lobby.shown.is_some_and(|(_, shown)| shown == selected) {
         return;
@@ -452,20 +463,44 @@ fn show_fighter(
         ))
         .id();
     lobby.shown = Some((fighter, selected));
+}
 
-    let def = selected.def();
-    commands.entity(*details).despawn_children().with_children(|column| {
-        column.spawn(ui_text(def.role.to_uppercase(), 12.0, ACCENT));
-        column.spawn(ui_text(def.name.clone(), 44.0, palette::ui::LICHEN));
-        column.spawn(ui_text(def.blurb.clone(), 14.0, palette::ui::MUTED));
-        column.spawn(Node { height: px(GAP * 2.0), ..default() });
-        stat_frame::spawn_frame(column, selected, false);
-        if let Some(passive) = stat_frame::passive_blurb(def) {
-            column.spawn(Node { height: px(GAP), ..default() });
-            power(column, "PASSIVE", palette::TORCH_FLAME, passive);
+/// The selected fighter's details on the left, rebuilt when it changes or the pane opens or
+/// folds. As the lobbies pane: the header (role over name) always; open, cards under it, plainly
+/// apart.
+fn show_details(
+    mut commands: Commands,
+    lobby: Res<Lobby>,
+    open: Res<DetailsOpen>,
+    details: Single<(Entity, Ref<Details>)>,
+    mut built_for: Local<Option<ClassId>>,
+) {
+    let (details, fresh) = details.into_inner();
+    // `Lobby` changes every frame (the camera's sway), so which fighter is shown is kept here.
+    if *built_for == Some(lobby.selected) && !open.is_changed() && !fresh.is_added() {
+        return;
+    }
+    *built_for = Some(lobby.selected);
+    let def = lobby.selected.def();
+    commands.entity(details).despawn_children().with_children(|column| {
+        column.spawn((DetailsHeader, pane_header(open.0))).with_children(|header| {
+            header.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2.0), ..default() }).with_children(|left| {
+                left.spawn(ui_text(def.role.to_uppercase(), 12.0, ACCENT));
+                left.spawn(ui_text(def.name.clone(), 36.0, palette::ui::LICHEN));
+            });
+            header.spawn(fold_chip(open.0));
+        });
+        if !open.0 {
+            return;
         }
-        column.spawn(Node { height: px(GAP), ..default() });
-        power(column, "Q", palette::SPIRIT, stat_frame::ability_blurb(def));
+        stat_frame::spawn_frame(column, lobby.selected, stat_frame::FrameStyle::Card);
+        column.spawn(card()).with_children(|card| {
+            if let Some(passive) = stat_frame::passive_blurb(def) {
+                power(card, "PASSIVE", palette::TORCH_FLAME, passive);
+                card.spawn(Node { height: px(GAP), ..default() });
+            }
+            power(card, "Q", palette::SPIRIT, stat_frame::ability_blurb(def));
+        });
     });
 }
 
@@ -523,12 +558,41 @@ pub(crate) fn team_color(team: u8) -> Color {
     }
 }
 
-/// A card in the side panel: a block of its own, dark, with room around its content.
+/// The room around a card's content, and its fill.
+pub(crate) const CARD_PADDING: f32 = GAP * 2.0;
+pub(crate) fn card_fill() -> Color {
+    palette::ui::HOLLOW.with_alpha(0.88)
+}
+
+/// A card in a pane: a block of its own, dark, with room around its content.
 pub(crate) fn card() -> impl Bundle {
     (
-        Node { flex_direction: FlexDirection::Column, row_gap: px(GAP), padding: UiRect::all(px(GAP * 2.0)), ..default() },
-        BackgroundColor(palette::ui::HOLLOW.with_alpha(0.88)),
+        Node { flex_direction: FlexDirection::Column, row_gap: px(GAP), padding: UiRect::all(px(CARD_PADDING)), ..default() },
+        BackgroundColor(card_fill()),
     )
+}
+
+/// A fold-open pane's header, a button the whole width, its content spread to the ends (ending
+/// with `fold_chip`). Open, it joins the cards under it with an accent edge.
+pub(crate) fn pane_header(open: bool) -> impl Bundle {
+    let edge = if open { ACCENT } else { palette::ui::MUTED.with_alpha(0.3) };
+    (
+        button_fill(card_fill()),
+        Node {
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(px(GAP * 2.0), px(GAP * 1.5)),
+            border: UiRect::left(px(3.0)),
+            ..default()
+        },
+        BorderColor::all(edge),
+    )
+}
+
+/// Whether a click on a pane's header shows or hides the rest.
+pub(crate) fn fold_chip(open: bool) -> impl Bundle {
+    let (toggle, color) = if open { ("Hide", palette::ui::MUTED) } else { ("Show", ACCENT) };
+    key_chip(toggle, 11.0, color, color.with_alpha(0.5))
 }
 
 /// A small caps label over a part of a card.

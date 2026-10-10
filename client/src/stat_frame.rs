@@ -13,6 +13,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::glade::palette;
+use crate::lobby;
 use crate::render::{GameUi, ui_text};
 use crate::tooltip::{Side, hover_shows, tip, tip_text};
 
@@ -57,26 +58,38 @@ pub struct HealthParts {
     pub text: Entity,
 }
 
-/// A stat frame for `class`, under `parent`: with its name and role on top when `named` (the
-/// lobby shows those bigger itself), its health full.
-pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, named: bool) -> HealthParts {
+/// Where a stat frame is shown, which sets its look.
+#[derive(Clone, Copy, PartialEq)]
+pub enum FrameStyle {
+    /// In the arena's corner: a bordered panel of its own, the fighter's name and role on top.
+    Hud,
+    /// In the lobby's details pane: one of its cards, unnamed (the pane's header names it).
+    Card,
+}
+
+/// A stat frame for `class`, under `parent`, in `style`, its health full.
+pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, style: FrameStyle) -> HealthParts {
     let def = class.def();
+    let (width, padding, border, fill) = match style {
+        FrameStyle::Hud => (px(WIDTH), 12.0, 1.0, palette::ui::HOLLOW.with_alpha(0.85)),
+        FrameStyle::Card => (auto(), lobby::CARD_PADDING, 0.0, lobby::card_fill()),
+    };
     let mut parts = HealthParts { frame: Entity::PLACEHOLDER, text: Entity::PLACEHOLDER };
     parts.frame = parent
         .spawn((
             Node {
-                width: px(WIDTH),
+                width,
                 flex_direction: FlexDirection::Column,
                 row_gap: px(6.0),
-                padding: UiRect::all(px(12.0)),
-                border: UiRect::all(px(1.0)),
+                padding: UiRect::all(px(padding)),
+                border: UiRect::all(px(border)),
                 ..default()
             },
-            BackgroundColor(palette::ui::HOLLOW.with_alpha(0.85)),
+            BackgroundColor(fill),
             BorderColor::all(palette::ui::MUTED.with_alpha(0.3)),
         ))
         .with_children(|frame| {
-            if named {
+            if style == FrameStyle::Hud {
                 frame
                     .spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Baseline, ..default() })
                     .with_children(|row| {
@@ -183,7 +196,7 @@ fn spawn_my_frame(
         commands.entity(frame).despawn();
     }
     commands.entity(*corner).with_children(|corner| {
-        let parts = spawn_frame(corner, *class, true);
+        let parts = spawn_frame(corner, *class, FrameStyle::Hud);
         corner.commands().entity(parts.frame).insert(MyFrame(parts));
     });
 }
