@@ -133,7 +133,7 @@ fn tooltip(text: String) -> impl Bundle {
 fn stats(def: &ClassDef) -> [(&'static str, String, Option<String>); 5] {
     // The base odds only: a better chance vs frozen targets is the passive's to tell.
     let crit_text = def.describe("{crit}");
-    let crit_tip = def.describe("A critical hit deals {crit_multiplier} damage. Only your auto-attacks can crit.");
+    let crit_tip = def.describe("The chance your auto-attacks land a critical strike, dealing {crit_multiplier} of normal damage.");
     let attack = &def.attack;
     let per_second = TICK_HZ as f32 / attack.cooldown_ticks as f32;
     let range = match attack.kind {
