@@ -20,10 +20,7 @@
 //! fight (`rig.rs`), so it looks exactly as it will.
 
 use std::f32::consts::FRAC_PI_2;
-use std::fmt::Write;
 
-use arena_shared::classes::{ClassDef, seconds};
-use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::{AbilityState, AttackState, ClassId, Pos, RoomRequest};
 use arena_shared::rooms::{BLUE, MAX_PER_TEAM, Member, Mode, NO_TEAM, RED, RoomView, team_name};
 use bevy::input::mouse::AccumulatedMouseMotion;
@@ -418,8 +415,6 @@ fn show_fighter(
         column.spawn(ui_text(def.blurb.clone(), 14.0, palette::STONE));
         column.spawn(Node { height: px(GAP * 2.0), ..default() });
         stat_frame::spawn_frame(column, selected, false);
-        column.spawn(Node { height: px(GAP), ..default() });
-        column.spawn(ui_text(attack_summary(def), 13.0, palette::HAZE));
         if let Some(passive) = stat_frame::passive_blurb(def) {
             column.spawn(Node { height: px(GAP), ..default() });
             power(column, "PASSIVE", palette::TORCH_FLAME, passive);
@@ -440,24 +435,6 @@ fn power(column: &mut ChildSpawnerCommands, badge: &str, color: Color, blurb: st
         column.spawn(ui_text(cooldown, 11.0, palette::STONE));
     }
     column.spawn(ui_text(blurb.description, 13.0, palette::STONE));
-}
-
-/// One line on what the auto-attack does, in the units players think in.
-fn attack_summary(def: &ClassDef) -> String {
-    let attack = &def.attack;
-    let per_second = TICK_HZ as f32 / attack.cooldown_ticks as f32;
-    let mut s = String::new();
-    match (attack.damage_at(0.0), attack.damage_at(f32::INFINITY)) {
-        (near, far) if near != far => write!(s, "{near}-{far} damage, more at range"),
-        (damage, _) => write!(s, "{damage} damage"),
-    }
-    .ok();
-    write!(s, ", {per_second:.1} hits/s.").ok();
-    let chill = attack.chill;
-    if chill.slow > 0.0 && chill.slow_ticks > 0 {
-        write!(s, " Slows {:.0}% for {}.", chill.slow * 100.0, seconds(chill.slow_ticks)).ok();
-    }
-    s
 }
 
 /// Keeps the camera on the fighter, swaying gently around its front; dragging (left button,

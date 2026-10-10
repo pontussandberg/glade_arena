@@ -238,7 +238,7 @@ pub fn melee_hits(attacker: Vec2, dir: Vec2, class: ClassId, target: Vec2) -> bo
 }
 
 /// Damage of a projectile hitting at `tick`: the ability's, or the auto-attack's by how far it
-/// has flown (see `far_damage`).
+/// has flown (see `far_scale`).
 pub fn projectile_damage(projectile: &Projectile, tick: u32) -> i32 {
     let def = projectile.class.def();
     if let (true, AbilityKind::Projectile { damage, .. }) = (projectile.ability, &def.ability.kind) {

@@ -415,11 +415,12 @@ fn view_time(now: Tick, link: Entity, delays: &Query<&InterpolationDelay, With<C
     (tick.0.max(earliest), overstep)
 }
 
-/// What a hit does: damage, and crowd control on top.
+/// What a hit does: damage, and crowd control on top. Only an auto-attack's `can_crit`.
 #[derive(Clone, Copy)]
 struct Blow {
     amount: i32,
     chill: Chill,
+    can_crit: bool,
 }
 
 /// Who dealt a hit, of which class (whose crit odds it rolls), and `with` what (for the log).
@@ -434,8 +435,8 @@ fn foes(side: Side, other: Side) -> bool {
 }
 
 /// Apply a hit dealt by `attacker`; at zero health the player is out of the fight for
-/// `RESPAWN_TICKS`. A crit is rolled on the attacker's class's odds, against whether the target
-/// is frozen now: a root this very hit applies starts next tick, so it doesn't count.
+/// `RESPAWN_TICKS`. A blow that can crit rolls on the attacker's class's odds, against whether the
+/// target is frozen now: a root this very hit applies starts next tick, so it doesn't count.
 fn damage(
     commands: &mut Commands,
     now: u32,
@@ -444,7 +445,7 @@ fn damage(
     blow: Blow,
     (by, class, with): Attacker,
 ) {
-    let crit = fastrand::f32() < class.def().crit.chance_against(chilled.rooted_at(now));
+    let crit = blow.can_crit && fastrand::f32() < class.def().crit.chance_against(chilled.rooted_at(now));
     let amount = if crit { (blow.amount as f32 * CRIT_MULTIPLIER).round() as i32 } else { blow.amount };
     health.0 = (health.0 - amount).max(0);
     hits.push(amount, if crit { HitKind::Crit } else { HitKind::Damage });
@@ -546,7 +547,7 @@ fn attack(
             sim::Attack::Melee(swing) => {
                 *last_swing = swing;
                 let seen_at = view_time(now, controlled_by.owner, &delays);
-                let blow = Blow { amount: class.def().attack.damage, chill: class.def().attack.chill };
+                let blow = Blow { amount: class.def().attack.damage, chill: class.def().attack.chill, can_crit: true };
                 let with = (id.0, *class, "auto-attack");
                 hit_where_seen(&mut commands, now.0, &mut targets, seen_at, with, side, blow, |_, seen| {
                     sim::melee_hits(pos.0, swing.dir, *class, seen)
@@ -605,7 +606,7 @@ fn use_abilities(
             }
             let seen_at = view_time(now, controlled_by.owner, &delays);
             let with = (id.0, *class, class.def().ability.name.as_str());
-            let blow = Blow { amount: *cut, chill: Chill::default() };
+            let blow = Blow { amount: *cut, chill: Chill::default(), can_crit: false };
             let cut_now = hit_where_seen(&mut commands, now.0, &mut targets, seen_at, with, side, blow, |target, seen| {
                 let fresh = !hits.1.contains(&target) && sim::dash_hits(pos.0, seen);
                 if fresh {
@@ -625,7 +626,7 @@ fn use_abilities(
                 let AbilityKind::Nova { damage, chill, .. } = class.def().ability.kind else { continue };
                 let seen_at = view_time(now, controlled_by.owner, &delays);
                 let with = (id.0, *class, class.def().ability.name.as_str());
-                let blow = Blow { amount: damage, chill };
+                let blow = Blow { amount: damage, chill, can_crit: false };
                 hit_where_seen(&mut commands, now.0, &mut targets, seen_at, with, side, blow, |_, seen| {
                     sim::nova_hits(pos.0, *class, seen)
                 });
@@ -670,7 +671,11 @@ fn resolve_projectile_hits(
                 continue;
             }
             commands.entity(projectile_entity).try_despawn();
-            let blow = Blow { amount: sim::projectile_damage(projectile, now.0), chill: sim::projectile_chill(projectile) };
+            let blow = Blow {
+                amount: sim::projectile_damage(projectile, now.0),
+                chill: sim::projectile_chill(projectile),
+                can_crit: !projectile.ability,
+            };
             let def = projectile.class.def();
             let with = if projectile.ability { def.ability.name.as_str() } else { "auto-attack" };
             let hit = (&mut *health, &mut *chilled, &mut *recent);

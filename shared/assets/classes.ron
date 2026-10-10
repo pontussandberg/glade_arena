@@ -13,8 +13,8 @@
 //                   the whole attack: holding fire keeps you planted, to move you stop firing
 //     kind: Melee(range, arc_degrees)       hits everyone in a cone in front of you
 //           Projectile(speed, radius, range) flies straight, stops at walls/rocks/trees;
-//             optional far_damage: damage after flying the full range, scaling linearly from
-//             `damage` (point blank) by how far the shot flew
+//             optional far_scale: damage after flying the full range, as a multiple of `damage`
+//             (point blank), scaling linearly by how far the shot flew (2.0 = double at full range)
 //     chill (optional): crowd control each hit applies on top of its damage:
 //       (slow: fraction of speed taken away, slow_ticks: for how long, root_ticks: frozen in
 //       place this long: no walking, no dashing, and a dash in progress stops)
@@ -26,15 +26,18 @@
 //           Nova(radius, damage, chill)  a burst around you, at once: everyone within `radius`
 //             (and not behind a wall) takes `damage` and `chill`
 //   passive (optional)  shown to players, nothing more: Some((name, description)). Its effect
-//     lives in the numbers it describes (far_damage, crit...).
+//     lives in the numbers it describes (far_scale, chill, crit...).
 //
 // Descriptions (the passive's and the ability's) can name this class's numbers in braces, filled
-// in when shown, so the words follow a retune: {near_damage} / {far_damage} (the auto-attack's
-// damage point blank / after its full range), {crit}, {crit_vs_frozen} (as percentages),
-// {crit_multiplier} ("2x"), {ability_damage}, {ability_reach} (a thrown ability's range, a dash's
-// distance, a nova's radius, in meters), {ability_root} (a nova's root, in seconds).
-//   crit (optional)  odds (0 to 1) that a hit you deal, auto-attack or Q, is critical for double
-//     damage: (chance: normally, vs_frozen: against a frozen (rooted) target). None by default.
+// in when shown, so the words follow a retune: {far_scale} (the auto-attack's damage after its full
+// range, as a percent of point blank), {attack_slow} / {attack_slow_time} (the auto-attack's slow,
+// as a percent / in seconds), {crit}, {crit_vs_frozen}, {crit_multiplier} (as percentages),
+// {ability_damage}, {ability_reach} (a thrown ability's range, a dash's distance, a nova's
+// radius, in meters), {ability_root} (a nova's root, in seconds). A Q that deals damage must name
+// {ability_damage}.
+//   crit (optional)  odds (0 to 1) that an auto-attack hit you deal is critical for double damage
+//     (a Q never crits): (chance: normally, vs_frozen: against a frozen (rooted) target). None by
+//     default.
 [
     (
         id: "javelinist",
@@ -47,17 +50,17 @@
             damage: 16,
             cooldown_ticks: 48,
             windup_ticks: 48,
-            kind: Projectile(speed: 15.0, radius: 0.25, range: 15.0, far_damage: Some(36)),
+            kind: Projectile(speed: 15.0, radius: 0.25, range: 15.0, far_scale: Some(2.25)),
         ),
         ability: (
             name: "Spirit Spear",
-            description: "Instantly hurl a fast spectral spear. No windup: throw on the move.",
+            description: "Instantly hurl a fast spectral spear for {ability_damage} damage. No windup: throw on the move.",
             cooldown_ticks: 384,
             kind: Projectile(speed: 32.0, radius: 0.2, range: 13.0, damage: 22),
         ),
         passive: Some((
             name: "Long Shot",
-            description: "Your javelins hit harder the farther they fly: {near_damage} damage point blank, up to {far_damage} at full range.",
+            description: "Your auto-attacks hit harder the farther they fly, up to {far_scale} damage at full range.",
         )),
         crit: (chance: 0.1),
     ),
@@ -76,7 +79,7 @@
         ),
         ability: (
             name: "Rift Step",
-            description: "Dash through enemies, cutting each one. A hit readies your blade at once.",
+            description: "Dash through enemies, cutting each one for {ability_damage} damage. A hit readies your blade at once.",
             cooldown_ticks: 320,
             kind: Dash(distance: 6.0, ticks: 10, damage: 18, resets_attack: true),
         ),
@@ -98,13 +101,13 @@
         ),
         ability: (
             name: "Frost Nova",
-            description: "Instantly freeze everyone within {ability_reach} in place for {ability_root}: no walking, no dashing.",
+            description: "Instantly deal {ability_damage} damage to everyone within {ability_reach} and freeze them in place for {ability_root}: no walking, no dashing.",
             cooldown_ticks: 448,
             kind: Nova(radius: 3.5, damage: 6, chill: (root_ticks: 160)),
         ),
         passive: Some((
             name: "Shatter",
-            description: "Your hits on frozen targets have a {crit_vs_frozen} crit chance, for {crit_multiplier} damage.",
+            description: "Auto-attacks against targets frozen by Frost Nova have a {crit_vs_frozen} crit chance. Auto-attacks also slow on hit, by {attack_slow} for {attack_slow_time}.",
         )),
         crit: (vs_frozen: 1.0),
     ),
