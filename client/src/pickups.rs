@@ -61,6 +61,14 @@ pub(crate) fn color(kind: PickupKind) -> Color {
     }
 }
 
+/// A pickup's icon, as text (the minimap's marker).
+pub(crate) fn icon(kind: PickupKind) -> &'static str {
+    match kind {
+        PickupKind::Heal => "+",
+        PickupKind::Haste => ">>",
+    }
+}
+
 fn load_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     let mut kind = |kind| {
         let c = color(kind);

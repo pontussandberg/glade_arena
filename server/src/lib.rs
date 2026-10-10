@@ -345,7 +345,7 @@ fn spawn_pickups(mut commands: Commands) {
 
 /// A fighter touching a pickup that's lying there takes it (the first found, if several), and
 /// it's gone for `PICKUP_RESPAWN_TICKS`. A heal is taken even at full health; what it restores
-/// goes in `RecentHits` as a negative hit, for the client's number. A haste starts next tick.
+/// goes in `RecentHits` (as a heal), for the client's number. A haste starts next tick.
 fn take_pickups(
     timeline: Res<LocalTimeline>,
     mut pickups: Query<&mut Pickup>,
@@ -368,7 +368,7 @@ fn take_pickups(
             PickupKind::Heal => {
                 let healed = (health.0 + sim::heal_amount(class.def().max_hp)).min(class.def().max_hp);
                 if healed > health.0 {
-                    hits.push(health.0 - healed, false);
+                    hits.push(healed - health.0, HitKind::Heal);
                     health.0 = healed;
                 }
             }
@@ -447,7 +447,7 @@ fn damage(
     let crit = fastrand::f32() < class.def().crit.chance_against(chilled.rooted_at(now));
     let amount = if crit { (blow.amount as f32 * CRIT_MULTIPLIER).round() as i32 } else { blow.amount };
     health.0 = (health.0 - amount).max(0);
-    hits.push(amount, crit);
+    hits.push(amount, if crit { HitKind::Crit } else { HitKind::Damage });
     if !blow.chill.is_none() {
         chilled.apply(blow.chill, now);
     }

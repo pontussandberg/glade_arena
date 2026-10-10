@@ -46,9 +46,18 @@ pub struct RecentHits(pub Vec<Hit>);
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Hit {
     pub seq: u32,
-    /// Damage taken; negative for health gained (a heal pickup).
+    /// Health lost (or, for a heal, gained).
     pub amount: i32,
-    pub crit: bool,
+    pub kind: HitKind,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+pub enum HitKind {
+    Damage,
+    /// Damage, critical.
+    Crit,
+    /// Health gained (a heal pickup).
+    Heal,
 }
 
 impl RecentHits {
@@ -60,12 +69,12 @@ impl RecentHits {
         self.0.last().map_or(0, |hit| hit.seq)
     }
 
-    pub fn push(&mut self, amount: i32, crit: bool) {
+    pub fn push(&mut self, amount: i32, kind: HitKind) {
         let seq = self.seq() + 1;
         if self.0.len() == Self::KEEP {
             self.0.remove(0);
         }
-        self.0.push(Hit { seq, amount, crit });
+        self.0.push(Hit { seq, amount, kind });
     }
 }
 

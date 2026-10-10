@@ -48,13 +48,13 @@ struct Dot {
 #[derive(Component)]
 struct ViewFrame;
 
-/// A pickup's marker (this entity, a round chip) and its text, and what it shows now: `None`
-/// the pickup's icon (it's lying there), else the seconds until it's back.
+/// A pickup's marker (this entity, a round chip) and its text, and what it shows now: the
+/// pickup's icon (`None`: it's lying there), else the seconds until it's back.
 #[derive(Component)]
 struct PickupMarker {
     pickup: Entity,
     text: Entity,
-    showing: Option<Option<u32>>,
+    showing: Option<u32>,
 }
 
 /// Where a gameplay position is on the minimap, in whole pixels from its top-left corner (so a
@@ -164,7 +164,9 @@ fn place_dots(
 /// standing on it doesn't hide its timer.
 fn spawn_markers(mut commands: Commands, minimap: Single<Entity, With<Minimap>>, new: Query<(Entity, &Pickup), Added<Pickup>>) {
     for (pickup, info) in &new {
-        let text = commands.spawn(ui_text("", MARKER_TEXT, palette::HAZE)).id();
+        let color = crate::pickups::color(info.kind);
+        // Spawned showing its icon, as lying there; `update_markers` turns it into a timer.
+        let text = commands.spawn(ui_text(crate::pickups::icon(info.kind), MARKER_TEXT, palette::INK)).id();
         let at = on_minimap(info.at) - Vec2::splat(MARKER / 2.0);
         let marker = commands
             .spawn((
@@ -181,8 +183,8 @@ fn spawn_markers(mut commands: Commands, minimap: Single<Entity, With<Minimap>>,
                     align_items: AlignItems::Center,
                     ..default()
                 },
-                BackgroundColor(palette::INK.with_alpha(0.85)),
-                BorderColor::all(crate::pickups::color(info.kind)),
+                BackgroundColor(color),
+                BorderColor::all(color),
                 ZIndex(1),
             ))
             .add_child(text)
@@ -207,15 +209,13 @@ fn update_markers(
             continue;
         };
         let wanted = pickup.back_at.map(|back_at| ((back_at as f32 - now) / TICK_HZ as f32).ceil().max(1.0) as u32);
-        if marker.showing == Some(wanted) {
+        if marker.showing == wanted {
             continue;
         }
-        marker.showing = Some(wanted);
-        let color = crate::pickups::color(pickup.kind);
-        let (label, text_color, fill) = match (wanted, pickup.kind) {
-            (Some(seconds), _) => (seconds.to_string(), palette::HAZE, palette::INK.with_alpha(0.85)),
-            (None, PickupKind::Heal) => ("+".to_string(), palette::INK, color),
-            (None, PickupKind::Haste) => (">>".to_string(), palette::INK, color),
+        marker.showing = wanted;
+        let (label, text_color, fill) = match wanted {
+            Some(seconds) => (seconds.to_string(), palette::HAZE, palette::INK.with_alpha(0.85)),
+            None => (crate::pickups::icon(pickup.kind).to_string(), palette::INK, crate::pickups::color(pickup.kind)),
         };
         background.set_if_neq(BackgroundColor(fill));
         if let Ok((mut text, mut current)) = texts.get_mut(marker.text) {
