@@ -42,6 +42,7 @@ impl Plugin for RenderPlugin {
                 fly_shots.after(crate::rig::Posing),
                 (show_swings, sweep_swooshes, show_dashes, show_novas, grow_bursts, fade_swings, show_frost),
                 (show_telegraphs, align_to_world).chain().after(crate::rig::Posing),
+                toggle_range_circle,
                 update_hud,
             ),
         );
@@ -281,6 +282,11 @@ pub(crate) struct GameUi;
 #[derive(Component)]
 struct DestinationMarker;
 
+/// The faint circle at the edge of your shots' range: shown with A (MOBA camera), hidden again
+/// by the next key or click (`toggle_range_circle`).
+#[derive(Component)]
+struct RangeCircle;
+
 fn setup_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -437,6 +443,27 @@ fn read_local_input(
     desired.0 = PlayerInput { move_to, walk, aim, fire, ability };
 }
 
+/// A shows the range circle (MOBA camera only: the free camera walks with A); any key or click
+/// after that, A included, hides it.
+fn toggle_range_circle(
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mode: Res<CameraMode>,
+    mut circle: Query<&mut Visibility, With<RangeCircle>>,
+) {
+    let Ok(mut visibility) = circle.single_mut() else { return };
+    let showing = *visibility != Visibility::Hidden;
+    let pressed = keys.get_just_pressed().next().is_some() || mouse.get_just_pressed().next().is_some();
+    let show = if mode.free {
+        false
+    } else if showing {
+        !pressed
+    } else {
+        keys.just_pressed(KeyCode::KeyA)
+    };
+    visibility.set_if_neq(shown(show));
+}
+
 fn show_destination(
     desired: Res<DesiredInput>,
     marker: Single<(&mut Transform, &mut Visibility), With<DestinationMarker>>,
@@ -512,6 +539,8 @@ fn add_visuals(
                 Mesh3d(circle),
                 MeshMaterial3d(visuals.material(&mut materials, id.0, Look::Range)),
                 WorldAligned(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2), 0.03),
+                RangeCircle,
+                Visibility::Hidden,
             ));
         }
     }
