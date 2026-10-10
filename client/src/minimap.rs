@@ -29,7 +29,7 @@ impl Plugin for MinimapPlugin {
 /// Screen pixels per map tile, the gap from the screen corner, a dot's size, and a pickup
 /// marker's (and its text's).
 const SCALE: f32 = 6.0;
-const MARGIN: f32 = 12.0;
+pub(crate) const MARGIN: f32 = 12.0;
 const DOT: f32 = 12.0;
 const MARKER: f32 = 22.0;
 const MARKER_TEXT: f32 = 14.0;
@@ -64,7 +64,7 @@ fn on_minimap(p: Vec2) -> Vec2 {
 }
 
 /// The minimap's size in pixels.
-fn picture_size() -> Vec2 {
+pub(crate) fn picture_size() -> Vec2 {
     MAP_TILES.as_vec2() * SCALE
 }
 

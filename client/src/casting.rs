@@ -1,7 +1,8 @@
 //! Quick cast and normal cast, LoL-style. Quick cast sends Q off toward the cursor the moment
 //! it's pressed; normal cast first shows where it will go (the aim indicator, on the ground at
 //! your feet) and casts it on the next left click (a right click drops it). The pill beside the Q
-//! icon picks which one plain Q is; Shift+Q is always the other. The choice is kept in the
+//! icon picks which one plain Q is; Shift+Q is always the other.
+//! Clicking the Q icon is always a normal cast. The choice is kept in the
 //! browser (`localStorage`). The keys themselves are read in `render::read_local_input`.
 
 use std::f32::consts::FRAC_PI_2;
@@ -13,8 +14,9 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::DesiredInput;
-use crate::action_bar::{ICON, ICON_BOTTOM, Tooltip, tip_panel};
+use crate::action_bar::{Tooltip, tip_panel};
 use crate::glade::{self, palette};
+use crate::minimap;
 use crate::render::{clicked, shown, ui_text};
 
 pub struct CastingPlugin;
@@ -51,20 +53,19 @@ impl CastMode {
 #[derive(Resource, Default)]
 pub(crate) struct Aiming(pub bool);
 
-/// The quick cast pill, right of the Q icon (a button).
+/// The quick cast pill, just above the minimap, at its right edge (a button).
 #[derive(Component)]
 pub(crate) struct QuickCastToggle {
     label: Entity,
 }
 
-/// The pill's size and its gap from the Q icon (pixels).
+/// The pill's size and its gap above the minimap (pixels).
 const PILL_WIDTH: f32 = 84.0;
 const PILL_HEIGHT: f32 = 22.0;
-const PILL_GAP: f32 = 10.0;
+const PILL_GAP: f32 = 6.0;
 const TIP_WIDTH: f32 = 280.0;
 
-/// Builds the pill once our own player exists (with the Q icon), right of the icon, centered on
-/// its height.
+/// Builds the pill once our own player exists, over the minimap's top right corner.
 fn spawn_toggle(mut commands: Commands, me: Query<(), Added<Predicted>>, toggles: Query<(), With<QuickCastToggle>>) {
     if me.is_empty() || !toggles.is_empty() {
         return;
@@ -74,7 +75,8 @@ fn spawn_toggle(mut commands: Commands, me: Query<(), Added<Predicted>>, toggles
         .spawn(tip_panel(Node {
             position_type: PositionType::Absolute,
             bottom: px(PILL_HEIGHT + 10.0),
-            left: px((PILL_WIDTH - TIP_WIDTH) / 2.0),
+            // Right edges lined up, so it stays on the screen.
+            right: px(0.0),
             width: px(TIP_WIDTH),
             flex_direction: FlexDirection::Column,
             row_gap: px(4.0),
@@ -86,7 +88,8 @@ fn spawn_toggle(mut commands: Commands, me: Query<(), Added<Predicted>>, toggles
             tip.spawn(ui_text("Click to turn on or off", 11.0, palette::STONE));
             tip.spawn(ui_text(
                 "On: Q casts your ability right away, toward the cursor. Shift+Q shows where it will \
-                 go first: left click casts it, right click cancels.",
+                 go first: left click casts it, right click cancels. Clicking the ability's icon \
+                 always shows where it will go.",
                 13.0,
                 palette::HAZE,
             ));
@@ -96,13 +99,13 @@ fn spawn_toggle(mut commands: Commands, me: Query<(), Added<Predicted>>, toggles
     commands
         .spawn((
             QuickCastToggle { label },
+            crate::render::GameUi,
             Button,
             Tooltip(tip),
             Node {
                 position_type: PositionType::Absolute,
-                bottom: px(ICON_BOTTOM + (ICON - PILL_HEIGHT) / 2.0),
-                left: percent(50.0),
-                margin: UiRect::left(px(ICON / 2.0 + PILL_GAP)),
+                bottom: px(minimap::MARGIN + minimap::picture_size().y + PILL_GAP),
+                right: px(minimap::MARGIN),
                 width: px(PILL_WIDTH),
                 height: px(PILL_HEIGHT),
                 border: UiRect::all(px(1.0)),

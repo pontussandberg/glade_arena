@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::DesiredInput;
+use crate::action_bar::AbilityIcon;
 use crate::camera::{CameraMode, CameraPlaced, key_axis};
 use crate::casting::{Aiming, CastMode, QuickCastToggle};
 use crate::feedback::AttackClock;
@@ -424,7 +425,7 @@ fn setup_scene(
 /// Mouse -> `DesiredInput`, LoL-style: right click walks to the clicked point, left click
 /// attacks toward the cursor. Q casts right away (quick cast) or first shows where it will go,
 /// cast by the next left click and dropped by a right click (normal cast); Shift+Q is the other
-/// one (see `casting.rs`).
+/// one (see `casting.rs`). Clicking the Q icon is always a normal cast.
 #[allow(clippy::too_many_arguments)]
 fn read_local_input(
     mouse: Res<ButtonInput<MouseButton>>,
@@ -434,6 +435,7 @@ fn read_local_input(
     me: Query<(&Pos, &AbilityState), (With<Predicted>, With<PlayerId>)>,
     (mode, cast_mode, clock): (Res<CameraMode>, Res<CastMode>, AttackClock),
     toggle: Query<&Interaction, With<QuickCastToggle>>,
+    icon: Query<&Interaction, With<AbilityIcon>>,
     mut aiming: ResMut<Aiming>,
     mut held_click: Local<bool>,
     mut last_pos: Local<Option<Vec2>>,
@@ -475,7 +477,8 @@ fn read_local_input(
         (Some(cursor), Some(me)) => cursor - me,
         _ => desired.0.aim,
     };
-    let on_toggle = toggle.iter().any(|i| *i != Interaction::None);
+    let hovered = |i: &Interaction| *i != Interaction::None;
+    let (on_toggle, on_icon) = (toggle.iter().any(hovered), icon.iter().any(hovered));
     let mut ability = desired.0.ability;
     if keys.just_pressed(KeyCode::KeyQ) {
         let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
@@ -486,11 +489,14 @@ fn read_local_input(
             aiming.0 = true;
         }
     }
-    // A left click that casts (or turns quick cast on or off) doesn't also attack: no attacking
-    // until it's let go. A right click (MOBA camera) drops the aim, and walks as usual; ESC drops
+    // A left click that casts, aims (on the Q icon) or turns quick cast on or off doesn't also
+    // attack: no attacking until it's let go. A right click (MOBA camera) drops the aim, and walks as usual; ESC drops
     // it too (`esc_menu`).
     if mouse.just_pressed(MouseButton::Left) {
         if on_toggle {
+            *held_click = true;
+        } else if on_icon {
+            aiming.0 = ability_ready;
             *held_click = true;
         } else if aiming.0 {
             ability = true;
