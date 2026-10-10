@@ -68,9 +68,10 @@ fn dash_step(pos: Vec2, dir: Vec2, class: ClassId, speed: f32) -> Vec2 {
     if map().line_walkable(pos, next) { next } else { pos }
 }
 
-/// True once a player stands on the clicked point. Exact: `step_player` snaps onto it.
+/// True once a player stands on the clicked point (pulled in, if it hugs a wall: where the walk
+/// ends, see `Map::next_waypoint`). Exact: `step_player` snaps onto it.
 pub fn arrived(pos: Vec2, target: Vec2) -> bool {
-    pos == target
+    pos == target || (target.is_finite() && pos == map().standing_point(target))
 }
 
 /// What an auto-attack produces.
@@ -343,9 +344,11 @@ mod tests {
         let clicked = m.walk_target(Map::center(wall + IVec2::X) - Vec2::new(0.49, 0.0), 4).unwrap();
         let (end, ticks) = walk_point(SPAWN_POINTS[3], clicked, 64 * 30);
         assert!(arrived(end, clicked), "stuck at {end} after {ticks} ticks, short of {clicked}");
-        // Even a point the client didn't pull in gets walked to (its tile's center), never stuck.
+        // A point the client didn't pull in gets pulled in by the sim the same way: never stuck,
+        // and arrival is recognized.
         let hugging = Map::center(wall + IVec2::X) - Vec2::new(0.49, 0.0);
-        assert_eq!(walk_point(SPAWN_POINTS[3], hugging, 64 * 30).0, Map::center(wall + IVec2::X));
+        let end = walk_point(SPAWN_POINTS[3], hugging, 64 * 30).0;
+        assert!(end == clicked && arrived(end, hugging));
         assert_eq!(step_player(from, &walk_to_point(Vec2::NAN), SPEED), from);
     }
 

@@ -362,14 +362,16 @@ impl Map {
             return None;
         }
         let tile = self.nearest_walkable(Map::tile_of(p), max_radius)?;
-        let center = Map::center(tile);
-        if tile != Map::tile_of(p) {
-            return Some(center);
-        }
+        Some(if tile == Map::tile_of(p) { self.standing_point(p) } else { Map::center(tile) })
+    }
+
+    /// `p` (on a walkable tile) if a body fits there, else the farthest point toward it from its
+    /// tile's center that one does. From that center it's always in a straight line.
+    pub(crate) fn standing_point(&self, p: Vec2) -> Vec2 {
+        let center = Map::center(Map::tile_of(p));
         if self.line_walkable(center, p) {
-            return Some(p);
+            return p;
         }
-        // The farthest point toward `p` a body can still reach from the center.
         let (mut reachable, mut blocked) = (0.0, 1.0);
         for _ in 0..12 {
             let mid = (reachable + blocked) / 2.0;
@@ -379,21 +381,20 @@ impl Map {
                 blocked = mid;
             }
         }
-        Some(center.lerp(p, reachable))
+        center.lerp(p, reachable)
     }
 
     /// Where to head next on the way from `pos` to `target`: the farthest point on the A* path
     /// reachable in a straight line, so movement looks direct (LoL-style) instead of zig-zagging
-    /// along tiles. A target too close to a wall to stand on (see `walk_target`) means its tile's
-    /// center. `None` if the target can't be reached.
+    /// along tiles. A target too close to a wall to stand on is pulled in first, the same way
+    /// `walk_target` does, so whatever sends the target, the walk ends exactly on a point
+    /// `sim::arrived` recognizes. `None` if the target can't be reached.
     pub fn next_waypoint(&self, pos: Vec2, target: Vec2) -> Option<Vec2> {
         let target_tile = Map::tile_of(target);
         if !target.is_finite() || !self.walkable(target_tile) {
             return None;
         }
-        // From the target tile's center the goal is always in a straight line.
-        let target_center = Map::center(target_tile);
-        let goal = if self.line_walkable(target_center, target) { target } else { target_center };
+        let goal = self.standing_point(target);
         let Some(mut blocker) = self.line_blocker(pos, goal) else { return Some(goal) };
         let start = Map::tile_of(pos);
         let path = self.cached_path(start, target_tile)?;
@@ -551,7 +552,7 @@ mod tests {
             if !m.walkable(tile) {
                 return None;
             }
-            let goal = if m.line_walkable(Map::center(tile), target) { target } else { Map::center(tile) };
+            let goal = m.standing_point(target);
             if m.line_walkable(pos, goal) {
                 return Some(goal);
             }
