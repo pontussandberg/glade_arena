@@ -134,7 +134,9 @@ const JAVELINIST: Moves = Moves {
     lead_arm: [0.35, 1.5, -0.9, -0.8],
     lead_leg: [0.12, 0.55, 0.4, 0.6],
     back_leg: [-0.1, -0.5, -0.75, -0.6],
-    twist: [0.0, -1.0, 0.55, 0.0],
+    // Released: the shoulder comes round just far enough to put the javelin square in front of
+    // the chest, on the line it flies (see `HeldAt`), not across it.
+    twist: [0.0, -1.0, 0.3, 0.0],
     lean: [0.0, 0.28, -0.38, -0.45],
     head_dip: [0.0, 0.2, -0.15, 0.0],
     held: Held::OnTarget,
@@ -225,8 +227,10 @@ struct Facing {
     turned: f32,
 }
 
-/// Where a fighter's held weapon is in the world as posed this frame: its grip, the weapon
-/// pointing along +Y. A thrown javelin leaves the hand from here (`render::fly_shots`).
+/// Where a fighter's held weapon is in the world in the pose it's heading for this frame (its
+/// joints' targets, not where their springs have got to): its grip, the weapon pointing along
+/// +Y. A thrown javelin leaves the hand from here (`render::fly_shots`): where the throw sends
+/// it, out in front, rather than from an arm the springs still hold halfway through the swing.
 #[derive(Component, Default, PartialEq)]
 pub(crate) struct HeldAt(pub Transform);
 
@@ -506,11 +510,12 @@ fn pose_rigs(
 
         let unlean = lean.inverse();
         let weapon_arm = Quat::from_rotation_z(weapon_arm);
-        let held = match moves.held {
+        let held_in = |weapon_arm: Quat, unlean: Quat| match moves.held {
             Held::OnTarget => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-(FRAC_PI_2 - 0.12)),
             Held::InHand(forward) => Quat::from_rotation_z(PI + forward),
             Held::Upright(tip) => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-pose(tip)),
         };
+        let held = held_in(weapon_arm, unlean);
         let rotations = [
             (rig.head, unlean * Quat::from_rotation_z(-head_dip)),
             (rig.arms[0], weapon_arm),
@@ -519,12 +524,16 @@ fn pose_rigs(
             (rig.legs[1], Quat::from_rotation_z(legs[1])),
             (rig.held, held),
         ];
-        // The held weapon's world pose, rebuilt from the same joints it hangs from (it's a child
-        // of the weapon arm at the hand, see `add_rigs`): child transforms aren't propagated
-        // until after this frame's shots are placed.
-        let hand = Transform::from_translation(RIG_SHOULDER).with_rotation(weapon_arm)
-            * Transform::from_translation(RIG_HAND).with_rotation(held);
-        held_at.set_if_neq(HeldAt(posed * hand));
+        // The held weapon's world pose in the pose the joints are heading for (see `HeldAt`),
+        // rebuilt from the joints it hangs from (it's a child of the weapon arm at the hand, see
+        // `add_rigs`): child transforms aren't propagated until after this frame's shots are
+        // placed.
+        let aimed_lean = Quat::from_rotation_y(pose(moves.twist)) * Quat::from_rotation_z(pose(moves.lean));
+        let aimed_arm = Quat::from_rotation_z(pose(moves.weapon_arm));
+        let aimed_body = Transform { rotation: Quat::from_rotation_y(facing.look.to_angle()) * aimed_lean, ..posed };
+        let hand = Transform::from_translation(RIG_SHOULDER).with_rotation(aimed_arm)
+            * Transform::from_translation(RIG_HAND).with_rotation(held_in(aimed_arm, aimed_lean.inverse()));
+        held_at.set_if_neq(HeldAt(aimed_body * hand));
         for (part, rotation) in rotations.into_iter().chain(tail) {
             if let Ok((mut transform, mut visibility)) = parts.get_mut(part) {
                 if transform.rotation != rotation {
