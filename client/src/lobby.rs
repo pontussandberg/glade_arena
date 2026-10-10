@@ -175,7 +175,7 @@ fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &m
     ));
     commands.spawn((
         LobbyPart,
-        Mesh3d(meshes.add(Cylinder::new(1.3, 0.16).mesh().resolution(48).build())),
+        Mesh3d(meshes.add(Cylinder::new(glade::DAIS_RADIUS, 0.16).mesh().resolution(48).build())),
         MeshMaterial3d(materials.add(glade::matte(palette::WALL.darker(0.25)))),
         Transform::from_translation(center - Vec3::Y * 0.08),
     ));

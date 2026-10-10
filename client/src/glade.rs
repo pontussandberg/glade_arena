@@ -1172,28 +1172,34 @@ pub fn hollow_floor_mesh(radius: f32) -> Mesh {
     b.build()
 }
 
-/// What stands around the lobby's stage: a ring of dark trunks fading into the backdrop, and
-/// stones, moss clumps and grass tufts scattered on the floor (not too close to the dais, so
-/// the fighter's feet stay clear). Vertex-colored, for one matte white material.
+/// The lobby dais's radius, which the kerb runs around.
+pub const DAIS_RADIUS: f32 = 1.3;
+
+/// What lies around the lobby's stage: a low kerb of stones around the dais, and stones, moss
+/// clumps and grass tufts scattered on the floor (none tall enough to hide the fighter's feet).
+/// Vertex-colored, for one matte white material.
 pub fn hollow_props_mesh() -> Mesh {
     use std::f32::consts::TAU;
     let mut rng = Lcg(0xB0_55_E5);
     let mut parts = Vec::new();
     let mut add = |mesh: Mesh, at: Transform, color: Color| parts.push(tinted(faceted(mesh.transformed_by(at)), color));
-    // Trunks: wide, leaning a little, rising out of sight; a couple of roots at each foot.
-    for i in 0..13 {
-        let a = (i as f32 + rng.range(-0.3, 0.3)) / 13.0 * TAU;
-        let r = rng.range(9.5, 15.0);
-        let foot = Vec3::new(r * a.cos(), 0.0, r * a.sin());
-        let width = rng.range(0.35, 0.75);
-        let lean = Quat::from_rotation_z(rng.range(-0.12, 0.12)) * Quat::from_rotation_x(rng.range(-0.12, 0.12));
-        let bark = stage::NIGHT.mix(&stage::UMBER, rng.range(0.4, 0.9));
-        add(cylinder(width, 30.0, 7), Transform::from_translation(foot + Vec3::Y * 15.0).with_rotation(lean), bark);
-        for k in 0..3 {
-            let out = a + TAU * (k as f32 / 3.0 + rng.range(0.0, 0.2));
-            let dir = Vec3::new(out.cos(), 0.0, out.sin());
-            let root = Quat::from_rotation_arc(Vec3::Y, (dir + Vec3::Y * 0.45).normalize());
-            add(cone(width * 0.45, width * 3.0, 5), Transform::from_translation(foot + dir * width * 0.9).with_rotation(root), bark);
+    // A low, broken kerb of stones around the dais's edge, some mossy, with gaps where grass
+    // grows through: it frames the fighter without hiding its feet.
+    let kerb = 26;
+    for k in 0..kerb {
+        if rng.next() < 0.22 {
+            continue;
+        }
+        let a = (k as f32 + rng.range(-0.15, 0.15)) / kerb as f32 * TAU;
+        let r = DAIS_RADIUS + rng.range(0.08, 0.16);
+        let (wide, tall, deep) = (rng.range(0.24, 0.34), rng.range(0.16, 0.3), rng.range(0.18, 0.26));
+        let at = Vec3::new(r * a.cos(), tall * 0.5 - 0.04, r * a.sin());
+        let turn = Quat::from_rotation_y(-a - std::f32::consts::FRAC_PI_2) * Quat::from_rotation_z(rng.range(-0.12, 0.12)) * Quat::from_rotation_x(rng.range(-0.15, 0.1));
+        let stone = WALL.darker(0.25).mix(&stage::RUST, rng.range(0.15, 0.4));
+        add(Cuboid::new(wide, tall, deep).mesh().build(), Transform::from_translation(at).with_rotation(turn), stone);
+        if rng.next() < 0.45 {
+            let moss = Transform::from_translation(at + Vec3::Y * tall * 0.5).with_rotation(turn).with_scale(Vec3::new(wide * 0.45, 0.04, deep * 0.45));
+            add(Sphere::new(1.0).mesh().ico(1).unwrap(), moss, stage::GOLD.darker(0.35));
         }
     }
     // Scatter at a random spot between `near` and `far` from the stage's center.
@@ -1216,8 +1222,9 @@ pub fn hollow_props_mesh() -> Mesh {
         let clump = stage::RUST.mix(&stage::OCHRE, rng.range(0.3, 0.9));
         add(Sphere::new(1.0).mesh().ico(1).unwrap(), Transform::from_translation(at).with_scale(Vec3::new(size, size * 0.3, size * rng.range(0.7, 1.2))), clump);
     }
-    for _ in 0..70 {
-        let at = spot(&mut rng, 1.7, 9.0);
+    for i in 0..94 {
+        // The first ones crowd the kerb's foot.
+        let at = if i < 24 { spot(&mut rng, DAIS_RADIUS + 0.25, DAIS_RADIUS + 0.55) } else { spot(&mut rng, 1.7, 9.0) };
         let blades = 3 + (rng.next() * 3.0) as usize;
         let tall = rng.range(0.18, 0.42);
         let grass = stage::OCHRE.mix(&stage::GOLD, rng.range(0.2, 0.8));
