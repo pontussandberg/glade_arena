@@ -26,9 +26,9 @@ progress stops) but it can still attack. Slowed fighters take on a cold blue cas
 under their feet; frozen ones stand in ice.
 
 Every attack has a short windup (`windup_ticks`): you stand still with your aim locked while a
-cast bar fills under your health bar and a faint telegraph shows what it will cover (the swing's
-fan, or the shot's lane), then it goes off. Everyone sees it, so attacks can be read and dodged,
-and kiting takes skill. Attacking also cancels your walk: afterwards you stand still until you
+cast bar fills under your health bar (and, for a swing, a faint telegraph shows the fan it will
+cover), then it goes off. Everyone sees the windup, so attacks can be read and dodged, and kiting
+takes skill. A faint circle around you marks how far your shots fly. Attacking also cancels your walk: afterwards you stand still until you
 right click again (a click during the windup is kept and walked to once the attack is off);
 so does a dash. Abilities have their own cooldown (shown in the HUD) and are predicted like
 everything else: your spear flies and your dash moves the moment you press Q, the server

@@ -81,11 +81,11 @@ const NOVA_GROW_SECONDS: f32 = 0.1;
 const NOVA_SECONDS: f32 = 0.75;
 /// How fast (radians per second) the frost under a slowed fighter turns.
 const RUNE_TURN_RATE: f32 = 0.8;
-/// Thin shots still get a lane wide enough to see.
-const TELEGRAPH_MIN_WIDTH: f32 = 0.45;
+/// How wide (meters) the circle at the edge of your shots' range is.
+const RANGE_CIRCLE_WIDTH: f32 = 0.05;
 
-/// Who a fighter is to you. Only what marks a fighter shows it (its health bar, ground ring,
-/// minimap dot and telegraph); its body, shots and swings look the same whoever's they are.
+/// Who a fighter is to you. Only its health bar and minimap dot show it; its body, shots, swings
+/// and telegraph look the same whoever's they are.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Relation {
     You,
@@ -114,9 +114,10 @@ impl Relation {
 #[derive(Resource)]
 pub(crate) struct Visuals {
     fighters: HashMap<ClassId, Handle<Mesh>>,
-    /// The ground an attack covers: a melee swing's fan, or the lane a shot flies down. Drawn
-    /// faintly as the windup telegraph, and (melee) brightly as the swing itself.
-    attack_shapes: HashMap<ClassId, Handle<Mesh>>,
+    /// The ground a melee swing covers, drawn faintly as its windup telegraph.
+    swing_fans: HashMap<ClassId, Handle<Mesh>>,
+    /// A circle at the edge of a projectile class's auto-attack range, shown around you.
+    range_circles: HashMap<ClassId, Handle<Mesh>>,
     /// The swoosh a melee class's swing leaves in the air (`glade::swoosh_mesh`), and its
     /// material as it fades out, brightest first.
     swooshes: HashMap<ClassId, Handle<Mesh>>,
@@ -132,10 +133,9 @@ pub(crate) struct Visuals {
     projectiles: HashMap<(ClassId, bool), glade::ShotLook<Handle<Mesh>>>,
     shot_tip: Handle<Mesh>,
     wind: Handle<Mesh>,
-    ring: Handle<Mesh>,
-    /// Per owner (bodies, so a hit flashes just that fighter), per relation (what marks a
-    /// fighter) or shared, and look.
-    materials: HashMap<(Option<PeerId>, Option<Relation>, Look), Handle<StandardMaterial>>,
+    /// Per owner (`None` for looks that are the same for everyone: all but bodies, so a hit
+    /// flashes just that fighter) and look.
+    materials: HashMap<(Option<PeerId>, Look), Handle<StandardMaterial>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -155,10 +155,10 @@ pub(crate) enum Look {
     Wind,
     /// The white glow on a thrown spear's point.
     Spark,
-    /// A faint marking of where an attack that's winding up will land.
+    /// A faint marking of where a swing that's winding up will land.
     Telegraph,
-    /// The ring under a fighter's feet, so it reads even in shadow.
-    Ring,
+    /// The faint circle at the edge of your shots' range.
+    Range,
     /// See-through, glowing ice: novas and frozen fighters, whoever's.
     Frost,
     /// Brighter, bluer see-through glow: the frost under a slowed fighter's feet.
@@ -175,22 +175,14 @@ impl Visuals {
         &mut self,
         materials: &mut Assets<StandardMaterial>,
         owner: PeerId,
-        is_me: bool,
         look: Look,
     ) -> Handle<StandardMaterial> {
-        let relation = Relation::of(is_me);
-        let key = match look {
-            Look::Body => (Some(owner), None, look),
-            Look::Ring | Look::Telegraph => (None, Some(relation), look),
-            _ => (None, None, look),
-        };
         self.materials
-            .entry(key)
+            .entry(((look == Look::Body).then_some(owner), look))
             .or_insert_with(|| {
-                let color = relation.color();
                 materials.add(match look {
                     // Fighters wear their own colors (in the mesh); who they are to you shows in
-                    // rings and bars.
+                    // their health bars.
                     Look::Body => glade::matte(Color::WHITE),
                     Look::Shot => glade::glow(palette::SILVER, 4.0),
                     Look::Ice => glade::glow(Color::WHITE, 4.0),
@@ -199,8 +191,8 @@ impl Visuals {
                     Look::Plain => glade::matte(Color::WHITE),
                     Look::Wind => glade::translucent(Color::WHITE, 0.6, 1.5),
                     Look::Spark => glade::glow(Color::WHITE, 5.0),
-                    Look::Telegraph => glade::translucent(color, 0.28, 1.2),
-                    Look::Ring => glade::glow(color, 1.2),
+                    Look::Telegraph => glade::translucent(palette::SUN, 0.22, 1.2),
+                    Look::Range => glade::translucent(Color::WHITE, 0.2, 1.0),
                     Look::Frost => glade::translucent(palette::ICE, 0.45, 1.6),
                     Look::Chill => glade::translucent(palette::FROST_GLOW, 0.75, 2.5),
                 })
@@ -273,7 +265,7 @@ struct Launch {
 struct Telegraph(Entity);
 
 /// A child that keeps this orientation and size in the world, this high above the ground,
-/// whatever its parent does (fighters turn, lean, crouch and are drawn bigger, see `rig.rs`): the ground ring and the telegraph
+/// whatever its parent does (fighters turn, lean, crouch and are drawn bigger, see `rig.rs`): the range circle and the telegraph
 /// stay flat on the ground.
 #[derive(Component)]
 struct WorldAligned(Quat, f32);
@@ -303,16 +295,24 @@ fn setup_scene(
     ));
     commands.insert_resource(Visuals {
         fighters: ClassId::all().map(|c| (c, meshes.add(glade::fighter_mesh(&c.def().id)))).collect(),
-        attack_shapes: ClassId::all()
-            .map(|c| {
-                let kind = &c.def().attack.kind;
-                let mesh = match *kind {
-                    AttackKind::Melee { arc_degrees, .. } => glade::swing_mesh(kind.reach(), arc_degrees),
-                    AttackKind::Projectile { radius, .. } => {
-                        glade::lane_mesh(PLAYER_RADIUS, kind.reach(), (2.0 * radius).max(TELEGRAPH_MIN_WIDTH))
-                    }
-                };
-                (c, meshes.add(mesh))
+        swing_fans: ClassId::all()
+            .filter_map(|c| match c.def().attack.kind {
+                AttackKind::Melee { range, arc_degrees } => {
+                    Some((c, meshes.add(glade::swing_mesh(range + PLAYER_RADIUS, arc_degrees))))
+                }
+                AttackKind::Projectile { .. } => None,
+            })
+            .collect(),
+        // Where a shot's front edge stops: it starts at the edge of the shooter and flies its
+        // range, so a fighter whose body reaches over the circle can be hit.
+        range_circles: ClassId::all()
+            .filter_map(|c| match c.def().attack.kind {
+                AttackKind::Projectile { radius, range, .. } => {
+                    let outer = PLAYER_RADIUS + 2.0 * radius + range;
+                    let circle = Annulus::new(outer - RANGE_CIRCLE_WIDTH, outer).mesh().resolution(96).build();
+                    Some((c, meshes.add(circle)))
+                }
+                AttackKind::Melee { .. } => None,
             })
             .collect(),
         swooshes: ClassId::all()
@@ -356,7 +356,6 @@ fn setup_scene(
             .collect(),
         shot_tip: meshes.add(glade::shot_tip_mesh()),
         wind: meshes.add(glade::wind_mesh()),
-        ring: meshes.add(Annulus::new(0.58, 0.7).mesh().resolution(20).build()),
         materials: HashMap::default(),
     });
     commands.spawn((
@@ -466,20 +465,21 @@ fn add_visuals(
     let Ok(me) = me.single() else { return };
     for (entity, id, class, pos) in &players {
         let is_me = id.0 == me.0;
-        let material = visuals.material(&mut materials, id.0, is_me, Look::Body);
-        let ring = visuals.material(&mut materials, id.0, is_me, Look::Ring);
-        let telegraph = commands
-            .spawn((
-                Mesh3d(visuals.attack_shapes[class].clone()),
-                MeshMaterial3d(visuals.material(&mut materials, id.0, is_me, Look::Telegraph)),
-                WorldAligned(Quat::IDENTITY, 0.05),
-                Visibility::Hidden,
-            ))
-            .id();
+        let material = visuals.material(&mut materials, id.0, Look::Body);
+        let telegraph = visuals.swing_fans.get(class).cloned().map(|fan| {
+            commands
+                .spawn((
+                    Mesh3d(fan),
+                    MeshMaterial3d(visuals.material(&mut materials, id.0, Look::Telegraph)),
+                    WorldAligned(Quat::IDENTITY, 0.05),
+                    Visibility::Hidden,
+                ))
+                .id()
+        });
         let prison = commands
             .spawn((
                 Mesh3d(visuals.ice_prison.clone()),
-                MeshMaterial3d(visuals.material(&mut materials, id.0, is_me, Look::Frost)),
+                MeshMaterial3d(visuals.material(&mut materials, id.0, Look::Frost)),
                 WorldAligned(Quat::IDENTITY, 0.0),
                 Visibility::Hidden,
             ))
@@ -487,7 +487,7 @@ fn add_visuals(
         let rune = commands
             .spawn((
                 Mesh3d(visuals.frost_rune.clone()),
-                MeshMaterial3d(visuals.material(&mut materials, id.0, is_me, Look::Chill)),
+                MeshMaterial3d(visuals.material(&mut materials, id.0, Look::Chill)),
                 WorldAligned(Quat::IDENTITY, 0.04),
                 Visibility::Hidden,
             ))
@@ -501,15 +501,19 @@ fn add_visuals(
                 ShownSwing::default(),
                 ShownDash::default(),
                 ShownNova::default(),
-                Telegraph(telegraph),
                 Frost { prison, rune, shown: (false, false) },
             ))
-            .add_children(&[telegraph, prison, rune])
-            .with_child((
-                Mesh3d(visuals.ring.clone()),
-                MeshMaterial3d(ring),
+            .add_children(&[prison, rune]);
+        if let Some(telegraph) = telegraph {
+            commands.entity(entity).insert(Telegraph(telegraph)).add_child(telegraph);
+        }
+        if is_me && let Some(circle) = visuals.range_circles.get(class).cloned() {
+            commands.entity(entity).with_child((
+                Mesh3d(circle),
+                MeshMaterial3d(visuals.material(&mut materials, id.0, Look::Range)),
                 WorldAligned(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2), 0.03),
             ));
+        }
     }
     for (entity, projectile, pos) in &projectiles {
         let Some(glade::ShotLook { mesh, glow, thrown, aura, spin }) =
@@ -517,7 +521,6 @@ fn add_visuals(
         else {
             continue;
         };
-        let is_mine = projectile.owner == me.0;
         // Never in its owner's colors: a shot looks the same whoever throws it.
         let look = match glow {
             glade::ShotGlow::Weapon => Look::Plain,
@@ -525,7 +528,7 @@ fn add_visuals(
             glade::ShotGlow::Ice => Look::Ice,
             glade::ShotGlow::Pale => Look::Shot,
         };
-        let body = visuals.material(&mut materials, projectile.owner, is_mine, look);
+        let body = visuals.material(&mut materials, projectile.owner, look);
         let mut shot = commands.entity(entity);
         shot.insert((
             Mesh3d(mesh),
@@ -538,15 +541,15 @@ fn add_visuals(
         }
         // A real weapon, in its own colors, gets a white glow on its point.
         if glow == glade::ShotGlow::Weapon {
-            let spark = visuals.material(&mut materials, projectile.owner, is_mine, Look::Spark);
+            let spark = visuals.material(&mut materials, projectile.owner, Look::Spark);
             shot.with_child((Mesh3d(visuals.shot_tip.clone()), MeshMaterial3d(spark)));
         }
         if let Some(aura) = aura {
-            let material = visuals.material(&mut materials, projectile.owner, is_mine, Look::Aura);
+            let material = visuals.material(&mut materials, projectile.owner, Look::Aura);
             shot.with_child((Mesh3d(aura), MeshMaterial3d(material)));
         }
         if thrown {
-            let material = visuals.material(&mut materials, projectile.owner, is_mine, Look::Wind);
+            let material = visuals.material(&mut materials, projectile.owner, Look::Wind);
             // No length yet: it grows as the spear flies.
             let wind = Transform::from_xyz(-WIND_FRONT, 0.0, 0.0).with_scale(Vec3::new(0.0, 1.0, 1.0));
             let wind = shot.commands().spawn((Mesh3d(visuals.wind.clone()), MeshMaterial3d(material), wind)).id();
@@ -560,7 +563,7 @@ fn add_visuals(
 struct ShownSwing(u32);
 
 /// A swoosh for each new melee swing, in the air where the blade swept (the same for everyone:
-/// who swung shows in the ring and bar, not the swing). `LastSwing` is predicted for our own
+/// who swung shows in the health bar, not the swing). `LastSwing` is predicted for our own
 /// player (instant) and replicated for others; rollbacks may rewrite it with the same value, so
 /// each swing is drawn once per tick.
 fn show_swings(
@@ -637,13 +640,13 @@ fn show_dashes(
     time: Res<Time>,
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut dashes: Query<(&PlayerId, &ClassId, &Pos, &AbilityState, Has<Predicted>, &mut ShownDash), Changed<AbilityState>>,
+    mut dashes: Query<(&PlayerId, &ClassId, &Pos, &AbilityState, &mut ShownDash), Changed<AbilityState>>,
 ) {
-    for (id, class, pos, ability, is_me, mut shown) in &mut dashes {
+    for (id, class, pos, ability, mut shown) in &mut dashes {
         let Some(dash) = ability.dash.filter(|d| d.started_at > shown.0) else { continue };
         shown.0 = dash.started_at;
         let Some(streak) = visuals.dash_streaks.get(class).cloned() else { continue };
-        let material = visuals.material(&mut materials, id.0, is_me, Look::Spirit);
+        let material = visuals.material(&mut materials, id.0, Look::Spirit);
         let until = time.elapsed_secs() + DASH_SECONDS;
         commands.spawn(flash(streak, material, to_world(pos.0, 0.1), dash.dir, until));
     }
@@ -663,15 +666,15 @@ fn show_novas(
     time: Res<Time>,
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut casters: Query<(&PlayerId, &ClassId, &Pos, &AbilityState, Has<Predicted>, &mut ShownNova), Changed<AbilityState>>,
+    mut casters: Query<(&PlayerId, &ClassId, &Pos, &AbilityState, &mut ShownNova), Changed<AbilityState>>,
 ) {
-    for (id, class, pos, ability, is_me, mut shown) in &mut casters {
+    for (id, class, pos, ability, mut shown) in &mut casters {
         let Some(used_at) = ability.used_at(*class).filter(|&t| t > shown.0) else { continue };
         shown.0 = used_at;
         let AbilityKind::Nova { radius, .. } = class.def().ability.kind else { continue };
         let Some(nova) = visuals.novas.get(class).cloned() else { continue };
-        let frost = visuals.material(&mut materials, id.0, is_me, Look::Frost);
-        let wave = visuals.material(&mut materials, id.0, is_me, Look::Spirit);
+        let frost = visuals.material(&mut materials, id.0, Look::Frost);
+        let wave = visuals.material(&mut materials, id.0, Look::Spirit);
         let now = time.elapsed_secs();
         // Each piece starts at nothing and only grows from there (`grow_bursts`); `until` is how
         // long it stays.
@@ -758,7 +761,8 @@ fn fade_swings(mut commands: Commands, time: Res<Time>, swings: Query<(Entity, &
     }
 }
 
-/// Show the telegraph, pointing where the attack is locked to, while a fighter winds up.
+/// Show the telegraph, pointing where the swing is locked to, while a melee fighter winds up (a
+/// shot shows none: you see it fly).
 /// `AttackState` is predicted for us (shown the moment we click) and interpolated for others
 /// (and gone once their spear is seen flying, see `SeenThrows`).
 fn show_telegraphs(
