@@ -1,7 +1,7 @@
 //! A fighter's stat frame: health, move speed, crit chance (hover it for what a crit does), and
 //! the auto-attack's damage, speed and range, in one panel.
 //! The lobby shows it for the selected fighter; in the arena it sits in the bottom-left corner
-//! for your own, its health live with a bar under it.
+//! for your own, its health live.
 //!
 //! Also the words for a class's passive and Q, which the lobby lists and the action bar shows
 //! as tooltips.
@@ -14,7 +14,7 @@ use lightyear::prelude::*;
 
 use crate::action_bar::{Tooltip, tip_panel};
 use crate::glade::palette;
-use crate::render::{GameUi, set_fill, ui_text};
+use crate::render::{GameUi, ui_text};
 
 pub struct StatFramePlugin;
 
@@ -27,11 +27,8 @@ impl Plugin for StatFramePlugin {
 
 /// The frame's width (pixels).
 const WIDTH: f32 = 260.0;
-/// The one accent of the lobby and the frame: the role, the health bar, what's selected.
+/// The one accent of the lobby and the frame: the role, what's selected.
 pub(crate) const ACCENT: Color = palette::MEADOW;
-/// Health running low: the bar turns this color under `LOW_HEALTH` of the max.
-const HURT: Color = palette::ENEMY;
-const LOW_HEALTH: f32 = 0.3;
 
 /// The bottom-left corner your stat frame sits in.
 #[derive(Component)]
@@ -58,16 +55,13 @@ fn spawn_corner(mut commands: Commands) {
 pub struct HealthParts {
     pub frame: Entity,
     pub text: Entity,
-    /// The health bar's fill: in the arena only (a placeholder in the lobby).
-    pub fill: Entity,
 }
 
-/// A stat frame for `class`, under `parent`, its health full. In the `arena`, with its name and
-/// role on top (the lobby shows those bigger itself) and a bar under its health (in the lobby it
-/// would only ever be full).
-pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, arena: bool) -> HealthParts {
+/// A stat frame for `class`, under `parent`: with its name and role on top when `named` (the
+/// lobby shows those bigger itself), its health full.
+pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, named: bool) -> HealthParts {
     let def = class.def();
-    let mut parts = HealthParts { frame: Entity::PLACEHOLDER, text: Entity::PLACEHOLDER, fill: Entity::PLACEHOLDER };
+    let mut parts = HealthParts { frame: Entity::PLACEHOLDER, text: Entity::PLACEHOLDER };
     parts.frame = parent
         .spawn((
             Node {
@@ -82,7 +76,7 @@ pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, arena: boo
             BorderColor::all(palette::STONE.with_alpha(0.3)),
         ))
         .with_children(|frame| {
-            if arena {
+            if named {
                 frame
                     .spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Baseline, ..default() })
                     .with_children(|row| {
@@ -90,23 +84,10 @@ pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, arena: boo
                         row.spawn(ui_text(def.role.to_uppercase(), 11.0, ACCENT));
                     });
             }
-            frame
-                .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4.0), ..default() })
-                .with_children(|health| {
-                    health.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
-                        row.spawn(ui_text("HEALTH", 11.0, palette::STONE));
-                        parts.text = row.spawn(ui_text(def.max_hp.to_string(), 11.0, palette::HAZE)).id();
-                    });
-                    if arena {
-                        health
-                            .spawn((Node { height: px(6.0), ..default() }, BackgroundColor(palette::HAZE.with_alpha(0.12))))
-                            .with_children(|bar| {
-                                parts.fill = bar
-                                    .spawn((Node { width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(ACCENT)))
-                                    .id();
-                            });
-                    }
-                });
+            frame.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
+                row.spawn(ui_text("HEALTH", 11.0, palette::STONE));
+                parts.text = row.spawn(ui_text(def.max_hp.to_string(), 11.0, palette::HAZE)).id();
+            });
             for (label, value, tip) in stats(def) {
                 let name = frame
                     .spawn(Node { column_gap: px(5.0), align_items: AlignItems::Center, ..default() })
@@ -218,12 +199,11 @@ fn spawn_my_frame(
     });
 }
 
-/// Your health, as it is: the numbers and the bar, red when it runs low.
+/// Your health, as it is.
 fn update_health(
     me: Query<(&ClassId, Option<&Health>), (With<Predicted>, With<PlayerId>)>,
     frame: Option<Single<&MyFrame>>,
     mut texts: Query<&mut Text>,
-    mut fills: Query<(&mut Node, &mut BackgroundColor)>,
 ) {
     let (Some(frame), Ok((class, health))) = (frame, me.single()) else { return };
     let max = class.def().max_hp;
@@ -233,10 +213,5 @@ fn update_health(
         && text.0 != label
     {
         text.0 = label;
-    }
-    if let Ok((mut node, mut color)) = fills.get_mut(frame.0.fill) {
-        let fraction = hp as f32 / max as f32;
-        set_fill(&mut node, fraction);
-        color.set_if_neq(BackgroundColor(if fraction < LOW_HEALTH { HURT } else { ACCENT }));
     }
 }
