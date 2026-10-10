@@ -827,7 +827,7 @@ fn update_hud(
         text.push_str(if mode.free {
             "WASD or right click: move | left click: attack | Q: ability\nhold right mouse: turn camera | wheel: zoom | V: MOBA camera"
         } else {
-            "right click: move | S: stop | left click: attack | Q: ability\nhold Space: lock camera | edges/arrows: pan | wheel: zoom | V: free camera"
+            "right click: move | S: stop | left click: attack | Q: ability\nwheel: zoom | V: free camera"
         });
     }
     // Only touch the component when the text changed, so Bevy doesn't re-layout it every frame.

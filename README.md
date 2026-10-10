@@ -160,8 +160,8 @@ support WebTransport with certificate hashes.
 
 Controls: in the lobby, pick a class with a click or its number key and enter with the button or
 Enter; in the arena, right click to move, S to stop, left
-click to attack toward the cursor, Q for your ability toward the cursor, hold Space to lock the camera on
-yourself, push the mouse to a screen edge or use the arrow keys to pan, mouse wheel to zoom.
+click to attack toward the cursor, Q for your ability toward the cursor. The camera stays locked on
+you; the mouse wheel zooms.
 
 V toggles a free, WoW-style camera that follows behind you: WASD walks relative to it, holding
 the right mouse button and dragging turns it, the wheel zooms. Click to move still works there:
