@@ -228,14 +228,15 @@ pub enum PickupKind {
     Haste,
 }
 
-/// A pickup lying at `at` (one of `map::PICKUP_SPOTS`), or, while `back_at` is set, taken and
-/// gone until that tick. Server-authoritative: the server decides who takes it, clients draw it
-/// and its timer.
+/// A pickup lying at `at` (one of `map::PICKUP_SPOTS`), or, while `back_at` is set, taken (last
+/// by `taken_by`) and gone until that tick. Server-authoritative: the server decides who takes
+/// it, clients draw it, its timer, and its taker's burst.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Pickup {
     pub kind: PickupKind,
     pub at: Vec2,
     pub back_at: Option<u32>,
+    pub taken_by: Option<PeerId>,
 }
 
 /// The player's most recent melee swing, for drawing it. Predicted, so your own swing shows

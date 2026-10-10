@@ -1,7 +1,7 @@
 //! Pickups lying in the arena, and what taking one shows: a glowing green cross (a heal) or
 //! golden chevrons (a haste) floating over a glow on the ground, bobbing and turning, gone while
-//! they're waiting to come back. A heal bursts around whoever took it (a ring spreading on the
-//! ground, sparks spiraling up); a hasted fighter trails golden wind streaks while it runs, like a
+//! they're waiting to come back. A heal bursts around whoever takes it, even at full health (a
+//! ring spreading on the ground, sparks spiraling up); a hasted fighter trails golden wind streaks while it runs, like a
 //! sprint. Who takes a pickup is the server's call (`Pickup`, `Hasted`); a heal's number is in
 //! `feedback`, the timers on the minimap.
 
@@ -22,7 +22,7 @@ impl Plugin for PickupsPlugin {
         app.add_systems(Startup, load_looks);
         app.add_systems(
             Update,
-            (add_pickup_visuals, float_pickups, (burst_on_heal, grow_bursts).chain(), (trail_haste, fade_streaks).chain()),
+            (add_pickup_visuals, float_pickups, (burst_on_take, grow_bursts).chain(), (trail_haste, fade_streaks).chain()),
         );
     }
 }
@@ -177,9 +177,9 @@ fn float_pickups(
     }
 }
 
-/// The running number (`RecentHits::seq`) of the last hit on this fighter checked for a heal.
+/// When a pickup was last seen taken (its `back_at` then), so each taking bursts once.
 #[derive(Component)]
-struct SeenHeals(u32);
+struct SeenTaken(Option<u32>);
 
 /// A heal's burst around `player`, from `born` (seconds): its ring and sparks are its children.
 #[derive(Component)]
@@ -190,23 +190,26 @@ struct HealBurst {
     sparks: Vec<Entity>,
 }
 
-/// Bursts around a fighter for each new heal in its `RecentHits` (server-confirmed, like the
-/// number over it). The heals already there when we first see a fighter are only noted.
-fn burst_on_heal(
+/// Bursts around whoever takes a heal, the moment we learn it's taken: tied to the pickup, not
+/// to health, so it shows at full health too. A taking already there when we first see the
+/// pickup is only noted.
+fn burst_on_take(
     mut commands: Commands,
     time: Res<Time>,
     looks: Res<PickupLooks>,
-    mut players: Query<(Entity, &RecentHits, Option<&mut SeenHeals>), Changed<RecentHits>>,
+    mut pickups: Query<(Entity, &Pickup, Option<&mut SeenTaken>), Changed<Pickup>>,
+    players: Query<(Entity, &PlayerId)>,
 ) {
-    for (player, recent, seen) in &mut players {
+    for (entity, pickup, seen) in &mut pickups {
         let Some(mut seen) = seen else {
-            commands.entity(player).insert(SeenHeals(recent.seq()));
+            commands.entity(entity).insert(SeenTaken(pickup.back_at));
             continue;
         };
-        let last = std::mem::replace(&mut seen.0, recent.seq());
-        if !recent.0.iter().any(|hit| hit.seq > last && hit.kind == HitKind::Heal) {
+        if std::mem::replace(&mut seen.0, pickup.back_at) == pickup.back_at || pickup.back_at.is_none() {
             continue;
         }
+        let taker = pickup.taken_by.and_then(|by| players.iter().find(|(_, id)| id.0 == by));
+        let (Some((player, _)), PickupKind::Heal) = (taker, pickup.kind) else { continue };
         let (glow, faint) = looks.heal.clone();
         let flat = Quat::from_rotation_x(-FRAC_PI_2);
         let ring = commands

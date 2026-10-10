@@ -55,6 +55,7 @@ fn pickups_heal_and_haste_on_touch_then_are_gone_a_while() {
     let last_hit = q.iter(d.server.world()).find(|(p, _)| p.0 == peer(A)).and_then(|(_, hits)| hits.0.last().copied());
     assert_eq!(last_hit.map(|h| (h.amount, h.kind)), Some((sim::heal_amount(max), HitKind::Heal)), "the heal should show as one");
     d.until(Duration::from_secs(1), "A sees the heal taken", |d| pickup(&mut d.a, PickupKind::Heal).unwrap().back_at.is_some());
+    assert_eq!(pickup(&mut d.a, PickupKind::Heal).unwrap().taken_by, Some(peer(A)), "A should see who took it");
 
     // Standing on it while it's gone does nothing.
     set_health(&mut d.server, A, hurt);

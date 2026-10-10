@@ -339,7 +339,7 @@ fn move_players(
 /// The pickups, lying at their spots for everyone to see.
 fn spawn_pickups(mut commands: Commands) {
     for (at, kind) in arena_shared::map::PICKUP_SPOTS {
-        commands.spawn((Name::from("Pickup"), Pickup { kind, at, back_at: None }, Replicate::to_clients(NetworkTarget::All)));
+        commands.spawn((Name::from("Pickup"), Pickup { kind, at, back_at: None, taken_by: None }, Replicate::to_clients(NetworkTarget::All)));
     }
 }
 
@@ -375,6 +375,7 @@ fn take_pickups(
             PickupKind::Haste => hasted.start(now),
         }
         pickup.back_at = Some(now + PICKUP_RESPAWN_TICKS);
+        pickup.taken_by = Some(id.0);
         debug!(player = ?id.0, kind = ?pickup.kind, health = health.0, "took a pickup");
     }
 }
