@@ -95,18 +95,18 @@ pub fn step_attack(
     mut state: AttackState,
 ) -> (AttackState, Option<Attack>) {
     let attack = &class.def().attack;
-    let released = state.windup.filter(|windup| tick >= windup.releases_at(class)).map(|windup| {
-        let dir = windup.dir;
+    let mut released = None;
+    if let Some(Windup { dir, .. }) = state.windup.filter(|windup| tick >= windup.releases_at(class)) {
         state.windup = None;
         state.released_at = Some(tick);
-        match attack.kind {
+        released = Some(match attack.kind {
             AttackKind::Projectile { radius, .. } => {
                 let origin = shot_spawn(pos, dir, radius);
                 Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: false })
             }
             AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir }),
-        }
-    });
+        });
+    }
     if state.windup.is_none()
         && input.fire
         && tick >= state.ready_at
