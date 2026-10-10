@@ -40,7 +40,7 @@ impl Plugin for RenderPlugin {
                 (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
                 (add_visuals, sync_transforms).chain().before(crate::rig::Posing),
                 fly_shots.after(crate::rig::Posing),
-                (show_swings, show_dashes, show_novas, grow_bursts, fade_swings, show_frost),
+                (show_swings, sweep_swooshes, show_dashes, show_novas, grow_bursts, fade_swings, show_frost),
                 (show_telegraphs, align_to_world).chain().after(crate::rig::Posing),
                 update_hud,
             ),
@@ -66,8 +66,12 @@ const RUBBER_STIFFNESS: f32 = 14.0;
 const RUBBER_DAMPING: f32 = 0.3;
 const RUBBER_PULSE: f32 = 0.18;
 const RUBBER_RATE: f32 = 3.5;
-/// How long a swing, and a dash streak, stay on screen.
-const SWING_SECONDS: f32 = 0.16;
+/// A sword's swoosh: how long it stays on screen, how far (a fraction of the swing's arc) it
+/// sweeps on through it, and how many steps it fades out in (one shared material each).
+const SWOOSH_SECONDS: f32 = 0.26;
+const SWOOSH_SWEEP: f32 = 0.35;
+const SWOOSH_FADES: usize = 8;
+/// How long a dash streak stays on screen.
 const DASH_SECONDS: f32 = 0.3;
 /// A nova: its shockwave races out to the edge in `NOVA_WAVE_SECONDS`, raising shards as it
 /// passes (each takes `NOVA_GROW_SECONDS` to burst up); the frost on the ground and the shards
@@ -113,6 +117,10 @@ pub(crate) struct Visuals {
     /// The ground an attack covers: a melee swing's fan, or the lane a shot flies down. Drawn
     /// faintly as the windup telegraph, and (melee) brightly as the swing itself.
     attack_shapes: HashMap<ClassId, Handle<Mesh>>,
+    /// The swoosh a melee class's swing leaves in the air (`glade::swoosh_mesh`), and its
+    /// material as it fades out, brightest first.
+    swooshes: HashMap<ClassId, Handle<Mesh>>,
+    swoosh_fades: Vec<Handle<StandardMaterial>>,
     /// The ground a dash covers, for its streak.
     dash_streaks: HashMap<ClassId, Handle<Mesh>>,
     /// A nova's burst (see `glade::NovaMeshes`).
@@ -147,8 +155,6 @@ pub(crate) enum Look {
     Wind,
     /// The white glow on a thrown spear's point.
     Spark,
-    /// Swings are see-through flashes.
-    Swing,
     /// A faint marking of where an attack that's winding up will land.
     Telegraph,
     /// The ring under a fighter's feet, so it reads even in shadow.
@@ -193,7 +199,6 @@ impl Visuals {
                     Look::Plain => glade::matte(Color::WHITE),
                     Look::Wind => glade::translucent(Color::WHITE, 0.6, 1.5),
                     Look::Spark => glade::glow(Color::WHITE, 5.0),
-                    Look::Swing => glade::translucent(color, 0.45, 2.0),
                     Look::Telegraph => glade::translucent(color, 0.28, 1.2),
                     Look::Ring => glade::glow(color, 1.2),
                     Look::Frost => glade::translucent(palette::ICE, 0.45, 1.6),
@@ -204,10 +209,19 @@ impl Visuals {
     }
 }
 
-/// A swing flash; despawned after `SWING_SECONDS`.
+/// A swoosh, a dash streak or a nova's part; despawned `until` (seconds).
 #[derive(Component)]
 struct SwingFx {
     until: f32,
+}
+
+/// A sword's swoosh, sweeping on through its swing from `started` (seconds), facing `dir` (radians
+/// about Y) at the end, across a swing `arc` radians wide.
+#[derive(Component)]
+struct Swoosh {
+    started: f32,
+    dir: f32,
+    arc: f32,
 }
 
 /// Something that bursts out from nothing: scaled up to `size` over `grow` seconds from `started`
@@ -299,6 +313,19 @@ fn setup_scene(
                     }
                 };
                 (c, meshes.add(mesh))
+            })
+            .collect(),
+        swooshes: ClassId::all()
+            .filter_map(|c| match c.def().attack.kind {
+                AttackKind::Melee { range, arc_degrees } => Some((c, meshes.add(glade::swoosh_mesh(range, arc_degrees)))),
+                AttackKind::Projectile { .. } => None,
+            })
+            .collect(),
+        // Bright for the first third, then fading out.
+        swoosh_fades: (0..SWOOSH_FADES)
+            .map(|i| {
+                let left = 1.0 - ((i as f32 / SWOOSH_FADES as f32 - 0.3) / 0.7).max(0.0);
+                materials.add(glade::translucent(palette::SILVER, 0.9 * left, 2.5))
             })
             .collect(),
         dash_streaks: ClassId::all()
@@ -532,26 +559,60 @@ fn add_visuals(
 #[derive(Component, Default)]
 struct ShownSwing(u32);
 
-/// Flash a fan for each new melee swing. `LastSwing` is predicted for our own player (instant)
-/// and replicated for others; rollbacks may rewrite it with the same value, so each swing is
-/// drawn once per tick.
+/// A swoosh for each new melee swing, in the air where the blade swept (the same for everyone:
+/// who swung shows in the ring and bar, not the swing). `LastSwing` is predicted for our own
+/// player (instant) and replicated for others; rollbacks may rewrite it with the same value, so
+/// each swing is drawn once per tick.
 fn show_swings(
     mut commands: Commands,
     time: Res<Time>,
-    mut visuals: ResMut<Visuals>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut swings: Query<(&PlayerId, &ClassId, &Pos, &LastSwing, Has<Predicted>, &mut ShownSwing), Changed<LastSwing>>,
+    visuals: Res<Visuals>,
+    mut swings: Query<(&ClassId, &Pos, &LastSwing, &mut ShownSwing), Changed<LastSwing>>,
 ) {
-    for (id, class, pos, swing, is_me, mut shown) in &mut swings {
+    for (class, pos, swing, mut shown) in &mut swings {
         if swing.tick <= shown.0 {
             continue;
         }
         shown.0 = swing.tick;
-        let AttackKind::Melee { .. } = class.def().attack.kind else { continue };
-        let fan = visuals.attack_shapes[class].clone();
-        let material = visuals.material(&mut materials, id.0, is_me, Look::Swing);
-        let until = time.elapsed_secs() + SWING_SECONDS;
-        commands.spawn(flash(fan, material, to_world(pos.0, 0.08), swing.dir, until));
+        let AttackKind::Melee { arc_degrees, .. } = class.def().attack.kind else { continue };
+        let Some(mesh) = visuals.swooshes.get(class).cloned() else { continue };
+        let now = time.elapsed_secs();
+        let swoosh = Swoosh { started: now, dir: swing.dir.to_angle(), arc: arc_degrees.to_radians() };
+        commands.spawn((
+            SwingFx { until: now + SWOOSH_SECONDS },
+            Mesh3d(mesh),
+            MeshMaterial3d(visuals.swoosh_fades[0].clone()),
+            Transform::from_translation(to_world(pos.0, 0.0)).with_rotation(swoosh.turn(0.0)),
+            swoosh,
+        ));
+    }
+}
+
+impl Swoosh {
+    /// Its rotation `t` (0..1) of the way through: sweeping on, quickly at first, to rest where
+    /// the swing was aimed.
+    fn turn(&self, t: f32) -> Quat {
+        let eased = 1.0 - (1.0 - t).powi(3);
+        Quat::from_rotation_y(self.dir - (1.0 - eased) * SWOOSH_SWEEP * self.arc)
+    }
+}
+
+/// Swooshes sweep on, spread out a little and fade.
+fn sweep_swooshes(
+    time: Res<Time>,
+    visuals: Res<Visuals>,
+    mut swooshes: Query<(&Swoosh, &mut Transform, &mut MeshMaterial3d<StandardMaterial>)>,
+) {
+    let now = time.elapsed_secs();
+    for (swoosh, mut transform, mut material) in &mut swooshes {
+        let t = ((now - swoosh.started) / SWOOSH_SECONDS).clamp(0.0, 1.0);
+        let spread = 0.9 + 0.15 * t;
+        transform.rotation = swoosh.turn(t);
+        transform.scale = Vec3::new(spread, 1.0, spread);
+        let fade = &visuals.swoosh_fades[((t * SWOOSH_FADES as f32) as usize).min(SWOOSH_FADES - 1)];
+        if material.0 != *fade {
+            material.0 = fade.clone();
+        }
     }
 }
 

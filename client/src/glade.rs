@@ -172,8 +172,8 @@ fn ball(radius: f32) -> Mesh {
 }
 
 /// Gives every vertex `color`, so one material can carry several colors: vertex colors multiply
-/// the material's base color (the team color on a body, white on bone-and-wood trim). All parts
-/// merged together need it, or none.
+/// the material's base color (white on a body, tinted while it's chilled). All parts merged
+/// together need it, or none.
 fn tinted(mut mesh: Mesh, color: Color) -> Mesh {
     let count = mesh.count_vertices();
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![color.to_linear().to_f32_array(); count]);
@@ -668,8 +668,8 @@ fn held_spear() -> Mesh {
 /// A fighter's low-poly figure, feet at the origin, picked by class id so each class has its own
 /// silhouette from above. Every class needs one (see `FIGHTER_LOOKS`).
 pub fn fighter_mesh(class_key: &str) -> Mesh {
-    // Drawn in a white material: these are the real colors, the same for every player (rings,
-    // health bars and shots tell teams apart).
+    // Drawn in a white material: these are the real colors, the same for every player (ground
+    // rings and health bars tell who is who).
     match class_key {
         // Hunter, dark and bony: a long, belted hunter's robe in near-black moss green, split up
         // the front; bone ribs strapped over the chest, an executioner's spiked iron shoulder
@@ -766,6 +766,41 @@ pub fn swing_mesh(reach: f32, arc_degrees: f32) -> Mesh {
         let (a, z) = (-half + 2.0 * half * i as f32 / steps as f32, -half + 2.0 * half * (i + 1) as f32 / steps as f32);
         b.tri([Vec3::ZERO, point(a), point(z)], Color::WHITE);
     }
+    b.build()
+}
+
+/// A sword's swoosh: a crescent of light left in the air where a blade swept through a melee
+/// swing's arc, its outer edge at the swing's real `reach`, centered on world +X. It sweeps from
+/// the right (+Z) high to the left (-Z) low, like the revenant's diagonal chop: thick and bright
+/// at its leading end, which comes to a point, thinning and fading away behind, its inner edge
+/// soft (vertex alpha). Both faces, so it shows from any angle.
+pub fn swoosh_mesh(reach: f32, arc_degrees: f32) -> Mesh {
+    const STEPS: usize = 16;
+    let (high, low) = (1.35, 0.55);
+    let half = arc_degrees.to_radians() / 2.0;
+    // `u` runs along the arc from its trailing end (0) to its leading end (1).
+    let at = |u: f32, r: f32| {
+        let t = -half + 2.0 * half * u;
+        Vec3::new(t.cos() * r, high + (low - high) * u, -t.sin() * r)
+    };
+    let inner = |u: f32| reach * (1.0 - 0.42 * u.powf(0.7));
+    let alpha = |u: f32| u.powf(1.6);
+    let mut b = FlatMesh::default();
+    let mut both = |corners: [Vec3; 3], alphas: [f32; 3]| {
+        b.tri_faded(corners, alphas);
+        b.tri_faded([corners[0], corners[2], corners[1]], [alphas[0], alphas[2], alphas[1]]);
+    };
+    const SOFT: f32 = 0.15;
+    for i in 0..STEPS {
+        let (u0, u1) = (i as f32 / STEPS as f32, (i + 1) as f32 / STEPS as f32);
+        let (o0, o1, i0, i1) = (at(u0, reach), at(u1, reach), at(u0, inner(u0)), at(u1, inner(u1)));
+        let (a0, a1) = (alpha(u0), alpha(u1));
+        both([o0, i0, o1], [a0, a0 * SOFT, a1]);
+        both([o1, i0, i1], [a1, a0 * SOFT, a1 * SOFT]);
+    }
+    // The leading point, just past the end of the arc.
+    let tip = at(1.06, (reach + inner(1.0)) / 2.0 + 0.05);
+    both([at(1.0, reach), at(1.0, inner(1.0)), tip], [1.0, SOFT, 0.8]);
     b.build()
 }
 
