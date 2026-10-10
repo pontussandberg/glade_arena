@@ -17,11 +17,14 @@ serde = { version = "1", features = ["derive"] }
 # Dependencies are optimized even in dev builds; our own crates stay fast to compile.
 [profile.dev]
 opt-level = 1
+# Just enough debug info for panics and test failures to point at exact lines. Full debug info
+# made every test binary's .pdb about 1.3 GB, and old ones pile up in target/.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
-# No debug info for dependencies (ours keep it, so panics and test failures still point at exact
-# lines): far smaller objects, so linking Bevy is much faster and needs much less memory.
+# No debug info for dependencies (ours keep line tables, see above): far smaller objects, so
+# linking Bevy is much faster and needs much less memory.
 debug = false
 
 [profile.wasm-release]

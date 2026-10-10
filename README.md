@@ -109,7 +109,9 @@ Prereqs: Rust (stable, MSVC on Windows), `rustup target add wasm32-unknown-unkno
 
 Build settings that keep Bevy builds fast and within memory: Windows links with Rust's bundled
 `rust-lld` and cargo runs at most 12 jobs (`.cargo/config.toml`); dependencies build without
-debug info (`Cargo.toml`; our own crates keep it).
+debug info and our own crates with line tables only (`Cargo.toml`). `scripts/dev.sh` also
+deletes our own crates' build artifacts (not dependencies') that no build has written in 3 days:
+cargo never removes outdated ones itself.
 
 ```sh
 # all at once: rebuild the browser client, replace any running server, serve on :8080
