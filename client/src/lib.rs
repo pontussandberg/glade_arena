@@ -45,6 +45,10 @@ pub mod render;
 #[cfg(feature = "render")]
 pub mod rig;
 pub mod rooms;
+#[cfg(all(test, feature = "render"))]
+mod preview;
+#[cfg(feature = "render")]
+pub mod sculpt;
 #[cfg(feature = "render")]
 pub mod stat_frame;
 #[cfg(feature = "render")]
