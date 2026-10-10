@@ -100,9 +100,13 @@ const TAIL_TURN: f32 = 0.06;
 
 /// How a rigged class moves. Keyframes are (carrying, fully drawn back, released, dashing),
 /// radians. Limbs: positive swings forward. Twist: negative turns the weapon (right, +Z)
-/// shoulder back. Lean: positive leans back.
+/// shoulder back. Lean: positive leans back (along the facing, whatever the twist).
 struct Moves {
     weapon_arm: [f32; 4],
+    /// How much of the body's twist the weapon arm undoes (0 to 1), so it swings along the
+    /// facing rather than across the twisted chest: an overhand throw draws straight back behind
+    /// the shoulder and whips straight through, instead of round behind the head.
+    weapon_arm_untwist: f32,
     lead_arm: [f32; 4],
     lead_leg: [f32; 4],
     back_leg: [f32; 4],
@@ -131,12 +135,13 @@ enum Held {
 
 const JAVELINIST: Moves = Moves {
     weapon_arm: [-2.9, -2.8, 1.9, -2.1],
+    weapon_arm_untwist: 1.0,
     lead_arm: [0.35, 1.5, -0.9, -0.8],
     lead_leg: [0.12, 0.55, 0.4, 0.6],
     back_leg: [-0.1, -0.5, -0.75, -0.6],
-    // Released: the shoulder comes round just far enough to put the javelin square in front of
-    // the chest, on the line it flies (see `HeldAt`), not across it.
-    twist: [0.0, -1.0, 0.3, 0.0],
+    // Drawn: the shoulder turned back only so far that the javelin, held on target, stays clear
+    // of the head. Released: the shoulder comes round, the javelin in front of the chest.
+    twist: [0.0, -0.8, 0.55, 0.0],
     lean: [0.0, 0.28, -0.38, -0.45],
     head_dip: [0.0, 0.2, -0.15, 0.0],
     held: Held::OnTarget,
@@ -146,6 +151,7 @@ const JAVELINIST: Moves = Moves {
 
 const REVENANT: Moves = Moves {
     weapon_arm: [0.65, -2.7, 1.0, -1.5],
+    weapon_arm_untwist: 0.0,
     lead_arm: [-0.2, 0.7, -0.6, -1.1],
     lead_leg: [0.1, 0.45, 0.6, 0.65],
     back_leg: [-0.1, -0.4, -0.65, -0.7],
@@ -159,6 +165,7 @@ const REVENANT: Moves = Moves {
 
 const FROST_MAGE: Moves = Moves {
     weapon_arm: [0.3, 1.9, 1.25, 0.75],
+    weapon_arm_untwist: 0.0,
     lead_arm: [-0.1, 1.25, 0.8, -1.0],
     lead_leg: [0.1, 0.3, 0.5, 0.55],
     back_leg: [-0.1, -0.3, -0.5, -0.5],
@@ -197,6 +204,9 @@ const SLAM: (f32, f32) = (8.0, 24.0);
 /// (per second, exponential).
 const TURN_RATE: f32 = 28.0;
 const WALK_RATE: f32 = 10.0;
+/// How much the head turns and leans with the body (0: it stays square on the aim), so it moves
+/// with the shoulders through a strike instead of hanging still while the body turns under it.
+const HEAD_FOLLOW: f32 = 0.3;
 /// How brightly the eyes (and other glowing parts) glow.
 const EYE_GLOW: f32 = 6.0;
 
@@ -496,8 +506,13 @@ fn pose_rigs(
         // walks.
         let walk = rig.walking * (1.0 - braced);
         let sway = phase.sin() * SWAY * walk;
+        // Leaning along the facing, then twisting: leaning back about the twisted body's own axis
+        // would tip it sideways, across the line of the strike.
         let leaning = |twist: f32, lean: f32, sway: f32| {
-            Quat::from_rotation_y(twist) * Quat::from_rotation_z(lean) * Quat::from_rotation_x(sway)
+            Quat::from_rotation_z(lean) * Quat::from_rotation_y(twist) * Quat::from_rotation_x(sway)
+        };
+        let arm_turn = |twist: f32, swing: f32| {
+            Quat::from_rotation_y(-moves.weapon_arm_untwist * twist) * Quat::from_rotation_z(swing)
         };
         let facing_turn = Quat::from_rotation_y(facing.look.to_angle());
         let lean = leaning(twist, lean, sway);
@@ -517,7 +532,7 @@ fn pose_rigs(
         });
 
         let unlean = lean.inverse();
-        let weapon_arm = Quat::from_rotation_z(weapon_arm);
+        let weapon_arm = arm_turn(twist, weapon_arm);
         let held_in = |weapon_arm: Quat, unlean: Quat| match moves.held {
             Held::OnTarget => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-(FRAC_PI_2 - 0.12)),
             Held::InHand(forward) => Quat::from_rotation_z(PI + forward),
@@ -525,7 +540,7 @@ fn pose_rigs(
         };
         let held = held_in(weapon_arm, unlean);
         let rotations = [
-            (rig.head, unlean * Quat::from_rotation_z(-head_dip)),
+            (rig.head, unlean.slerp(Quat::IDENTITY, HEAD_FOLLOW) * Quat::from_rotation_z(-head_dip)),
             (rig.arms[0], weapon_arm),
             (rig.arms[1], Quat::from_rotation_z(lead_arm)),
             (rig.legs[0], Quat::from_rotation_z(legs[0])),
@@ -538,7 +553,7 @@ fn pose_rigs(
         // after this frame's shots are placed.
         if moves.throws {
             let aimed_lean = leaning(twist_to, lean_to, 0.0);
-            let aimed_arm = Quat::from_rotation_z(weapon_arm_to);
+            let aimed_arm = arm_turn(twist_to, weapon_arm_to);
             let aimed_body = Transform { rotation: facing_turn * aimed_lean, ..posed };
             let hand = Transform::from_translation(RIG_SHOULDER).with_rotation(aimed_arm)
                 * Transform::from_translation(RIG_HAND).with_rotation(held_in(aimed_arm, aimed_lean.inverse()));
