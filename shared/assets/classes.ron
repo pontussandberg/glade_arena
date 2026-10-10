@@ -24,6 +24,14 @@
 //             a hit readies the auto-attack at once.
 //           Nova(radius, damage, chill)  a burst around you, at once: everyone within `radius`
 //             (and not behind a wall) takes `damage` and `chill`
+//   passive (optional)  shown to players, nothing more: Some((name, description)). Its effect
+//     lives in the numbers it describes (far_damage, crit...).
+//
+// Descriptions (the passive's and the ability's) can name this class's numbers in braces, filled
+// in when shown, so the words follow a retune: {near_damage} / {far_damage} (the auto-attack's
+// damage point blank / after its full range), {crit}, {crit_vs_frozen} (as percentages),
+// {crit_multiplier} ("2x"), {ability_damage}, {ability_reach} (a thrown ability's range, a dash's
+// distance, a nova's radius, in meters), {ability_root} (a nova's root, in seconds).
 //   crit (optional)  odds (0 to 1) that a hit you deal, auto-attack or Q, is critical for double
 //     damage: (chance: normally, vs_frozen: against a frozen (rooted) target). None by default.
 [
@@ -46,6 +54,10 @@
             cooldown_ticks: 384,
             kind: Projectile(speed: 32.0, radius: 0.2, range: 13.0, damage: 22),
         ),
+        passive: Some((
+            name: "Long Shot",
+            description: "Your javelins hit harder the farther they fly: {near_damage} damage point blank, up to {far_damage} at full range.",
+        )),
         crit: (chance: 0.1),
     ),
     (
@@ -85,10 +97,14 @@
         ),
         ability: (
             name: "Frost Nova",
-            description: "Instantly freeze everyone within 3.5 m in place for 2.5 s: no walking, no dashing. Your hits on the frozen always crit.",
+            description: "Instantly freeze everyone within {ability_reach} in place for {ability_root}: no walking, no dashing.",
             cooldown_ticks: 448,
             kind: Nova(radius: 3.5, damage: 6, chill: (root_ticks: 160)),
         ),
+        passive: Some((
+            name: "Shatter",
+            description: "Your hits on frozen targets have a {crit_vs_frozen} crit chance, for {crit_multiplier} damage.",
+        )),
         crit: (vs_frozen: 1.0),
     ),
 ]

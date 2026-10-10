@@ -1,5 +1,7 @@
 //! Your abilities, LoL-style: a square icon at the bottom center of your own screen, with a dark
-//! clock-wipe sweeping away clockwise and the seconds left while it cools down. Only you see it.
+//! clock-wipe sweeping away clockwise and the seconds left while it cools down, and your passive
+//! (if your class has one) in a smaller square beside it. Hovering either shows what it does.
+//! Only you see them.
 
 use std::f32::consts::TAU;
 
@@ -12,12 +14,13 @@ use lightyear::prelude::*;
 use crate::feedback::AttackClock;
 use crate::glade::palette;
 use crate::render::{shown, ui_text};
+use crate::stat_frame::{self, Blurb};
 
 pub struct ActionBarPlugin;
 
 impl Plugin for ActionBarPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (spawn_icon, update_icon).chain());
+        app.add_systems(Update, ((spawn_icon, update_icon).chain(), show_tooltips));
     }
 }
 
@@ -26,6 +29,15 @@ const ICON: f32 = 64.0;
 const BOTTOM: f32 = 18.0;
 /// The cooldown wipe's shade.
 const SHADE: Color = Color::srgba(0.02, 0.03, 0.04, 0.8);
+/// The passive's icon size, and its gap from the Q icon.
+const PASSIVE: f32 = 46.0;
+const PASSIVE_GAP: f32 = 10.0;
+/// A tooltip's width (pixels).
+const TIP_WIDTH: f32 = 280.0;
+
+/// Hovering this shows that tooltip.
+#[derive(Component)]
+struct Tooltip(Entity);
 
 /// The Q icon (this entity) and the parts that change: the wipe and the seconds.
 #[derive(Component)]
@@ -91,23 +103,100 @@ fn spawn_icon(mut commands: Commands, me: Query<&ClassId, Added<Predicted>>, ico
         })
         .with_child(ui_text(ability.name.clone(), 12.0, palette::HAZE))
         .id();
+    let tip = tooltip(&mut commands, stat_frame::ability_blurb(class.def()), ICON);
     commands
         .spawn((
             AbilityIcon { wipe, seconds },
+            icon_frame(tip, ICON, -ICON / 2.0, palette::SPIRIT),
+        ))
+        .add_children(&[picture, wipe, seconds_box, key, name, tip]);
+    if let Some(blurb) = stat_frame::passive_blurb(class.def()) {
+        spawn_passive(&mut commands, blurb);
+    }
+}
+
+/// The passive's icon, left of Q, bottoms lined up: a gold diamond in a plain frame.
+fn spawn_passive(commands: &mut Commands, blurb: Blurb) {
+    let tip = tooltip(commands, blurb, PASSIVE);
+    let diamond = commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            width: percent(100.0),
+            height: percent(100.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        })
+        .with_child((
+            Node { width: px(16.0), height: px(16.0), border: UiRect::all(px(2.0)), ..default() },
+            BorderColor::all(palette::TORCH_FLAME),
+            BackgroundColor(palette::TORCH_FLAME.with_alpha(0.25)),
+            UiTransform::from_rotation(Rot2::degrees(45.0)),
+        ))
+        .id();
+    commands
+        .spawn(icon_frame(tip, PASSIVE, -ICON / 2.0 - PASSIVE_GAP - PASSIVE, palette::STONE))
+        .add_children(&[diamond, tip]);
+}
+
+/// An icon's square frame, `size` pixels, its left edge `from_center` pixels from the middle of
+/// the screen, bottoms all lined up; hovering it shows `tip`.
+fn icon_frame(tip: Entity, size: f32, from_center: f32, border: Color) -> impl Bundle {
+    (
+        Tooltip(tip),
+        Interaction::default(),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(BOTTOM + 14.0),
+            left: percent(50.0),
+            margin: UiRect::left(px(from_center)),
+            width: px(size),
+            height: px(size),
+            border: UiRect::all(px(2.0)),
+            ..default()
+        },
+        BackgroundColor(palette::INK.with_alpha(0.9)),
+        BorderColor::all(border),
+    )
+}
+
+/// A tooltip above an icon `size` pixels wide, centered on it, hidden until it's hovered: the
+/// name, what kind it is, and what it does.
+fn tooltip(commands: &mut Commands, blurb: Blurb, size: f32) -> Entity {
+    commands
+        .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                bottom: px(BOTTOM + 14.0),
-                left: percent(50.0),
-                margin: UiRect::left(px(-ICON / 2.0)),
-                width: px(ICON),
-                height: px(ICON),
-                border: UiRect::all(px(2.0)),
+                bottom: px(size + 10.0),
+                left: px((size - TIP_WIDTH) / 2.0),
+                width: px(TIP_WIDTH),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4.0),
+                padding: UiRect::all(px(10.0)),
+                border: UiRect::all(px(1.0)),
                 ..default()
             },
-            BackgroundColor(palette::INK.with_alpha(0.9)),
-            BorderColor::all(palette::SPIRIT),
+            BackgroundColor(palette::INK.with_alpha(0.95)),
+            BorderColor::all(palette::STONE.with_alpha(0.4)),
+            GlobalZIndex(30),
+            Visibility::Hidden,
         ))
-        .add_children(&[picture, wipe, seconds_box, key, name]);
+        .with_children(|tip| {
+            tip.spawn(ui_text(blurb.name, 15.0, palette::HAZE));
+            let kind = blurb.cooldown.map_or("Passive".to_string(), |cooldown| format!("Q ability, {cooldown}"));
+            tip.spawn(ui_text(kind, 11.0, palette::STONE));
+            tip.spawn(ui_text(blurb.description, 13.0, palette::HAZE));
+        })
+        .id()
+}
+
+/// Shows a tooltip while its icon is hovered.
+fn show_tooltips(icons: Query<(&Interaction, &Tooltip), Changed<Interaction>>, mut tips: Query<&mut Visibility>) {
+    for (interaction, tooltip) in &icons {
+        if let Ok(mut visibility) = tips.get_mut(tooltip.0) {
+            visibility.set_if_neq(shown(*interaction != Interaction::None));
+        }
+    }
 }
 
 /// Steps the wipe moves in per turn: finer than a pixel at the icon's edge, so it looks smooth

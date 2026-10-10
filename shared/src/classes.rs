@@ -25,6 +25,9 @@ pub struct ClassDef {
     pub move_speed: f32,
     pub attack: AttackDef,
     pub ability: AbilityDef,
+    /// What the class always has going for it, nothing to press (none by default).
+    #[serde(default)]
+    pub passive: Option<PassiveDef>,
     /// Critical hits (none by default).
     #[serde(default)]
     pub crit: Crit,
@@ -106,6 +109,15 @@ pub struct AbilityDef {
     pub kind: AbilityKind,
 }
 
+/// A passive, as players read it. Only words: its effect is in the numbers it describes (e.g.
+/// the attack's `far_damage`, the class's `crit`), which its description names by placeholder
+/// (`ClassDef::describe`).
+#[derive(Deserialize, Debug, Clone)]
+pub struct PassiveDef {
+    pub name: String,
+    pub description: String,
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub enum AbilityKind {
     /// Thrown instantly toward the aim (no windup, no root), fixed damage.
@@ -149,6 +161,40 @@ impl ClassDef {
     pub fn shot(&self, ability: bool) -> Option<Shot> {
         if ability { self.ability.kind.shot() } else { self.attack.kind.shot() }
     }
+
+    /// A description from the class file (a passive's or the Q's) with its `{placeholders}`
+    /// filled in from this class's numbers, so the words can't drift from them. The list is in
+    /// `classes.ron`.
+    pub fn describe(&self, text: &str) -> String {
+        self.placeholders().into_iter().fold(text.to_string(), |text, (key, value)| text.replace(&format!("{{{key}}}"), &value))
+    }
+
+    fn placeholders(&self) -> Vec<(&'static str, String)> {
+        let percent = |odds: f32| format!("{:.0}%", odds * 100.0);
+        let mut all = vec![
+            ("near_damage", self.attack.damage_at(0.0).to_string()),
+            ("far_damage", self.attack.damage_at(f32::INFINITY).to_string()),
+            ("crit", percent(self.crit.chance)),
+            ("crit_vs_frozen", percent(self.crit.vs_frozen)),
+            ("crit_multiplier", format!("{CRIT_MULTIPLIER}x")),
+        ];
+        let (damage, reach) = match self.ability.kind {
+            AbilityKind::Projectile { damage, range, .. } => (damage, range),
+            AbilityKind::Dash { damage, distance, .. } => (damage, distance),
+            AbilityKind::Nova { damage, radius, chill } => {
+                all.push(("ability_root", seconds(chill.root_ticks)));
+                (damage, radius)
+            }
+        };
+        all.extend([("ability_damage", damage.to_string()), ("ability_reach", format!("{reach} m"))]);
+        all
+    }
+}
+
+/// Ticks as players read them: "6 s", "2.5 s".
+pub fn seconds(ticks: u32) -> String {
+    let seconds = ticks as f32 / TICK_HZ as f32;
+    if seconds.fract() == 0.0 { format!("{seconds} s") } else { format!("{seconds:.1} s") }
 }
 
 impl AbilityKind {
@@ -276,6 +322,13 @@ mod tests {
                 }
             }
             chill_is_sane(&c.id, c.attack.chill);
+            if let Some(passive) = &c.passive {
+                assert!(!passive.name.is_empty() && !passive.description.is_empty(), "{}: passive", c.id);
+            }
+            for text in c.passive.iter().map(|p| &p.description).chain([&c.ability.description]) {
+                let filled = c.describe(text);
+                assert!(!filled.contains(['{', '}']), "{}: unknown placeholder in {filled:?}", c.id);
+            }
             let Crit { chance, vs_frozen } = c.crit;
             assert!((0.0..=1.0).contains(&chance) && (0.0..=1.0).contains(&vs_frozen), "{}: crit odds", c.id);
         }

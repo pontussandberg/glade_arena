@@ -49,7 +49,8 @@ server/   headless authoritative server (spawning, hit decisions, lag compensati
           tests/integration/ has the end-to-end tests (one test binary: each links all of Bevy)
 client/   ClientNetPlugin (networking + prediction, headless-capable), bot (sparring AI);
           render (fighters, shots, swings, telegraphs, dash streaks, novas, frost, HUD, input), camera,
-          action_bar (your ability icon and cooldown), minimap, inspect (F2's fighter panel),
+          action_bar (your passive and ability icons, cooldown, hover tooltips), stat_frame (a
+          class's stats: in the lobby and bottom left in the arena), minimap,
           glade (the 3D scene and all meshes), rig (animated fighters: facing, walk cycle,
           windup and throw), lobby (character select), feedback (health and cast bars, hit flash)
 client/web/  index.html for the browser build (pkg/ and digest.txt are generated)
@@ -167,8 +168,8 @@ V toggles a free, WoW-style camera that follows behind you: WASD walks relative 
 the right mouse button and dragging (or the arrow keys) turns it, the wheel (or + / -) zooms,
 down to arm's length. There the right button only turns the camera: click to move is off. Tab
 moves it on to the next fighter, to watch them play (and after the last, back to
-you). V again goes back. F2 shows a panel about the fighter the camera is on: health, what
-it's doing (winding up, dashing, frozen...) and where.
+you). V again goes back. The keys for the current camera are listed
+top left, under the ping (with the free camera also jitter and rollbacks).
 
 Two tabs work: a hidden tab keeps simulating and networking without rendering (see
 `client/src/hidden_tab.rs`, which works around Bevy 0.19 ignoring Lightyear's keepalive). If a
