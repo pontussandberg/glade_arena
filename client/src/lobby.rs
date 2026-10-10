@@ -549,6 +549,10 @@ fn show_room(
     });
 }
 
+/// How tall a team's member list is at least: four members (a row is about 38 pixels), so the
+/// sides don't grow as the first few join.
+const TEAM_ROWS_HEIGHT: f32 = 4.0 * 38.0 + 3.0 * GAP * 0.75;
+
 /// A team's side: its colored header and count, its members, and (unless we're on it, or it's
 /// full) the way onto it.
 fn team_column(sides: &mut ChildSpawnerCommands, view: &RoomView, team: u8, my_team: u8, my_id: u32) {
@@ -567,15 +571,18 @@ fn team_column(sides: &mut ChildSpawnerCommands, view: &RoomView, team: u8, my_t
             header.spawn(ui_text(team_name(team).to_uppercase(), 13.0, color));
             header.spawn(ui_text(format!("{}/{MAX_PER_TEAM}", view.on_team(team)), 12.0, palette::STONE));
         });
-        let mut members = view.members.iter().filter(|m| m.team == team).peekable();
-        if members.peek().is_none() {
-            column.spawn(ui_text("Empty", 12.0, palette::STONE.with_alpha(0.6)));
-        }
-        for member in members {
-            member_row(column, view, member, my_id);
-        }
-        // Pushed to the bottom, so both sides' buttons line up.
-        column.spawn(Node { flex_grow: 1.0, ..default() });
+        // Room for a few members before the side grows, and the rest pushed to the bottom: both
+        // sides' buttons line up.
+        let rows = Node { flex_direction: FlexDirection::Column, row_gap: px(GAP * 0.75), flex_grow: 1.0, min_height: px(TEAM_ROWS_HEIGHT), ..default() };
+        column.spawn(rows).with_children(|rows| {
+            let mut members = view.members.iter().filter(|m| m.team == team).peekable();
+            if members.peek().is_none() {
+                rows.spawn(ui_text("Empty", 12.0, palette::STONE.with_alpha(0.6)));
+            }
+            for member in members {
+                member_row(rows, view, member, my_id);
+            }
+        });
         if team != my_team && view.on_team(team) < MAX_PER_TEAM {
             let join = button(format!("Join {}", team_name(team)), 11.0, color.with_alpha(0.15), color, color.with_alpha(0.6));
             column.spawn((RoomButton(RoomRequest::SetTeam(team)), join));
