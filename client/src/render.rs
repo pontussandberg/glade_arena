@@ -133,8 +133,12 @@ pub(crate) struct Visuals {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Look {
     Body,
-    /// Projectiles glow, so a shot in flight is the easiest thing to spot.
+    /// Projectiles glow, so a shot in flight is the easiest thing to spot: round bolts glow pale.
     Shot,
+    /// Glowing ice in its mesh's colors: frostbolts.
+    Ice,
+    /// The see-through cold glow around a frostbolt and trailing it.
+    Aura,
     /// Spirit: abilities glow spectral blue, whoever uses them.
     Spirit,
     /// Plain, for meshes that carry their own colors (a thrown javelin).
@@ -183,6 +187,8 @@ impl Visuals {
                     // rings and bars.
                     Look::Body => glade::matte(Color::WHITE),
                     Look::Shot => glade::glow(palette::SILVER, 4.0),
+                    Look::Ice => glade::glow(Color::WHITE, 4.0),
+                    Look::Aura => glade::translucent(palette::FROST_GLOW, 0.35, 2.0),
                     Look::Spirit => glade::glow(palette::SPIRIT, 6.0),
                     Look::Plain => glade::matte(Color::WHITE),
                     Look::Wind => glade::translucent(Color::WHITE, 0.6, 1.5),
@@ -233,6 +239,10 @@ struct Thrown {
     length: f32,
     stretch: f32,
 }
+
+/// A shot that turns about its flight this fast (radians per second): a frostbolt.
+#[derive(Component)]
+struct Spin(f32);
 
 /// When (seconds) and where a thrown spear left the hand: its point, how far that is off its
 /// real path and how it was held (as a shot's rotation).
@@ -312,8 +322,9 @@ fn setup_scene(
         projectiles: ClassId::all()
             .flat_map(|c| [false, true].map(|ability| (c, ability)))
             .filter_map(|(c, ability)| {
-                let look = glade::shot_look(c.def(), c.def().shot(ability)?, ability);
-                Some(((c, ability), glade::ShotLook { mesh: meshes.add(look.mesh), colored: look.colored, thrown: look.thrown }))
+                let glade::ShotLook { mesh, glow, thrown, aura, spin } = glade::shot_look(c.def(), c.def().shot(ability)?, ability);
+                let look = glade::ShotLook { mesh: meshes.add(mesh), glow, thrown, aura: aura.map(|a| meshes.add(a)), spin };
+                Some(((c, ability), look))
             })
             .collect(),
         shot_tip: meshes.add(glade::shot_tip_mesh()),
@@ -474,17 +485,18 @@ fn add_visuals(
             ));
     }
     for (entity, projectile, pos) in &projectiles {
-        let Some(glade::ShotLook { mesh, colored, thrown }) = visuals.projectiles.get(&(projectile.class, projectile.ability)).cloned()
+        let Some(glade::ShotLook { mesh, glow, thrown, aura, spin }) =
+            visuals.projectiles.get(&(projectile.class, projectile.ability)).cloned()
         else {
             continue;
         };
         let is_mine = projectile.owner == me.0;
-        // A glowing shot is drawn in its owner's color (spirit blue for abilities); one in its own
-        // colors (a thrown spear, just as it was held) gets a white glow on its point.
-        let look = match (colored, projectile.ability) {
-            (true, _) => Look::Plain,
-            (false, true) => Look::Spirit,
-            (false, false) => Look::Shot,
+        // Never in its owner's colors: a shot looks the same whoever throws it.
+        let look = match glow {
+            glade::ShotGlow::Weapon => Look::Plain,
+            glade::ShotGlow::Spirit => Look::Spirit,
+            glade::ShotGlow::Ice => Look::Ice,
+            glade::ShotGlow::Pale => Look::Shot,
         };
         let body = visuals.material(&mut materials, projectile.owner, is_mine, look);
         let mut shot = commands.entity(entity);
@@ -494,9 +506,17 @@ fn add_visuals(
             Transform::from_translation(to_world(pos.0, PROJECTILE_HEIGHT))
                 .with_rotation(Quat::from_rotation_y(projectile.dir.to_angle())),
         ));
-        if colored {
+        if spin != 0.0 {
+            shot.insert(Spin(spin));
+        }
+        // A real weapon, in its own colors, gets a white glow on its point.
+        if glow == glade::ShotGlow::Weapon {
             let spark = visuals.material(&mut materials, projectile.owner, is_mine, Look::Spark);
             shot.with_child((Mesh3d(visuals.shot_tip.clone()), MeshMaterial3d(spark)));
+        }
+        if let Some(aura) = aura {
+            let material = visuals.material(&mut materials, projectile.owner, is_mine, Look::Aura);
+            shot.with_child((Mesh3d(aura), MeshMaterial3d(material)));
         }
         if thrown {
             let material = visuals.material(&mut materials, projectile.owner, is_mine, Look::Wind);
@@ -748,18 +768,19 @@ fn fly_shots(
     time: Res<Time>,
     clock: AttackClock,
     holders: Query<(&PlayerId, &HeldAt)>,
-    mut shots: Query<(&Projectile, &mut Transform, Option<&mut Thrown>), With<Mesh3d>>,
+    mut shots: Query<(&Projectile, &mut Transform, Option<&mut Thrown>, Option<&Spin>), With<Mesh3d>>,
     mut winds: Query<&mut Transform, Without<Projectile>>,
 ) {
     let now = time.elapsed_secs();
     let tick = clock.now(true);
-    for (projectile, mut transform, thrown) in &mut shots {
+    for (projectile, mut transform, thrown, spin) in &mut shots {
         let speed = projectile.class.def().shot(projectile.ability).map_or(0.0, |s| s.speed);
         let on_path = to_world(sim::projectile_pos(projectile, tick), PROJECTILE_HEIGHT);
         let along = Quat::from_rotation_y(projectile.dir.to_angle());
         let forward_dir = along * Vec3::X;
         let Some(mut thrown) = thrown else {
-            transform.set_if_neq(Transform::from_translation(on_path).with_rotation(along));
+            let spun = spin.map_or(Quat::IDENTITY, |s| Quat::from_rotation_x(s.0 * now));
+            transform.set_if_neq(Transform::from_translation(on_path).with_rotation(along * spun));
             continue;
         };
         let launch = match thrown.launch {

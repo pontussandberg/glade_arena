@@ -778,16 +778,32 @@ pub fn lane_mesh(from: f32, to: f32, width: f32) -> Mesh {
     b.build()
 }
 
-/// How a class's shot looks (see `SHOT_LOOKS`).
+/// How a class's shot looks (see `SHOT_LOOKS`). Never in its owner's colors: a shot looks the
+/// same whoever throws it.
 #[derive(Clone)]
 pub struct ShotLook<M = Mesh> {
     pub mesh: M,
-    /// The mesh carries its own colors (a real weapon, drawn plain); otherwise it's drawn as a
-    /// glow.
-    pub colored: bool,
+    pub glow: ShotGlow,
     /// A thrown spear: leaves the thrower's hand where the javelin is held (gripped `GRIP_TO_TIP`
     /// behind its point) and trails wind (`wind_mesh`).
     pub thrown: bool,
+    /// A see-through glow around it and trailing behind, faded by its vertex alpha (`frost_aura`).
+    pub aura: Option<M>,
+    /// How fast (radians per second) it turns about its flight.
+    pub spin: f32,
+}
+
+/// What a shot's mesh is drawn in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ShotGlow {
+    /// Its own colors (a real weapon, drawn plain), with a white spark on its point.
+    Weapon,
+    /// Spectral blue: an ability.
+    Spirit,
+    /// Glowing ice, its colors in the mesh.
+    Ice,
+    /// A plain pale glow.
+    Pale,
 }
 
 /// How far the point of a held javelin is ahead of the hand.
@@ -797,26 +813,77 @@ pub const GRIP_TO_TIP: f32 = 1.2;
 
 /// A class's shot (auto-attack or, `ability`, Q), flying along world +X, the point that hits at
 /// the origin, picked by class id: the javelinist throws the very javelin it carries (and its Q
-/// is a plain spectral spear, drawn glowing); the frost mage an ice crystal; the rest round
-/// bolts of the shot's radius.
+/// is a plain spectral spear, drawn glowing); the frost mage a frostbolt; the rest round bolts of
+/// the shot's radius.
 pub fn shot_look(class: &ClassDef, shot: Shot, ability: bool) -> ShotLook {
+    let plain = |mesh, glow| ShotLook { mesh, glow, thrown: false, aura: None, spin: 0.0 };
     match (class.id.as_str(), ability) {
         ("javelinist", false) => ShotLook {
-            mesh: frame_spear(palette::IRON, palette::SILVER).rotated_by(ALONG_X),
-            colored: true,
             thrown: true,
+            ..plain(frame_spear(palette::IRON, palette::SILVER).rotated_by(ALONG_X), ShotGlow::Weapon)
         },
         ("javelinist", true) => {
-            ShotLook { mesh: frame_spear(Color::WHITE, Color::WHITE).rotated_by(ALONG_X), colored: false, thrown: true }
+            ShotLook { thrown: true, ..plain(frame_spear(Color::WHITE, Color::WHITE).rotated_by(ALONG_X), ShotGlow::Spirit) }
         }
-        // A frostbolt: a long ice crystal, point first.
-        ("frost_mage", false) => {
-            let length = shot.radius * 5.0;
-            let bolt = ice_shard(shot.radius * 0.7, length).translated_by(Vec3::Y * -length).rotated_by(ALONG_X);
-            ShotLook { mesh: bolt, colored: false, thrown: false }
-        }
-        _ => ShotLook { mesh: gem_mesh(shot.radius), colored: false, thrown: false },
+        ("frost_mage", false) => ShotLook {
+            aura: Some(frost_aura(shot.radius)),
+            spin: FROSTBOLT_SPIN,
+            ..plain(frostbolt(shot.radius), ShotGlow::Ice)
+        },
+        _ => plain(gem_mesh(shot.radius), ShotGlow::Pale),
     }
+}
+
+/// A frostbolt's crystal is this many times as long as the shot's radius, and turns this fast
+/// (radians per second) as it flies.
+const FROSTBOLT_LENGTH: f32 = 3.6;
+const FROSTBOLT_SPIN: f32 = 5.0;
+
+/// A frostbolt, point first along +X (its point at the origin), sized by the shot's radius: a long
+/// six-sided ice crystal with a ring of smaller shards splaying back from its waist like a
+/// frozen burst, the core pale ice, the shards a deeper frost glow.
+fn frostbolt(radius: f32) -> Mesh {
+    let length = radius * FROSTBOLT_LENGTH;
+    let point_up = |mesh: Mesh| mesh.rotated_by(ALONG_X);
+    let core = tinted(ice_shard(radius * 0.4, length).translated_by(Vec3::Y * -length), palette::ICE);
+    // A shard standing from its base `back` behind the point, leaning back and `out` (radians)
+    // from the axis, turned `around` it.
+    let splay = |shard: Mesh, back: f32, out: f32, around: f32| {
+        shard
+            .rotated_by(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2 + out))
+            .translated_by(Vec3::new(-back, -radius * 0.1, 0.0))
+            .rotated_by(Quat::from_rotation_x(around))
+    };
+    let mut parts = vec![point_up(core)];
+    // Five shards round the waist, alternating long and short.
+    for i in 0..5 {
+        let long = if i % 2 == 0 { 1.0 } else { 0.7 };
+        let shard = tinted(ice_shard(radius * 0.17, length * 0.42 * long), palette::FROST_GLOW);
+        parts.push(splay(shard, length * 0.35, 0.5, i as f32 * std::f32::consts::TAU / 5.0 + 0.3));
+    }
+    // Two slivers riding just behind the point.
+    for around in [std::f32::consts::FRAC_PI_2, -std::f32::consts::FRAC_PI_2] {
+        parts.push(splay(tinted(ice_shard(radius * 0.1, length * 0.3), palette::ICE), length * 0.12, 0.25, around));
+    }
+    sculpted(parts)
+}
+
+/// The cold glow around a frostbolt: a faceted halo round the crystal, stretched back into a
+/// trail about as long again, fading out toward its end (vertex alpha).
+fn frost_aura(radius: f32) -> Mesh {
+    let length = radius * FROSTBOLT_LENGTH;
+    let halo = Sphere::new(1.0).mesh().ico(1).unwrap();
+    let halo = halo.scaled_by(Vec3::new(length * 0.55, radius, radius)).translated_by(Vec3::X * -length * 0.45);
+    let trail = cone(radius * 0.8, length * 1.4, 8).rotated_by(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
+    let trail = trail.translated_by(Vec3::X * -length * 1.3);
+    let mut aura = merge_parts(vec![halo, trail]);
+    let fade = |x: f32| (1.0 + x / (length * 2.0)).clamp(0.0, 1.0).powf(1.5);
+    let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) = aura.attribute(Mesh::ATTRIBUTE_POSITION) else {
+        unreachable!("meshes have positions")
+    };
+    let colors: Vec<[f32; 4]> = positions.iter().map(|p| [1.0, 1.0, 1.0, fade(p[0])]).collect();
+    aura.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    aura
 }
 
 /// The white glow on a thrown spear's point: a small bright spark stretched along +X, at the
