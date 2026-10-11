@@ -18,7 +18,7 @@ projectile) and Q ability; all of it lives in `shared/assets/classes.ron`:
 | Class | Role | Auto-attack | Q |
 |---|---|---|---|
 | Javelinist | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`) | **Spirit Spear**: a fast spectral spear, thrown instantly (no windup, no root) |
-| Revenant | Duelist | A long thrust down a narrow lane, with a medium windup | **Rift Step**: dash through enemies, cutting each one; a hit readies the blade at once |
+| Revenant | Duelist | A long thrust down a narrow lane, with a slow windup; each hit makes the next windup 72% shorter if it follows within 1.5 s (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash forward, damaging each enemy you pass through |
 | Frost Mage | Controller | Frostbolts: little damage and shorter range (mid range), but each hit slows (40% for 2 s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5 s (no walking, no dashing) |
 
 Hits can carry **crowd control** (`chill` in `classes.ron`): a slow takes a share off walking
@@ -90,7 +90,7 @@ scripts/  build-web.sh, serve.mjs
   spear appears (`SeenThrows`), which can be a little ahead of the thrower's body.
 - Other players are **interpolated** between server snapshots.
 - `Health` is server-only: replicated, never predicted. Melee, dash and nova damage are decided
-  by the server too (and a Rift Step readying the blade: your client is corrected by a rollback);
+  by the server too (and a hit arming Follow Through: your client is corrected by a rollback);
   your own swing (`LastSwing`) is predicted so it shows instantly.
 - So is `Chilled` (slows and roots). It holds tick spans, so when one lands on you a round trip
   late, the rollback it causes replays your movement with it from exactly the tick it began.

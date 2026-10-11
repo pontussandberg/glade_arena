@@ -18,8 +18,11 @@
 //! where it faces. The windup draws the sword arm back, the weapon shoulder turning away and the
 //! lead hand reaching out at the target, the point coming up level; the strike is a lunge,
 //! the arm driving the point straight out at the target as the lead leg steps long into it and
-//! the body leans in behind it, the blade smearing out longer for a moment as it lands. A dash is
-//! that lunge, held all the way through it.
+//! the body leans in behind it, the blade smearing out longer for a moment as it lands. A strike
+//! started before the last one has settled (holding fire, or clicking again quickly) chains onto
+//! it: the blade comes straight back into the draw, still raised, instead of sinking to the
+//! point-low carry in between. A dash is that lunge, held all the way through it; a dash taken
+//! mid-windup leaves the windup be, the fighter gliding along in its stance, facing the aim.
 //!
 //! The frost mage carries its staff upright at its side. The windup raises it high toward the
 //! target, the off hand reaching out to gather the cold; the cast thrusts the crystal forward at
@@ -33,6 +36,7 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 use arena_shared::classes::{AbilityKind, AttackKind};
 use arena_shared::protocol::*;
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use lightyear::prelude::*;
@@ -48,7 +52,7 @@ impl Plugin for RigPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((crate::cloth::ClothPlugin, crate::swish::SwishPlugin));
         app.add_systems(Startup, load_rigs);
-        app.add_systems(Update, (add_rigs, see_throws, turn_fighters, pose_rigs).chain().in_set(Posing));
+        app.add_systems(Update, (add_rigs, see_throws, turn_fighters, pose_rigs, show_auras).chain().in_set(Posing));
     }
 }
 
@@ -213,6 +217,9 @@ const SMEAR_REACH: f32 = 0.4;
 const REARM_TICKS: f32 = 12.0;
 /// After the throw: how long (ticks) the follow-through is held, and when it's back to carrying.
 const FOLLOW_THROUGH: (f32, f32) = (3.0, 14.0);
+/// A melee windup started during the last strike's follow-through: how long (a fraction of the
+/// windup) what's left of the strike is still held before the blade comes back into the draw.
+const CHAIN_HOLD: f32 = 0.15;
 /// A thrown Q's flick: ticks after the throw until the arm starts and finishes coming back.
 const FLICK: (f32, f32) = (1.0, 10.0);
 /// A nova's slam: ticks after the cast until it starts and finishes rising out of it.
@@ -226,6 +233,13 @@ const WALK_RATE: f32 = 10.0;
 const HEAD_FOLLOW: f32 = 0.3;
 /// How brightly the eyes (and other glowing parts) glow.
 const EYE_GLOW: f32 = 6.0;
+
+/// How see-through a weapon's aura is, and how fast (radians per second) and how much it swells.
+const AURA_ALPHA: f32 = 0.42;
+const AURA_PULSE: (f32, f32) = (9.0, 0.15);
+/// How fast the glint twinkles (radians per second) and spins (radians per second).
+const GLINT_TWINKLE: f32 = 7.0;
+const GLINT_SPIN: f32 = 2.5;
 
 /// Rig meshes for each class, and its glow (crystals: the same for everyone of a class), and the
 /// cold white everyone's eyes burn with. Every other part is drawn in the fighter's own material
@@ -245,6 +259,8 @@ struct RigHandles {
     glow: Handle<StandardMaterial>,
     held_glow: Option<Handle<Mesh>>,
     body_glow: Option<Handle<Mesh>>,
+    held_aura: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    held_glint: Option<(Handle<Mesh>, Handle<StandardMaterial>, Vec3)>,
     wardrobe: Option<WardrobeAssets>,
 }
 
@@ -274,6 +290,10 @@ struct Rig {
     /// Right (back) leg and left (lead) leg.
     legs: [Entity; 2],
     held: Entity,
+    /// The held weapon's aura (`RigMeshes::held_aura`), if it has one.
+    aura: Option<Entity>,
+    /// And the glint at its point.
+    glint: Option<Entity>,
     moves: &'static Moves,
     /// Walk cycles so far, and how much the fighter is walking (0..1, eased).
     stride: f32,
@@ -337,6 +357,8 @@ fn load_rigs(
                 glow: materials.add(arena::glow(rig.glow, EYE_GLOW)),
                 held_glow: rig.held_glow.map(|mesh| meshes.add(mesh)),
                 body_glow: rig.body_glow.map(|mesh| meshes.add(mesh)),
+                held_aura: rig.held_aura.map(|mesh| (meshes.add(mesh), materials.add(arena::translucent(rig.glow, AURA_ALPHA, EYE_GLOW)))),
+                held_glint: rig.held_glint.map(|(mesh, at)| (meshes.add(mesh), materials.add(arena::glow(Color::WHITE, EYE_GLOW)), at)),
                 wardrobe: rig.wardrobe.map(|wardrobe| WardrobeAssets::load(wardrobe, &mut meshes, &mut bindposes, &mut materials)),
             };
             (c, handles)
@@ -367,6 +389,8 @@ fn add_rigs(
             arms: [part(&handles.arm, own, RIG_SHOULDER), part(&handles.arm, own, mirrored(RIG_SHOULDER))],
             legs: [part(&handles.leg, own, RIG_HIP), part(&handles.leg, own, mirrored(RIG_HIP))],
             held: part(&handles.held, own, RIG_HAND),
+            aura: handles.held_aura.as_ref().map(|(mesh, material)| part(mesh, material, Vec3::ZERO)),
+            glint: handles.held_glint.as_ref().map(|(mesh, material, at)| part(mesh, material, *at)),
             moves: moves(&class.def().id),
             stride: 0.0,
             walking: 0.0,
@@ -380,6 +404,10 @@ fn add_rigs(
         if let Some(glow) = held_glow {
             commands.entity(rig.held).add_child(glow);
         }
+        for shown_armed in rig.aura.into_iter().chain(rig.glint) {
+            commands.entity(shown_armed).insert((Visibility::Hidden, NotShadowCaster, NotShadowReceiver));
+            commands.entity(rig.held).add_child(shown_armed);
+        }
         if let Some(glow) = body_glow {
             commands.entity(player).add_child(glow);
         }
@@ -388,7 +416,7 @@ fn add_rigs(
             crate::cloth::dress(&mut commands, player, rig.legs, own, wardrobe);
         }
         if matches!(rig.moves.held, Held::Blade(_)) {
-            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length: arena::BLADE_LENGTH, shown: 0 });
+            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length: arena::BLADE_LENGTH, shown: 0, quickened: false });
         }
         commands.entity(player).insert((
             rig,
@@ -410,9 +438,11 @@ fn turn_fighters(time: Res<Time>, mut fighters: Query<(&mut Facing, &Pos, &Attac
     let turn = rate(&time, TURN_RATE);
     for (mut facing, pos, attack, ability) in &mut fighters {
         let moved = pos.0 - facing.last_pos;
-        let wants = match (ability.dash, attack.windup) {
-            (Some(dash), _) => dash.dir,
-            (None, Some(windup)) => windup.dir,
+        let wants = match (attack.windup, ability.dash) {
+            (Some(windup), _) => windup.dir,
+            // Struck mid-dash: still facing the strike.
+            (None, Some(_)) if attack_in_dash(attack, ability) => facing.look,
+            (None, Some(dash)) => dash.dir,
             (None, None) if moved.length() > 0.01 => moved.normalize(),
             (None, None) => facing.look,
         };
@@ -423,6 +453,13 @@ fn turn_fighters(time: Res<Time>, mut fighters: Query<(&mut Facing, &Pos, &Attac
             *facing = Facing { look, last_pos: pos.0, moved, turned };
         }
     }
+}
+
+/// A dash with an attack in it (dashing mid-windup, or a windup going off mid-dash): it keeps
+/// the attack's look, facing the aim, its pose undisturbed, gliding without a stride. Only a
+/// dash on its own strikes the dash pose.
+fn attack_in_dash(attack: &AttackState, ability: &AbilityState) -> bool {
+    ability.dash.is_some_and(|dash| attack.windup.is_some() || attack.released_at.is_some_and(|at| at >= dash.started_at))
 }
 
 /// 0 below `from`, 1 above `to`, smooth in between.
@@ -463,8 +500,11 @@ fn pose_rigs(
     let dt = time.delta_secs().min(0.1);
     for (mut rig, facing, mut body, mut held_at, class, attack, ability, seen, is_me) in &mut rigs {
         let rig = &mut *rig;
-        rig.stride += facing.moved.length() * STRIDES_PER_METER;
-        let is_walking = if facing.moved.length() > 0.001 { 1.0 } else { 0.0 };
+        let gliding = attack_in_dash(attack, ability);
+        if !gliding {
+            rig.stride += facing.moved.length() * STRIDES_PER_METER;
+        }
+        let is_walking = if facing.moved.length() > 0.001 && !gliding { 1.0 } else { 0.0 };
         let walking = rig.walking + (is_walking - rig.walking) * ease_walk;
         rig.walking = if (walking - is_walking).abs() < 1e-3 { is_walking } else { walking };
         let phase = rig.stride.fract() * TAU;
@@ -483,17 +523,33 @@ fn pose_rigs(
         };
         let released = since_throw(attack.released_at, seen.and_then(|seen| seen.attack));
         let windup = SeenThrows::windup(seen, attack);
-        let (draw, mut throw) = match (windup, released) {
+        // A melee windup picks up from how much of the last strike's follow-through was left when
+        // it started (1: still fully held, as when holding fire; 0: settled back to carrying): the
+        // blade comes from there straight into the draw, never sinking further toward carrying.
+        let follow_left = |windup: &Windup| match (&def.attack.kind, attack.released_at) {
+            (AttackKind::Melee { .. }, Some(at)) if windup.started_at >= at => {
+                1.0 - ease(FOLLOW_THROUGH.0, FOLLOW_THROUGH.1, (windup.started_at - at) as f32)
+            }
+            _ => 0.0,
+        };
+        let (draw, mut throw, strike) = match (windup, released) {
             (Some(windup), _) => {
                 let progress = windup.progress(now, *class);
-                let strike_start = (1.0 - STRIKE_TICKS / def.attack.windup_ticks.max(1) as f32).max(DRAW_END);
-                (ease(0.0, DRAW_END, progress), ease_out(strike_start, 1.0, progress))
+                let strike_start = (1.0 - STRIKE_TICKS / windup.ticks(*class).max(1) as f32).max(DRAW_END);
+                let strike = ease_out(strike_start, 1.0, progress);
+                // What's left of the strike eases out over the draw, and how much the pose
+                // carries only ever shrinks, from what it was when the windup began.
+                let follow = follow_left(&windup);
+                let held = follow * (1.0 - ease(CHAIN_HOLD, DRAW_END, progress));
+                let carrying = (1.0 - follow) * (1.0 - ease(0.0, DRAW_END, progress));
+                let draw = if held < 1.0 { 1.0 - carrying / (1.0 - held) } else { 1.0 };
+                (draw, strike.max(held), strike)
             }
-            (None, Some(since)) => (0.0, 1.0 - ease(FOLLOW_THROUGH.0, FOLLOW_THROUGH.1, since)),
-            (None, None) => (0.0, 0.0),
+            (None, Some(since)) => (0.0, 1.0 - ease(FOLLOW_THROUGH.0, FOLLOW_THROUGH.1, since), 0.0),
+            (None, None) => (0.0, 0.0, 0.0),
         };
         let flicked = since_throw(ability.used_at(*class), seen.and_then(|seen| seen.ability));
-        let mut dashing = if ability.dash.is_some() { 1.0 } else { 0.0 };
+        let mut dashing = if ability.dash.is_some() && !gliding { 1.0 } else { 0.0 };
         match (&def.ability.kind, flicked) {
             (AbilityKind::Projectile { .. }, Some(since)) => throw = throw.max(1.0 - ease(FLICK.0, FLICK.1, since)),
             // A nova's slam is its Q pose, like a dash's.
@@ -585,13 +641,9 @@ fn pose_rigs(
             held_at.set_if_neq(HeldAt(aimed_body * hand));
         }
         // The strike's smear: the weapon stretching out as the strike comes through, longest as
-        // it lands, snapping back over the next few ticks.
-        let smear = moves.stretch
-            * match (windup, released) {
-                (Some(_), _) => throw.powi(3),
-                (None, Some(since)) => 1.0 - ease(0.0, STRETCH_TICKS, since),
-                (None, None) => 0.0,
-            };
+        // it lands, snapping back over the next few ticks (into a chained windup too).
+        let landed = released.map_or(0.0, |since| 1.0 - ease(0.0, STRETCH_TICKS, since));
+        let smear = moves.stretch * strike.powi(3).max(landed);
         for (part, rotation) in rotations {
             if let Ok((mut transform, mut visibility)) = parts.get_mut(part) {
                 if transform.rotation != rotation {
@@ -605,6 +657,43 @@ fn pose_rigs(
                         transform.translation = at;
                     }
                 }
+            }
+        }
+    }
+}
+
+/// A weapon's aura and glint show while the attack's `follow_up` is armed or quickening the
+/// windup in progress: the aura swelling and shrinking a little, the glint spinning and flaring.
+/// A blade's trail brightens with them (`swish::Blade::quickened`).
+fn show_auras(
+    time: Res<Time>,
+    clock: Option<AttackClock>,
+    mut fighters: Query<(&Rig, &AttackState, Has<Predicted>, Option<&mut crate::swish::Blade>)>,
+    mut parts: Query<(&mut Visibility, &mut Transform)>,
+) {
+    let t = time.elapsed_secs();
+    let pulse = 1.0 + AURA_PULSE.1 * (t * AURA_PULSE.0).sin();
+    // Mostly small, flaring sharply once a twinkle.
+    let flare = 0.4 + 1.0 * (0.5 + 0.5 * (t * GLINT_TWINKLE).sin()).powi(6);
+    for (rig, attack, is_me, blade) in &mut fighters {
+        // Hidden without a synced clock (e.g. after a disconnect): no telling when the window ends.
+        let on = clock.as_ref().is_some_and(|clock| attack.quick_at(clock.now(is_me)) || attack.windup.is_some_and(|w| w.quick));
+        if let Some(mut blade) = blade
+            && blade.quickened != on
+        {
+            blade.quickened = on;
+        }
+        if let Some((mut visibility, mut transform)) = rig.aura.and_then(|aura| parts.get_mut(aura).ok()) {
+            visibility.set_if_neq(shown(on));
+            if on {
+                transform.scale = Vec3::new(pulse, 1.0, pulse);
+            }
+        }
+        if let Some((mut visibility, mut transform)) = rig.glint.and_then(|glint| parts.get_mut(glint).ok()) {
+            visibility.set_if_neq(shown(on));
+            if on {
+                transform.scale = Vec3::splat(flare);
+                transform.rotation = Quat::from_rotation_y(t * GLINT_SPIN);
             }
         }
     }

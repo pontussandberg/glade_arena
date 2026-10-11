@@ -31,12 +31,17 @@ fn a_last_swing(d: &mut Duel) -> u32 {
 
 /// A starts a swing toward where it sees B, and steps until it goes off on A (after the windup).
 fn a_swings_at_b(d: &mut Duel) {
-    let before = a_last_swing(d);
     let aim = sees(&mut d.a, B).unwrap() - sees(&mut d.a, A).unwrap();
+    a_swings(d, aim);
+}
+
+/// A starts a swing toward `aim`, and steps until it goes off on A (after the windup).
+fn a_swings(d: &mut Duel, aim: Vec2) {
+    let before = a_last_swing(d);
     set_input(&mut d.a, PlayerInput { aim, fire: true, ..default() });
     d.until(Duration::from_secs(1), "A's windup starts", |d| attack_state(&mut d.a, A).windup.is_some());
     set_input(&mut d.a, PlayerInput::default());
-    d.until(Duration::from_secs(1), "A's swing goes off", |d| a_last_swing(d) > before);
+    d.until(Duration::from_secs(2), "A's swing goes off", |d| a_last_swing(d) > before);
 }
 
 fn reach() -> f32 {
@@ -45,22 +50,26 @@ fn reach() -> f32 {
 
 #[test]
 fn melee_hits_where_the_attacker_saw_the_target() {
-    let mut d = duel_at_close_range(5895);
-    let b_goal = Vec2::new(-12.5, -6.5);
-    assert!(map().line_walkable(B_SPOT, b_goal));
-    let full = b_health(&mut d);
-
-    // B runs away. A's swing goes off with B at the edge of reach *as A sees it*, which is
-    // already out of reach on the server: only lag compensation can land this hit. A starts
-    // winding up early by the distance B covers during the windup.
-    set_input(&mut d.b, PlayerInput { move_to: Some(Map::center(Map::tile_of(b_goal))), ..default() });
+    // B runs along +x, from behind A, through it (bodies may overlap) and away. A's swing, down
+    // that line, goes off with B at the edge of reach *as A sees it*, which is already out of
+    // reach on the server: only lag compensation can land this hit. A starts winding up early
+    // by the distance B covers during the windup, so B starts far enough behind A for that,
+    // however long the windup.
     let lead = class_id(B_CLASS).def().move_speed * windup(A_CLASS).as_secs_f32();
+    let a_spot = A_SPOT + Vec2::X * 2.0; // room behind A for B's run-up
+    let ahead = |p: Vec2| p.x - a_spot.x;
+    let b_start = a_spot - Vec2::X * (lead - reach() + 1.5).max(0.2);
+    let mut d = Duel::placed(5895, (A_CLASS, a_spot), (B_CLASS, b_start));
+    let b_goal = Vec2::new(-12.5, -6.5);
+    assert!(map().line_walkable(b_start, b_goal));
+    let full = b_health(&mut d);
+    set_input(&mut d.b, PlayerInput { move_to: Some(Map::center(Map::tile_of(b_goal))), ..default() });
     d.until(Duration::from_secs(3), "B nearly at the edge of A's reach, as A sees it", |d| {
-        sees(&mut d.a, B).unwrap().distance(A_SPOT) > reach() - 0.3 - lead
+        ahead(sees(&mut d.a, B).unwrap()) > reach() - 0.3 - lead
     });
-    a_swings_at_b(&mut d);
-    let seen = sees(&mut d.a, B).unwrap().distance(A_SPOT);
-    let actual = server_player(&mut d.server, B).0.distance(A_SPOT);
+    a_swings(&mut d, Vec2::X);
+    let seen = sees(&mut d.a, B).unwrap().distance(a_spot);
+    let actual = server_player(&mut d.server, B).0.distance(a_spot);
     println!("swing: A sees B {seen:.2} m away, B is really {actual:.2} m away, reach {:.2} m", reach());
     assert!(seen < reach(), "test setup: A should see B in reach when the swing goes off");
     assert!(actual > reach(), "test setup: B should already be out of reach on the server");
@@ -68,8 +77,8 @@ fn melee_hits_where_the_attacker_saw_the_target() {
     d.until(Duration::from_secs(2), "the swing hits", |d| b_health(d) == full - damage);
 
     // A swing at someone clearly out of reach (as A sees it) does nothing.
-    d.until(Duration::from_secs(3), "B far away", |d| sees(&mut d.a, B).unwrap().distance(A_SPOT) > reach() + 2.0);
-    d.run(Duration::from_millis(700)); // past the attack cooldown
+    d.until(Duration::from_secs(3), "B far away", |d| sees(&mut d.a, B).unwrap().distance(a_spot) > reach() + 2.0);
+    d.run(windup(A_CLASS) + Duration::from_millis(200)); // past the attack cooldown
     a_swings_at_b(&mut d);
     d.run(Duration::from_millis(500));
     assert_eq!(b_health(&mut d), full - damage, "an out-of-reach swing hit");
