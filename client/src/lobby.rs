@@ -10,7 +10,7 @@
 //! - on the right, the side panel: at home, the lobbies to join or create (`browser.rs`, opened
 //!   with "Create / join lobby"); in a room, its name and mode, who's in it (by team), the team
 //!   buttons, and for the leader the mode switch
-//! - the way in at the bottom right (the button, or Enter): at home, practice; in a room, the
+//! - the way in at the bottom right: at home, practice; in a room, the
 //!   leader's start, or once the match is on, into the arena
 //!
 //! In a room, the picked fighter goes to the server as it's picked: the others see it, and the
@@ -109,9 +109,6 @@ struct EnterButton;
 /// The way in's text, and the hint under it.
 #[derive(Component)]
 struct EnterLabel;
-
-#[derive(Component)]
-struct EnterHint;
 
 /// The left column's content, rebuilt for the selected fighter.
 #[derive(Component)]
@@ -363,7 +360,6 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                                     BackgroundColor(ACCENT),
                                 ))
                                 .with_child((EnterLabel, ui_text("PRACTICE", 18.0, palette::ui::PANEL)));
-                            column.spawn((EnterHint, ui_text("or press Enter", 11.0, palette::ui::MUTED), Node { align_self: AlignSelf::FlexEnd, ..default() }));
                         });
                 });
             });
@@ -813,13 +809,11 @@ fn way_in(screen: Screen, view: Option<&RoomView>, me: Option<&Me>) -> WayIn {
     }
 }
 
-/// The button or Enter: at home, practice as the selected fighter; in a room, the leader starts
+/// The button: at home, practice as the selected fighter; in a room, the leader starts
 /// the match (everyone goes in as what they picked), and once it's on, in we go. We're taken to
 /// the arena when our fighter appears. "Create / join lobby" is there at home only.
 #[allow(clippy::too_many_arguments)]
 fn enter_arena(
-    keys: Res<ButtonInput<KeyCode>>,
-    typing: Res<Typing>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     screen: Res<State<Screen>>,
     room: Res<CurrentRoom>,
@@ -827,8 +821,7 @@ fn enter_arena(
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
     button: Single<(Ref<Interaction>, &mut BackgroundColor), With<EnterButton>>,
     mut label: Single<&mut Text, With<EnterLabel>>,
-    mut hint: Single<&mut Visibility, (With<EnterHint>, Without<LobbiesButton>)>,
-    mut lobbies: Single<&mut Visibility, (With<LobbiesButton>, Without<EnterHint>)>,
+    mut lobbies: Single<&mut Visibility, With<LobbiesButton>>,
 ) {
     let way = way_in(*screen.get(), room.0.as_ref(), me.as_deref());
     // Its look is `browser.rs`'s, where it opens the lobbies.
@@ -842,7 +835,6 @@ fn enter_arena(
     if label.0 != text {
         label.0 = text.to_string();
     }
-    hint.set_if_neq(shown(way != WayIn::Wait));
     let (interaction, mut background) = button.into_inner();
     let fill = match (way, *interaction) {
         (WayIn::Wait, _) => palette::ui::MUTED.with_alpha(0.5),
@@ -850,7 +842,7 @@ fn enter_arena(
         _ => ACCENT.lighter(0.08),
     };
     background.set_if_neq(BackgroundColor(fill));
-    if !clicked(interaction) && !(keys.just_pressed(KeyCode::Enter) && !typing.0) {
+    if !clicked(interaction) {
         return;
     }
     // The button goes in on the press: forget the held button, or our fighter could spawn while
