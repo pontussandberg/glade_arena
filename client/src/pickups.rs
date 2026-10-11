@@ -9,7 +9,7 @@ use std::f32::consts::FRAC_PI_2;
 
 use arena_shared::protocol::*;
 use bevy::prelude::*;
-use lightyear::prelude::*;
+use crate::Me;
 
 use crate::feedback::AttackClock;
 use crate::arena::{self, palette, to_world};
@@ -307,7 +307,7 @@ fn trail_haste(
     time: Res<Time>,
     clock: AttackClock,
     looks: Res<PickupLooks>,
-    mut fighters: Query<(Entity, &Pos, &Hasted, Option<&Health>, Has<Predicted>, Option<&mut HasteTrail>), With<Mesh3d>>,
+    mut fighters: Query<(Entity, &Pos, &Hasted, Option<&Health>, Has<Me>, Option<&mut HasteTrail>), With<Mesh3d>>,
     mut seed: Local<u32>,
 ) {
     let mut random = || {

@@ -4,12 +4,16 @@
 //! golden), a green number when one is healed, and dead fighters disappearing until they
 //! respawn.
 
+use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use lightyear::core::time::TickInstant;
 use lightyear::interpolation::timeline::InterpolationTimeline;
+use lightyear::prelude::client::RemoteTimeline;
 use lightyear::prelude::*;
+
+use crate::Me;
 
 use crate::camera::CameraPlaced;
 use crate::arena::{palette, to_world};
@@ -139,7 +143,7 @@ fn spawn_world_ui(mut commands: Commands) {
 }
 
 /// Each fighter gets its bars once it has a body.
-fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, new: Query<(Entity, &ClassId, Has<Predicted>), (With<PlayerId>, Added<Mesh3d>)>) {
+fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, new: Query<(Entity, &ClassId, Has<Me>), (With<PlayerId>, Added<Mesh3d>)>) {
     let fill = |color: Color| (Node { width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(color));
     let frame = |node: Node| {
         (
@@ -214,21 +218,24 @@ fn over_bar(camera: &Camera, camera_transform: &GlobalTransform, pos: &Pos) -> O
 }
 
 /// "Now" in fractional ticks, on the timeline a fighter is shown on, to compare with its
-/// `AttackState`: ours is predicted (our own windup starts at the click), others' are
-/// interpolated (their windup plays out in step with their delayed position).
+/// `AttackState`. Ours is shown as the server last said: the server's tick half a round trip ago
+/// (when that state was sent). Others' are interpolated (their windup plays out in step with
+/// their delayed position). Projectiles go by ours, so a shot coming at us is drawn where it is
+/// relative to us.
 #[derive(SystemParam)]
 pub(crate) struct AttackClock<'w, 's> {
-    local: SyncedLocalTimeline<'w, 's>,
-    fixed: Res<'w, Time<Fixed>>,
+    remote: Query<'w, 's, (&'static RemoteTimeline, &'static Link), With<Client>>,
     interpolation: Option<Res<'w, InterpolationTimeline>>,
 }
 
 impl AttackClock<'_, '_> {
-    pub(crate) fn now(&self, predicted: bool) -> f32 {
+    pub(crate) fn now(&self, me: bool) -> f32 {
         let ticks = |t: TickInstant| t.tick().0 as f32 + t.overstep().to_f32();
-        match &self.interpolation {
-            Some(timeline) if !predicted => ticks(timeline.now),
-            _ => ticks(self.local.instant(&self.fixed)),
+        match (&self.interpolation, self.remote.single()) {
+            (Some(timeline), _) if !me => ticks(timeline.now),
+            (_, Ok((remote, link))) => ticks(remote.now) - link.stats.rtt.as_secs_f32() / 2.0 * TICK_HZ as f32,
+            (Some(timeline), Err(_)) => ticks(timeline.now),
+            (None, Err(_)) => 0.0,
         }
     }
 }
@@ -240,7 +247,7 @@ fn place_bars(
     time: Res<Time>,
     clock: AttackClock,
     camera: Single<(&Camera, &GlobalTransform)>,
-    players: Query<(&Pos, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Option<&SeenThrows>, Has<Predicted>)>,
+    players: Query<(&Pos, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Option<&SeenThrows>, Has<Me>)>,
     mut bars: Query<(Entity, &Bars, &mut HealthTrail, &mut Node, &mut UiTransform, &mut Visibility)>,
     mut parts: Query<(&mut Node, &mut Visibility), Without<Bars>>,
     mut colors: Query<&mut BackgroundColor>,
@@ -388,7 +395,7 @@ fn spawn_damage_numbers(
     mut commands: Commands,
     time: Res<Time>,
     world_ui: Single<Entity, With<WorldUi>>,
-    mut players: Query<(Entity, &RecentHits, Option<&mut ShownHits>, Has<Predicted>), Changed<RecentHits>>,
+    mut players: Query<(Entity, &RecentHits, Option<&mut ShownHits>, Has<Me>), Changed<RecentHits>>,
 ) {
     for (player, recent, shown, is_me) in &mut players {
         let Some(mut shown) = shown else {

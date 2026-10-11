@@ -128,8 +128,7 @@ impl Mark {
 }
 
 /// A mark for each new swing, along the blade where it is as the strike lands (after it's posed
-/// and placed, so it's exactly there). `LastSwing` is predicted for our own player (instant) and
-/// replicated for others; rollbacks may rewrite it with the same value, so each is drawn once.
+/// and placed, so it's exactly there). `LastSwing` comes from the server; each is drawn once.
 fn show_marks(
     mut commands: Commands,
     time: Res<Time>,

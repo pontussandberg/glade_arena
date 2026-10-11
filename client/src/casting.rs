@@ -11,7 +11,7 @@ use arena_shared::classes::AbilityKind;
 use arena_shared::config::PLAYER_RADIUS;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
-use lightyear::prelude::*;
+use crate::Me;
 
 use crate::DesiredInput;
 use crate::arena::{self, palette};
@@ -153,7 +153,7 @@ fn spawn_indicator(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    me: Query<&ClassId, Added<Predicted>>,
+    me: Query<&ClassId, Added<Me>>,
     indicators: Query<Entity, With<AimIndicator>>,
 ) {
     let Ok(class) = me.single() else { return };
@@ -185,7 +185,7 @@ fn spawn_indicator(
 fn show_indicator(
     mut aiming: ResMut<Aiming>,
     desired: Res<DesiredInput>,
-    me: Query<(&Transform, &Health), (With<Predicted>, With<PlayerId>, Without<AimIndicator>)>,
+    me: Query<(&Transform, &Health), (With<Me>, With<PlayerId>, Without<AimIndicator>)>,
     indicator: Single<(&AimIndicator, &mut Transform, &mut Visibility)>,
 ) {
     let (indicator, mut transform, mut visibility) = indicator.into_inner();

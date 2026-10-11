@@ -10,7 +10,7 @@ use arena_shared::classes::AbilityKind;
 use arena_shared::config::{GLOBAL_COOLDOWN_TICKS, TICK_HZ};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
-use lightyear::prelude::*;
+use crate::Me;
 
 use crate::feedback::AttackClock;
 use crate::arena::palette;
@@ -51,7 +51,7 @@ struct ActionBarPart;
 /// Builds the icon each time our own player appears (any old one replaced, in case it was for
 /// another class): its frame, a picture for the ability, the key, the wipe and the seconds, and
 /// the ability's name under it.
-fn spawn_icon(mut commands: Commands, me: Query<&ClassId, Added<Predicted>>, parts: Query<Entity, With<ActionBarPart>>) {
+fn spawn_icon(mut commands: Commands, me: Query<&ClassId, Added<Me>>, parts: Query<Entity, With<ActionBarPart>>) {
     let Ok(class) = me.single() else { return };
     for part in &parts {
         commands.entity(part).despawn();
@@ -205,7 +205,7 @@ const WIPE_STEPS: f32 = 256.0;
 /// ready, a bright frame. Only writes what visibly changed.
 fn update_icon(
     clock: AttackClock,
-    me: Query<(&ClassId, &AbilityState), With<Predicted>>,
+    me: Query<(&ClassId, &AbilityState), With<Me>>,
     icons: Single<(&AbilityIcon, &mut BorderColor)>,
     mut wipes: Query<(&mut BackgroundGradient, &mut Visibility)>,
     mut texts: Query<&mut Text>,

@@ -1,10 +1,12 @@
-//! Melee, lag compensation, death and respawn, end to end: a real server and two headless
-//! clients over WebTransport, the attacker on a 60 ms + jitter + 2% loss connection.
+//! Melee (judged where the target is on the server, no lag compensation), death and respawn,
+//! end to end: a real server and two headless clients over WebTransport, the attacker on a 60 ms
+//! + jitter + 2% loss connection.
 
 use std::time::{Duration, Instant};
 
 use arena_shared::map::{Map, SPAWN_POINTS, map};
 use arena_shared::protocol::*;
+use arena_shared::sim;
 use bevy::prelude::*;
 use crate::common::*;
 
@@ -48,42 +50,55 @@ fn reach() -> f32 {
     class_id(A_CLASS).def().attack.kind.reach()
 }
 
+/// The tick of A's latest swing on the server.
+fn server_swing(d: &mut Duel) -> u32 {
+    player::<LastSwing>(&mut d.server, A).map_or(0, |s| s.tick)
+}
+
+/// A swings toward +x with B wherever it is; the swing is judged on the server when it goes
+/// off. Returns where A and B were on the server at that tick, and the damage B took.
+fn swing_judged_on_server(d: &mut Duel) -> (Vec2, Vec2, i32) {
+    let (before, health) = (server_swing(d), b_health(d));
+    set_input(&mut d.a, PlayerInput { aim: Vec2::X, fire: true, ..default() });
+    d.until(Duration::from_secs(1), "A's windup starts on A", |d| attack_state(&mut d.a, A).windup.is_some());
+    set_input(&mut d.a, PlayerInput::default());
+    // Checked every frame: a frame runs at most one tick here, so this is B where it was judged.
+    d.until(Duration::from_secs(3), "A's swing goes off on the server", |d| server_swing(d) > before);
+    let (a, b) = (server_player(&mut d.server, A).0, server_player(&mut d.server, B).0);
+    d.run(Duration::from_millis(100));
+    (a, b, health - b_health(d))
+}
+
 #[test]
-fn melee_hits_where_the_attacker_saw_the_target() {
-    // B runs along +x, from behind A, through it (bodies may overlap) and away. A's swing, down
-    // that line, goes off with B at the edge of reach *as A sees it*, which is already out of
-    // reach on the server: only lag compensation can land this hit. A starts winding up early
-    // by the distance B covers during the windup, so B starts far enough behind A for that,
-    // however long the windup.
-    let lead = class_id(B_CLASS).def().move_speed * windup(A_CLASS).as_secs_f32();
-    let a_spot = A_SPOT + Vec2::X * 2.0; // room behind A for B's run-up
-    let ahead = |p: Vec2| p.x - a_spot.x;
-    let b_start = a_spot - Vec2::X * (lead - reach() + 1.5).max(0.2);
-    let mut d = Duel::placed(5895, (A_CLASS, a_spot), (B_CLASS, b_start));
-    let b_goal = Vec2::new(-12.5, -6.5);
-    assert!(map().line_walkable(b_start, b_goal));
-    let full = b_health(&mut d);
-    set_input(&mut d.b, PlayerInput { move_to: Some(Map::center(Map::tile_of(b_goal))), ..default() });
-    d.until(Duration::from_secs(3), "B nearly at the edge of A's reach, as A sees it", |d| {
-        ahead(sees(&mut d.a, B).unwrap()) > reach() - 0.3 - lead
-    });
-    a_swings(&mut d, Vec2::X);
-    let seen = sees(&mut d.a, B).unwrap().distance(a_spot);
-    let actual = server_player(&mut d.server, B).0.distance(a_spot);
-    println!("swing: A sees B {seen:.2} m away, B is really {actual:.2} m away, reach {:.2} m", reach());
-    assert!(seen < reach(), "test setup: A should see B in reach when the swing goes off");
-    assert!(actual > reach(), "test setup: B should already be out of reach on the server");
+fn melee_hits_where_the_target_is_now() {
+    let a_spot = A_SPOT + Vec2::X * 2.0;
+    let mut d = Duel::placed(5895, (A_CLASS, a_spot), (B_CLASS, a_spot + Vec2::X * (reach() - 0.3)));
     let damage = class_id(A_CLASS).def().attack.damage;
-    d.until(Duration::from_secs(2), "the swing hits", |d| b_health(d) == full - damage);
+    let hits = |a: Vec2, b: Vec2| sim::melee_hits(a, Vec2::X, class_id(A_CLASS), b);
 
-    // A swing at someone clearly out of reach (as A sees it) does nothing.
-    d.until(Duration::from_secs(3), "B far away", |d| sees(&mut d.a, B).unwrap().distance(a_spot) > reach() + 2.0);
-    d.run(windup(A_CLASS) + Duration::from_millis(200)); // past the attack cooldown
-    a_swings_at_b(&mut d);
+    // B standing just inside reach is hit; just outside, it isn't.
+    let (_, _, dealt) = swing_judged_on_server(&mut d);
+    assert!(dealt >= damage, "a swing at B standing in reach missed");
+    place(&mut d.server, B, a_spot + Vec2::X * (reach() + 0.3));
+    d.run(windup(A_CLASS) + Duration::from_millis(300)); // past the attack cooldown
+    let (_, _, dealt) = swing_judged_on_server(&mut d);
+    assert_eq!(dealt, 0, "a swing at B standing out of reach hit");
+
+    // B runs away along A's swing, from inside its reach: A starts swinging at once, so B is near
+    // the edge of reach when it goes off (on A's screen, a little further in). It lands exactly
+    // when B was in the swing's lane on the server at that tick, whatever A saw.
+    place(&mut d.server, B, a_spot + Vec2::X * 0.5);
     d.run(Duration::from_millis(500));
-    assert_eq!(b_health(&mut d), full - damage, "an out-of-reach swing hit");
+    let goal = Vec2::new(-12.5, -6.5);
+    assert!(map().line_walkable(a_spot, goal));
+    set_input(&mut d.b, PlayerInput { move_to: Some(Map::center(Map::tile_of(goal))), ..default() });
+    let lead = class_id(B_CLASS).def().move_speed * windup(A_CLASS).as_secs_f32();
+    d.until(Duration::from_secs(3), "B runs off", |d| server_player(&mut d.server, B).0.x - a_spot.x > reach() - lead);
+    let (a, b, dealt) = swing_judged_on_server(&mut d);
+    println!("swing went off with B {:.2} m away on the server (reach {:.2}); dealt {dealt}", b.distance(a), reach());
+    assert_eq!(dealt > 0, hits(a, b), "the swing should land exactly when B is in reach on the server");
 
-    // Both clients saw A swing (predicted on A, interpolated on B).
+    // Both clients saw A swing.
     let swung = |app: &mut App| player::<LastSwing>(app, A).is_some_and(|s| s.tick > 0);
     assert!(swung(&mut d.a) && swung(&mut d.b), "the swing should be visible on both clients");
 }

@@ -2,14 +2,14 @@
 //! localhost, all stepped in this process. Client A receives with simulated latency, jitter and
 //! 2% packet loss.
 //!
-//! Checks:
-//! - both clients connect and see each other (own player predicted, other interpolated)
-//! - client-side prediction: A's own movement shows up locally before the server could confirm it
-//! - reconciliation: after moving, A's predicted position converges to the server's
-//! - server authority: clicks into the river go nowhere; far clicks are walked at normal speed
-//! - projectiles: A's shot appears instantly on A (prespawned) and is predicted on B too, where
-//!   it really is now rather than where the server last said; the server decides the hit and the
-//!   damage replicates to everyone
+//! Checks (League-style netcode: commands, nothing predicted):
+//! - both clients connect and see each other (own player as the server says, other interpolated)
+//! - a command's result shows up on A about a round trip later
+//! - after moving, A's own view and B's interpolated view both match the server
+//! - server authority: clicks into the river go nowhere; far clicks are walked at normal speed,
+//!   and a position the server sets is simply what A then sees
+//! - projectiles: A's shot shows on both clients once the server throws it; the server decides
+//!   the hit and the damage replicates to everyone
 
 use std::time::{Duration, Instant};
 
@@ -28,23 +28,12 @@ fn projectile_count(app: &mut App) -> usize {
     q.iter(app.world()).count()
 }
 
-/// How far along its path the (only) projectile is, and whether this app predicts it.
-fn projectile_flown(app: &mut App) -> Option<(f32, bool)> {
-    let mut q = app.world_mut().query::<(&Pos, &Projectile, Has<lightyear::prelude::Predicted>)>();
-    q.iter(app.world()).next().map(|(pos, shot, predicted)| ((pos.0 - shot.origin).dot(shot.dir), predicted))
-}
-
-fn rollbacks(app: &App) -> u32 {
-    app.world()
-        .get_resource::<lightyear::prediction::prelude::PredictionMetrics>()
-        .map_or(0, |m| m.rollbacks)
-}
-
 #[test]
-fn prediction_reconciliation_and_server_authoritative_hits() {
+fn commands_round_trip_and_server_authoritative_hits() {
     let mut h = Duel::new(PORT, A_CLASS, B_CLASS);
 
-    // --- Connect: each client predicts its own player and interpolates the other one.
+    // --- Connect: each client shows its own player as the server says and interpolates the
+    // other one.
     h.until(Duration::from_secs(15), "both clients see both players", |h| {
         matches!(client_view(&mut h.a, A), Some((_, _, true, false)))
             && matches!(client_view(&mut h.a, B), Some((_, _, false, true)))
@@ -53,31 +42,28 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     });
     // Let the timelines sync before driving inputs.
     h.run(Duration::from_millis(1500));
-    println!("connected; A rollbacks so far: {}", rollbacks(&h.a));
 
-    // --- Prediction: A right-clicks a tile 4 m away; its own view starts walking long before a
-    // round trip (>120ms) completes.
-    let (a_start_server, _) = server_player(&mut h.server, A);
+    // --- A right-clicks a tile 4 m away: nothing moves on A until the server has walked it and
+    // said so, about a round trip later.
     let (a_start_local, ..) = client_view(&mut h.a, A).unwrap();
     let a_target = map().nearest_walkable(Map::tile_of(a_start_local) + IVec2::new(0, 4), 3).unwrap();
     set_input(&mut h.a, PlayerInput { move_to: Some(Map::center(a_target)), ..default() });
     let t0 = Instant::now();
-    h.until(Duration::from_secs(2), "A's predicted position moves", |h| {
+    h.until(Duration::from_secs(2), "A's own view moves", |h| {
         client_view(&mut h.a, A).unwrap().0.distance(a_start_local) > 0.01
     });
-    let local_reaction = t0.elapsed();
-    let (server_now, _) = server_player(&mut h.server, A);
-    println!("A saw its own movement after {local_reaction:?}; server had moved {:.3}", server_now.distance(a_start_server));
-    assert!(local_reaction < Duration::from_millis(60), "prediction too slow: {local_reaction:?}");
+    let reaction = t0.elapsed();
+    println!("A saw its own movement after {reaction:?}");
+    assert!(reaction < COMMAND_SHOWS_WITHIN, "the walk took too long to show: {reaction:?}");
 
-    // --- Reconciliation: after arriving, predicted, authoritative and interpolated agree.
+    // --- After arriving, A's own view, the server and B's interpolated view agree.
     h.run(Duration::from_millis(1800));
     let (a_server, _) = server_player(&mut h.server, A);
     let (a_local, ..) = client_view(&mut h.a, A).unwrap();
     let (a_seen_by_b, ..) = client_view(&mut h.b, A).unwrap();
-    println!("A: server {a_server}, A's prediction {a_local}, B's interpolated view {a_seen_by_b}");
+    println!("A: server {a_server}, A's own view {a_local}, B's interpolated view {a_seen_by_b}");
     assert_eq!(a_server, Map::center(a_target), "server should have walked A to the clicked tile");
-    assert!(a_local.distance(a_server) < 0.01, "prediction diverged from server");
+    assert!(a_local.distance(a_server) < 0.01, "A's own view diverged from the server");
     assert!(a_seen_by_b.distance(a_server) < 0.01, "B's interpolated view diverged from server");
     set_input(&mut h.a, PlayerInput::default());
 
@@ -92,7 +78,7 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     set_input(&mut h.b, PlayerInput { move_to: Some(Map::center(far)), ..default() });
     let t0 = Instant::now();
     h.run(Duration::from_millis(500));
-    set_input(&mut h.b, PlayerInput::default());
+    stop_walking(&mut h.b);
     let elapsed = t0.elapsed().as_secs_f32();
     h.run(Duration::from_millis(300));
     let (b_after, _) = server_player(&mut h.server, B);
@@ -101,21 +87,18 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     let speed = class_id(B_CLASS).def().move_speed;
     assert!(moved > 1.0 && moved <= speed * (elapsed + 0.2), "moved {moved}");
 
-    // --- Server override: the server moves both players on its own (like a knockback or an
-    // anti-cheat correction). A mispredicted that, so it must roll back and end up where the
-    // server says. The spots are 8 m apart in the open, which also sets up the shot below.
+    // --- Server override: the server moves both players on its own (like a knockback). A
+    // simply shows where the server says. The spots are 8 m apart in the open, which also sets up
+    // the shot below.
     let (a_spot, b_spot) = (Vec2::new(-22.5, -6.5), Vec2::new(-14.5, -6.5));
     assert!(map().walkable_at(a_spot) && map().walkable_at(b_spot) && map().line_walkable(a_spot, b_spot));
-    let rollbacks_before = rollbacks(&h.a);
     let mut q = h.server.world_mut().query::<(&PlayerId, &mut Pos)>();
     for (id, mut pos) in q.iter_mut(h.server.world_mut()) {
         pos.0 = if id.0 == peer(A) { a_spot } else { b_spot };
     }
-    h.until(Duration::from_secs(2), "A reconciles to the server's correction", |h| {
+    h.until(Duration::from_secs(2), "A shows the server's correction", |h| {
         client_view(&mut h.a, A).unwrap().0.distance(a_spot) < 0.01
     });
-    println!("rollbacks: A={} (before correction {rollbacks_before})", rollbacks(&h.a));
-    assert!(rollbacks(&h.a) > rollbacks_before, "the correction should have caused a rollback");
     // Let A's interpolated view of B settle too.
     h.run(Duration::from_millis(300));
 
@@ -124,28 +107,18 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     let (b_pos, ..) = client_view(&mut h.a, B).unwrap();
     let (_, b_health_before) = server_player(&mut h.server, B);
     assert_eq!(b_health_before, class_id(B_CLASS).def().max_hp);
-    // The windup starts the moment A clicks (predicted), the shot follows when it's over.
+    // The windup shows on A about a round trip after the click, the shot when it's over.
     set_input(&mut h.a, PlayerInput { aim: b_pos - a_pos, fire: true, ..default() });
     let t0 = Instant::now();
-    h.until(Duration::from_secs(1), "A's windup starts on A", |h| attack_state(&mut h.a, A).windup.is_some());
-    println!("A's windup started locally after {:?}", t0.elapsed());
-    assert!(t0.elapsed() < Duration::from_millis(60), "windup was not predicted");
+    h.until(Duration::from_secs(1), "A's windup shows on A", |h| attack_state(&mut h.a, A).windup.is_some());
+    println!("A's windup showed after {:?}", t0.elapsed());
+    assert!(t0.elapsed() < COMMAND_SHOWS_WITHIN, "the windup took too long to show");
     set_input(&mut h.a, PlayerInput::default());
     h.until(Duration::from_secs(1), "A's projectile appears on A", |h| projectile_count(&mut h.a) > 0);
     let windup = windup(A_CLASS);
-    println!("A's projectile appeared locally after {:?} (windup {windup:?})", t0.elapsed());
-    assert!(t0.elapsed() < windup + Duration::from_millis(60), "projectile was not predicted");
-
-    // B's client sees the projectile too, predicted: it learned of it late, but puts it where it
-    // really is on B's own clock, which runs ahead of the server's (not where the server's
-    // message said it was, a moment ago).
+    println!("A's projectile appeared after {:?} (windup {windup:?})", t0.elapsed());
+    assert!(t0.elapsed() < windup + COMMAND_SHOWS_WITHIN, "the projectile took too long to show");
     h.until(Duration::from_secs(1), "B sees A's projectile", |h| projectile_count(&mut h.b) > 0);
-    h.update();
-    if let (Some((on_b, predicted)), Some((on_server, _))) = (projectile_flown(&mut h.b), projectile_flown(&mut h.server)) {
-        println!("A's projectile: {on_b:.2} m along on B, {on_server:.2} m on the server");
-        assert!(predicted, "B should predict A's projectile");
-        assert!(on_b >= on_server, "B's copy of A's projectile is behind the server's");
-    }
 
     // The server decides the hit (damage depends on how far the shot flew); health replicates to
     // both clients.
@@ -163,9 +136,8 @@ fn prediction_reconciliation_and_server_authoritative_hits() {
     h.run(Duration::from_millis(1500));
     assert_eq!(server_player(&mut h.server, B).1, damaged);
     assert_eq!(projectile_count(&mut h.server), 0, "projectile should be gone after hitting");
-    assert_eq!(projectile_count(&mut h.a), 0, "A's predicted projectile should be gone");
+    assert_eq!(projectile_count(&mut h.a), 0, "A's copy of the projectile should be gone");
     assert_eq!(projectile_count(&mut h.b), 0, "B's copy of A's projectile should be gone");
-    println!("rollbacks at end: A={} B={}", rollbacks(&h.a), rollbacks(&h.b));
 }
 
 #[test]

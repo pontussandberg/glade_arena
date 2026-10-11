@@ -5,7 +5,7 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
-use arena_client::{ClientSettings, DesiredInput, build_headless_client_app};
+use arena_client::{ClientSettings, DesiredInput, Me, StopWalking, build_headless_client_app};
 use arena_server::{Certificate, ServerSettings, build_server_app};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
@@ -76,6 +76,11 @@ pub fn lossy() -> LinkConditionerConfig {
     }
 }
 
+/// How long a command may take to show on the `lossy` client that sent it: a round trip (60 ms
+/// receive latency, ±10 ms jitter, sometimes a lost packet resent) plus a tick on the server and
+/// the next update out. Nothing is predicted, so nothing shows sooner.
+pub const COMMAND_SHOWS_WITHIN: Duration = Duration::from_millis(250);
+
 /// Teleport a player on the server (tests set up positions this way).
 pub fn place(server: &mut App, id: u64, at: Vec2) {
     let mut q = server.world_mut().query::<(&PlayerId, &mut Pos)>();
@@ -142,14 +147,14 @@ impl Duel {
     }
 }
 
-/// A player as seen by a client: (position, health, is_predicted, is_interpolated).
+/// A player as seen by a client: (position, health, is_me, is_interpolated).
 pub fn client_view(client: &mut App, id: u64) -> Option<(Vec2, Option<i32>, bool, bool)> {
     let mut q = client
         .world_mut()
-        .query::<(&PlayerId, &Pos, Option<&Health>, Has<Predicted>, Has<Interpolated>)>();
+        .query::<(&PlayerId, &Pos, Option<&Health>, Has<Me>, Has<Interpolated>)>();
     q.iter(client.world())
         .find(|(p, ..)| p.0 == peer(id))
-        .map(|(_, pos, h, pred, interp)| (pos.0, h.map(|h| h.0), pred, interp))
+        .map(|(_, pos, h, me, interp)| (pos.0, h.map(|h| h.0), me, interp))
 }
 
 /// Component `C` of player `id`, as `app` (a client or the server) has it.
@@ -178,6 +183,12 @@ pub fn set_input(client: &mut App, input: PlayerInput) {
 /// Changes part of what the client wants to do, e.g. presses fire without touching the walk.
 pub fn edit_input(client: &mut App, edit: impl FnOnce(&mut PlayerInput)) {
     edit(&mut client.world_mut().resource_mut::<DesiredInput>().0);
+}
+
+/// Stops walking (S): the only way to stop that's sent; forgetting a destination isn't.
+pub fn stop_walking(client: &mut App) {
+    edit_input(client, |i| i.move_to = None);
+    client.world_mut().resource_mut::<StopWalking>().0 = true;
 }
 
 /// How long a class's attack winds up.

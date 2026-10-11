@@ -39,7 +39,7 @@ use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use lightyear::prelude::*;
+use crate::Me;
 
 use crate::cloth::WardrobeAssets;
 use crate::feedback::AttackClock;
@@ -77,7 +77,7 @@ impl SeenThrows {
 
 fn see_throws(
     shots: Query<&Projectile, Added<Projectile>>,
-    mut throwers: Query<(&PlayerId, &mut SeenThrows), Without<Predicted>>,
+    mut throwers: Query<(&PlayerId, &mut SeenThrows), Without<Me>>,
 ) {
     for shot in &shots {
         let Some((_, mut seen)) = throwers.iter_mut().find(|(id, _)| id.0 == shot.owner) else { continue };
@@ -492,7 +492,7 @@ fn pose_rigs(
         &AttackState,
         &AbilityState,
         Option<&SeenThrows>,
-        Has<Predicted>,
+        Has<Me>,
     )>,
     mut parts: Query<(&mut Transform, &mut Visibility), Without<Rig>>,
 ) {
@@ -668,7 +668,7 @@ fn pose_rigs(
 fn show_auras(
     time: Res<Time>,
     clock: Option<AttackClock>,
-    mut fighters: Query<(&Rig, &AttackState, Has<Predicted>, Option<&mut crate::swish::Blade>)>,
+    mut fighters: Query<(&Rig, &AttackState, Has<Me>, Option<&mut crate::swish::Blade>)>,
     mut parts: Query<(&mut Visibility, &mut Transform)>,
 ) {
     let t = time.elapsed_secs();
