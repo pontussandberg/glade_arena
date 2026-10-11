@@ -292,10 +292,18 @@ pub(crate) fn spawn_dummy(commands: &mut Commands, id: PeerId, class: ClassId, r
         .id()
 }
 
-/// A dummy that would die is back at full health on the spot (its hits still show).
-fn restore_dummies(mut commands: Commands, mut dummies: Query<(Entity, &ClassId, &mut Health), (With<Dummy>, With<Dead>)>) {
-    for (dummy, class, mut health) in &mut dummies {
+/// A dummy that would die is back on the spot, fresh as a respawned player (full health, its
+/// slows, roots and haste gone); its hits still show.
+fn restore_dummies(
+    mut commands: Commands,
+    mut dummies: Query<(Entity, &ClassId, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, &mut AbilityState), (With<Dummy>, With<Dead>)>,
+) {
+    for (dummy, class, mut health, (mut chilled, mut hasted), mut attack, mut ability) in &mut dummies {
         health.0 = class.def().max_hp;
+        chilled.set_if_neq(Chilled::default());
+        hasted.set_if_neq(Hasted::default());
+        attack.set_if_neq(AttackState::default());
+        ability.set_if_neq(AbilityState::default());
         commands.entity(dummy).remove::<Dead>();
     }
 }
@@ -375,7 +383,8 @@ fn spawn_pickups(commands: &mut Commands, room: InRoom) -> Vec<Entity> {
 fn take_pickups(
     timeline: Res<LocalTimeline>,
     mut pickups: Query<(&mut Pickup, &InRoom)>,
-    mut players: Query<(&PlayerId, &ClassId, &Pos, &mut Health, &mut Hasted, &mut RecentHits, &InRoom), InPlay>,
+    // Not dummies: one standing on a pickup's spot would take it every time it came back.
+    mut players: Query<(&PlayerId, &ClassId, &Pos, &mut Health, &mut Hasted, &mut RecentHits, &InRoom), (InPlay, Without<Dummy>)>,
 ) {
     let now = timeline.tick().0;
     for (mut pickup, room) in &mut pickups {
@@ -498,7 +507,8 @@ fn damage(
 fn respawn(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    mut dead: Query<(Entity, &ClassId, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, &mut AbilityState, &mut Dead)>,
+    // Dummies come back on the spot instead (`restore_dummies`).
+    mut dead: Query<(Entity, &ClassId, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, &mut AbilityState, &mut Dead), Without<Dummy>>,
 ) {
     let now = timeline.tick().0;
     for (player, class, mut health, (mut chilled, mut hasted), mut attack, mut ability, mut dead) in &mut dead {

@@ -97,9 +97,10 @@ pub enum Attack {
 
 /// One tick of the auto-attack. Holding fire while the attack is ready starts a windup: the aim
 /// locks and the cooldown starts. When the windup is over the attack goes off (returned here)
-/// from wherever the player stands then (it can't have moved: winding up roots it). Released
-/// before a new one may start, so with a windup as long as the cooldown, holding fire winds the
-/// next one up on the very tick the last goes off: rooted throughout, one attack per cooldown.
+/// from wherever the player stands then (winding up roots it, but a dash mid-windup still moves
+/// it). Released before a new one may start, so with a windup as long as the cooldown, holding
+/// fire winds the next one up on the very tick the last goes off: rooted throughout, one attack
+/// per cooldown.
 pub fn step_attack(
     tick: u32,
     owner: PeerId,
