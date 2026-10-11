@@ -62,7 +62,6 @@ fn show_tools(mut commands: Commands, room: Res<CurrentRoom>, tools: Query<Entit
                         right: px(8.0),
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::FlexStart,
-                        row_gap: px(8.0),
                         padding: UiRect::axes(px(10.0), px(8.0)),
                         ..default()
                     },
@@ -78,7 +77,7 @@ fn show_tools(mut commands: Commands, room: Res<CurrentRoom>, tools: Query<Entit
                 .id();
             let label = commands.spawn(ui_text("Practice", 12.0, palette::ui::MUTED)).id();
             let tools = commands
-                .spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Stretch, row_gap: px(6.0), ..default() })
+                .spawn(tools_node(true))
                 .with_children(|tools| {
                     tools.spawn((DummyButton, HudButton, button("Target dummy", 13.0, palette::ui::HOLLOW, palette::ui::LICHEN, palette::ui::MUTED.with_alpha(0.5))));
                 })
@@ -106,15 +105,35 @@ fn close_tools(mut commands: Commands, tools: Query<Entity, With<Tools>>, mut pl
     *placing = Placing::default();
 }
 
+/// The tools under the header: folded away, they keep their width (so the panel stays the same
+/// size) but take no height.
+fn tools_node(open: bool) -> Node {
+    Node {
+        flex_direction: FlexDirection::Column,
+        align_items: AlignItems::Stretch,
+        row_gap: px(6.0),
+        margin: UiRect::top(px(if open { 8.0 } else { 0.0 })),
+        height: if open { Val::Auto } else { px(0.0) },
+        overflow: Overflow::clip(),
+        ..default()
+    }
+}
+
 /// A click on "Practice" folds the tools away or out.
-fn fold_tools(mut headers: Query<(Ref<Interaction>, &mut ToolsHeader)>, mut nodes: Query<&mut Node>, mut chevrons: Query<&mut UiTransform>) {
+/// Folded, the tools are hidden too, so they can't be clicked where they'd be.
+fn fold_tools(
+    mut headers: Query<(Ref<Interaction>, &mut ToolsHeader)>,
+    mut tools: Query<(&mut Node, &mut Visibility)>,
+    mut chevrons: Query<&mut UiTransform>,
+) {
     for (interaction, mut header) in &mut headers {
         if !clicked(interaction) {
             continue;
         }
         header.open = !header.open;
-        if let Ok(mut tools) = nodes.get_mut(header.tools) {
-            tools.display = if header.open { Display::Flex } else { Display::None };
+        if let Ok((mut node, mut visibility)) = tools.get_mut(header.tools) {
+            *node = tools_node(header.open);
+            *visibility = if header.open { Visibility::Inherited } else { Visibility::Hidden };
         }
         if let Ok(mut chevron) = chevrons.get_mut(header.chevron) {
             *chevron = UiTransform::from_rotation(Rot2::degrees(if header.open { 45.0 } else { -45.0 }));
