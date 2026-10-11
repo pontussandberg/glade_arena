@@ -991,8 +991,7 @@ fn update_status(
     frame_rate.seconds += time.delta_secs();
     frame_rate.frames += 1;
     if frame_rate.seconds >= 0.5 {
-        frame_rate.shown = (frame_rate.frames as f32 / frame_rate.seconds).round() as u32;
-        *frame_rate = FrameRate { shown: frame_rate.shown, ..default() };
+        *frame_rate = FrameRate { shown: (frame_rate.frames as f32 / frame_rate.seconds).round() as u32, ..default() };
     }
     let Ok((link, connected, disconnected)) = client.single() else { return };
     let mut text = String::new();
