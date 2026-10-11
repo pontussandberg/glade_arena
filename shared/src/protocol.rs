@@ -90,16 +90,14 @@ impl RecentHits {
     }
 }
 
-/// The auto-attack's state: when the next one may start, the windup in progress (if any), and
-/// when the last one went off. Predicted, so your own windup starts instantly and rollbacks
+/// The auto-attack's state: the windup in progress (if any; the next may start once it's off),
+/// and when the last one went off. Predicted, so your own windup starts instantly and rollbacks
 /// restore it; replicated (and shown on the same delayed timeline as others' positions), so
 /// others see your windup coming.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct AttackState {
-    pub ready_at: u32,
     pub windup: Option<Windup>,
-    /// The tick the last attack went off (`None`: never). Kept rather than worked out from
-    /// `ready_at`, which depends on whether the windup was quick.
+    /// The tick the last attack went off (`None`: never).
     pub released_at: Option<u32>,
     /// An attack started by this tick winds up quick (`FollowUp`; `None`: not armed).
     pub quick_until: Option<u32>,

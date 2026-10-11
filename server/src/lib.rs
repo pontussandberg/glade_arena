@@ -608,7 +608,7 @@ fn attack(
             }
         }
         // Only on change: AttackState is replicated.
-        state.set_if_neq(sim::start_attack(now.0, *class, &input.0, next));
+        state.set_if_neq(sim::start_attack(now.0, &input.0, next));
     }
 }
 

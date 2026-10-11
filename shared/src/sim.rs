@@ -93,12 +93,11 @@ pub enum Attack {
     Melee(LastSwing),
 }
 
-/// One tick of the auto-attack. Holding fire while the attack is ready starts a windup: the aim
-/// locks and the cooldown starts. When the windup is over the attack goes off (returned here)
+/// One tick of the auto-attack. Holding fire with no windup in progress starts one: the aim
+/// locks. When the windup is over the attack goes off (returned here)
 /// from wherever the player stands then (winding up roots it, but a dash mid-windup still moves
-/// it). Released before a new one may start, so with a windup as long as the cooldown, holding
-/// fire winds the next one up on the very tick the last goes off: rooted throughout, one attack
-/// per cooldown. A windup started while `quick_until` is armed is quick (`follow_up`); starting
+/// it). Released before a new one may start, so holding fire winds the next one up on the very
+/// tick the last goes off: rooted throughout, one attack per windup. A windup started while `quick_until` is armed is quick (`follow_up`); starting
 /// one disarms it either way.
 pub fn step_attack(
     tick: u32,
@@ -109,7 +108,7 @@ pub fn step_attack(
     state: AttackState,
 ) -> (AttackState, Option<Attack>) {
     let (state, released) = release_attack(tick, owner, class, pos, state);
-    (start_attack(tick, class, input, state), released)
+    (start_attack(tick, input, state), released)
 }
 
 /// `step_attack`'s first half: the windup going off, if it's over. The server resolves the swing
@@ -131,19 +130,14 @@ pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, mut s
     (state, released)
 }
 
-/// `step_attack`'s second half: a new windup starting, if fire is held and the attack is ready.
-pub fn start_attack(tick: u32, class: ClassId, input: &PlayerInput, mut state: AttackState) -> AttackState {
-    let attack = &class.def().attack;
+/// `step_attack`'s second half: a new windup starting, if fire is held and none is in progress.
+pub fn start_attack(tick: u32, input: &PlayerInput, mut state: AttackState) -> AttackState {
     if state.windup.is_none()
         && input.fire
-        && tick >= state.ready_at
         && let Some(dir) = input.aim.try_normalize()
     {
-        let windup = Windup { started_at: tick, dir, quick: state.quick_at(tick as f32) };
+        state.windup = Some(Windup { started_at: tick, dir, quick: state.quick_at(tick as f32) });
         state.quick_until = None;
-        // The same pause after the windup, quick or not.
-        state.ready_at = windup.releases_at(class) + attack.cooldown_ticks - attack.windup_ticks;
-        state.windup = Some(windup);
     }
     state
 }
@@ -426,21 +420,21 @@ mod tests {
     }
 
     #[test]
-    fn attacks_go_off_after_the_windup_once_per_cooldown() {
+    fn attacks_go_off_once_per_windup() {
         for class in ClassId::all() {
-            let (windup, cooldown) = (class.def().attack.windup_ticks, class.def().attack.cooldown_ticks);
-            let (released, state) = attack_ticks(class, &aim(Vec2::X, true), 10, 10 + 2 * cooldown + windup);
-            let expected = vec![10 + windup, 10 + cooldown + windup, 10 + 2 * cooldown + windup];
+            let windup = class.def().attack.windup_ticks;
+            let (released, state) = attack_ticks(class, &aim(Vec2::X, true), 10, 10 + 3 * windup);
+            let expected = vec![10 + windup, 10 + 2 * windup, 10 + 3 * windup];
             assert_eq!(released, expected, "{}", class.def().id);
             assert_eq!(state.released_at, released.last().copied(), "{}: last release", class.def().id);
         }
     }
 
     #[test]
-    fn holding_fire_with_a_full_length_windup_keeps_you_rooted() {
-        for class in ClassId::all().filter(|c| c.def().attack.windup_ticks == c.def().attack.cooldown_ticks) {
+    fn holding_fire_keeps_you_rooted() {
+        for class in ClassId::all() {
             let mut state = AttackState::default();
-            for tick in 10..10 + 3 * class.def().attack.cooldown_ticks {
+            for tick in 10..10 + 3 * class.def().attack.windup_ticks {
                 state = step_attack(tick, PeerId::Netcode(1), class, Vec2::ZERO, &aim(Vec2::X, true), state).0;
                 assert!(state.windup.is_some(), "{}: free to walk at tick {tick} while holding fire", class.def().id);
             }
@@ -461,7 +455,6 @@ mod tests {
         let armed = start(10, 10);
         assert_eq!(armed.windup.map(|w| w.releases_at(class)), Some(10 + quick));
         assert_eq!(armed.quick_until, None, "the quick windup should use it up");
-        assert_eq!(armed.ready_at, 10 + quick + attack.cooldown_ticks - attack.windup_ticks, "the cooldown should shrink as much");
         let late = start(11, 10);
         assert_eq!(late.windup.map(|w| w.releases_at(class)), Some(11 + attack.windup_ticks), "quick after the window");
         assert_eq!(late.quick_until, None);

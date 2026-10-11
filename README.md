@@ -18,7 +18,7 @@ projectile) and Q ability; all of it lives in `shared/assets/classes.ron`:
 | Class | Role | Auto-attack | Q |
 |---|---|---|---|
 | Jav | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`) | **Spirit Spear**: a fast spectral spear, thrown instantly (no windup, no root) |
-| Revenant | Duelist | A long thrust down a narrow lane, with a slow windup; each hit makes the next windup 72% shorter if it follows within 1.5 s (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash forward, damaging each enemy you pass through |
+| Revenant | Duelist | A long thrust down a narrow lane, with a slow windup; each hit gives the next swing +100% attack speed if it follows within 1.5 s, lost on a miss (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash forward, damaging each enemy you pass through |
 | Frost Mage | Controller | Frostbolts: little damage and shorter range (mid range), but each hit slows (40% for 2 s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5 s (no walking, no dashing) |
 
 Hits can carry **crowd control** (`chill` in `classes.ron`): a slow takes a share off walking
@@ -28,9 +28,9 @@ progress stops) but it can still attack. Slowed fighters take on a cold blue cas
 under their feet; frozen ones stand in ice.
 
 Every attack has a windup (`windup_ticks`): you stand still with your aim locked while a cast
-bar fills under your health bar, then it goes off. For the Jav and the Frost Mage the windup is the whole cooldown:
-the bar is the attack, and holding fire keeps you planted, so to kite you have to stop firing.
-The Revenant's swing winds up for part of its cooldown. Everyone sees the windup, so attacks can
+bar fills under your health bar, then it goes off. The windup is the whole attack: the next
+may start the moment one goes off, so attack speed is just how quick the windup is, and holding
+fire keeps you planted; to kite you have to stop firing. Everyone sees the windup, so attacks can
 be read and dodged. Attacking also cancels your walk: afterwards you stand still until you
 right click again (a click during the windup is kept and walked to once the attack is off);
 so does a dash. A dash may be used mid-windup: it moves you, and the attack still goes off when
