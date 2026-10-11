@@ -217,26 +217,60 @@ fn over_bar(camera: &Camera, camera_transform: &GlobalTransform, pos: &Pos) -> O
     camera.world_to_viewport(camera_transform, to_world(pos.0, BAR_HEIGHT)).ok()
 }
 
+/// How far behind the latest state from the server our own fighter is drawn, in ticks: enough
+/// that the next update is (almost) always in by the time it's needed, so it moves smoothly
+/// between updates however unevenly they arrive (`render::glide_me`).
+pub(crate) const ME_BEHIND_TICKS: f32 = 1.0;
+
+/// The server tick our latest news from it is from, advancing smoothly with real time between
+/// packets (`advance_latest_clock`): a packet from tick T arrives about when this reads T.
+#[derive(Resource, Default)]
+pub(crate) struct LatestClock {
+    tick: Option<f32>,
+    /// The tick of the latest packet from the server.
+    pub(crate) latest: Option<u32>,
+}
+
+/// How hard each new packet pulls the clock toward its tick (a little: arrivals are uneven), and
+/// how far off it may be before it's set straight there instead (after a stall, at the start).
+const CLOCK_PULL: f32 = 0.1;
+const CLOCK_SNAP_TICKS: f32 = 4.0;
+
+pub(crate) fn advance_latest_clock(time: Res<Time<Real>>, remote: Query<&RemoteTimeline, With<Client>>, mut clock: ResMut<LatestClock>) {
+    let Some(latest) = remote.single().ok().and_then(|r| r.last_received_tick()).map(|t| t.0) else { return };
+    let mut tick = clock.tick.map_or(latest as f32, |t| t + time.delta_secs() * TICK_HZ as f32);
+    if clock.latest != Some(latest) {
+        let off = latest as f32 - tick;
+        tick = if off.abs() > CLOCK_SNAP_TICKS { latest as f32 } else { tick + off * CLOCK_PULL };
+    }
+    (clock.tick, clock.latest) = (Some(tick), Some(latest));
+}
+
 /// "Now" in fractional ticks, on the timeline a fighter is shown on, to compare with its
-/// `AttackState`. Ours is shown as the server last said: the server's tick half a round trip ago
-/// (when that state was sent). Others' are interpolated (their windup plays out in step with
-/// their delayed position). Projectiles go by ours, so a shot coming at us is drawn where it is
-/// relative to us.
+/// `AttackState`. Ours: `LatestClock` less `ME_BEHIND_TICKS`. Others' are interpolated (their
+/// windup plays out in step with their delayed position). Projectiles go by ours, so a shot
+/// coming at us is drawn where it is relative to us.
 #[derive(SystemParam)]
-pub(crate) struct AttackClock<'w, 's> {
-    remote: Query<'w, 's, (&'static RemoteTimeline, &'static Link), With<Client>>,
+pub(crate) struct AttackClock<'w> {
+    latest: Option<Res<'w, LatestClock>>,
     interpolation: Option<Res<'w, InterpolationTimeline>>,
 }
 
-impl AttackClock<'_, '_> {
+impl AttackClock<'_> {
     pub(crate) fn now(&self, me: bool) -> f32 {
         let ticks = |t: TickInstant| t.tick().0 as f32 + t.overstep().to_f32();
-        match (&self.interpolation, self.remote.single()) {
+        let mine = self.latest.as_ref().and_then(|c| c.tick).map(|t| t - ME_BEHIND_TICKS);
+        match (&self.interpolation, mine) {
             (Some(timeline), _) if !me => ticks(timeline.now),
-            (_, Ok((remote, link))) => ticks(remote.now) - link.stats.rtt.as_secs_f32() / 2.0 * TICK_HZ as f32,
-            (Some(timeline), Err(_)) => ticks(timeline.now),
-            (None, Err(_)) => 0.0,
+            (_, Some(mine)) => mine,
+            (Some(timeline), None) => ticks(timeline.now),
+            (None, None) => 0.0,
         }
+    }
+
+    /// The tick of the latest packet from the server: what a state that just arrived is from.
+    pub(crate) fn latest_tick(&self) -> Option<u32> {
+        self.latest.as_ref().and_then(|c| c.latest)
     }
 }
 
