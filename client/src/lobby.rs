@@ -252,7 +252,7 @@ fn liven_stage(time: Res<Time>, mut motes: Query<(&Mote, &mut Transform)>, mut t
     torch.intensity = TORCH_INTENSITY * f;
 }
 
-/// The screen over the stage: a top bar with our `name`, the selected fighter's details on the
+/// The screen over the stage: our `name` at the top, the selected fighter's details on the
 /// left, the side panel on the right, and along the bottom the controls hint, the fighter tiles
 /// and the way in.
 fn spawn_screen(commands: &mut Commands, name: &str) {
@@ -271,29 +271,37 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
             GlobalZIndex(10),
         ))
         .with_children(|screen| {
-            // The top bar and the bottom row in three columns: the outer two share what the middle
-            // leaves, so the middle is centered.
+            // The bottom row in three columns: the outer two share what the middle leaves, so the
+            // middle is centered.
             let side = |justify: JustifyContent| Node { flex_grow: 1.0, flex_basis: px(0.0), justify_content: justify, ..default() };
-            // The game on the left, who we are in the middle, over the fighter.
-            screen.spawn(Node { align_items: AlignItems::Center, ..default() }).with_children(|bar| {
-                bar.spawn(side(JustifyContent::FlexStart)).with_child(ui_text("ARENA", 18.0, palette::ui::MUTED));
-                bar.spawn((
-                    Node {
-                        column_gap: px(GAP * 1.5),
-                        align_items: AlignItems::Center,
-                        padding: UiRect::axes(px(12.0), px(4.0)),
-                        border: UiRect::bottom(px(2.0)),
-                        ..default()
-                    },
-                    BackgroundColor(palette::ui::PANEL),
-                    BorderColor::all(ACCENT),
-                ))
-                .with_children(|badge| {
-                    badge.spawn(label("Guest"));
-                    badge.spawn(ui_text(name, 16.0, ACCENT));
+            // Who we are, centered over the fighter. Out of the flow, so the panes either side
+            // start at the top.
+            screen
+                .spawn(Node {
+                    position_type: PositionType::Absolute,
+                    top: px(MARGIN),
+                    left: px(0.0),
+                    right: px(0.0),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                })
+                .with_children(|bar| {
+                    bar.spawn((
+                        Node {
+                            column_gap: px(GAP * 1.5),
+                            align_items: AlignItems::Center,
+                            padding: UiRect::axes(px(12.0), px(4.0)),
+                            border: UiRect::bottom(px(2.0)),
+                            ..default()
+                        },
+                        BackgroundColor(palette::ui::PANEL),
+                        BorderColor::all(ACCENT),
+                    ))
+                    .with_children(|badge| {
+                        badge.spawn(label("Guest"));
+                        badge.spawn(ui_text(name, 16.0, ACCENT));
+                    });
                 });
-                bar.spawn(side(JustifyContent::FlexEnd));
-            });
             screen.spawn((
                 SidePanel,
                 Visibility::Hidden,
@@ -309,14 +317,15 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
             ));
             screen.spawn((
                 Details,
-                // Fills the height between the top bar and the bottom row, its content from the
-                // top: the name stays put whichever fighter is picked, however long its details.
+                // Fills the height above the bottom row, its content from the top (level with
+                // the side panel's): the name stays put whichever fighter is picked, however long
+                // its details.
                 Node {
                     flex_direction: FlexDirection::Column,
                     flex_grow: 1.0,
                     row_gap: px(GAP * 1.5),
                     width: px(340.0),
-                    margin: UiRect::vertical(px(GAP * 3.0)),
+                    margin: UiRect::bottom(px(GAP * 3.0)),
                     ..default()
                 },
             ));
@@ -600,7 +609,7 @@ pub(crate) fn label(text: &str) -> impl Bundle {
 /// switch. Who's in it: in free-for-all a list; in teams the two side by side, with the way to
 /// switch sides under ours. Then the way out. Rebuilt when the room changes, or we come to it.
 ///
-/// Names are in one neutral color; ours is in the accent (on a tinted row), as in the top bar.
+/// Names are in one neutral color; ours is in the accent (on a tinted row), as in the badge over the fighter.
 fn show_room(
     mut commands: Commands,
     room: Res<CurrentRoom>,
