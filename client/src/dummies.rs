@@ -66,7 +66,7 @@ fn show_tools(mut commands: Commands, room: Res<CurrentRoom>, tools: Query<Entit
             let tools = commands
                 .spawn(tools_node(true))
                 .with_children(|tools| {
-                    tools.spawn((DummyButton, HudButton, button("Target dummy", 13.0, palette::ui::HOLLOW, palette::ui::LICHEN, palette::ui::MUTED.with_alpha(0.5))));
+                    tools.spawn((DummyButton, HudButton, button("Target dummy", 13.0, palette::ui::PANEL, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5))));
                 })
                 .id();
             let header = commands.spawn((ToolsHeader { chevron, tools, open: true }, fold_header())).add_children(&[chevron, label]).id();
@@ -224,7 +224,7 @@ fn show_hint(mut commands: Commands, placing: Res<Placing>, hint: Query<Entity, 
                     ..default()
                 },
                 Pickable::IGNORE,
-                children![ui_text("Click to place a target dummy  ·  right-click or ESC to cancel", 14.0, palette::ui::SPROUT)],
+                children![ui_text("Click to place a target dummy  ·  right-click or ESC to cancel", 14.0, palette::ui::ACCENT)],
             ));
         }
         (false, Some(hint)) => commands.entity(hint).despawn(),

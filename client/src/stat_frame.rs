@@ -13,6 +13,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::arena::palette;
+use crate::arena::palette::ui::ACCENT;
 use crate::lobby;
 use crate::render::{GameUi, ui_text};
 use crate::tooltip::{Side, hover_shows, tip, tip_text};
@@ -28,8 +29,6 @@ impl Plugin for StatFramePlugin {
 
 /// The frame's width (pixels).
 const WIDTH: f32 = 260.0;
-/// The one accent of the lobby and the frame: the role, what's selected.
-pub(crate) const ACCENT: Color = palette::ui::SPROUT;
 
 /// The bottom-left corner your stat frame sits in.
 #[derive(Component)]
@@ -71,7 +70,7 @@ pub enum FrameStyle {
 pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, style: FrameStyle) -> HealthParts {
     let def = class.def();
     let (width, padding, border, fill) = match style {
-        FrameStyle::Hud => (px(WIDTH), 12.0, 1.0, palette::ui::HOLLOW.with_alpha(0.85)),
+        FrameStyle::Hud => (px(WIDTH), 12.0, 1.0, palette::ui::PANEL.with_alpha(0.85)),
         FrameStyle::Card => (auto(), lobby::CARD_PADDING, 0.0, lobby::card_fill()),
     };
     let mut parts = HealthParts { frame: Entity::PLACEHOLDER, text: Entity::PLACEHOLDER };
@@ -93,13 +92,13 @@ pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, style: Fra
                 frame
                     .spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Baseline, ..default() })
                     .with_children(|row| {
-                        row.spawn(ui_text(def.name.clone(), 16.0, palette::ui::LICHEN));
+                        row.spawn(ui_text(def.name.clone(), 16.0, palette::ui::TEXT));
                         row.spawn(ui_text(def.role.to_uppercase(), 11.0, ACCENT));
                     });
             }
             frame.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
                 row.spawn(ui_text("HEALTH", 11.0, palette::ui::MUTED));
-                parts.text = row.spawn(ui_text(def.max_hp.to_string(), 11.0, palette::ui::LICHEN)).id();
+                parts.text = row.spawn(ui_text(def.max_hp.to_string(), 11.0, palette::ui::TEXT)).id();
             });
             for (label, value, tip) in stats(def) {
                 let name = frame
@@ -107,7 +106,7 @@ pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, style: Fra
                     .with_child(ui_text(label, 11.0, palette::ui::MUTED))
                     .id();
                 let mut row = frame.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() });
-                row.add_child(name).with_child(ui_text(value, 11.0, palette::ui::LICHEN));
+                row.add_child(name).with_child(ui_text(value, 11.0, palette::ui::TEXT));
                 if let Some(text) = tip {
                     let tip = row.commands().spawn(tooltip(text)).id();
                     row.commands().entity(name).with_child(info_badge());
