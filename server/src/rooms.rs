@@ -376,10 +376,8 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             }
             // Each class in turn.
             let class = ClassId::all().nth(room.dummies.len() % ClassId::all().count()).expect("a class");
-            let in_room = InRoom { key, net: room.net };
             lobby.next_dummy += 1;
-            let dummy = spawn_dummy(&mut ctx.commands, PeerId::Local(lobby.next_dummy), class, in_room, at);
-            lobby.rooms.get_mut(&key).expect("in it").dummies.push(dummy);
+            room.dummies.push(spawn_dummy(&mut ctx.commands, PeerId::Local(lobby.next_dummy), class, InRoom { key, net: room.net }, at));
             info!(room = key.0, class = class.def().name, "target dummy placed");
         }
         RoomRequest::Start => {

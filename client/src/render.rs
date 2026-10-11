@@ -5,7 +5,7 @@
 
 use std::fmt::Write;
 
-use arena_shared::classes::{AbilityKind, AttackKind};
+use arena_shared::classes::AbilityKind;
 use arena_shared::config::*;
 use arena_shared::map::map;
 use arena_shared::protocol::*;
@@ -51,7 +51,7 @@ impl Plugin for RenderPlugin {
                 (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
                 (add_visuals, sync_transforms).chain().before(crate::rig::Posing),
                 fly_shots.after(crate::rig::Posing),
-                (show_novas, grow_bursts, fade_swings, show_frost),
+                (show_novas, grow_bursts, end_fleeting, show_frost),
                 align_to_world.after(crate::rig::Posing),
                 toggle_range_circle,
                 (update_status, update_key_hints, fold_controls),
@@ -127,7 +127,7 @@ impl Relation {
     }
 }
 
-/// Meshes shared by every player/projectile/swing (one figure and one attack shape per class),
+/// Meshes shared by every player and projectile (one figure, one range circle per class),
 /// and materials per player, so attacking doesn't create and upload new GPU assets.
 #[derive(Resource)]
 pub(crate) struct Visuals {
@@ -210,13 +210,13 @@ impl Visuals {
 
 /// A nova's part; despawned `until` (seconds).
 #[derive(Component)]
-struct SwingFx {
+struct Fleeting {
     until: f32,
 }
 
 /// Something that bursts out from nothing: scaled up to `size` over `grow` seconds from `started`
 /// (seconds; nothing shows before), and sinking back into the ground over its last
-/// `NOVA_GROW_SECONDS` before it's gone (`SwingFx`).
+/// `NOVA_GROW_SECONDS` before it's gone (`Fleeting`).
 #[derive(Component)]
 struct Burst {
     started: f32,
@@ -317,16 +317,11 @@ fn setup_scene(
     ));
     commands.insert_resource(Visuals {
         fighters: ClassId::all().map(|c| (c, meshes.add(arena::fighter_mesh(&c.def().id)))).collect(),
-        // Where an auto-attack stops reaching, so a fighter whose body reaches over the circle can
-        // be hit: a shot's front edge starts at the edge of the shooter and flies its range; a
-        // thrust reaches a body whose center is within its reach, so whose edge is within its
-        // range.
+        // Where an auto-attack stops reaching: a fighter whose body reaches over the circle can be
+        // hit.
         range_circles: ClassId::all()
             .map(|c| {
-                let outer = match c.def().attack.kind {
-                    AttackKind::Projectile { radius, range, .. } => PLAYER_RADIUS + 2.0 * radius + range,
-                    AttackKind::Melee { range, .. } => range,
-                };
+                let outer = c.def().attack.kind.edge_reach();
                 (c, meshes.add(Annulus::new(outer - RANGE_CIRCLE_WIDTH, outer).mesh().resolution(96).build()))
             })
             .collect(),
@@ -355,42 +350,12 @@ fn setup_scene(
         materials: HashMap::default(),
     });
     commands
-        .spawn((
-            GameUi,
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(8.0),
-                left: px(8.0),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::FlexStart,
-                row_gap: px(8.0),
-                padding: UiRect::axes(px(10.0), px(8.0)),
-                ..default()
-            },
-            BackgroundColor(palette::ui::HOLLOW.with_alpha(0.6)),
-        ))
+        .spawn(corner_panel(false, 8.0))
         .with_children(|corner| {
             corner.spawn((Status, ui_text("connecting...", 12.0, palette::ui::LICHEN)));
-            let chevron = corner
-                .spawn((
-                    Node {
-                        width: px(5.0),
-                        height: px(5.0),
-                        border: UiRect { right: px(1.5), bottom: px(1.5), ..default() },
-                        ..default()
-                    },
-                    BorderColor::all(palette::ui::MUTED),
-                ))
-                .id();
+            let chevron = corner.spawn(chevron(false)).id();
             let label = corner.spawn(ui_text("Controls", 12.0, palette::ui::MUTED)).id();
-            corner
-                .spawn((
-                    ControlsHeader { chevron },
-                    HudButton,
-                    Interaction::default(),
-                    Node { column_gap: px(8.0), align_items: AlignItems::Center, ..default() },
-                ))
-                .add_children(&[chevron, label]);
+            corner.spawn((ControlsHeader { chevron }, fold_header())).add_children(&[chevron, label]);
             // Two columns: the keys, as wide as the widest, then what they do, all left-aligned.
             corner.spawn((
                 KeyHints,
@@ -405,6 +370,46 @@ fn setup_scene(
                 },
             ));
         });
+}
+
+/// A see-through HUD panel in a top corner (the right one, or the left), its contents in a
+/// column `gap` pixels apart.
+pub(crate) fn corner_panel(right: bool, gap: f32) -> impl Bundle {
+    (
+        GameUi,
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(8.0),
+            left: if right { Val::Auto } else { px(8.0) },
+            right: if right { px(8.0) } else { Val::Auto },
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::FlexStart,
+            row_gap: px(gap),
+            padding: UiRect::axes(px(10.0), px(8.0)),
+            ..default()
+        },
+        BackgroundColor(palette::ui::HOLLOW.with_alpha(0.6)),
+    )
+}
+
+/// A disclosure's header (a chevron, then its label, as children): clicking it folds what's
+/// under it away or out.
+pub(crate) fn fold_header() -> impl Bundle {
+    (HudButton, Interaction::default(), Node { column_gap: px(8.0), align_items: AlignItems::Center, ..default() })
+}
+
+/// A disclosure's chevron: a corner of a square, turned to point down while `open`, right while
+/// folded (`chevron_turn`).
+pub(crate) fn chevron(open: bool) -> impl Bundle {
+    (
+        Node { width: px(5.0), height: px(5.0), border: UiRect { right: px(1.5), bottom: px(1.5), ..default() }, ..default() },
+        BorderColor::all(palette::ui::MUTED),
+        chevron_turn(open),
+    )
+}
+
+pub(crate) fn chevron_turn(open: bool) -> UiTransform {
+    UiTransform::from_rotation(Rot2::degrees(if open { 45.0 } else { -45.0 }))
 }
 
 /// Mouse -> `DesiredInput`, LoL-style: right click walks to the clicked point, left click
@@ -424,7 +429,6 @@ fn read_local_input(
         Or<(With<HudButton>, With<AbilityIcon>)>,
     >,
     mut aiming: ResMut<Aiming>,
-    mut placing: ResMut<crate::dummies::Placing>,
     mut held_click: Local<bool>,
     mut last_pos: Local<Option<Vec2>>,
     mut desired: ResMut<DesiredInput>,
@@ -456,15 +460,9 @@ fn read_local_input(
         move_to = None;
     }
     *last_pos = me;
-    // Placing a target dummy: a right click cancels it (and doesn't walk).
-    let stop_placing = placing.on && !mode.free && mouse.just_pressed(MouseButton::Right);
-    if stop_placing {
-        placing.on = false;
-    }
     // Once per click: holding the button doesn't keep re-targeting. Not with the free camera:
     // there the right button turns the camera, and WASD walks.
     if !mode.free
-        && !stop_placing
         && mouse.just_pressed(MouseButton::Right)
         && let Some(cursor) = cursor
         && let Some(point) = map().walk_target(cursor, 4)
@@ -497,10 +495,6 @@ fn read_local_input(
     // walks as usual; ESC drops it too (`esc_menu`).
     if mouse.just_pressed(MouseButton::Left) {
         if on_control {
-            *held_click = true;
-        } else if placing.on {
-            placing.at = cursor;
-            placing.on = false;
             *held_click = true;
         } else if on_icon {
             aiming.0 = ability_ready;
@@ -692,7 +686,7 @@ fn show_novas(
         let mut burst = |mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>, at: Vec3, dir: Vec2, until: f32, burst: Burst| {
             let placed = Transform::from_translation(at).with_rotation(Quat::from_rotation_y(dir.to_angle()));
             commands.spawn((
-                SwingFx { until: now + until },
+                Fleeting { until: now + until },
                 Mesh3d(mesh.clone()),
                 MeshMaterial3d(material.clone()),
                 placed.with_scale(Vec3::splat(1e-3)),
@@ -716,7 +710,7 @@ fn show_novas(
 }
 
 /// Bursts grow out to full size (quickly at first), then sink away just before they're gone.
-fn grow_bursts(time: Res<Time>, mut bursts: Query<(&Burst, &SwingFx, &mut Transform)>) {
+fn grow_bursts(time: Res<Time>, mut bursts: Query<(&Burst, &Fleeting, &mut Transform)>) {
     let now = time.elapsed_secs();
     for (burst, fx, mut transform) in &mut bursts {
         let grown = ((now - burst.started) / burst.grow).clamp(0.0, 1.0);
@@ -764,8 +758,8 @@ fn show_frost(
     }
 }
 
-fn fade_swings(mut commands: Commands, time: Res<Time>, swings: Query<(Entity, &SwingFx)>) {
-    for (entity, fx) in &swings {
+fn end_fleeting(mut commands: Commands, time: Res<Time>, fleeting: Query<(Entity, &Fleeting)>) {
+    for (entity, fx) in &fleeting {
         if time.elapsed_secs() >= fx.until {
             commands.entity(entity).despawn();
         }
@@ -1024,8 +1018,7 @@ fn fold_controls(
     }
     hints.display = if open.0 { Display::Grid } else { Display::None };
     if let Ok(mut chevron) = chevrons.get_mut(header.chevron) {
-        // Its corner points down while open, right while folded.
-        *chevron = UiTransform::from_rotation(Rot2::degrees(if open.0 { 45.0 } else { -45.0 }));
+        *chevron = chevron_turn(open.0);
     }
 }
 

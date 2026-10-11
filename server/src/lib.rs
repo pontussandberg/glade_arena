@@ -241,23 +241,30 @@ fn on_new_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
     commands.entity(trigger.entity).insert(ReplicationSender);
 }
 
+/// What every fighter is, player or dummy: who, of which class, where and on which side, and
+/// its fight state (health, crowd control, attack and ability, the positions hits are judged
+/// against), fresh.
+fn fighter(id: PeerId, class: ClassId, room: InRoom, team: Team, at: Vec2) -> impl Bundle {
+    (
+        PlayerId(id),
+        (class, team, room, room.rooms()),
+        Pos(at),
+        Health(class.def().max_hp),
+        (Chilled::default(), Hasted::default(), RecentHits::default()),
+        (AttackState::default(), AbilityState::default(), LastSwing::default()),
+        PosHistory::default(),
+    )
+}
+
 /// A room member's fighter, as `class`, on `team`. Despawned with the client's link when it
 /// disconnects; `rooms.rs` despawns it when the member leaves the room.
 fn spawn_player(commands: &mut Commands, link: Entity, id: PeerId, class: ClassId, room: InRoom, team: Team) -> Entity {
     commands
         .spawn((
             Name::from("Player"),
-            PlayerId(id),
-            (class, team, room, room.rooms()),
-            Pos::default(),
+            fighter(id, class, room, team, Vec2::ZERO),
             NeedsSpawnPoint,
-            Health(class.def().max_hp),
-            (Chilled::default(), Hasted::default(), RecentHits::default()),
-            AttackState::default(),
-            AbilityState::default(),
             DashHits::default(),
-            LastSwing::default(),
-            PosHistory::default(),
             InputGaps::default(),
             ActionState::<PlayerInput>::default(),
             // Replication starts in `place_players`, once it has a real position.
@@ -278,15 +285,7 @@ pub(crate) fn spawn_dummy(commands: &mut Commands, id: PeerId, class: ClassId, r
         .spawn((
             Name::from("Dummy"),
             Dummy,
-            PlayerId(id),
-            (class, Team(arena_shared::rooms::NO_TEAM), room, room.rooms()),
-            Pos(at),
-            Health(class.def().max_hp),
-            (Chilled::default(), Hasted::default(), RecentHits::default()),
-            AttackState::default(),
-            AbilityState::default(),
-            LastSwing::default(),
-            PosHistory::default(),
+            fighter(id, class, room, Team(arena_shared::rooms::NO_TEAM), at),
             Replicate::to_clients(NetworkTarget::All),
             InterpolationTarget::to_clients(NetworkTarget::All),
         ))

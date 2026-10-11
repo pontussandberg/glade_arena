@@ -19,10 +19,14 @@ pub struct EscMenuPlugin;
 impl Plugin for EscMenuPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(Update, (PlayerControls, CameraControl).run_if(not(menu_open)));
-        app.add_systems(Update, (toggle_menu, menu_buttons).chain().run_if(in_state(Screen::InGame)));
+        app.add_systems(Update, (toggle_menu.in_set(MenuKey), menu_buttons).chain().run_if(in_state(Screen::InGame)));
         app.add_systems(OnExit(Screen::InGame), close_menu);
     }
 }
+
+/// Where ESC opens and closes the menu: what takes ESC first (placing a dummy) goes before it.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct MenuKey;
 
 /// The menu, while it's open.
 #[derive(Component)]
@@ -50,14 +54,8 @@ fn toggle_menu(
     room: Res<CurrentRoom>,
     mut desired: ResMut<crate::DesiredInput>,
     mut aiming: ResMut<crate::casting::Aiming>,
-    mut placing: ResMut<crate::dummies::Placing>,
 ) {
     if !keys.just_pressed(KeyCode::Escape) {
-        return;
-    }
-    // ESC first cancels placing a target dummy (`dummies.rs`).
-    if placing.on {
-        placing.on = false;
         return;
     }
     // ESC first drops a normal cast's aim; the next one opens the menu.

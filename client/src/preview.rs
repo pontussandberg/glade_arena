@@ -7,7 +7,7 @@
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
 
-use crate::arena::{self, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER, RIG_TAIL};
+use crate::arena::{self, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER};
 
 const SIZE: usize = 360;
 
@@ -62,15 +62,11 @@ fn figure(class: &str) -> Vec<Tri> {
     for hip in [RIG_HIP, Vec3::new(RIG_HIP.x, RIG_HIP.y, -RIG_HIP.z)] {
         triangles(&rig.leg, at(hip), &mut tris, false);
     }
-    if let Some(tail) = &rig.tail {
-        triangles(tail, at(RIG_TAIL), &mut tris, false);
-    }
     // Cloth at rest.
     for drape in rig.wardrobe.iter().flat_map(|wardrobe| &wardrobe.drapes) {
-        let place = if drape.on_head { at(RIG_NECK) } else { Mat4::IDENTITY };
-        triangles(&drape.mesh, place, &mut tris, false);
+        triangles(&drape.mesh, Mat4::IDENTITY, &mut tris, false);
         if let Some(glow) = &drape.glow {
-            triangles(glow, place, &mut tris, true);
+            triangles(glow, Mat4::IDENTITY, &mut tris, true);
         }
     }
     tris

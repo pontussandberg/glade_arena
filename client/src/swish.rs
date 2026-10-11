@@ -1,22 +1,19 @@
-//! A blade's wind: what a melee swing leaves in the air. A faint trail follows the blade itself
-//! wherever it moves fast (a lunge, a dash), so it shows where the sword just was; and each strike
-//! leaves a mark, one thin, sharp line of wind along the blade where it was as the strike landed,
-//! lingering a moment as it fades. Air casts no shadow. The same whoever swung (who it was shows
-//! in the health bar).
+//! A blade's wind: what a thrusting blade leaves in the air. A faint trail follows the blade
+//! itself wherever it moves fast (a lunge, a dash), so it shows where the sword just was; and each
+//! strike leaves a mark, one thin, sharp line of wind along the blade where it was as the strike
+//! landed, lingering a moment as it fades. Air casts no shadow. The same whoever swung (who it was
+//! shows in the health bar).
 
 use std::collections::VecDeque;
 
-use arena_shared::classes::AttackKind;
 use arena_shared::protocol::*;
-use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
-use bevy::mesh::PrimitiveTopology;
-use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
-use crate::arena::{self, palette};
+use crate::arena::{self, FlatMesh, palette};
+use crate::render::shown;
 
 pub struct SwishPlugin;
 
@@ -28,22 +25,35 @@ impl Plugin for SwishPlugin {
     }
 }
 
-/// The weapon in a fighter's hand (its grip at the origin, the blade along +Y), set by `rig.rs`.
+/// On a fighter holding a blade out (`rig.rs`): the blade (its grip at the origin, the blade
+/// along +Y), how long it is, and the last swing a mark was drawn for.
 #[derive(Component)]
-pub(crate) struct Blade(pub Entity);
+pub(crate) struct Blade {
+    pub(crate) held: Entity,
+    pub(crate) length: f32,
+    pub(crate) shown: u32,
+}
+
+impl Blade {
+    /// The point `up` (a fraction of its length) up the blade, in the world (stretched as the
+    /// blade is when it smears).
+    fn at(&self, held: &GlobalTransform, up: f32) -> Vec3 {
+        held.transform_point(Vec3::Y * self.length * up)
+    }
+}
 
 /// How long the trail lingers (seconds), how fast the blade's tip must move for it to show
 /// (m/s: it fades in from the first to the second), and the stretch of the blade it follows
-/// (from its base, through where it's brightest, to its tip, up the blade from the grip).
+/// (from its base, through where it's brightest, to its tip, as fractions of its length).
 const TRAIL_LIFE: f32 = 0.16;
 const TRAIL_SPEED: (f32, f32) = (6.0, 13.0);
-const TRAIL_BLADE: [f32; 3] = [0.3, 1.1, 1.72];
+const TRAIL_BLADE: [f32; 3] = [0.17, 0.63, 1.0];
 
-/// The mark a strike leaves: how long it lasts (seconds), the stretch of the blade it's drawn
-/// along (up the blade from the grip, as stretched as it is when the strike lands), and how many
-/// steps it fades in (one shared material each).
+/// The mark a strike leaves: how long it lasts (seconds), where along the blade it starts (a
+/// fraction of its length; it runs to the tip), and how many steps it fades in (one shared
+/// material each).
 const MARK_LIFE: f32 = 0.32;
-const MARK_BLADE: (f32, f32) = (0.25, 1.82);
+const MARK_FROM: f32 = 0.14;
 const MARK_FADES: usize = 8;
 /// The air's color, and how see-through the mark is at its brightest.
 const AIR: Color = palette::SILVER;
@@ -71,16 +81,7 @@ fn load_swish(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mate
 fn mark_mesh() -> Mesh {
     const STEPS: usize = 12;
     const HALF_WIDTH: f32 = 0.025;
-    let mut positions = Vec::new();
-    let mut colors = Vec::new();
-    let mut tri = |corners: [Vec3; 3], alphas: [f32; 3]| {
-        for order in [[0, 1, 2], [0, 2, 1]] {
-            for k in order {
-                positions.push(corners[k].to_array());
-                colors.push([1.0, 1.0, 1.0, alphas[k]]);
-            }
-        }
-    };
+    let mut b = FlatMesh::default();
     // Widest a little short of the tip, a needle point at it; clear at the near end.
     let width = |t: f32| HALF_WIDTH * (t / 0.17).min(1.0) * ((1.0 - t) / 0.23).min(1.0).powf(0.6);
     let alpha = |t: f32| (t / 0.35).min(1.0).powf(1.5);
@@ -92,15 +93,12 @@ fn mark_mesh() -> Mesh {
             let (a0, a1) = (alpha(t0), alpha(t1));
             // Bright along its spine, clear at its edges.
             for side in [1.0, -1.0] {
-                tri([p0, p0 + w0 * side, p1], [a0, 0.0, a1]);
-                tri([p1, p0 + w0 * side, p1 + w1 * side], [a1, 0.0, 0.0]);
+                b.tri_faded_both([p0, p0 + w0 * side, p1], [a0, 0.0, a1]);
+                b.tri_faded_both([p1, p0 + w0 * side, p1 + w1 * side], [a1, 0.0, 0.0]);
             }
         }
     }
-    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
-        .with_computed_flat_normals()
+    b.build()
 }
 
 /// A strike's mark, from `started` (seconds): drawn `from` the blade's base to its tip as the
@@ -125,25 +123,24 @@ impl Mark {
     }
 }
 
-/// A mark for each new melee swing, along the blade where it is as the strike lands (after it's
-/// posed and placed, so it's exactly there). `LastSwing` is predicted for our own player (instant)
-/// and replicated for others; rollbacks may rewrite it with the same value, so each is drawn once.
+/// A mark for each new swing, along the blade where it is as the strike lands (after it's posed
+/// and placed, so it's exactly there). `LastSwing` is predicted for our own player (instant) and
+/// replicated for others; rollbacks may rewrite it with the same value, so each is drawn once.
 fn show_marks(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<SwishAssets>,
-    swings: Query<(Entity, &ClassId, &LastSwing, &Blade), Changed<LastSwing>>,
+    mut swings: Query<(&LastSwing, &mut Blade), Changed<LastSwing>>,
     blades: Query<&GlobalTransform>,
-    mut shown: Local<HashMap<Entity, u32>>,
 ) {
     let now = time.elapsed_secs();
-    for (entity, class, swing, blade) in &swings {
-        if !matches!(class.def().attack.kind, AttackKind::Melee { .. }) || shown.get(&entity).is_some_and(|&tick| swing.tick <= tick) {
+    for (swing, mut blade) in &mut swings {
+        if swing.tick <= blade.shown {
             continue;
         }
-        shown.insert(entity, swing.tick);
-        let Ok(held) = blades.get(blade.0) else { continue };
-        let mark = Mark { started: now, from: held.transform_point(Vec3::Y * MARK_BLADE.0), to: held.transform_point(Vec3::Y * MARK_BLADE.1) };
+        blade.shown = swing.tick;
+        let Ok(held) = blades.get(blade.held) else { continue };
+        let mark = Mark { started: now, from: blade.at(held, MARK_FROM), to: blade.at(held, 1.0) };
         let transform = mark.transform(0.0);
         commands.spawn((
             Mesh3d(assets.mark.clone()),
@@ -179,8 +176,8 @@ fn drive_marks(
     }
 }
 
-/// A melee fighter's blade trail: where its blade has lately been (in the world), drawn by
-/// `entity` (a mesh in world space, rebuilt each frame).
+/// A blade's trail: where the blade has lately been (in the world), drawn by `entity` (a mesh in
+/// world space, rebuilt each frame it shows).
 #[derive(Component)]
 pub(crate) struct Trail {
     entity: Entity,
@@ -196,14 +193,11 @@ fn add_trails(
     mut commands: Commands,
     assets: Res<SwishAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
-    fighters: Query<(Entity, &ClassId), (With<Blade>, Without<Trail>)>,
+    fighters: Query<Entity, (With<Blade>, Without<Trail>)>,
     trails: Query<(Entity, &TrailOf)>,
     owners: Query<(), With<Trail>>,
 ) {
-    for (fighter, class) in &fighters {
-        if !matches!(class.def().attack.kind, AttackKind::Melee { .. }) {
-            continue;
-        }
+    for fighter in &fighters {
         let mesh = meshes.add(trail_mesh(&[]));
         let entity = commands
             .spawn((
@@ -229,30 +223,22 @@ fn add_trails(
 /// A ribbon through the blade's recent places (`(alpha, [base, middle, tip])`, oldest first):
 /// clear at the blade's base, brightest toward its tip. Both faces.
 fn trail_mesh(places: &[(f32, [Vec3; 3])]) -> Mesh {
-    let mut positions = Vec::new();
-    let mut colors = Vec::new();
     let shade = [0.0, 0.6, 1.0];
+    let mut b = FlatMesh::default();
     for pair in places.windows(2) {
         let ((a0, p0), (a1, p1)) = (pair[0], pair[1]);
         for k in 0..2 {
-            let quad = [(p0[k], a0 * shade[k]), (p0[k + 1], a0 * shade[k + 1]), (p1[k + 1], a1 * shade[k + 1]), (p1[k], a1 * shade[k])];
-            for order in [[0, 1, 2, 0, 2, 3], [0, 2, 1, 0, 3, 2]] {
-                for i in order {
-                    positions.push(quad[i].0.to_array());
-                    colors.push([1.0, 1.0, 1.0, quad[i].1]);
-                }
-            }
+            let (lo, hi) = ((a0 * shade[k], a0 * shade[k + 1]), (a1 * shade[k], a1 * shade[k + 1]));
+            b.tri_faded_both([p0[k], p0[k + 1], p1[k + 1]], [lo.0, lo.1, hi.1]);
+            b.tri_faded_both([p0[k], p1[k + 1], p1[k]], [lo.0, hi.1, hi.0]);
         }
     }
-    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
-        .with_computed_flat_normals()
+    b.build()
 }
 
-/// Notes where each melee fighter's blade is now (after it's posed and placed), drops what's
-/// older than the trail lasts, and redraws its trail: bright where the blade moved fast, fading
-/// with age.
+/// Notes where each blade is now (after it's posed and placed), drops what's older than the trail
+/// lasts, and redraws its trail while it shows: bright where the blade moved fast, fading with
+/// age.
 fn trail_blades(
     time: Res<Time>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -262,32 +248,30 @@ fn trail_blades(
 ) {
     let now = time.elapsed_secs();
     for (blade, mut trail, visible) in &mut fighters {
-        let Ok(held) = blades.get(blade.0) else { continue };
-        let place = TRAIL_BLADE.map(|up| held.transform_point(Vec3::Y * up));
-        trail.samples.push_back((now, place));
+        let Ok(held) = blades.get(blade.held) else { continue };
+        let trail = &mut *trail;
+        trail.samples.push_back((now, TRAIL_BLADE.map(|up| blade.at(held, up))));
         while trail.samples.front().is_some_and(|(at, _)| now - at > TRAIL_LIFE) {
             trail.samples.pop_front();
         }
-        let samples: Vec<_> = trail.samples.iter().copied().collect();
-        let places: Vec<(f32, [Vec3; 3])> = samples
-            .iter()
-            .enumerate()
-            .map(|(i, &(at, place))| {
-                // How fast the tip was moving here.
-                let speed = match i {
-                    0 => 0.0,
-                    _ => place[2].distance(samples[i - 1].1[2]) / (at - samples[i - 1].0).max(1e-4),
-                };
-                let fast = ((speed - TRAIL_SPEED.0) / (TRAIL_SPEED.1 - TRAIL_SPEED.0)).clamp(0.0, 1.0);
-                let fresh = 1.0 - (now - at) / TRAIL_LIFE;
-                (fast * fresh * fresh, place)
-            })
-            .collect();
-        let showing = visible.get() && places.iter().any(|(alpha, _)| *alpha > 0.01);
+        let samples = trail.samples.make_contiguous();
+        // How bright it is at each sample: by how fast the tip was moving there, and how fresh.
+        let alpha = |i: usize| {
+            let (at, place) = samples[i];
+            let speed = match i {
+                0 => 0.0,
+                _ => place[2].distance(samples[i - 1].1[2]) / (at - samples[i - 1].0).max(1e-4),
+            };
+            let fast = ((speed - TRAIL_SPEED.0) / (TRAIL_SPEED.1 - TRAIL_SPEED.0)).clamp(0.0, 1.0);
+            let fresh = 1.0 - (now - at) / TRAIL_LIFE;
+            fast * fresh * fresh
+        };
+        let showing = visible.get() && (0..samples.len()).any(|i| alpha(i) > 0.01);
         if let Ok(mut visibility) = drawn.get_mut(trail.entity) {
-            visibility.set_if_neq(if showing { Visibility::Inherited } else { Visibility::Hidden });
+            visibility.set_if_neq(shown(showing));
         }
         if showing && let Some(mut mesh) = meshes.get_mut(&trail.mesh) {
+            let places: Vec<(f32, [Vec3; 3])> = (0..samples.len()).map(|i| (alpha(i), samples[i].1)).collect();
             *mesh = trail_mesh(&places);
         }
     }

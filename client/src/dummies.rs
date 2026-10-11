@@ -2,8 +2,8 @@
 //! "Practice" header that folds them away or out (like "Controls", open to begin with). Its one
 //! tool so far, "Target dummy", places one: the next left click stands it where it's clicked
 //! (the server takes each class in turn); a right click or ESC (`esc_menu`) cancels. Click it
-//! again for another. A hint says so meanwhile. The placing click itself is read in
-//! `render::read_local_input`, so it never also attacks.
+//! again for another. A hint says so meanwhile. Placing reads its own clicks (and ESC), before
+//! the fight's controls and the menu, and takes them: a placing click never also attacks or walks.
 
 use arena_shared::protocol::RoomRequest;
 use bevy::prelude::*;
@@ -11,7 +11,8 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use crate::arena::palette;
-use crate::render::{GameUi, HudButton, button, clicked, ui_text};
+use crate::camera::CameraPlaced;
+use crate::render::{GameUi, HudButton, button, chevron, chevron_turn, clicked, corner_panel, fold_header, ground_at, shown, ui_text};
 use crate::rooms::{CurrentRoom, Screen, request};
 
 pub struct DummiesPlugin;
@@ -19,17 +20,21 @@ pub struct DummiesPlugin;
 impl Plugin for DummiesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Placing>();
-        app.add_systems(Update, (show_tools, fold_tools, use_tools, place_dummy, show_hint).chain().run_if(in_state(Screen::InGame)));
+        app.add_systems(
+            Update,
+            (
+                (show_tools, fold_tools, use_tools, show_hint).chain(),
+                place_dummy.in_set(CameraPlaced).before(crate::PlayerControls).before(crate::esc_menu::MenuKey),
+            )
+                .run_if(in_state(Screen::InGame)),
+        );
         app.add_systems(OnExit(Screen::InGame), close_tools);
     }
 }
 
-/// Whether we're placing a target dummy, and where the click (not yet sent) asked for it.
+/// Whether we're placing a target dummy.
 #[derive(Resource, Default)]
-pub(crate) struct Placing {
-    pub(crate) on: bool,
-    pub(crate) at: Option<Vec2>,
-}
+struct Placing(bool);
 
 /// The practice tools' panel, while practicing.
 #[derive(Component)]
@@ -38,8 +43,7 @@ struct Tools;
 #[derive(Component)]
 struct DummyButton;
 
-/// "Practice", over the tools: clicking it folds them away or out. Its chevron (a corner of a
-/// square, turned) points down while open and right while folded.
+/// "Practice", over the tools: clicking it folds them away or out (`render::fold_header`).
 #[derive(Component)]
 struct ToolsHeader {
     chevron: Entity,
@@ -52,29 +56,8 @@ fn show_tools(mut commands: Commands, room: Res<CurrentRoom>, tools: Query<Entit
     let practicing = room.0.as_ref().is_some_and(|r| r.practice);
     match (practicing, tools.single().ok()) {
         (true, None) => {
-            let panel = commands
-                .spawn((
-                    Tools,
-                    GameUi,
-                    Node {
-                        position_type: PositionType::Absolute,
-                        top: px(8.0),
-                        right: px(8.0),
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::FlexStart,
-                        padding: UiRect::axes(px(10.0), px(8.0)),
-                        ..default()
-                    },
-                    BackgroundColor(palette::ui::HOLLOW.with_alpha(0.6)),
-                ))
-                .id();
-            let chevron = commands
-                .spawn((
-                    Node { width: px(5.0), height: px(5.0), border: UiRect { right: px(1.5), bottom: px(1.5), ..default() }, ..default() },
-                    BorderColor::all(palette::ui::MUTED),
-                    UiTransform::from_rotation(Rot2::degrees(45.0)),
-                ))
-                .id();
+            let panel = commands.spawn((Tools, corner_panel(true, 0.0))).id();
+            let chevron = commands.spawn(chevron(true)).id();
             let label = commands.spawn(ui_text("Practice", 12.0, palette::ui::MUTED)).id();
             let tools = commands
                 .spawn(tools_node(true))
@@ -82,15 +65,7 @@ fn show_tools(mut commands: Commands, room: Res<CurrentRoom>, tools: Query<Entit
                     tools.spawn((DummyButton, HudButton, button("Target dummy", 13.0, palette::ui::HOLLOW, palette::ui::LICHEN, palette::ui::MUTED.with_alpha(0.5))));
                 })
                 .id();
-            let header = commands
-                .spawn((
-                    ToolsHeader { chevron, tools, open: true },
-                    HudButton,
-                    Interaction::default(),
-                    Node { column_gap: px(8.0), align_items: AlignItems::Center, ..default() },
-                ))
-                .add_children(&[chevron, label])
-                .id();
+            let header = commands.spawn((ToolsHeader { chevron, tools, open: true }, fold_header())).add_children(&[chevron, label]).id();
             commands.entity(panel).add_children(&[header, tools]);
         }
         (false, Some(tools)) => commands.entity(tools).despawn(),
@@ -102,7 +77,7 @@ fn close_tools(mut commands: Commands, tools: Query<Entity, With<Tools>>, mut pl
     for tools in &tools {
         commands.entity(tools).despawn();
     }
-    *placing = Placing::default();
+    placing.0 = false;
 }
 
 /// The tools under the header: folded away, they keep their width (so the panel stays the same
@@ -133,10 +108,10 @@ fn fold_tools(
         header.open = !header.open;
         if let Ok((mut node, mut visibility)) = tools.get_mut(header.tools) {
             *node = tools_node(header.open);
-            *visibility = if header.open { Visibility::Inherited } else { Visibility::Hidden };
+            *visibility = shown(header.open);
         }
         if let Ok(mut chevron) = chevrons.get_mut(header.chevron) {
-            *chevron = UiTransform::from_rotation(Rot2::degrees(if header.open { 45.0 } else { -45.0 }));
+            *chevron = chevron_turn(header.open);
         }
     }
 }
@@ -144,14 +119,42 @@ fn fold_tools(
 /// The dummy button starts placing one (or, while placing, cancels it).
 fn use_tools(buttons: Query<Ref<Interaction>, With<DummyButton>>, mut placing: ResMut<Placing>) {
     if buttons.iter().any(clicked) {
-        placing.on = !placing.on;
+        placing.0 = !placing.0;
     }
 }
 
-/// Says where to stand the clicked dummy.
-fn place_dummy(mut placing: ResMut<Placing>, mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>) {
-    if let Some(at) = placing.at.take() {
-        request(&mut sender, RoomRequest::PlaceDummy(at));
+/// While placing: a left click (not on a HUD control) stands the dummy where it's clicked; a right
+/// click or ESC cancels. Either way the click or key is taken, so it doesn't also attack, walk or
+/// open the menu.
+#[allow(clippy::too_many_arguments)]
+fn place_dummy(
+    mut placing: ResMut<Placing>,
+    mut mouse: ResMut<ButtonInput<MouseButton>>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    window: Single<&Window>,
+    camera: Single<(&Camera, &GlobalTransform)>,
+    controls: Query<&Interaction, With<HudButton>>,
+    mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
+) {
+    if !placing.0 {
+        return;
+    }
+    let on_control = controls.iter().any(|i| *i != Interaction::None);
+    if mouse.just_pressed(MouseButton::Left) && !on_control {
+        let (camera, transform) = *camera;
+        if let Some(at) = window.cursor_position().and_then(|c| ground_at(camera, transform, c)) {
+            request(&mut sender, RoomRequest::PlaceDummy(at));
+        }
+        placing.0 = false;
+        mouse.reset(MouseButton::Left);
+    }
+    if mouse.just_pressed(MouseButton::Right) {
+        placing.0 = false;
+        mouse.reset(MouseButton::Right);
+    }
+    if keys.just_pressed(KeyCode::Escape) {
+        placing.0 = false;
+        keys.reset(KeyCode::Escape);
     }
 }
 
@@ -163,7 +166,7 @@ fn show_hint(mut commands: Commands, placing: Res<Placing>, hint: Query<Entity, 
     if !placing.is_changed() {
         return;
     }
-    match (placing.on, hint.single().ok()) {
+    match (placing.0, hint.single().ok()) {
         (true, None) => {
             commands.spawn((
                 Hint,

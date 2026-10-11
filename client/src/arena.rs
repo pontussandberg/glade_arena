@@ -16,7 +16,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use crate::cloth::{Column, Drape, Wardrobe, Weave};
-use crate::sculpt::{Section, bevel_box, sheet, smoothed, sweep, tube};
+use crate::sculpt::{Section, bevel_box, grid, hemmed, sheet, smoothed, sweep, tube};
 
 pub mod palette {
     use bevy::color::Color;
@@ -309,18 +309,14 @@ pub struct RigMeshes {
     pub leg: Mesh,
     /// The weapon in the right hand, pointing up (+Y) from the grip.
     pub held: Mesh,
-    /// Eyes in the head's space, drawn glowing in `eye_glow`.
+    /// Eyes in the head's space, drawn glowing cold white (`palette::SOUL`, everyone's).
     pub eyes: Mesh,
-    pub eye_glow: Color,
     /// What the glowing parts below glow with.
     pub glow: Color,
     /// Parts of the held weapon (in its space) and of the body (in the fighter's space) drawn
     /// glowing, like the eyes: crystals, runes.
     pub held_glow: Option<Mesh>,
     pub body_glow: Option<Mesh>,
-    /// Something that hangs from the upper back and swings on its own (a tail, a cape),
-    /// hanging down (-Y) from `RIG_TAIL`.
-    pub tail: Option<Mesh>,
     /// Cloth that moves (see `cloth.rs`), in the fighter's space.
     pub wardrobe: Option<Wardrobe>,
 }
@@ -332,8 +328,6 @@ pub const RIG_SHOULDER: Vec3 = Vec3::new(0.0, 1.32, 0.3);
 pub const RIG_HIP: Vec3 = Vec3::new(0.0, 0.8, 0.11);
 /// Where the hand is, in the arm's space.
 pub const RIG_HAND: Vec3 = Vec3::new(0.0, -0.52, 0.0);
-/// Where a tail or cape hangs from, on the upper back.
-pub const RIG_TAIL: Vec3 = Vec3::new(-0.15, 1.38, 0.0);
 
 /// Where the eyes sit in a `deep_hood`'s opening (and ±z, the other one).
 const HOOD_EYES: Vec3 = Vec3::new(0.165, 0.2, 0.055);
@@ -347,11 +341,9 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             leg: javelinist_leg(),
             held: held_spear(),
             eyes: spectral_eyes(JAVELINIST_HOOD),
-            eye_glow: palette::SOUL,
             glow: palette::SOUL,
             held_glow: None,
             body_glow: None,
-            tail: None,
             wardrobe: Some(javelinist_wardrobe()),
         },
         "revenant" => RigMeshes {
@@ -360,11 +352,9 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             leg: booted_leg(palette::ROBE, palette::DARK_LEATHER, 0.082, 0.07),
             held: sword(),
             eyes: slit_eyes(REVENANT_EYES),
-            eye_glow: palette::SOUL,
             glow: palette::WISP,
             held_glow: Some(sword_glow()),
             body_glow: Some(revenant_glow()),
-            tail: None,
             wardrobe: Some(revenant_wardrobe()),
         },
         "frost_mage" => RigMeshes {
@@ -373,11 +363,9 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             leg: booted_leg(palette::FROST_DARK, palette::DARK_LEATHER, 0.1, 0.08),
             held: ice_staff(),
             eyes: spectral_eyes(Vec2::ONE),
-            eye_glow: palette::SOUL,
             glow: palette::FROST_GLOW,
             held_glow: Some(staff_crystals()),
             body_glow: Some(frost_mage_glow()),
-            tail: None,
             wardrobe: Some(frost_mage_wardrobe()),
         },
         _ => unreachable!("no rig for class {class_key:?} (add it to FIGHTER_LOOKS)"),
@@ -567,6 +555,31 @@ fn ring(x: f32, y: f32, half: (f32, f32), color: Color) -> Section {
     Section::new(Vec3::new(x, y, 0.0), Vec2::new(half.0, half.1), color)
 }
 
+/// A belt (or a sash) round the waist from `y.0` up to `y.1`, `half` (depth, width) across at its
+/// edge, `x` forward: a band standing a little proud of its rolled edges.
+fn belt(x: f32, y: (f32, f32), half: (f32, f32), color: Color) -> Mesh {
+    let at = |y: f32, grow: f32| ring(x, y, (half.0 + grow, half.1 + grow), color).exact();
+    tube(&[at(y.0, 0.0), at(y.0 + 0.012, 0.005), at(y.1 - 0.012, 0.004), at(y.1, -0.001)], 40, (true, true))
+}
+
+/// How a tabard moves: heavier than the rest, held close.
+const TABARD_WEAVE: Weave = Weave { hold: (9.0, 2.0), damping: 5.0, air: 0.3, inertia: 0.3, gravity: 8.0, flutter: 0.4, joined: false, wisps: 0.0 };
+
+/// A tabard: a narrow panel hanging from `top` (at the belt, in front) down by `drop`, `half` wide
+/// at the top and at the bottom, curving back round the legs (`curve`), its end torn up to
+/// `torn.0` deep in strips `torn.1` apart; in `colors` from the top down (the last for the rest).
+fn tabard(top: Vec3, drop: Vec3, half: (f32, f32), curve: f32, torn: (f32, f32), colors: &[Color]) -> Drape {
+    const ROWS: usize = 12;
+    const COLS: usize = 8;
+    let at = |v: f32| top + drop * v;
+    let rows = grid(ROWS, COLS, (0.0, 1.0), |u, v| {
+        let z = (u * 2.0 - 1.0) * (half.0 + (half.1 - half.0) * v);
+        let tear = if v >= 1.0 { torn.0 * (u * COLS as f32 * torn.1).sin().abs() } else { 0.0 };
+        at(v) + Vec3::new(-curve * z * z, -tear, z)
+    });
+    Drape::new(sheet(&rows, colors, 0.008), None, vec![[0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0].map(at).to_vec()], TABARD_WEAVE)
+}
+
 /// A deep hood, its rim (in `rim`) sunk over the collar, rising through `top` (the sections
 /// above the brow), its opening dark (`void`) and framed by a heavy lip of cloth, in the head's
 /// space (the neck at the origin, facing +X). The eyes go at `HOOD_EYES`.
@@ -708,16 +721,7 @@ fn revenant_body() -> Mesh {
         .collect();
     parts.push(sheet(&collar_rows, &[palette::ROBE, palette::ROBE, palette::ROBE, palette::ROBE, palette::TATTERS, palette::TATTERS], 0.012));
     // The belt, over the top of the coat's tails, its iron buckle a little off center.
-    parts.push(tube(
-        &[
-            ring(0.005, 0.825, (0.168, 0.198), palette::DARK_LEATHER).exact(),
-            ring(0.005, 0.835, (0.173, 0.203), palette::DARK_LEATHER).exact(),
-            ring(0.005, 0.885, (0.172, 0.202), palette::DARK_LEATHER).exact(),
-            ring(0.005, 0.895, (0.167, 0.197), palette::DARK_LEATHER).exact(),
-        ],
-        40,
-        (true, true),
-    ));
+    parts.push(belt(0.005, (0.825, 0.895), (0.168, 0.198), palette::DARK_LEATHER));
     parts.push(bevel_box(Vec3::new(0.025, 0.06, 0.065), 0.008, palette::IRON).translated_by(Vec3::new(0.172, 0.86, 0.04)));
     parts.push(shoulder_plates(-1.0));
     sculpted(parts)
@@ -794,43 +798,18 @@ fn revenant_wardrobe() -> Wardrobe {
     const ROWS: usize = 18;
     const COLS: usize = 22;
     let tail = |side: f32| {
-        let grid = |from: f32, to: f32, rows: usize| -> Vec<Vec<Vec3>> {
-            (0..=rows)
-                .map(|i| from + (to - from) * i as f32 / rows as f32)
-                .map(|v| (0..=COLS).map(|j| coat_tail_point(side, j as f32 / COLS as f32, v, true)).collect())
-                .collect()
-        };
-        let colors: Vec<Color> = (0..ROWS).map(|i| if i + 3 < ROWS { palette::ROBE } else { palette::TATTERS }).collect();
+        let point = |u, v| coat_tail_point(side, u, v, true);
         let chains = (0..4).map(|c| [0.06, 0.3, 0.53, 0.77, 1.0].map(|v| coat_tail_point(side, c as f32 / 3.0, v, false)).to_vec()).collect();
         Drape::new(
-            sheet(&grid(0.0, 1.0, ROWS), &colors, 0.01),
-            Some(sheet(&grid(0.975, 1.0, 2), &[Color::WHITE], 0.02)),
+            sheet(&grid(ROWS, COLS, (0.0, 1.0), point), &hemmed(ROWS, 3, palette::ROBE, palette::TATTERS), 0.01),
+            Some(sheet(&grid(2, COLS, (0.975, 1.0), point), &[Color::WHITE], 0.02)),
             chains,
             Weave { hold: (6.0, 1.2), damping: 5.5, air: 0.35, inertia: 0.4, gravity: 6.5, flutter: 0.7, joined: true, wisps: 3.0 },
         )
     };
 
-    // The tabard: from under the lames down the front, curving round the legs, its end torn.
-    let tabard_rows: Vec<Vec<Vec3>> = (0..=12)
-        .map(|i| {
-            let v = i as f32 / 12.0;
-            let at = Vec3::new(0.21 + 0.1 * v, 0.84 - 0.6 * v, 0.0);
-            let half = 0.065 - 0.01 * v;
-            (0..=8)
-                .map(|j| {
-                    let z = (j as f32 / 8.0 * 2.0 - 1.0) * half;
-                    let torn = if i == 12 { 0.07 * (j as f32 * 2.3).sin().abs() } else { 0.0 };
-                    at + Vec3::new(-z * z, -torn, z)
-                })
-                .collect()
-        })
-        .collect();
-    let tabard = Drape::new(
-        sheet(&tabard_rows, &[palette::ASH], 0.008),
-        None,
-        vec![vec![Vec3::new(0.21, 0.84, 0.0), Vec3::new(0.243, 0.64, 0.0), Vec3::new(0.277, 0.44, 0.0), Vec3::new(0.31, 0.24, 0.0)]],
-        Weave { hold: (9.0, 2.0), damping: 5.0, air: 0.3, inertia: 0.3, gravity: 8.0, flutter: 0.4, joined: false, wisps: 0.0 },
-    );
+    // The tabard: down the front, curving round the legs, its end torn.
+    let tabard = tabard(Vec3::new(0.21, 0.84, 0.0), Vec3::new(0.1, -0.6, 0.0), (0.065, 0.055), 1.0, (0.07, 2.3), &[palette::ASH]);
 
     Wardrobe {
         drapes: vec![tail(1.0), tail(-1.0), tabard],
@@ -838,8 +817,6 @@ fn revenant_wardrobe() -> Wardrobe {
         body: vec![
             Column { center: Vec2::ZERO, half: Vec2::new(0.17, 0.205), from: 0.3, to: 0.9 },
             Column { center: Vec2::ZERO, half: Vec2::new(0.2, 0.25), from: 0.9, to: 1.4 },
-            // The collar.
-            Column { center: Vec2::new(-0.01, 0.0), half: Vec2::new(0.16, 0.175), from: 1.4, to: 1.58 },
         ],
         leg_radius: 0.1,
     }
@@ -1027,6 +1004,9 @@ fn sword() -> Mesh {
 const BLADE: [(f32, f32, f32, f32); 6] =
     [(0.12, 0.018, 0.04, 0.0), (0.45, 0.017, 0.043, 0.0), (1.1, 0.015, 0.046, 0.0), (1.45, 0.013, 0.041, 0.0), (1.63, 0.008, 0.023, 0.0), (1.76, 0.0, 0.0, 0.0)];
 
+/// How long the revenant's blade is, from the grip to its point.
+pub const BLADE_LENGTH: f32 = BLADE[BLADE.len() - 1].0;
+
 /// What glows on the revenant's sword: a line of wisp light down the fuller on both faces, and a
 /// gem on each face of the guard.
 fn sword_glow() -> Mesh {
@@ -1067,16 +1047,7 @@ fn frost_mage_body() -> Mesh {
         28,
         (true, true),
     );
-    let sash = tube(
-        &[
-            ring(0.01, 0.82, (0.208, 0.248), palette::FROST_BLUE),
-            ring(0.01, 0.835, (0.213, 0.253), palette::FROST_BLUE),
-            ring(0.01, 0.9, (0.211, 0.251), palette::FROST_BLUE),
-            ring(0.01, 0.915, (0.205, 0.245), palette::FROST_BLUE),
-        ],
-        40,
-        (true, true),
-    );
+    let sash = belt(0.01, (0.82, 0.915), (0.208, 0.248), palette::FROST_BLUE);
     let mantle = tube(
         &[
             ring(-0.01, 1.53, (0.1, 0.13), palette::RIME),
@@ -1158,13 +1129,8 @@ fn frost_mage_wardrobe() -> Wardrobe {
         }
         Vec3::new(x, 1.36 - 1.28 * v, z)
     };
-    let rows: Vec<Vec<Vec3>> = (0..=ROWS)
-        .map(|i| i as f32 / ROWS as f32)
-        .map(|v| (0..=COLS).map(|j| cape_point(j as f32 / COLS as f32, v, true)).collect())
-        .collect();
-    let colors: Vec<Color> = (0..ROWS).map(|i| if i + 2 < ROWS { palette::FROST_DARK } else { palette::RIME }).collect();
     let cape = Drape::new(
-        sheet(&rows, &colors, 0.012),
+        sheet(&grid(ROWS, COLS, (0.0, 1.0), |u, v| cape_point(u, v, true)), &hemmed(ROWS, 2, palette::FROST_DARK, palette::RIME), 0.012),
         None,
         [0.1, 0.5, 0.9].map(|u| [0.02, 0.27, 0.51, 0.75, 1.0].map(|v| cape_point(u, v, false)).to_vec()).to_vec(),
         Weave { hold: (5.0, 1.3), damping: 6.0, air: 0.4, inertia: 0.4, gravity: 6.0, flutter: 0.6, joined: true, wisps: 0.0 },
@@ -1276,16 +1242,7 @@ fn javelinist_body() -> Mesh {
         (true, true),
     );
     // The belt goes over the coat's top (the coat hangs from under it).
-    let belt = tube(
-        &[
-            ring(0.01, 0.855, (0.183, 0.223), palette::LEATHER).exact(),
-            ring(0.01, 0.87, (0.188, 0.228), palette::LEATHER).exact(),
-            ring(0.01, 0.935, (0.186, 0.226), palette::LEATHER).exact(),
-            ring(0.01, 0.95, (0.18, 0.22), palette::LEATHER).exact(),
-        ],
-        40,
-        (true, true),
-    );
+    let belt = belt(0.01, (0.855, 0.95), (0.183, 0.223), palette::LEATHER);
     let buckle = bevel_box(Vec3::new(0.03, 0.075, 0.07), 0.01, palette::SILVER).translated_by(Vec3::new(0.2, 0.902, 0.0));
     let mantle = tube(
         &smoothed(
@@ -1331,16 +1288,10 @@ fn coat_point(u: f32, v: f32, ragged: bool) -> Vec3 {
 fn javelinist_wardrobe() -> Wardrobe {
     const ROWS: usize = 18;
     const COLS: usize = 64;
-    let grid = |rows: usize, from: f32, to: f32, cols: usize, out: f32| -> Vec<Vec<Vec3>> {
-        (0..=rows)
-            .map(|i| from + (to - from) * i as f32 / rows as f32)
-            .map(|v| (0..=cols).map(|j| coat_point(j as f32 / cols as f32, v, true) * Vec3::new(out, 1.0, out)).collect())
-            .collect()
-    };
-    let colors: Vec<Color> = (0..ROWS).map(|i| if i + 3 < ROWS { palette::HUNTER } else { palette::HUNTER_DARK }).collect();
-    let coat = sheet(&grid(ROWS, 0.0, 1.0, COLS, 1.0), &colors, 0.01);
+    let point = |u, v| coat_point(u, v, true);
+    let coat = sheet(&grid(ROWS, COLS, (0.0, 1.0), point), &hemmed(ROWS, 3, palette::HUNTER, palette::HUNTER_DARK), 0.01);
     // The glowing hem, wrapped round the cloth's last few centimeters.
-    let trim = sheet(&grid(2, 0.975, 1.0, COLS, 1.0), &[Color::WHITE], 0.02);
+    let trim = sheet(&grid(2, COLS, (0.975, 1.0), point), &[Color::WHITE], 0.02);
     let coat_chains: Vec<Vec<Vec3>> = (0..=8).map(|c| [0.07, 0.3, 0.53, 0.77, 1.0].map(|v| coat_point(c as f32 / 8.0, v, false)).to_vec()).collect();
     let coat = Drape::new(
         coat,
@@ -1349,39 +1300,17 @@ fn javelinist_wardrobe() -> Wardrobe {
         Weave { hold: (6.0, 1.5), damping: 6.0, air: 0.3, inertia: 0.35, gravity: 7.0, flutter: 0.5, joined: true, wisps: 5.0 },
     );
 
-    // The tabard: a narrow panel down the front, curving round the legs, its end torn.
-    let tabard_chain = vec![Vec3::new(0.19, 0.89, 0.0), Vec3::new(0.205, 0.7, 0.0), Vec3::new(0.22, 0.5, 0.0), Vec3::new(0.232, 0.3, 0.0)];
-    let tabard_rows: Vec<Vec<Vec3>> = (0..=12)
-        .map(|i| {
-            let v = i as f32 / 12.0;
-            let at = Vec3::new(0.19 + 0.042 * v, 0.9 - 0.62 * v, 0.0);
-            let half = 0.072 - 0.008 * v;
-            (0..=8)
-                .map(|j| {
-                    let z = (j as f32 / 8.0 * 2.0 - 1.0) * half;
-                    let torn = if i == 12 { 0.04 * (j as f32 * 2.1).sin().abs() } else { 0.0 };
-                    at + Vec3::new(-1.2 * z * z, -torn, z)
-                })
-                .collect()
-        })
-        .collect();
-    let mut tabard_colors = vec![palette::HUNTER; 12];
-    tabard_colors[0] = palette::LEATHER;
-    tabard_colors[10] = palette::HUNTER_DARK;
-    tabard_colors[11] = palette::HUNTER_DARK;
-    let tabard = Drape::new(
-        sheet(&tabard_rows, &tabard_colors, 0.008),
-        None,
-        vec![tabard_chain],
-        Weave { hold: (9.0, 2.0), damping: 5.0, air: 0.3, inertia: 0.3, gravity: 8.0, flutter: 0.4, joined: false, wisps: 0.0 },
-    );
+    // The tabard: down the front, curving round the legs, its end torn; leather where it hangs
+    // from the belt, darker at its end.
+    let mut colors = hemmed(12, 2, palette::HUNTER, palette::HUNTER_DARK);
+    colors[0] = palette::LEATHER;
+    let tabard = tabard(Vec3::new(0.19, 0.9, 0.0), Vec3::new(0.042, -0.62, 0.0), (0.072, 0.064), 1.2, (0.04, 2.1), &colors);
 
     Wardrobe {
         drapes: vec![coat, tabard],
         trim: palette::SOUL,
         body: vec![
             Column { center: Vec2::ZERO, half: Vec2::new(0.165, 0.205), from: 0.3, to: 1.05 },
-            Column { center: Vec2::new(-0.015, 0.0), half: Vec2::new(0.245, 0.33), from: 1.05, to: 1.5 },
         ],
         leg_radius: 0.125,
     }
@@ -1656,7 +1585,7 @@ impl Lcg {
 
 /// Collects flat-colored triangles into one mesh.
 #[derive(Default)]
-struct FlatMesh {
+pub(crate) struct FlatMesh {
     positions: Vec<[f32; 3]>,
     colors: Vec<[f32; 4]>,
 }
@@ -1672,11 +1601,17 @@ impl FlatMesh {
     }
 
     /// A white triangle whose opacity at each corner is `alphas` (for see-through materials).
-    fn tri_faded(&mut self, corners: [Vec3; 3], alphas: [f32; 3]) {
+    pub(crate) fn tri_faded(&mut self, corners: [Vec3; 3], alphas: [f32; 3]) {
         for (p, alpha) in corners.into_iter().zip(alphas) {
             self.positions.push(p.to_array());
             self.colors.push([1.0, 1.0, 1.0, alpha]);
         }
+    }
+
+    /// `tri_faded`, facing both ways (seen from either side).
+    pub(crate) fn tri_faded_both(&mut self, [a, b, c]: [Vec3; 3], [x, y, z]: [f32; 3]) {
+        self.tri_faded([a, b, c], [x, y, z]);
+        self.tri_faded([a, c, b], [x, z, y]);
     }
 
     /// A triangle with its own color (and opacity) at each corner, blended across it.
@@ -1693,7 +1628,7 @@ impl FlatMesh {
         self.tri([a, c, d], color);
     }
 
-    fn build(self) -> Mesh {
+    pub(crate) fn build(self) -> Mesh {
         Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
             .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)

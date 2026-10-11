@@ -242,6 +242,16 @@ impl AttackKind {
         }
     }
 
+    /// How far from your center a target's body can reach and still be hit: a thrust reaches a
+    /// body whose center is within its reach; a shot's front edge starts at the edge of you and
+    /// flies its range. (What the range circle shows.)
+    pub fn edge_reach(&self) -> f32 {
+        match *self {
+            AttackKind::Melee { range, .. } => range,
+            AttackKind::Projectile { radius, range, .. } => PLAYER_RADIUS + 2.0 * radius + range,
+        }
+    }
+
     /// How a projectile attack flies (`None` for melee).
     pub fn shot(&self) -> Option<Shot> {
         let AttackKind::Projectile { speed, radius, range, .. } = *self else { return None };
