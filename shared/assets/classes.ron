@@ -28,8 +28,9 @@
 //       cooldown too
 //   ability       the Q ability, aimed at the cursor: name, description, cooldown_ticks, and
 //     kind: Projectile(speed, radius, range, damage)  thrown instantly: no windup, no root
-//           Dash(distance, ticks, damage)  dash toward the aim over `ticks`, through fighters,
-//             cutting each one crossed for `damage`; stops at walls.
+//           Dash(distance, ticks, damage)  dash `distance` toward the aim, through fighters,
+//             cutting each one crossed for `damage`; stops at walls. Takes `ticks` at normal
+//             speed (longer slowed, shorter hasted).
 //           Nova(radius, damage, chill)  a burst around you, at once: everyone within `radius`
 //             (and not behind a wall) takes `damage` and `chill`
 //   passive (optional)  shown to players, nothing more: Some((name, description)). Its effect

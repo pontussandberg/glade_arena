@@ -358,11 +358,13 @@ fn neutralize_stale_inputs(
 
 fn move_players(
     timeline: Res<LocalTimeline>,
-    mut players: Query<(&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &AbilityState, &Chilled, &Hasted), InPlay>,
+    mut players: Query<(&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &mut AbilityState, &Chilled, &Hasted), InPlay>,
 ) {
     let now = timeline.tick().0;
-    for (mut pos, class, input, attack, ability, chilled, hasted) in &mut players {
-        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, ability, chilled, hasted, now)));
+    for (mut pos, class, input, attack, mut ability, chilled, hasted) in &mut players {
+        let mut next = *ability;
+        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, &mut next, chilled, hasted, now)));
+        ability.set_if_neq(next);
     }
 }
 
