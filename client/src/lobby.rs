@@ -562,7 +562,9 @@ fn place_name_tag(camera: Single<(&Camera, &Transform), With<Camera3d>>, mut tag
     else {
         return;
     };
-    let bottom = px(size.y - at.y);
+    // Whole pixels, so the camera's sway doesn't nudge it (and lay the screen out again) by
+    // rounding error every frame.
+    let bottom = px((size.y - at.y).round());
     if tag.bottom != bottom {
         tag.bottom = bottom;
     }

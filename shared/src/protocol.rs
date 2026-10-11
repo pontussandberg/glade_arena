@@ -160,11 +160,19 @@ pub struct AbilityState {
 }
 
 impl AbilityState {
-    /// When the class's ability may be used next: its own cooldown over, and the global one if
-    /// it's on it.
+    /// When the ability's own cooldown is over (at once, with none).
+    pub fn cooldown_over_at(&self) -> u32 {
+        if self.free { 0 } else { self.ready_at }
+    }
+
+    /// When the global cooldown is over for the class's ability (at once, if it's not on it).
+    pub fn global_over_at(&self, class: ClassId) -> u32 {
+        if class.def().ability.global_cooldown { self.global_ready_at } else { 0 }
+    }
+
+    /// When the class's ability may be used next: both cooldowns over.
     pub fn usable_at(&self, class: ClassId) -> u32 {
-        let own = if self.free { 0 } else { self.ready_at };
-        if class.def().ability.global_cooldown { own.max(self.global_ready_at) } else { own }
+        self.cooldown_over_at().max(self.global_over_at(class))
     }
 
     /// When the ability was last used (`None`: never).

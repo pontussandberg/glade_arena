@@ -386,11 +386,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                 return Err("No cooldowns is for practice");
             }
             let player = ctx.player_of(link).ok_or("You're not in the arena")?;
-            if on {
-                ctx.commands.entity(player).insert(crate::NoCooldowns);
-            } else {
-                ctx.commands.entity(player).remove::<crate::NoCooldowns>();
-            }
+            ctx.commands.entity(player).entry::<AbilityState>().and_modify(move |mut ability| ability.free = on);
         }
         RoomRequest::Start => {
             let key = room_key.ok_or("You're not in a room")?;

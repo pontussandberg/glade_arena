@@ -209,41 +209,42 @@ fn update_icon(
     icons: Single<(&AbilityIcon, &mut BorderColor)>,
     mut wipes: Query<(&mut BackgroundGradient, &mut Visibility)>,
     mut texts: Query<&mut Text>,
-    mut shown_now: Local<(Option<(u32, u32)>, Option<u32>)>,
+    // What each wipe shows (its step, while it runs) and the label, as last written.
+    mut shown_now: Local<(Option<u32>, Option<u32>, String)>,
 ) {
     let (icon, mut border) = icons.into_inner();
     let Ok((class, ability)) = me.single() else { return };
-    let def = &class.def().ability;
     let now = clock.now(true);
-    let cooldown = def.cooldown_ticks as f32;
-    let left = if ability.free { 0.0 } else { (ability.ready_at as f32 - now).max(0.0) };
-    let cooling = left > 0.0;
-    let global_left = if def.global_cooldown { (ability.global_ready_at as f32 - now).max(0.0) } else { 0.0 };
+    let left = (ability.cooldown_over_at() as f32 - now).max(0.0);
+    let global_left = (ability.global_over_at(*class) as f32 - now).max(0.0);
+    let own = (left > 0.0).then(|| step_of(left, class.def().ability.cooldown_ticks as f32));
     let global = (global_left > 0.0).then(|| step_of(global_left, GLOBAL_COOLDOWN_TICKS as f32));
-    border.set_if_neq(BorderColor::all(if cooling || global.is_some() { palette::ui::MUTED } else { palette::SPIRIT }));
-    // What the icon should show, quantized: the wipe's step, and the label in tenths of a second
-    // under one second (whole seconds, rounded up, above).
+    border.set_if_neq(BorderColor::all(if own.is_some() || global.is_some() { palette::ui::MUTED } else { palette::SPIRIT }));
+    // The seconds left: tenths under one second, whole seconds (rounded up) above.
     let seconds = left / TICK_HZ as f32;
-    let label = if seconds >= 1.0 { seconds.ceil() as u32 * 10 } else { (seconds * 10.0).ceil() as u32 };
-    let wanted = (cooling.then_some((step_of(left, cooldown), label)), global);
-    if *shown_now == wanted {
-        return;
-    }
-    *shown_now = wanted;
-    let mut set_wipe = |entity: Entity, step: Option<u32>, shade: Color| {
+    let label = match own {
+        None => String::new(),
+        Some(_) if seconds >= 1.0 => (seconds.ceil() as u32).to_string(),
+        Some(_) => format!("0.{}", (seconds * 10.0).ceil() as u32),
+    };
+    let (shown_own, shown_global, shown_label) = &mut *shown_now;
+    let mut set_wipe = |entity: Entity, step: Option<u32>, was: &mut Option<u32>, shade: Color| {
+        if *was == step {
+            return;
+        }
+        *was = step;
         let Ok((mut wipe, mut visibility)) = wipes.get_mut(entity) else { return };
         visibility.set_if_neq(shown(step.is_some()));
         if let Some(step) = step {
             *wipe = wipe_gradient(step, shade);
         }
     };
-    set_wipe(icon.wipe, wanted.0.map(|(step, _)| step), palette::ui::BACKDROP.with_alpha(0.8));
-    set_wipe(icon.global_wipe, global, palette::ui::TEXT.with_alpha(0.3));
-    if let Ok(mut text) = texts.get_mut(icon.seconds) {
-        text.0 = match (cooling, label >= 10) {
-            (false, _) => String::new(),
-            (true, true) => (label / 10).to_string(),
-            (true, false) => format!("0.{label}"),
-        };
+    set_wipe(icon.wipe, own, shown_own, palette::ui::BACKDROP.with_alpha(0.8));
+    set_wipe(icon.global_wipe, global, shown_global, palette::ui::TEXT.with_alpha(0.3));
+    if *shown_label != label
+        && let Ok(mut text) = texts.get_mut(icon.seconds)
+    {
+        text.0.clone_from(&label);
+        *shown_label = label;
     }
 }

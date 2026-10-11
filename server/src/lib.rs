@@ -523,7 +523,8 @@ fn respawn(
             chilled.set_if_neq(Chilled::default());
             hasted.set_if_neq(Hasted::default());
             *attack = AttackState::default();
-            *ability = AbilityState::default();
+            // Practice's No cooldowns stays as it was.
+            *ability = AbilityState { free: ability.free, ..default() };
             commands.entity(player).remove::<Dead>();
             debug!(?player, "respawned");
         }
@@ -616,11 +617,6 @@ fn attack(
 #[derive(Component, Default)]
 struct DashHits(u32, Vec<PeerId>);
 
-/// A practicing player's Q has no cooldown (`RoomRequest::NoCooldowns`): their `AbilityState`
-/// says so, kept in step every tick (a respawn starts it afresh).
-#[derive(Component)]
-pub(crate) struct NoCooldowns;
-
 /// Q abilities. Thrown ones are spawned (and matched to the client's prespawned copy). Dashes
 /// cut whoever the dasher passes through, judged against where the dasher saw them, each target
 /// once per dash. A rooted dasher cuts no one (its dash stops). Novas hit everyone around the caster, judged against where the caster saw them.
@@ -637,7 +633,7 @@ fn use_abilities(
             &ControlledBy,
             &mut AbilityState,
             &mut DashHits,
-            (&InRoom, &Team, Has<NoCooldowns>),
+            (&InRoom, &Team),
         ),
         InPlay,
     >,
@@ -647,10 +643,7 @@ fn use_abilities(
     // Read up front: `targets` holds every player's `Chilled` mutably. A root or slow landing
     // during this loop starts next tick anyway.
     let chills: Vec<(PeerId, Chilled)> = targets.iter().map(|(_, id, .., chilled, _)| (id.0, *chilled)).collect();
-    for (id, class, pos, input, controlled_by, mut state, mut hits, (room, team, free)) in &mut users {
-        if state.free != free {
-            state.free = free;
-        }
+    for (id, class, pos, input, controlled_by, mut state, mut hits, (room, team)) in &mut users {
         let side = (*room, *team);
         let chilled = chills.iter().find(|(p, _)| *p == id.0).map(|(_, c)| *c).unwrap_or_default();
         // Cut whoever this tick's dash step reached (`move_players` just made it). Checked before
