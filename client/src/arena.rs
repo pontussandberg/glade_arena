@@ -318,6 +318,9 @@ pub struct RigMeshes {
     /// glowing, like the eyes: crystals, runes.
     pub held_glow: Option<Mesh>,
     pub body_glow: Option<Mesh>,
+    /// A see-through shell of the same glow around the held weapon, in its space: shown while the
+    /// attack's `follow_up` is armed (`rig::show_auras`).
+    pub held_aura: Option<Mesh>,
     /// Cloth that moves (see `cloth.rs`), in the fighter's space.
     pub wardrobe: Option<Wardrobe>,
 }
@@ -345,6 +348,7 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             glow: palette::SOUL,
             held_glow: None,
             body_glow: None,
+            held_aura: None,
             wardrobe: Some(javelinist_wardrobe()),
         },
         "revenant" => RigMeshes {
@@ -356,6 +360,7 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             glow: palette::WISP,
             held_glow: Some(sword_glow()),
             body_glow: Some(revenant_glow()),
+            held_aura: Some(blade_aura()),
             wardrobe: Some(revenant_wardrobe()),
         },
         "frost_mage" => RigMeshes {
@@ -367,6 +372,7 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             glow: palette::FROST_GLOW,
             held_glow: Some(staff_crystals()),
             body_glow: Some(frost_mage_glow()),
+            held_aura: None,
             wardrobe: Some(frost_mage_wardrobe()),
         },
         _ => unreachable!("no rig for class {class_key:?} (add it to FIGHTER_LOOKS)"),
@@ -1029,6 +1035,13 @@ fn sword_glow() -> Mesh {
         parts.push(tinted(gem.translated_by(Vec3::new(side * 0.037, 0.1, 0.0)), Color::WHITE));
     }
     sculpted(parts)
+}
+
+/// A soft shell of light around the revenant's blade, from the guard to a little past the point.
+fn blade_aura() -> Mesh {
+    let sections = [(0.08, 0.045, 0.08), (0.45, 0.05, 0.09), (1.1, 0.05, 0.095), (1.45, 0.045, 0.085), (1.65, 0.03, 0.05), (1.84, 0.0, 0.0)]
+        .map(|(y, depth, width)| Section::new(Vec3::Y * y, Vec2::new(depth, width), Color::WHITE));
+    tube(&smoothed(&sections, 2), 12, (true, false))
 }
 
 /// The frost mage's body, under its moving cloth (`frost_mage_wardrobe`): a robe from the waist

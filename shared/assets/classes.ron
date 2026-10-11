@@ -58,7 +58,7 @@
             cooldown_ticks: 40,
             windup_ticks: 30,
             kind: Melee(range: 3.75, width: 0.05),
-            follow_up: Some((within_ticks: 128, faster: 0.75)),
+            follow_up: Some((within_ticks: 96, faster: 0.75)),
         ),
         ability: (
             name: "Rift Step",

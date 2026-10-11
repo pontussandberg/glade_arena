@@ -48,7 +48,7 @@ impl Plugin for RigPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((crate::cloth::ClothPlugin, crate::swish::SwishPlugin));
         app.add_systems(Startup, load_rigs);
-        app.add_systems(Update, (add_rigs, see_throws, turn_fighters, pose_rigs).chain().in_set(Posing));
+        app.add_systems(Update, (add_rigs, see_throws, turn_fighters, pose_rigs, show_auras).chain().in_set(Posing));
     }
 }
 
@@ -245,6 +245,7 @@ struct RigHandles {
     glow: Handle<StandardMaterial>,
     held_glow: Option<Handle<Mesh>>,
     body_glow: Option<Handle<Mesh>>,
+    held_aura: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
     wardrobe: Option<WardrobeAssets>,
 }
 
@@ -274,6 +275,8 @@ struct Rig {
     /// Right (back) leg and left (lead) leg.
     legs: [Entity; 2],
     held: Entity,
+    /// The held weapon's aura (`RigMeshes::held_aura`), if it has one.
+    aura: Option<Entity>,
     moves: &'static Moves,
     /// Walk cycles so far, and how much the fighter is walking (0..1, eased).
     stride: f32,
@@ -337,6 +340,7 @@ fn load_rigs(
                 glow: materials.add(arena::glow(rig.glow, EYE_GLOW)),
                 held_glow: rig.held_glow.map(|mesh| meshes.add(mesh)),
                 body_glow: rig.body_glow.map(|mesh| meshes.add(mesh)),
+                held_aura: rig.held_aura.map(|mesh| (meshes.add(mesh), materials.add(arena::translucent(rig.glow, AURA_ALPHA, EYE_GLOW)))),
                 wardrobe: rig.wardrobe.map(|wardrobe| WardrobeAssets::load(wardrobe, &mut meshes, &mut bindposes, &mut materials)),
             };
             (c, handles)
@@ -367,6 +371,7 @@ fn add_rigs(
             arms: [part(&handles.arm, own, RIG_SHOULDER), part(&handles.arm, own, mirrored(RIG_SHOULDER))],
             legs: [part(&handles.leg, own, RIG_HIP), part(&handles.leg, own, mirrored(RIG_HIP))],
             held: part(&handles.held, own, RIG_HAND),
+            aura: handles.held_aura.as_ref().map(|(mesh, material)| part(mesh, material, Vec3::ZERO)),
             moves: moves(&class.def().id),
             stride: 0.0,
             walking: 0.0,
@@ -379,6 +384,10 @@ fn add_rigs(
         commands.entity(rig.arms[0]).add_child(rig.held);
         if let Some(glow) = held_glow {
             commands.entity(rig.held).add_child(glow);
+        }
+        if let Some(aura) = rig.aura {
+            commands.entity(aura).insert(Visibility::Hidden);
+            commands.entity(rig.held).add_child(aura);
         }
         if let Some(glow) = body_glow {
             commands.entity(player).add_child(glow);
@@ -618,6 +627,31 @@ mod tests {
     fn every_class_has_moves() {
         for class in ClassId::all() {
             super::moves(&class.def().id);
+        }
+    }
+}
+
+/// How see-through a weapon's aura is, and how fast (radians per second) and how much it swells.
+const AURA_ALPHA: f32 = 0.28;
+const AURA_PULSE: (f32, f32) = (9.0, 0.12);
+
+/// A weapon's aura shows while the attack's `follow_up` is armed or quickening the windup in
+/// progress, swelling and shrinking a little.
+fn show_auras(
+    time: Res<Time>,
+    clock: Option<AttackClock>,
+    fighters: Query<(&Rig, &AttackState, Has<Predicted>)>,
+    mut auras: Query<(&mut Visibility, &mut Transform)>,
+) {
+    let pulse = 1.0 + AURA_PULSE.1 * (time.elapsed_secs() * AURA_PULSE.0).sin();
+    for (rig, attack, is_me) in &fighters {
+        let Some((mut visibility, mut transform)) = rig.aura.and_then(|aura| auras.get_mut(aura).ok()) else { continue };
+        let now = clock.as_ref().map_or(0.0, |clock| clock.now(is_me));
+        let armed = attack.quick_until.is_some_and(|until| now <= until as f32);
+        let on = armed || attack.windup.is_some_and(|windup| windup.quick);
+        visibility.set_if_neq(shown(on));
+        if on {
+            transform.scale = Vec3::new(pulse, 1.0, pulse);
         }
     }
 }
