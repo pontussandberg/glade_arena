@@ -129,8 +129,10 @@ pub fn step_attack(
         && let Some(dir) = input.aim.try_normalize()
     {
         let quick = state.quick_until.take().is_some_and(|until| tick <= until);
-        state.windup = Some(Windup { started_at: tick, dir, quick });
-        state.ready_at = tick + attack.cooldown_ticks;
+        let windup = Windup { started_at: tick, dir, quick };
+        // A quick windup takes as much off the cooldown as off itself: the same pause after.
+        state.ready_at = tick + attack.cooldown_ticks - (attack.windup_ticks - windup.ticks(class));
+        state.windup = Some(windup);
     }
     (state, released)
 }
@@ -446,6 +448,7 @@ mod tests {
         let armed = start(10, 10);
         assert_eq!(armed.windup.map(|w| w.releases_at(class)), Some(10 + quick));
         assert_eq!(armed.quick_until, None, "the quick windup should use it up");
+        assert_eq!(armed.ready_at, 10 + quick + attack.cooldown_ticks - attack.windup_ticks, "the cooldown should shrink as much");
         let late = start(11, 10);
         assert_eq!(late.windup.map(|w| w.releases_at(class)), Some(11 + attack.windup_ticks), "quick after the window");
         assert_eq!(late.quick_until, None);

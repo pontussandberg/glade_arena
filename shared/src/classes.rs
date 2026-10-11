@@ -70,7 +70,7 @@ pub struct AttackDef {
 }
 
 /// Landing an auto-attack makes the next one, if started within `within_ticks` of the hit, wind
-/// up `faster` (the fraction of the windup cut). Quick ones that land arm the next too, so a
+/// up `faster` (the fraction of the windup cut), its cooldown cut by as much. Quick ones that land arm the next too, so a
 /// string of hits stays quick.
 /// Armed by the server, which alone knows a hit landed. Melee only: projectile hits resolve
 /// apart from the shooter's attack state.
