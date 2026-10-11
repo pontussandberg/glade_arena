@@ -24,7 +24,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use arena_shared::protocol::{AbilityState, AttackState, ClassId, Pos, RoomRequest};
-use arena_shared::rooms::{BLUE, MAX_PER_TEAM, Member, Mode, NO_TEAM, RED, RoomView, team_name};
+use arena_shared::rooms::{MAX_PER_TEAM, Member, Mode, NO_TEAM, RoomView, TEAMS};
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
@@ -548,15 +548,6 @@ fn show_game_ui(mut game_ui: Query<&mut Visibility, With<GameUi>>) {
     }
 }
 
-/// A team's color in the lobby.
-pub(crate) fn team_color(team: u8) -> Color {
-    match team {
-        RED => palette::ENEMY,
-        BLUE => palette::FROST_BLUE,
-        _ => palette::ui::MUTED,
-    }
-}
-
 /// The room around a card's content, and its fill.
 pub(crate) const CARD_PADDING: f32 = GAP * 2.0;
 pub(crate) fn card_fill() -> Color {
@@ -600,12 +591,10 @@ pub(crate) fn label(text: &str) -> impl Bundle {
 }
 
 /// The room column, two cards. The room: name, mode, whether it's on, and for the leader the mode
-/// switch. Who's in it: in free-for-all a list; in red vs blue the two teams side by side, blue on
-/// the left, red on the right, each with its way to switch to it. Then the way out. Rebuilt when
-/// the room changes, or we come to it.
+/// switch. Who's in it: in free-for-all a list; in teams the two side by side, with the way to
+/// switch sides under ours. Then the way out. Rebuilt when the room changes, or we come to it.
 ///
-/// Names are in one neutral color, so a team's color stays the team's: the column and its header
-/// carry it. Ours is in the accent (on a tinted row), as in the top bar.
+/// Names are in one neutral color; ours is in the accent (on a tinted row), as in the top bar.
 fn show_room(
     mut commands: Commands,
     room: Res<CurrentRoom>,
@@ -668,17 +657,17 @@ fn show_room(
 /// teams growing.
 const MIN_PLACES: usize = 4;
 
-/// The two teams side by side, blue on the left, red on the right, as one grid: a row for the
+/// The two teams side by side, each in its own column, as one grid: a row for the
 /// headers, one for each place on a team (at least `MIN_PLACES`; open ones drawn faintly), and
-/// the ways onto a team. The places' rows are equal flexible tracks in a grid as tall as its
+/// the way to switch sides. The places' rows are equal flexible tracks in a grid as tall as its
 /// content, so every one is as tall as the tallest member anywhere: the sides line up in a grid
-/// however names wrap, and how many are on each shows at a glance. Each side's color is a block
-/// behind its whole column.
+/// however names wrap, and how many are on each shows at a glance. Each side is a block behind
+/// its whole column. The sides have no names or colors: our own highlighted row tells us which is
+/// ours, and the way to switch sides sits under it (each team keeps its column, so we move across).
 fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
     let my_team = view.member(my_id).map_or(NO_TEAM, |m| m.team);
-    let sides = [BLUE, RED];
-    let members = sides.map(|team| view.members.iter().filter(|m| m.team == team).collect::<Vec<_>>());
-    let places = members.iter().map(Vec::len).max().unwrap_or(0).max(MIN_PLACES);
+    let sides = TEAMS.map(|team| view.members.iter().filter(|m| m.team == team).collect::<Vec<_>>());
+    let places = sides.iter().map(Vec::len).max().unwrap_or(0).max(MIN_PLACES);
     let grid = Node {
         display: Display::Grid,
         grid_template_columns: RepeatedGridTrack::flex(2, 1.0),
@@ -695,8 +684,7 @@ fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
         ..default()
     };
     card.spawn(grid).with_children(|grid| {
-        for (column, (&team, members)) in sides.iter().zip(&members).enumerate() {
-            let color = team_color(team);
+        for (column, (&team, members)) in TEAMS.iter().zip(&sides).enumerate() {
             // The block, behind the column's every row (spawned first, so drawn under them).
             grid.spawn((
                 Node {
@@ -705,15 +693,12 @@ fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
                     border: UiRect::top(px(3.0)),
                     ..default()
                 },
-                BorderColor::all(color),
-                BackgroundColor(color.with_alpha(0.07)),
+                BorderColor::all(palette::ui::MUTED.with_alpha(0.3)),
+                BackgroundColor(palette::ui::BACKDROP.with_alpha(0.3)),
             ));
-            let mut header = Node { justify_content: JustifyContent::SpaceBetween, ..cell(column, 0) };
+            let mut header = Node { justify_content: JustifyContent::FlexEnd, ..cell(column, 0) };
             header.margin.top = px(GAP);
-            grid.spawn(header).with_children(|header| {
-                header.spawn(ui_text(team_name(team).to_uppercase(), 13.0, color));
-                header.spawn(ui_text(format!("{}/{MAX_PER_TEAM}", view.on_team(team)), 12.0, palette::ui::MUTED));
-            });
+            grid.spawn(header).with_child(ui_text(format!("{}/{MAX_PER_TEAM}", members.len()), 12.0, palette::ui::MUTED));
             for place in 0..places {
                 match members.get(place) {
                     Some(member) => member_row(grid, cell(column, place + 1), view, member, my_id),
@@ -724,12 +709,15 @@ fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
             }
             let mut bottom = Node { flex_direction: FlexDirection::Column, ..cell(column, places + 1) };
             bottom.margin.bottom = px(GAP);
-            if team != my_team && view.on_team(team) < MAX_PER_TEAM {
-                let join = button(format!("Join {}", team_name(team)), 11.0, color.with_alpha(0.15), color, color.with_alpha(0.6));
-                grid.spawn(bottom).with_child((RoomButton(RoomRequest::SetTeam(team)), join));
-            } else if team == my_team {
-                let bottom = Node { align_items: AlignItems::Center, padding: UiRect::vertical(px(5.0)), ..bottom };
-                grid.spawn(bottom).with_child(ui_text("Your team", 11.0, color.with_alpha(0.8)));
+            if team == my_team {
+                let other = 1 - column;
+                if sides[other].len() < MAX_PER_TEAM {
+                    let switch = button("Switch sides", 11.0, palette::ui::BACKDROP, palette::ui::TEXT, ACCENT.with_alpha(0.6));
+                    grid.spawn(bottom).with_child((RoomButton(RoomRequest::SetTeam(TEAMS[other])), switch));
+                } else {
+                    let bottom = Node { align_items: AlignItems::Center, padding: UiRect::vertical(px(5.0)), ..bottom };
+                    grid.spawn(bottom).with_child(ui_text("The other side is full", 11.0, palette::ui::MUTED));
+                }
             }
         }
     });
@@ -740,13 +728,20 @@ fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
 /// need). Our own row is tinted.
 fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, member: &Member, my_id: u32) {
     let is_me = member.guest_id == my_id;
-    let row = Node { flex_direction: FlexDirection::Column, row_gap: px(2.0), padding: UiRect::axes(px(GAP), px(GAP * 0.5)), ..node };
+    // Bottom-aligned, so in rows of one height names and fighters line up, the leader's tag above.
+    let row = Node {
+        flex_direction: FlexDirection::Column,
+        justify_content: JustifyContent::FlexEnd,
+        row_gap: px(2.0),
+        padding: UiRect::axes(px(GAP), px(GAP * 0.5)),
+        ..node
+    };
     let tint = if is_me { ACCENT.with_alpha(0.14) } else { palette::ui::BACKDROP.with_alpha(0.5) };
     parent.spawn((row, BackgroundColor(tint))).with_children(|row| {
         if member.guest_id == view.leader {
             row.spawn(ui_text("LEADER", 9.0, palette::TORCH_FLAME));
         }
-        // Ours in the accent: no team's color, so it reads as "you" on either side.
+        // Ours in the accent, so it reads as "you" on either side.
         row.spawn(ui_text(member.name.clone(), 13.0, if is_me { ACCENT } else { palette::ui::TEXT }));
         let fighter = member.class.map_or("Picking...".to_string(), |c| c.def().name.clone());
         row.spawn(Node { column_gap: px(GAP * 0.75), flex_wrap: FlexWrap::Wrap, ..default() }).with_children(|line| {

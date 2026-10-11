@@ -144,17 +144,17 @@ fn allies_cant_hurt_each_other() {
     let key = g.rooms_listed(1)[0].key;
     g.ask(1, RoomRequest::Join(key));
     g.until(Duration::from_secs(5), "B on the other team", |g| {
-        g.room(0).is_some_and(|r| r.members.len() == 2 && r.on_team(RED) == 1 && r.on_team(BLUE) == 1)
+        g.room(0).is_some_and(|r| r.members.len() == 2 && r.on_team(TEAM_A) == 1 && r.on_team(TEAM_B) == 1)
     });
     // B joins A's team, and the leader starts.
-    g.ask(1, RoomRequest::SetTeam(RED));
-    g.until(Duration::from_secs(5), "both red", |g| g.room(0).is_some_and(|r| r.on_team(RED) == 2));
+    g.ask(1, RoomRequest::SetTeam(TEAM_A));
+    g.until(Duration::from_secs(5), "both on team A", |g| g.room(0).is_some_and(|r| r.on_team(TEAM_A) == 2));
     g.ask(0, RoomRequest::Start);
     g.until(Duration::from_secs(10), "both fighting", |g| {
         player::<Health>(&mut g.server, A).is_some() && player::<Health>(&mut g.server, B).is_some()
     });
     g.run(Duration::from_millis(1500));
-    assert_eq!(player::<Team>(&mut g.clients[0], B), Some(Team(RED)), "A sees B on its team");
+    assert_eq!(player::<Team>(&mut g.clients[0], B), Some(Team(TEAM_A)), "A sees B on its team");
 
     let spot = Vec2::new(-22.5, -6.5);
     place(&mut g.server, A, spot);
@@ -169,7 +169,7 @@ fn allies_cant_hurt_each_other() {
     assert_eq!(server_player(&mut g.server, B).1, full, "an ally's swing hurt");
 
     // On the other side, the same swings land.
-    g.ask(1, RoomRequest::SetTeam(BLUE));
+    g.ask(1, RoomRequest::SetTeam(TEAM_B));
     g.until(Duration::from_secs(3), "B hit once on the other team", |g| server_player(&mut g.server, B).1 < full);
 }
 
