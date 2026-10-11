@@ -16,7 +16,7 @@ use crate::rooms::{LeaveReason, Mode, NO_TEAM, RoomKey, RoomSummary, RoomView};
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct PlayerId(pub PeerId);
 
-/// Which side a player fights on: `rooms::RED` or `rooms::BLUE`, or `rooms::NO_TEAM` in
+/// Which side a player fights on: `rooms::TEAM_A` or `rooms::TEAM_B`, or `rooms::NO_TEAM` in
 /// free-for-all. Allies can't hurt each other.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
 pub struct Team(pub u8);

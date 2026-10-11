@@ -1,6 +1,8 @@
 // The playable classes. Edit freely: everything gameplay-related about a class lives here.
 // Server and client both compile this file in, and its hash is part of the protocol id, so a
 // client built from different numbers is refused at connect instead of mispredicting.
+// Their order here is the order everywhere: the class picker and its number keys, the default
+// pick, and the order target dummies come in.
 //
 // Units: meters, meters per second, ticks (64 per second), degrees.
 //   id            stable key (also picks the class's look in the client)
@@ -41,6 +43,27 @@
 //     default.
 [
     (
+        id: "revenant",
+        name: "Revenant",
+        role: "Duelist",
+        blurb: "A spectral blade that slips between worlds. Gets in close and keeps cutting.",
+        max_hp: 140,
+        move_speed: 5.6,
+        attack: (
+            damage: 20,
+            cooldown_ticks: 40,
+            windup_ticks: 24,
+            kind: Melee(range: 3.75, width: 0.05),
+        ),
+        ability: (
+            name: "Rift Step",
+            description: "Dash through enemies, cutting each one for {ability_damage} damage. A hit readies your blade at once.",
+            cooldown_ticks: 320,
+            kind: Dash(distance: 6.0, ticks: 10, damage: 18, resets_attack: true),
+        ),
+        crit: (chance: 0.1),
+    ),
+    (
         id: "javelinist",
         name: "Javelinist",
         role: "Marksman",
@@ -63,27 +86,6 @@
             name: "Long Shot",
             description: "Your auto-attacks hit harder the farther they fly, up to {far_scale} damage at full range.",
         )),
-        crit: (chance: 0.1),
-    ),
-    (
-        id: "revenant",
-        name: "Revenant",
-        role: "Duelist",
-        blurb: "A spectral blade that slips between worlds. Gets in close and keeps cutting.",
-        max_hp: 140,
-        move_speed: 5.6,
-        attack: (
-            damage: 20,
-            cooldown_ticks: 40,
-            windup_ticks: 24,
-            kind: Melee(range: 3.75, width: 0.05),
-        ),
-        ability: (
-            name: "Rift Step",
-            description: "Dash through enemies, cutting each one for {ability_damage} damage. A hit readies your blade at once.",
-            cooldown_ticks: 320,
-            kind: Dash(distance: 6.0, ticks: 10, damage: 18, resets_attack: true),
-        ),
         crit: (chance: 0.1),
     ),
     (

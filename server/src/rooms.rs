@@ -3,8 +3,8 @@
 //! fighters, projectiles and pickups carry `InRoom` (gameplay only ever pairs things in the same
 //! room) and lightyear `Rooms` (only the room's members are sent them).
 //!
-//! The room's leader (its creator, then the longest-standing member) picks free-for-all or red
-//! vs blue and starts the match, which takes everyone in; members pick their team and class, and
+//! The room's leader (its creator, then the longest-standing member) picks free-for-all or two
+//! teams and starts the match, which takes everyone in; members pick their team and class, and
 //! once it's on go in and out of the arena as they like (back to the room's lobby to pick another
 //! class), latecomers included. Leaving the room takes a member's fighter out of the arena; the
 //! room is gone when its last member leaves. A member idle for `AfkTimeout` is taken out as if
@@ -127,9 +127,9 @@ impl Lobby {
         room.members.iter().filter(|link| self.guests.get(link).is_some_and(|g| g.team == team)).count()
     }
 
-    /// The team with fewer members (red when even).
+    /// The team with fewer members (the first when even).
     fn smaller_team(&self, room: &Room) -> u8 {
-        if self.on_team(room, BLUE) < self.on_team(room, RED) { BLUE } else { RED }
+        TEAMS.into_iter().min_by_key(|&team| self.on_team(room, team)).expect("two teams")
     }
 
     fn summary(&self, key: RoomKey, room: &Room) -> RoomSummary {

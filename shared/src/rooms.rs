@@ -19,7 +19,7 @@ pub enum Mode {
     /// Everyone against everyone.
     #[default]
     Ffa,
-    /// Red against blue; members pick their side.
+    /// Two teams; members pick their side.
     Teams,
 }
 
@@ -35,7 +35,7 @@ impl Mode {
     pub fn label(self) -> &'static str {
         match self {
             Mode::Ffa => "Free for all",
-            Mode::Teams => "Red vs Blue",
+            Mode::Teams => "Teams",
         }
     }
 }
@@ -47,19 +47,12 @@ pub const ROOM_NAME_MAX: usize = 24;
 /// A member who hasn't touched anything for this long is taken out of the room.
 pub const AFK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
-/// Teams, as `Team` and `Member::team` carry them. In free-for-all everyone is `NO_TEAM`.
+/// Teams, as `Team` and `Member::team` carry them. In free-for-all everyone is `NO_TEAM`. Players
+/// never see these ids: each sees their own team as allies and the other as enemies.
 pub const NO_TEAM: u8 = 0;
-pub const RED: u8 = 1;
-pub const BLUE: u8 = 2;
-pub const TEAMS: [u8; 2] = [RED, BLUE];
-
-pub fn team_name(team: u8) -> &'static str {
-    match team {
-        RED => "Red",
-        BLUE => "Blue",
-        _ => "No team",
-    }
-}
+pub const TEAM_A: u8 = 1;
+pub const TEAM_B: u8 = 2;
+pub const TEAMS: [u8; 2] = [TEAM_A, TEAM_B];
 
 /// A line in the server browser.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
