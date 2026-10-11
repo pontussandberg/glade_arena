@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use arena_shared::config::TICK_DURATION;
+use arena_shared::config::{TICK_DURATION, TICK_HZ};
 use arena_shared::protocol::PlayerId;
 use bevy::log::{BoxedFmtLayer, Level, LogPlugin};
 use bevy::prelude::*;
@@ -24,7 +24,7 @@ const HITCH: Duration = Duration::from_millis(100);
 const STARTUP: Duration = Duration::from_secs(2);
 /// A client whose inputs stop arriving for longer than this gets a warning (shorter gaps are only
 /// counted, in the status line).
-const LONG_INPUT_GAP_TICKS: u32 = 64;
+const LONG_INPUT_GAP_TICKS: u32 = TICK_HZ as u32;
 
 pub fn log_plugin() -> LogPlugin {
     LogPlugin { level: Level::INFO, filter: QUIET_CRATES.into(), fmt_layer: json_layer, ..default() }

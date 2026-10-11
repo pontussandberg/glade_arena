@@ -366,12 +366,12 @@ mod tests {
         let m = map();
         let wall = m.tiles().find(|(t, tile)| *tile == crate::map::Tile::Wall && m.walkable(*t + IVec2::X)).unwrap().0;
         let clicked = m.walk_target(Map::center(wall + IVec2::X) - Vec2::new(0.49, 0.0), 4).unwrap();
-        let (end, ticks) = walk_point(SPAWN_POINTS[3], clicked, 64 * 30);
+        let (end, ticks) = walk_point(SPAWN_POINTS[3], clicked, TICK_HZ as u32 * 30);
         assert!(arrived(end, clicked), "stuck at {end} after {ticks} ticks, short of {clicked}");
         // A point the client didn't pull in gets pulled in by the sim the same way: never stuck,
         // and arrival is recognized.
         let hugging = Map::center(wall + IVec2::X) - Vec2::new(0.49, 0.0);
-        let end = walk_point(SPAWN_POINTS[3], hugging, 64 * 30).0;
+        let end = walk_point(SPAWN_POINTS[3], hugging, TICK_HZ as u32 * 30).0;
         assert!(end == clicked && arrived(end, hugging));
         assert_eq!(step_player(from, &walk_to_point(Vec2::NAN), SPEED), from);
     }
@@ -380,7 +380,7 @@ mod tests {
     fn walks_around_walls_and_across_the_river() {
         let from = SPAWN_POINTS[1];
         let target = Map::tile_of(SPAWN_POINTS[5]);
-        let (end, ticks) = walk(from, target, 64 * 30);
+        let (end, ticks) = walk(from, target, TICK_HZ as u32 * 30);
         assert_eq!(end, Map::center(target), "stuck after {ticks} ticks");
     }
 
@@ -389,7 +389,7 @@ mod tests {
         for from in SPAWN_POINTS {
             for to in SPAWN_POINTS {
                 let target = Map::tile_of(to);
-                let (end, ticks) = walk(from, target, 64 * 30);
+                let (end, ticks) = walk(from, target, TICK_HZ as u32 * 30);
                 assert_eq!(end, Map::center(target), "{from} -> {to}: stuck after {ticks} ticks");
             }
         }
@@ -686,13 +686,13 @@ mod tests {
     #[test]
     fn rooted_means_no_walking_no_dashing_and_a_dash_stops() {
         let mut chilled = Chilled::default();
-        chilled.apply(Chill { root_ticks: 64, ..default() }, 10);
+        chilled.apply(Chill { root_ticks: TICK_HZ as u32, ..default() }, 10);
         let from = SPAWN_POINTS[0];
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let class = dasher();
         let (attack, idle) = (AttackState::default(), AbilityState::default());
         assert_eq!(move_player(from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 11), from, "walked while rooted");
-        assert_ne!(move_player(from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 75), from, "still rooted after it wore off");
+        assert_ne!(move_player(from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 11 + TICK_HZ as u32), from, "still rooted after it wore off");
 
         let (state, _) = step_ability(11, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &chilled, idle);
         assert!(state.dash.is_none() && state.ready_at == 0, "dashed (or spent the cooldown) while rooted");

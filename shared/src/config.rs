@@ -1,7 +1,7 @@
 use core::time::Duration;
 
 /// Fixed simulation rate, identical on server and client.
-pub const TICK_HZ: u64 = 64;
+pub const TICK_HZ: u64 = 32;
 pub const TICK_DURATION: Duration = Duration::from_nanos(1_000_000_000 / TICK_HZ);
 /// Seconds per tick, for the sim's per-tick math.
 pub const TICK_DT: f32 = 1.0 / TICK_HZ as f32;

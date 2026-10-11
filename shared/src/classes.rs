@@ -365,7 +365,7 @@ mod tests {
                     assert!((1.0..=30.0).contains(&range), "{}: Q range", c.id);
                 }
                 AbilityKind::Dash { distance, ticks, damage, .. } => {
-                    assert!(damage >= 0 && (0.5..=15.0).contains(&distance) && (1..=64).contains(&ticks), "{}: dash", c.id);
+                    assert!(damage >= 0 && (0.5..=15.0).contains(&distance) && (1..=TICK_HZ as u32).contains(&ticks), "{}: dash", c.id);
                     assert!(ticks < c.ability.cooldown_ticks, "{}: dash longer than its cooldown", c.id);
                 }
                 AbilityKind::Nova { radius, damage, chill } => {
@@ -423,6 +423,6 @@ mod tests {
     #[test]
     fn projectile_lifetime_covers_its_range() {
         let kind = AttackKind::Projectile { speed: 16.0, radius: 0.2, range: 8.0, far_scale: None };
-        assert_eq!(kind.shot().unwrap().lifetime_ticks(), 32);
+        assert_eq!(kind.shot().unwrap().lifetime_ticks(), TICK_HZ as u32 / 2);
     }
 }
