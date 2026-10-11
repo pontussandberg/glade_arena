@@ -1,6 +1,6 @@
-//! The in-game menu, opened and closed with ESC: back to the fight; in a lobby, back to it (to
-//! pick another fighter, still in the room) or out of it altogether; in practice, home. The room
-//! goes on without us. While it's open, the fight's controls and the camera's are off.
+//! The in-game menu, opened and closed with ESC (or opened with the HUD's Home button): back to
+//! the fight; in a lobby, back to it (to pick another fighter, still in the room) or out of it
+//! altogether; in practice, home. The room goes on without us. While it's open, the fight's controls and the camera's are off.
 
 use arena_shared::protocol::RoomRequest;
 use bevy::prelude::*;
@@ -32,6 +32,10 @@ pub(crate) struct MenuKey;
 #[derive(Component)]
 struct EscMenu;
 
+/// The HUD's button that opens the menu (`render.rs` puts it in the top-left panel).
+#[derive(Component)]
+pub(crate) struct HomeButton;
+
 #[derive(Component)]
 struct ResumeButton;
 
@@ -47,25 +51,29 @@ fn menu_open(menu: Query<(), With<EscMenu>>) -> bool {
     !menu.is_empty()
 }
 
+/// ESC opens the menu, or closes it; the Home button opens it.
 fn toggle_menu(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
+    home: Query<Ref<Interaction>, With<HomeButton>>,
     menu: Query<Entity, With<EscMenu>>,
     room: Res<CurrentRoom>,
     mut desired: ResMut<crate::DesiredInput>,
     mut aiming: ResMut<crate::casting::Aiming>,
 ) {
-    if !keys.just_pressed(KeyCode::Escape) {
-        return;
-    }
+    let esc = keys.just_pressed(KeyCode::Escape);
     // ESC first drops a normal cast's aim; the next one opens the menu.
-    if aiming.0 {
+    if esc && aiming.0 {
         aiming.0 = false;
         return;
     }
-    if let Ok(menu) = menu.single() {
-        commands.entity(menu).despawn();
-        return;
+    match menu.single() {
+        Ok(menu) if esc => {
+            commands.entity(menu).despawn();
+            return;
+        }
+        Err(_) if esc || home.iter().any(clicked) => {}
+        _ => return,
     }
     // Stand still and stop attacking while away from the controls.
     desired.0 = default();

@@ -33,6 +33,8 @@
 //             speed (longer slowed, shorter hasted).
 //           Nova(radius, damage, chill)  a burst around you, at once: everyone within `radius`
 //             (and not behind a wall) takes `damage` and `chill`
+//     global_cooldown (optional, true by default): using it starts the global cooldown (1 s),
+//       and it waits for it, like every other ability on it; false opts out
 //   passive (optional)  shown to players, nothing more: Some((name, description)). Its effect
 //     lives in the numbers it describes (far_scale, chill, crit...).
 //
@@ -65,7 +67,7 @@
         ability: (
             name: "Rift Step",
             description: "Dash forward, dealing {ability_damage} damage to each enemy you pass through.",
-            cooldown_ticks: 320,
+            cooldown_ticks: 512,
             kind: Dash(distance: 6.0, ticks: 10, damage: 18),
         ),
         passive: Some((
@@ -76,7 +78,7 @@
     ),
     (
         id: "javelinist",
-        name: "Javelinist",
+        name: "Jav",
         role: "Marksman",
         blurb: "Hurls heavy javelins. The farther they fly, the harder they hit.",
         max_hp: 95,

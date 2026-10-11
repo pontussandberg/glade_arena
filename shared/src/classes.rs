@@ -123,6 +123,14 @@ pub struct AbilityDef {
     pub description: String,
     pub cooldown_ticks: u32,
     pub kind: AbilityKind,
+    /// Whether it starts and waits for the global cooldown (`GLOBAL_COOLDOWN_TICKS`): yes unless
+    /// it opts out.
+    #[serde(default = "yes")]
+    pub global_cooldown: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A passive, as players read it. Only words: its effect is in the numbers it describes (e.g.

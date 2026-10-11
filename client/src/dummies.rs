@@ -1,13 +1,14 @@
 //! The practice tools, LoL-style: a panel in the top right corner while practicing, under a
-//! "Practice" header that folds them away or out (like "Controls", open to begin with). Its one
-//! tool so far, "Target dummy", places one: a ring under the cursor shows where it would stand
+//! "Practice" header that folds them away or out (like "Controls", open to begin with).
+//! "No cooldowns" switches our Q's cooldown off and on (lit while off: what the server says, via
+//! our `AbilityState`). "Target dummy" places one: a ring under the cursor shows where it would stand
 //! (red where it can't), and the next left click stands it there (the server takes each class in
 //! turn); a right click or ESC cancels. Click it again for another. A hint says so meanwhile. Placing reads its own clicks (and ESC), before
 //! the fight's controls and the menu, and takes them: a placing click never also attacks or walks.
 
 use arena_shared::config::PLAYER_RADIUS;
 use arena_shared::map::map;
-use arena_shared::protocol::RoomRequest;
+use arena_shared::protocol::{AbilityState, RoomRequest};
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
@@ -15,7 +16,7 @@ use lightyear::prelude::*;
 
 use crate::arena::{self, palette, to_world};
 use crate::camera::CameraPlaced;
-use crate::render::{GameUi, HudButton, button, chevron, chevron_turn, clicked, corner_panel, fold_header, ground_at, shown, ui_text};
+use crate::render::{GameUi, HudButton, button, button_fill, chevron, chevron_turn, clicked, corner_panel, fold_header, ground_at, shown, ui_text};
 use crate::rooms::{CurrentRoom, Screen, request};
 
 pub struct DummiesPlugin;
@@ -27,7 +28,7 @@ impl Plugin for DummiesPlugin {
         app.add_systems(
             Update,
             (
-                (show_tools, fold_tools, use_tools, show_hint).chain(),
+                (show_tools, fold_tools, use_tools, toggle_cooldowns, show_hint).chain(),
                 (place_dummy, show_marker).chain().in_set(CameraPlaced).before(crate::PlayerControls).before(crate::esc_menu::MenuKey),
             )
                 .run_if(in_state(Screen::InGame)),
@@ -46,6 +47,13 @@ struct Tools;
 
 #[derive(Component)]
 struct DummyButton;
+
+#[derive(Component)]
+struct CooldownsButton;
+
+/// The "No cooldowns" switch's on/off text.
+#[derive(Component)]
+struct CooldownsState;
 
 /// "Practice", over the tools: clicking it folds them away or out (`render::fold_header`).
 #[derive(Component)]
@@ -66,6 +74,22 @@ fn show_tools(mut commands: Commands, room: Res<CurrentRoom>, tools: Query<Entit
             let tools = commands
                 .spawn(tools_node(true))
                 .with_children(|tools| {
+                    let node = Node {
+                        padding: UiRect::axes(px(13.0 * 1.2), px(13.0 * 0.6)),
+                        border: UiRect::all(px(1.0)),
+                        justify_content: JustifyContent::SpaceBetween,
+                        column_gap: px(12.0),
+                        ..default()
+                    };
+                    tools
+                        .spawn((CooldownsButton, HudButton, button_fill(palette::ui::PANEL), node, BorderColor::all(palette::ui::MUTED.with_alpha(0.5))))
+                        .with_children(|switch| {
+                            switch.spawn(ui_text("No cooldowns", 13.0, palette::ui::TEXT));
+                            // As wide for "ON" as for "OFF", so the panel keeps its width.
+                            switch
+                                .spawn(Node { width: px(32.0), justify_content: JustifyContent::FlexEnd, ..default() })
+                                .with_child((CooldownsState, ui_text("OFF", 13.0, palette::ui::MUTED)));
+                        });
                     tools.spawn((DummyButton, HudButton, button("Target dummy", 13.0, palette::ui::PANEL, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5))));
                 })
                 .id();
@@ -125,6 +149,28 @@ fn use_tools(buttons: Query<Ref<Interaction>, With<DummyButton>>, mut placing: R
     if buttons.iter().any(clicked) {
         placing.0 = !placing.0;
     }
+}
+
+/// The "No cooldowns" switch asks the server for the other way round from how our Q is now, and
+/// shows how it is.
+fn toggle_cooldowns(
+    me: Query<&AbilityState, With<Predicted>>,
+    button: Single<(Ref<Interaction>, &mut BorderColor), With<CooldownsButton>>,
+    state: Single<(&mut Text, &mut TextColor), With<CooldownsState>>,
+    mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
+) {
+    let on = me.iter().next().is_some_and(|ability| ability.free);
+    let (interaction, mut border) = button.into_inner();
+    if clicked(interaction) {
+        request(&mut sender, RoomRequest::NoCooldowns(!on));
+    }
+    let (text, edge, color) = if on { ("ON", palette::ui::ACCENT, palette::ui::ACCENT) } else { ("OFF", palette::ui::MUTED.with_alpha(0.5), palette::ui::MUTED) };
+    border.set_if_neq(BorderColor::all(edge));
+    let (mut label, mut label_color) = state.into_inner();
+    if label.0 != text {
+        label.0 = text.to_string();
+    }
+    label_color.set_if_neq(TextColor(color));
 }
 
 /// Where on the ground the cursor points, if it does.

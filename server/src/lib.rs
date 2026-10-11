@@ -523,7 +523,8 @@ fn respawn(
             chilled.set_if_neq(Chilled::default());
             hasted.set_if_neq(Hasted::default());
             *attack = AttackState::default();
-            *ability = AbilityState::default();
+            // Practice's No cooldowns stays as it was.
+            *ability = AbilityState { free: ability.free, ..default() };
             commands.entity(player).remove::<Dead>();
             debug!(?player, "respawned");
         }

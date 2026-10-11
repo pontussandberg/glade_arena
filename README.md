@@ -17,7 +17,7 @@ projectile) and Q ability; all of it lives in `shared/assets/classes.ron`:
 
 | Class | Role | Auto-attack | Q |
 |---|---|---|---|
-| Javelinist | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`) | **Spirit Spear**: a fast spectral spear, thrown instantly (no windup, no root) |
+| Jav | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`) | **Spirit Spear**: a fast spectral spear, thrown instantly (no windup, no root) |
 | Revenant | Duelist | A long thrust down a narrow lane, with a slow windup; each hit makes the next windup 72% shorter if it follows within 1.5 s (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash forward, damaging each enemy you pass through |
 | Frost Mage | Controller | Frostbolts: little damage and shorter range (mid range), but each hit slows (40% for 2 s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5 s (no walking, no dashing) |
 
@@ -28,7 +28,7 @@ progress stops) but it can still attack. Slowed fighters take on a cold blue cas
 under their feet; frozen ones stand in ice.
 
 Every attack has a windup (`windup_ticks`): you stand still with your aim locked while a cast
-bar fills under your health bar, then it goes off. For the Javelinist and the Frost Mage the windup is the whole cooldown:
+bar fills under your health bar, then it goes off. For the Jav and the Frost Mage the windup is the whole cooldown:
 the bar is the attack, and holding fire keeps you planted, so to kite you have to stop firing.
 The Revenant's swing winds up for part of its cooldown. Everyone sees the windup, so attacks can
 be read and dodged. Attacking also cancels your walk: afterwards you stand still until you
@@ -218,7 +218,7 @@ deploy restarts the server, which disconnects everyone playing.
 ## Not done yet (see the plan)
 
 - More classes, and more abilities (W/E/R); a balance pass (in bot duels the Revenant's
-  dash-and-swing tends to beat the Javelinist; the Frost Mage is new and untuned)
+  dash-and-swing tends to beat the Jav; the Frost Mage is new and untuned)
 - Network debug overlay (lag sliders, server ghost), room codes, switching class without rejoining
 - Visual smoothing: frame interpolation between ticks and correction blending after rollbacks
 - Accounts service issuing netcode connect tokens (currently a shared zero dev key)
