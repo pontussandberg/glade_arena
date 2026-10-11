@@ -18,9 +18,10 @@
 //! where it faces. The windup draws the sword arm back, the weapon shoulder turning away and the
 //! lead hand reaching out at the target, the point coming up level; the strike is a lunge,
 //! the arm driving the point straight out at the target as the lead leg steps long into it and
-//! the body leans in behind it, the blade smearing out longer for a moment as it lands. Holding
-//! fire chains the strikes: the blade comes straight back from each into the next draw, still
-//! raised, instead of sinking to the point-low carry in between. A dash is that lunge, held all
+//! the body leans in behind it, the blade smearing out longer for a moment as it lands. A strike
+//! started before the last one has settled (holding fire, or clicking again quickly) chains onto
+//! it: the blade comes straight back into the draw, still raised, instead of sinking to the
+//! point-low carry in between. A dash is that lunge, held all
 //! the way through it.
 //!
 //! The frost mage carries its staff upright at its side. The windup raises it high toward the
@@ -216,9 +217,8 @@ const SMEAR_REACH: f32 = 0.4;
 const REARM_TICKS: f32 = 12.0;
 /// After the throw: how long (ticks) the follow-through is held, and when it's back to carrying.
 const FOLLOW_THROUGH: (f32, f32) = (3.0, 14.0);
-/// A melee windup chained onto the last strike (started while its follow-through holds): how
-/// long (a fraction of the windup) the strike is still held before the blade comes straight back
-/// into the draw.
+/// A melee windup started during the last strike's follow-through: how long (a fraction of the
+/// windup) what's left of the strike is still held before the blade comes back into the draw.
 const CHAIN_HOLD: f32 = 0.15;
 /// A thrown Q's flick: ticks after the throw until the arm starts and finishes coming back.
 const FLICK: (f32, f32) = (1.0, 10.0);
@@ -511,22 +511,27 @@ fn pose_rigs(
         };
         let released = since_throw(attack.released_at, seen.and_then(|seen| seen.attack));
         let windup = SeenThrows::windup(seen, attack);
-        // Holding fire with a melee weapon chains each windup onto the last strike: the blade goes
-        // from the strike straight back into the draw, still raised, never down to carrying.
-        let chained = |windup: &Windup| {
-            matches!(def.attack.kind, AttackKind::Melee { .. })
-                && attack.released_at.is_some_and(|at| windup.started_at as f32 <= at as f32 + FOLLOW_THROUGH.0)
+        // A melee windup picks up from how much of the last strike's follow-through was left when
+        // it started (1: still fully held, as when holding fire; 0: settled back to carrying): the
+        // blade comes from there straight into the draw, never sinking further toward carrying.
+        let follow_left = |windup: &Windup| match (&def.attack.kind, attack.released_at) {
+            (AttackKind::Melee { .. }, Some(at)) if windup.started_at >= at => {
+                1.0 - ease(FOLLOW_THROUGH.0, FOLLOW_THROUGH.1, (windup.started_at - at) as f32)
+            }
+            _ => 0.0,
         };
         let (draw, mut throw, strike) = match (windup, released) {
             (Some(windup), _) => {
                 let progress = windup.progress(now, *class);
                 let strike_start = (1.0 - STRIKE_TICKS / windup.ticks(*class).max(1) as f32).max(DRAW_END);
                 let strike = ease_out(strike_start, 1.0, progress);
-                if chained(&windup) {
-                    (1.0, strike.max(1.0 - ease(CHAIN_HOLD, DRAW_END, progress)), strike)
-                } else {
-                    (ease(0.0, DRAW_END, progress), strike, strike)
-                }
+                // What's left of the strike eases out over the draw, and how much the pose
+                // carries only ever shrinks, from what it was when the windup began.
+                let follow = follow_left(&windup);
+                let held = follow * (1.0 - ease(CHAIN_HOLD, DRAW_END, progress));
+                let carrying = (1.0 - follow) * (1.0 - ease(0.0, DRAW_END, progress));
+                let draw = if held < 1.0 { 1.0 - carrying / (1.0 - held) } else { 1.0 };
+                (draw, strike.max(held), strike)
             }
             (None, Some(since)) => (0.0, 1.0 - ease(FOLLOW_THROUGH.0, FOLLOW_THROUGH.1, since), 0.0),
             (None, None) => (0.0, 0.0, 0.0),
