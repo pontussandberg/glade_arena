@@ -1,16 +1,17 @@
 use core::time::Duration;
 
 /// Fixed simulation rate, identical on server and client.
-pub const TICK_HZ: u64 = 64;
+pub const TICK_HZ: u64 = 32;
 pub const TICK_DURATION: Duration = Duration::from_nanos(1_000_000_000 / TICK_HZ);
 /// Seconds per tick, for the sim's per-tick math.
 pub const TICK_DT: f32 = 1.0 / TICK_HZ as f32;
-/// How often the server sends replication updates.
-pub const SEND_INTERVAL: Duration = Duration::from_millis(50);
+/// How often the server sends replication updates: every tick, so a command's result comes back
+/// as soon as it's there (nothing is predicted).
+pub const SEND_INTERVAL: Duration = TICK_DURATION;
 
 pub const SERVER_PORT: u16 = 5888;
 /// Includes the class file's hash: clients built with different class numbers can't connect.
-pub const PROTOCOL_ID: u64 = 0xA4E7_0006 ^ crate::classes::classes_hash();
+pub const PROTOCOL_ID: u64 = 0xA4E7_0007 ^ crate::classes::classes_hash();
 /// Netcode key shared by server and client. Fine for local dev; real auth will have the
 /// account service mint connect tokens instead (see README).
 pub const DEV_PRIVATE_KEY: [u8; 32] = [0; 32];

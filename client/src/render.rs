@@ -14,7 +14,9 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
-use crate::DesiredInput;
+use crate::Me;
+
+use crate::{DesiredInput, StopWalking};
 use crate::action_bar::AbilityIcon;
 use crate::camera::{CameraMode, CameraPlaced, key_axis};
 use crate::casting::{Aiming, CastMode};
@@ -45,6 +47,12 @@ impl Plugin for RenderPlugin {
         ));
         app.insert_resource(ControlsOpen(load_setting(CONTROLS_KEY).as_deref() == Some("open")));
         app.add_systems(Startup, setup_scene);
+        // Right after the network's updates are in, before anything this frame reads positions.
+        app.init_resource::<crate::feedback::LatestClock>();
+        app.add_systems(
+            RunFixedMainLoop,
+            (crate::feedback::advance_latest_clock, glide_me).chain().in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
+        );
         app.add_systems(
             Update,
             (
@@ -426,7 +434,7 @@ fn read_local_input(
     keys: Res<ButtonInput<KeyCode>>,
     window: Option<Single<&Window>>,
     camera: Single<(&Camera, &GlobalTransform)>,
-    me: Query<(&Pos, &ClassId, &AbilityState), (With<Predicted>, With<PlayerId>)>,
+    me: Query<(&Pos, &ClassId, &AbilityState), (With<Me>, With<PlayerId>)>,
     (mode, cast_mode, clock): (Res<CameraMode>, Res<CastMode>, AttackClock),
     hud: Query<
         (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Has<AbilityIcon>),
@@ -435,7 +443,7 @@ fn read_local_input(
     mut aiming: ResMut<Aiming>,
     mut held_click: Local<bool>,
     mut last_pos: Local<Option<Vec2>>,
-    mut desired: ResMut<DesiredInput>,
+    (mut desired, mut stop): (ResMut<DesiredInput>, ResMut<StopWalking>),
 ) {
     let me = me.single().ok();
     // A normal cast only aims while Q is ready (the global cooldown over too), as in LoL.
@@ -527,10 +535,14 @@ fn read_local_input(
     } else {
         Vec2::ZERO
     };
-    if walk != Vec2::ZERO || (!mode.free && keys.just_pressed(KeyCode::KeyS)) {
+    if walk != Vec2::ZERO {
         move_to = None;
     }
-    // `ability` is kept until it's been sent (`write_input` clears it), so a short tap isn't
+    if !mode.free && keys.just_pressed(KeyCode::KeyS) {
+        move_to = None;
+        stop.0 = true;
+    }
+    // `ability` is kept until it's been sent (`send_commands` clears it), so a short tap isn't
     // missed.
     desired.0 = PlayerInput { move_to, walk, aim, fire, ability };
 }
@@ -578,7 +590,7 @@ fn add_visuals(
     mut materials: ResMut<Assets<StandardMaterial>>,
     players: Query<(Entity, &PlayerId, &ClassId, &Pos), Without<Mesh3d>>,
     projectiles: Query<(Entity, &Projectile, &Pos), Without<Mesh3d>>,
-    me: Query<&PlayerId, With<Predicted>>,
+    me: Query<&PlayerId, With<Me>>,
 ) {
     // Wait until we know which player is ours, so colors are right from the first frame.
     let Ok(me) = me.single() else { return };
@@ -670,9 +682,8 @@ struct ShownNova(u32);
 
 /// A burst of ice around each new nova: a bright shockwave races out from the caster to the
 /// nova's edge, a spray of ice erupts where the staff struck, frost spreads over the ground, and
-/// shards burst up in two rings as the wave passes them. `AbilityState` is predicted for us (at
-/// the press) and shown on the same delayed timeline as others' positions; each nova is drawn
-/// once, though rollbacks may rewrite it.
+/// shards burst up in two rings as the wave passes them. `AbilityState` comes from the server
+/// (others' on the same delayed timeline as their positions); each nova is drawn once.
 fn show_novas(
     mut commands: Commands,
     time: Res<Time>,
@@ -731,14 +742,14 @@ fn grow_bursts(time: Res<Time>, mut bursts: Query<(&Burst, &Fleeting, &mut Trans
 }
 
 /// Frost on every fighter: slowed, its colors take a cold blue cast and frost turns slowly under
-/// its feet; rooted, ice locks its feet instead. `Chilled` comes from the server (it's never
-/// predicted); its spans are compared with the timeline each fighter is shown on, so others'
+/// its feet; rooted, ice locks its feet instead. `Chilled` comes from the server; its spans are
+/// compared with the timeline each fighter is shown on, so others'
 /// frost comes and goes in step with their (delayed) bodies.
 fn show_frost(
     clock: AttackClock,
     time: Res<Time>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut fighters: Query<(&Chilled, &MeshMaterial3d<StandardMaterial>, &mut Frost, Has<Predicted>)>,
+    mut fighters: Query<(&Chilled, &MeshMaterial3d<StandardMaterial>, &mut Frost, Has<Me>)>,
     mut parts: Query<(&mut Visibility, &mut WorldAligned)>,
 ) {
     let turn = Quat::from_rotation_y(time.elapsed_secs() * RUNE_TURN_RATE);
@@ -891,8 +902,8 @@ pub(crate) fn clicked(interaction: Ref<Interaction>) -> bool {
 /// Who each fighter is to us, as `Relation`: ours, on our team, or not.
 fn mark_relations(
     mut commands: Commands,
-    me: Query<&Team, (With<Predicted>, With<PlayerId>)>,
-    players: Query<(Entity, Has<Predicted>, Option<&Team>, Option<&Relation>), With<PlayerId>>,
+    me: Query<&Team, (With<Me>, With<PlayerId>)>,
+    players: Query<(Entity, Has<Me>, Option<&Team>, Option<&Relation>), With<PlayerId>>,
 ) {
     let my_team = me.single().ok().copied();
     for (player, is_me, team, relation) in &players {
@@ -909,14 +920,84 @@ pub(crate) fn shown(visible: bool) -> Visibility {
     if visible { Visibility::Inherited } else { Visibility::Hidden }
 }
 
+/// Our own fighter, drawn smoothly: each position from the server is noted with the server tick
+/// it's from, and the fighter is drawn on our clock (`AttackClock`, a tick behind the latest
+/// state), in between those. Updates come 32 times a second, unevenly; drawn as they arrive it
+/// would move in jerks, and the camera with it. Others are interpolated by Lightyear; ours isn't,
+/// for the least delay after a command, so this adds a tick. A jump (respawn, teleport) isn't
+/// eased.
+#[derive(Component, Default)]
+struct Glide {
+    /// (server tick, position), oldest first.
+    samples: std::collections::VecDeque<(f32, Vec2)>,
+    /// What it last drew, to tell a new position from the server (anything else) from its own.
+    drawn: Vec2,
+}
+
+impl Glide {
+    /// Where it was at `tick`, between the samples around it (the first or last outside them).
+    fn at(&self, tick: f32) -> Option<Vec2> {
+        let after = self.samples.iter().position(|(t, _)| *t > tick);
+        match after {
+            None => self.samples.back().map(|(_, p)| *p),
+            Some(0) => self.samples.front().map(|(_, p)| *p),
+            Some(i) => {
+                let ((t0, p0), (t1, p1)) = (self.samples[i - 1], self.samples[i]);
+                Some(p0.lerp(p1, (tick - t0) / (t1 - t0)))
+            }
+        }
+    }
+}
+
+/// Further than this between two updates is a jump, not a walk or a dash.
+const GLIDE_MAX: f32 = 2.0;
+
+fn glide_me(mut commands: Commands, clock: AttackClock, mut me: Query<(Entity, &mut Pos, Option<&mut Glide>), With<Me>>) {
+    let (Some(latest), now) = (clock.latest_tick(), clock.now(true)) else { return };
+    for (entity, mut pos, glide) in &mut me {
+        let Some(mut glide) = glide else {
+            let mut glide = Glide { drawn: pos.0, ..default() };
+            glide.samples.push_back((latest as f32, pos.0));
+            commands.entity(entity).insert(glide);
+            continue;
+        };
+        if pos.0 != glide.drawn {
+            let tick = latest as f32;
+            let last = glide.samples.back().copied();
+            if pos.0.distance(glide.drawn) > GLIDE_MAX {
+                glide.samples.clear();
+            } else if let Some((last_tick, last_pos)) = last
+                && last_tick < tick - 1.0
+            {
+                // It stood still since: the server only sends a position when it changes.
+                glide.samples.push_back((tick - 1.0, last_pos));
+            }
+            if glide.samples.back().is_some_and(|(t, _)| *t >= tick) {
+                glide.samples.pop_back();
+            }
+            glide.samples.push_back((tick, pos.0));
+        }
+        // Keep one sample before now, to draw from.
+        while glide.samples.len() > 2 && glide.samples[1].0 <= now {
+            glide.samples.pop_front();
+        }
+        let drawn = glide.at(now).unwrap_or(pos.0);
+        glide.drawn = drawn;
+        if pos.0 != drawn {
+            pos.0 = drawn;
+        }
+    }
+}
+
 fn sync_transforms(mut q: Query<(&Pos, &mut Transform), (Changed<Pos>, Without<Projectile>)>) {
     for (pos, mut transform) in &mut q {
         transform.translation = to_world(pos.0, 0.0);
     }
 }
 
-/// Places every shot each frame, where it really is right now (on our own player's clock, between
-/// ticks too, so it glides instead of stepping). Every shot is predicted, ours and others'.
+/// Places every shot each frame from where and when it was thrown, on our own fighter's clock
+/// (between ticks too, so it glides instead of stepping): a shot coming at us is drawn where it is
+/// relative to us. Never before where it starts.
 ///
 /// A thrown spear leaves the hand: the first frame it's drawn (after the thrower is posed,
 /// releasing) it takes over the held javelin's place (where the throw sends it, see `HeldAt`),
@@ -940,7 +1021,8 @@ fn fly_shots(
     for (projectile, mut transform, thrown, spin) in &mut shots {
         let speed = projectile.class.def().shot(projectile.ability).map_or(0.0, |s| s.speed);
         let height = shot_height(thrown.is_some());
-        let on_path = to_world(sim::projectile_pos(projectile, tick), height);
+        let at_tick = tick.max(projectile.spawn_tick as f32 - 1.0);
+        let on_path = to_world(sim::projectile_pos(projectile, at_tick), height);
         let along = Quat::from_rotation_y(projectile.dir.to_angle());
         let forward_dir = along * Vec3::X;
         let Some(mut thrown) = thrown else {
@@ -1010,16 +1092,15 @@ struct FrameRate {
     shown: u32,
 }
 
-/// The ping and frame rate (with the free camera, for watching the netcode, also the jitter and
-/// rollbacks), or that we're connecting or cut off; and when you're dead, how long until you're
+/// The ping and frame rate (with the free camera, for watching the netcode, also the jitter), or
+/// that we're connecting or cut off; and when you're dead, how long until you're
 /// back.
 fn update_status(
     time: Res<Time<Real>>,
     mut frame_rate: Local<FrameRate>,
     mut status: Single<&mut Text, With<Status>>,
     client: Query<(&Link, Has<Connected>, Option<&Disconnected>), With<Client>>,
-    metrics: Option<Res<lightyear::prediction::prelude::PredictionMetrics>>,
-    me: Query<&Health, (With<Predicted>, With<PlayerId>)>,
+    me: Query<&Health, (With<Me>, With<PlayerId>)>,
     mode: Res<CameraMode>,
 ) {
     frame_rate.seconds += time.delta_secs();
@@ -1037,8 +1118,7 @@ fn update_status(
         let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
         let _ = write!(text, "ping {:.0} ms   {} fps", ms(link.stats.rtt), frame_rate.shown);
         if mode.free {
-            let rollbacks = metrics.map_or(0, |m| m.rollbacks);
-            let _ = write!(text, "   jitter {:.0} ms   rollbacks {rollbacks}", ms(link.stats.jitter));
+            let _ = write!(text, "   jitter {:.0} ms", ms(link.stats.jitter));
         }
         if me.single().is_ok_and(|h| !h.alive()) {
             let _ = write!(text, "\nYou died. Back in {} seconds.", RESPAWN_TICKS / TICK_HZ as u32);

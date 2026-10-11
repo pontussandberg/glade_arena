@@ -1,7 +1,7 @@
 //! Server logs: what's worth knowing about a server you can't watch. Info level is the operator's
 //! view: start, connects and disconnects (with why), joins, kills, a status line every minute
-//! (players, each client's ping), and warnings when the server hitches or a client's inputs stop
-//! arriving for a while. Debug adds every hit and respawn.
+//! (players, each client's ping), and warnings when the server hitches. Debug adds every hit and
+//! respawn.
 //!
 //! `RUST_LOG` overrides the levels as usual (`RUST_LOG=arena_server=debug`). `ARENA_LOG_FORMAT=json`
 //! writes one JSON object per line instead of human-readable lines, for a log collector.
@@ -22,9 +22,6 @@ const STATUS_EVERY: Duration = Duration::from_secs(60);
 /// A frame longer than this means the server fell behind its tick rate.
 const HITCH: Duration = Duration::from_millis(100);
 const STARTUP: Duration = Duration::from_secs(2);
-/// A client whose inputs stop arriving for longer than this gets a warning (shorter gaps are only
-/// counted, in the status line).
-const LONG_INPUT_GAP_TICKS: u32 = 64;
 
 pub fn log_plugin() -> LogPlugin {
     LogPlugin { level: Level::INFO, filter: QUIET_CRATES.into(), fmt_layer: json_layer, ..default() }
@@ -56,38 +53,6 @@ impl Plugin for LoggingPlugin {
     }
 }
 
-/// Server-only, per player: inputs that stopped arriving (see `neutralize_stale_inputs`). `since`
-/// is the tick the current gap started; `count` is how many gaps since the last status line.
-#[derive(Component, Default)]
-pub(crate) struct InputGaps {
-    since: Option<u32>,
-    count: u32,
-}
-
-impl InputGaps {
-    /// Called every tick with whether this player's inputs are arriving in time.
-    pub(crate) fn update(&mut self, id: PeerId, fresh: bool, tick: u32) {
-        match (self.since, fresh) {
-            (None, false) => {
-                self.since = Some(tick);
-                self.count += 1;
-            }
-            (Some(since), true) => {
-                self.since = None;
-                let ticks = tick - since;
-                if ticks > LONG_INPUT_GAP_TICKS {
-                    warn!(client = ?id, gap_ms = ticks_to_ms(ticks), "inputs stopped arriving for a while");
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn ticks_to_ms(ticks: u32) -> u128 {
-    (TICK_DURATION * ticks).as_millis()
-}
-
 fn log_connect(trigger: On<Add, Connected>, links: Query<(&RemoteId, Option<&PeerAddr>), With<ClientOf>>) {
     let Ok((id, addr)) = links.get(trigger.entity) else { return };
     info!(client = ?id.0, addr = ?addr.map(|a| a.0), "client connected");
@@ -113,12 +78,12 @@ fn log_hitches(time: Res<Time<Real>>) {
     }
 }
 
-/// Every `STATUS_EVERY`: how many are playing, and each client's ping, jitter and input gaps.
+/// Every `STATUS_EVERY`: how many are playing, and each client's ping and jitter.
 fn log_status(
     time: Res<Time<Real>>,
     mut next: Local<Duration>,
     links: Query<(&RemoteId, &Link), (With<ClientOf>, With<Connected>)>,
-    mut players: Query<(&PlayerId, &mut InputGaps)>,
+    players: Query<(), With<PlayerId>>,
 ) {
     if time.elapsed() < *next {
         return;
@@ -126,15 +91,7 @@ fn log_status(
     *next = time.elapsed() + STATUS_EVERY;
     let mut clients = Vec::new();
     for (id, link) in &links {
-        let gaps = players.iter_mut().find(|(player, _)| player.0 == id.0).map_or(0, |(_, mut gaps)| {
-            std::mem::take(&mut gaps.count)
-        });
-        clients.push(format!(
-            "{:?}: {}±{} ms, {gaps} input gaps",
-            id.0,
-            link.stats.rtt.as_millis(),
-            link.stats.jitter.as_millis()
-        ));
+        clients.push(format!("{:?}: {}±{} ms", id.0, link.stats.rtt.as_millis(), link.stats.jitter.as_millis()));
     }
     info!(connected = links.iter().len(), players = players.iter().len(), clients = clients.join("; "), "status");
 }

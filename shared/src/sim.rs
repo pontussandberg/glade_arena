@@ -1,7 +1,8 @@
 //! Gameplay rules as pure functions of (state, input, tick).
 //!
-//! No wall-clock time and no randomness: the client replays these during rollback and must
-//! land on the same result the server computed. Per-class numbers come from `ClassDef`.
+//! No wall-clock time and no randomness. The server runs them; clients use the few they draw
+//! with (where a projectile is at a tick, whether a player has arrived). Per-class numbers come
+//! from `ClassDef`.
 
 use bevy::prelude::*;
 use lightyear::prelude::PeerId;
@@ -12,9 +13,8 @@ use crate::map::{Map, SPAWN_POINTS, map};
 use crate::protocol::{AbilityState, AttackState, Chilled, Dash, Hasted, LastSwing, PlayerInput, Projectile, Windup};
 
 /// Advance a player one tick: straight the way its keys walk it, or else toward the point it
-/// was told to walk to (point-and-click). Pathfinding runs here, in the shared sim, so the
-/// client predicts exactly the route the server walks. Unreachable or missing targets mean
-/// standing still.
+/// was told to walk to (point-and-click), pathfinding there. Unreachable or missing targets
+/// mean standing still.
 pub fn step_player(pos: Vec2, input: &PlayerInput, speed: f32) -> Vec2 {
     if let Some(dir) = input.walk.try_normalize() {
         return walk_step(pos, dir * speed * TICK_DT);
@@ -40,7 +40,7 @@ fn walk_step(pos: Vec2, step: Vec2) -> Vec2 {
 /// still while winding up an attack, or walking at its class's speed. A slow or a haste changes
 /// how fast it walks and dashes alike (a dash still goes its full distance, just slower or
 /// faster: each step comes off what's `left` of it here, and `step_ability` ends it once that's
-/// none). What both the server and the predicting client run.
+/// none).
 #[allow(clippy::too_many_arguments)]
 pub fn move_player(
     pos: Vec2,
@@ -236,7 +236,7 @@ pub fn projectile_hits(projectile_pos: Vec2, projectile: &Projectile, player_pos
 
 /// Does a swing from `attacker` toward `dir` reach `target`? Its lane reaches the target's body
 /// (like a shot as wide as the lane, out to the swing's reach), and not through a wall. Only the
-/// server decides this (melee damage isn't predicted).
+/// server decides this.
 pub fn melee_hits(attacker: Vec2, dir: Vec2, class: ClassId, target: Vec2) -> bool {
     let kind = &class.def().attack.kind;
     let AttackKind::Melee { width, .. } = *kind else { return false };
@@ -263,13 +263,6 @@ pub fn projectile_damage(projectile: &Projectile, tick: u32) -> i32 {
 /// none).
 pub fn projectile_chill(projectile: &Projectile) -> Chill {
     if projectile.ability { Chill::default() } else { projectile.class.def().attack.chill }
-}
-
-/// Same hash on client and server so the server's projectile is matched to the one the
-/// client already spawned locally (lightyear "prespawning"). An auto-attack and a Q thrown in
-/// the same tick get different hashes.
-pub fn projectile_prespawn_hash(projectile: &Projectile) -> u64 {
-    projectile.owner.to_bits().wrapping_mul(1_000_003) ^ (projectile.spawn_tick as u64) ^ ((projectile.ability as u64) << 40)
 }
 
 /// The spawn point farthest from every other player (server-side; the result is replicated).
@@ -353,8 +346,9 @@ mod tests {
         let target = Map::tile_of(from) + IVec2::new(0, 3);
         let (end, ticks) = walk(from, target, 500);
         assert_eq!(end, Map::center(target));
-        // 3 m at 6 m/s is 0.5 s = 32 ticks.
-        assert!((31..=34).contains(&ticks), "took {ticks} ticks");
+        // 3 m at 6 m/s is 0.5 s.
+        let half_second = TICK_HZ as u32 / 2;
+        assert!((half_second - 1..=half_second + 2).contains(&ticks), "took {ticks} ticks");
     }
 
     #[test]
@@ -366,12 +360,12 @@ mod tests {
         let m = map();
         let wall = m.tiles().find(|(t, tile)| *tile == crate::map::Tile::Wall && m.walkable(*t + IVec2::X)).unwrap().0;
         let clicked = m.walk_target(Map::center(wall + IVec2::X) - Vec2::new(0.49, 0.0), 4).unwrap();
-        let (end, ticks) = walk_point(SPAWN_POINTS[3], clicked, 64 * 30);
+        let (end, ticks) = walk_point(SPAWN_POINTS[3], clicked, TICK_HZ as u32 * 30);
         assert!(arrived(end, clicked), "stuck at {end} after {ticks} ticks, short of {clicked}");
         // A point the client didn't pull in gets pulled in by the sim the same way: never stuck,
         // and arrival is recognized.
         let hugging = Map::center(wall + IVec2::X) - Vec2::new(0.49, 0.0);
-        let end = walk_point(SPAWN_POINTS[3], hugging, 64 * 30).0;
+        let end = walk_point(SPAWN_POINTS[3], hugging, TICK_HZ as u32 * 30).0;
         assert!(end == clicked && arrived(end, hugging));
         assert_eq!(step_player(from, &walk_to_point(Vec2::NAN), SPEED), from);
     }
@@ -380,7 +374,7 @@ mod tests {
     fn walks_around_walls_and_across_the_river() {
         let from = SPAWN_POINTS[1];
         let target = Map::tile_of(SPAWN_POINTS[5]);
-        let (end, ticks) = walk(from, target, 64 * 30);
+        let (end, ticks) = walk(from, target, TICK_HZ as u32 * 30);
         assert_eq!(end, Map::center(target), "stuck after {ticks} ticks");
     }
 
@@ -389,7 +383,7 @@ mod tests {
         for from in SPAWN_POINTS {
             for to in SPAWN_POINTS {
                 let target = Map::tile_of(to);
-                let (end, ticks) = walk(from, target, 64 * 30);
+                let (end, ticks) = walk(from, target, TICK_HZ as u32 * 30);
                 assert_eq!(end, Map::center(target), "{from} -> {to}: stuck after {ticks} ticks");
             }
         }
@@ -541,10 +535,8 @@ mod tests {
         let again = |tick| step_ability(tick, me, class, Vec2::ZERO, &press_q(Vec2::X), &default(), state).1;
         assert!(again(10 + cooldown - 1).is_none(), "used again during its cooldown");
         assert!(again(10 + cooldown).is_some());
-        // Its own speed, separate from the auto-attack's (and the same tick gets another hash).
-        let auto = Projectile { ability: false, ..projectile };
+        // Its own speed, separate from the auto-attack's.
         assert_ne!(class.def().shot(true), class.def().shot(false));
-        assert_ne!(projectile_prespawn_hash(&projectile), projectile_prespawn_hash(&auto));
     }
 
     #[test]
@@ -686,13 +678,13 @@ mod tests {
     #[test]
     fn rooted_means_no_walking_no_dashing_and_a_dash_stops() {
         let mut chilled = Chilled::default();
-        chilled.apply(Chill { root_ticks: 64, ..default() }, 10);
+        chilled.apply(Chill { root_ticks: TICK_HZ as u32, ..default() }, 10);
         let from = SPAWN_POINTS[0];
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let class = dasher();
         let (attack, idle) = (AttackState::default(), AbilityState::default());
         assert_eq!(move_player(from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 11), from, "walked while rooted");
-        assert_ne!(move_player(from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 75), from, "still rooted after it wore off");
+        assert_ne!(move_player(from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 11 + TICK_HZ as u32), from, "still rooted after it wore off");
 
         let (state, _) = step_ability(11, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &chilled, idle);
         assert!(state.dash.is_none() && state.ready_at == 0, "dashed (or spent the cooldown) while rooted");
@@ -761,14 +753,5 @@ mod tests {
         // A player standing near a spawn point makes it the least attractive one.
         let near_first = SPAWN_POINTS[0] + Vec2::new(0.5, 0.0);
         assert_ne!(pick_spawn_point([near_first]), SPAWN_POINTS[0]);
-    }
-
-    #[test]
-    fn prespawn_hash_differs_per_owner_tick_and_kind() {
-        let shot = Projectile { owner: PeerId::Netcode(1), class: shooter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 100, ability: false };
-        let a = projectile_prespawn_hash(&shot);
-        assert_ne!(a, projectile_prespawn_hash(&Projectile { owner: PeerId::Netcode(2), ..shot }));
-        assert_ne!(a, projectile_prespawn_hash(&Projectile { spawn_tick: 101, ..shot }));
-        assert_ne!(a, projectile_prespawn_hash(&Projectile { ability: true, ..shot }));
     }
 }

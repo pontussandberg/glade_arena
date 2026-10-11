@@ -29,7 +29,7 @@ fn spirit_spears(app: &mut App) -> usize {
 }
 
 #[test]
-fn spirit_spear_flies_at_once_and_hits() {
+fn spirit_spear_flies_and_hits() {
     let mut d = duel(5892, "javelinist", "revenant");
     let AbilityKind::Projectile { damage, .. } = class_id("javelinist").def().ability.kind else { panic!("not a throw") };
     let full = server_player(&mut d.server, B).1;
@@ -37,8 +37,8 @@ fn spirit_spear_flies_at_once_and_hits() {
     a_uses_q_at_b(&mut d);
     let t0 = Instant::now();
     d.until(Duration::from_secs(1), "the spear appears on A", |d| spirit_spears(&mut d.a) > 0);
-    println!("spirit spear appeared locally after {:?}", t0.elapsed());
-    assert!(t0.elapsed() < Duration::from_millis(60), "no windup: the spear should be predicted at once");
+    println!("spirit spear appeared on A after {:?}", t0.elapsed());
+    assert!(t0.elapsed() < COMMAND_SHOWS_WITHIN, "no windup: the spear should be thrown at once");
     assert!(attack_state(&mut d.a, A).windup.is_none(), "throwing it shouldn't start an attack windup");
 
     d.until(Duration::from_secs(2), "the spear hits", |d| server_player(&mut d.server, B).1 == full - damage);
@@ -94,8 +94,7 @@ fn chilled(app: &mut App, id: u64) -> Chilled {
 }
 
 /// The counter to a diving Revenant: a nova freezes it in place (no walking, no Rift Step), then
-/// lets it go at full speed. Its own client, which predicts its movement, ends up where the
-/// server has it.
+/// lets it go at full speed. Its own client shows it where the server has it.
 #[test]
 fn frost_nova_freezes_a_revenant_then_lets_it_go() {
     let mut d = duel(5880, "frost_mage", "revenant");
@@ -118,12 +117,10 @@ fn frost_nova_freezes_a_revenant_then_lets_it_go() {
     }
     let ability: AbilityState = player(&mut d.server, B).unwrap();
     assert!(ability.dash.is_none() && ability.ready_at == 0, "B dashed (or spent Rift Step) while frozen");
-    // B's client predicted itself walking and was rolled back to where the server holds it.
-    assert!(sees(&mut d.b, B).unwrap().distance(held) < 0.05, "B's client didn't end up frozen");
+    assert!(sees(&mut d.b, B).unwrap().distance(held) < 0.05, "B's client didn't show it frozen");
 
-    // Thawed, and not slowed (only frostbolts slow): B walks off at its full speed. It lets go of
-    // Q, and clicks again: its client predicted the Rift Step before it heard of the root, which
-    // dropped the walk.
+    // Thawed, and not slowed (only frostbolts slow): B walks off at its full speed, to where it
+    // was told to before the root (the Q pressed meanwhile was used up, doing nothing).
     assert!(chill.slow == 0.0 || chill.slow_ticks == 0, "the nova shouldn't slow");
     d.until(Duration::from_secs(1), "the root wears off", |d| server_tick(d) > frozen.rooted.until + 2);
     edit_input(&mut d.b, |i| (i.move_to, i.ability) = (Some(away), false));
@@ -131,7 +128,7 @@ fn frost_nova_freezes_a_revenant_then_lets_it_go() {
     let (from, from_tick) = (server_player(&mut d.server, B).0, server_tick(&mut d));
     d.run(Duration::from_millis(300));
     let (to, to_tick) = (server_player(&mut d.server, B).0, server_tick(&mut d));
-    let speed = from.distance(to) / ((to_tick - from_tick) as f32 / 64.0);
+    let speed = from.distance(to) / ((to_tick - from_tick) as f32 / arena_shared::config::TICK_HZ as f32);
     let expected = class_id("revenant").def().move_speed;
     println!("thawed B walked {speed:.2} m/s (expected {expected:.2})");
     assert!((speed - expected).abs() < 0.3, "thawed B walked at {speed} m/s, expected {expected}");

@@ -1,5 +1,6 @@
-//! Game client: connects to the server, joins a room (`rooms.rs`), picks a class, sends inputs,
-//! and predicts its own player, projectiles and swings.
+//! Game client: connects to the server, joins a room (`rooms.rs`), picks a class, and sends
+//! commands (`PlayerCommand`), League style: nothing is predicted. Our own fighter is shown as the
+//! server last said it was; others are interpolated.
 //!
 //! The networking part (`ClientNetPlugin`) has no rendering, so integration tests can run it
 //! headless as a bot. `render` adds the window, 3D scene and keyboard/mouse input on top.
@@ -9,14 +10,10 @@ use std::time::Duration;
 
 use arena_shared::config::*;
 use arena_shared::protocol::*;
-use arena_shared::sim;
 use bevy::prelude::*;
-use lightyear::core::timeline::is_in_rollback;
 use lightyear::netcode::NetcodeClient;
 use lightyear::netcode::client_plugin::NetcodeConfig;
-use lightyear::prelude::client::input::InputSystems;
 use lightyear::prelude::client::*;
-use lightyear::prelude::input::native::{ActionState, InputMarker};
 use lightyear::prelude::*;
 
 #[cfg(feature = "render")]
@@ -88,14 +85,29 @@ pub struct ClientSettings {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PlayerControls;
 
+/// Sends the server what changed in `DesiredInput` (`send_commands`); after `PlayerControls` and
+/// the bot.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SendCommands;
+
 /// The class this client enters the arena as. Sent to the server whenever it's picked in a room.
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct ChosenClass(pub Option<ClassId>);
 
-/// What the local player wants to do this frame. Written by keyboard/mouse (render) or by a bot,
-/// then copied into the networked input buffer every tick.
+/// What the local player wants to do. Written by keyboard/mouse (render) or by a bot; what
+/// changes in it is sent to the server as commands. `move_to` is also where the destination
+/// marker is drawn: forgetting it here (arrived, attacking) only hides the marker, since the
+/// server forgets it by itself.
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct DesiredInput(pub PlayerInput);
+
+/// Set to stop walking (S): sent as `PlayerCommand::Stop`, then cleared.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub struct StopWalking(pub bool);
+
+/// Our own fighter (the one the server says we control).
+#[derive(Component, Debug)]
+pub struct Me;
 
 /// Builds a client app without rendering, for tests and bots.
 pub fn build_headless_client_app(settings: ClientSettings) -> App {
@@ -121,12 +133,8 @@ impl Plugin for ClientNetPlugin {
             guest_name: self.settings.guest_name.clone(),
         });
         app.init_resource::<DesiredInput>();
+        app.init_resource::<StopWalking>();
         app.insert_resource(ChosenClass(self.settings.class));
-        // Apply our own inputs immediately and cover the round trip with prediction.
-        app.insert_resource(
-            InputTimelineConfig::default().with_input_delay(InputDelayConfig::no_input_delay()),
-        );
-        app.insert_resource(PredictionManager::default());
 
         spawn_client_entity(app.world_mut(), &self.settings);
         app.add_systems(Startup, |mut commands: Commands, client: Single<Entity, With<Client>>| {
@@ -134,17 +142,8 @@ impl Plugin for ClientNetPlugin {
         });
 
         app.add_observer(mark_controlled_player);
-        // Not during rollback replays: lightyear replays the inputs it buffered then, and
-        // `write_input` would use up a Q press that hasn't been sent yet.
-        app.add_systems(
-            FixedPreUpdate,
-            write_input.in_set(InputSystems::WriteClientInputs).run_if(not(is_in_rollback)),
-        );
-        // Same rules, same order as the server, but only for what this client predicts.
-        app.add_systems(
-            FixedUpdate,
-            (predict_player_movement, predict_attack, predict_ability, cancel_walk_on_attack, predict_projectiles).chain(),
-        );
+        app.configure_sets(Update, SendCommands.after(PlayerControls));
+        app.add_systems(Update, (forget_walk_on_attack, send_commands).chain().in_set(SendCommands));
     }
 }
 
@@ -173,138 +172,86 @@ fn spawn_client_entity(world: &mut World, settings: &ClientSettings) {
     ));
 }
 
-/// The server marks our own player as `Controlled`; that's the one we write inputs to.
-fn mark_controlled_player(
-    trigger: On<Add, Controlled>,
-    players: Query<(), (With<PlayerId>, Without<InputMarker<PlayerInput>>)>,
-    mut commands: Commands,
-) {
+/// The server marks our own player as `Controlled`: that's `Me`.
+fn mark_controlled_player(trigger: On<Add, Controlled>, players: Query<(), With<PlayerId>>, mut commands: Commands) {
     if players.contains(trigger.entity) {
-        commands.entity(trigger.entity).insert(InputMarker::<PlayerInput>::default());
+        commands.entity(trigger.entity).insert(Me);
     }
 }
 
-/// Copies `DesiredInput` into the networked input. A Q press is sent for one tick.
-fn write_input(
+/// What `send_commands` last told the server.
+#[derive(Default)]
+struct Sent {
+    move_to: Option<Vec2>,
+    walk: Vec2,
+    fire: bool,
+    aim: Vec2,
+    /// When the attack or walk was last sent (`Time<Real>`), to send changes at most once a tick.
+    attack_at: Duration,
+    walk_at: Duration,
+}
+
+/// Sends the server what changed in `DesiredInput`: a new destination, a stop, walking keys, the
+/// attack pressed or let go (and, while it's held, the aim), a Q press. Clicks go out right away;
+/// changes that come with every mouse or camera move (aim, walking direction) at most once a
+/// tick. Nothing is sent while we have no fighter.
+fn send_commands(
+    time: Res<Time<Real>>,
     mut desired: ResMut<DesiredInput>,
-    mut query: Query<&mut ActionState<PlayerInput>, With<InputMarker<PlayerInput>>>,
+    mut stop: ResMut<StopWalking>,
+    me: Query<(), With<Me>>,
+    mut client: Query<&mut MessageSender<PlayerCommand>, (With<Client>, With<Connected>)>,
+    mut sent: Local<Sent>,
 ) {
-    if let Ok(mut action) = query.single_mut() {
-        action.0 = desired.0;
+    let (Ok(mut sender), false) = (client.single_mut(), me.is_empty()) else {
+        *sent = Sent::default();
+        desired.0.ability = false;
+        stop.0 = false;
+        return;
+    };
+    let mut send = |command| sender.send::<Reliable>(command);
+    let input = desired.0;
+    let now = time.elapsed();
+    let due = |at: Duration| now >= at + TICK_DURATION;
+    // Forgotten here (arrived, attacking, respawned) is forgotten on the server too: only a
+    // new destination, or S, is news.
+    if input.move_to != sent.move_to {
+        if let Some(point) = input.move_to {
+            send(PlayerCommand::MoveTo(point));
+        }
+        sent.move_to = input.move_to;
+    }
+    if std::mem::take(&mut stop.0) {
+        send(PlayerCommand::Stop);
+    }
+    let started_or_stopped = (input.walk == Vec2::ZERO) != (sent.walk == Vec2::ZERO);
+    if input.walk != sent.walk && (started_or_stopped || due(sent.walk_at)) {
+        send(PlayerCommand::Walk(input.walk));
+        (sent.walk, sent.walk_at) = (input.walk, now);
+    }
+    if input.fire != sent.fire || (input.fire && input.aim != sent.aim && due(sent.attack_at)) {
+        send(PlayerCommand::Attack { aim: input.aim, fire: input.fire });
+        (sent.fire, sent.aim, sent.attack_at) = (input.fire, input.aim, now);
+    }
+    if input.ability {
+        send(PlayerCommand::Cast(input.aim));
         desired.0.ability = false;
     }
 }
 
-/// Starting an attack or a dash drops the destination: afterwards you stand still, unless you
-/// clicked somewhere new meanwhile, which is then where you walk. Runs in the tick it starts, so
-/// a click read later that frame counts as the new one; once per attack or dash (by its start
-/// tick), so rollbacks replaying that tick don't drop it. (Arriving or being moved also forgets
-/// the destination; that's in `render::read_local_input`.)
-fn cancel_walk_on_attack(
+/// Starting an attack or a dash drops the destination (the server drops it by itself): hide its
+/// marker. Once per attack or dash (by its start tick), as the server's state shows it.
+fn forget_walk_on_attack(
     mut desired: ResMut<DesiredInput>,
-    me: Query<(&AttackState, &AbilityState), With<InputMarker<PlayerInput>>>,
-    mut cancelled_for: Local<[Option<u32>; 2]>,
+    me: Query<(&AttackState, &AbilityState), With<Me>>,
+    mut forgotten_for: Local<[Option<u32>; 2]>,
 ) {
     let Ok((attack, ability)) = me.single() else { return };
     let started = [attack.windup.map(|w| w.started_at), ability.dash.map(|d| d.started_at)];
-    for (started, cancelled) in started.into_iter().zip(cancelled_for.iter_mut()) {
-        if started.is_some() && *cancelled != started {
-            *cancelled = started;
+    for (started, forgotten) in started.into_iter().zip(forgotten_for.iter_mut()) {
+        if started.is_some() && *forgotten != started {
+            *forgotten = started;
             desired.0.move_to = None;
-        }
-    }
-}
-
-// The four systems below only run once the client's timeline is synced with the server
-// (`SyncedLocalTimeline` makes Bevy skip them until then).
-
-/// Our movement, right away. Slows and roots (`Chilled`) and hastes (`Hasted`) are the server's:
-/// one lands on us a round trip late, and the rollback it causes replays our movement with it
-/// from when it began.
-fn predict_player_movement(
-    synced: SyncedLocalTimeline,
-    mut players: Query<
-        (&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &mut AbilityState, (&Chilled, &Hasted), &Health),
-        (With<Predicted>, With<PlayerId>),
-    >,
-) {
-    let tick = synced.current_tick().0;
-    for (mut pos, class, input, attack, mut ability, (chilled, hasted), health) in &mut players {
-        if !health.alive() {
-            continue;
-        }
-        let mut next = *ability;
-        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, &mut next, chilled, hasted, tick)));
-        ability.set_if_neq(next);
-    }
-}
-
-/// Our auto-attack, right away: projectiles are spawned locally, swings are shown locally. Who
-/// gets hit (and damage) is up to the server.
-fn predict_attack(
-    synced: SyncedLocalTimeline,
-    mut commands: Commands,
-    mut players: Query<
-        (&PlayerId, &ClassId, &Pos, &ActionState<PlayerInput>, &mut AttackState, &mut LastSwing, &Health),
-        With<Predicted>,
-    >,
-) {
-    let tick = synced.current_tick().0;
-    for (id, class, pos, input, mut state, mut last_swing, health) in &mut players {
-        if !health.alive() {
-            continue;
-        }
-        let (next, released) = sim::step_attack(tick, id.0, *class, pos.0, &input.0, *state);
-        state.set_if_neq(next);
-        let Some(attack) = released else { continue };
-        match attack {
-            // Matched to the server's copy by hash when it arrives.
-            sim::Attack::Projectile(projectile) => {
-                commands.spawn(projectile.bundle());
-            }
-            sim::Attack::Melee(swing) => *last_swing = swing,
-        }
-    }
-}
-
-/// Our Q, right away: a thrown ability is spawned locally, a dash starts moving us, a nova's
-/// burst shows (from `AbilityState`). Who gets hit (and a dash readying the auto-attack) is up to
-/// the server.
-fn predict_ability(
-    synced: SyncedLocalTimeline,
-    mut commands: Commands,
-    mut players: Query<
-        (&PlayerId, &ClassId, &Pos, &ActionState<PlayerInput>, &Chilled, &mut AbilityState, &Health),
-        With<Predicted>,
-    >,
-) {
-    let tick = synced.current_tick().0;
-    for (id, class, pos, input, chilled, mut state, health) in &mut players {
-        if !health.alive() {
-            continue;
-        }
-        let (next, cast) = sim::step_ability(tick, id.0, *class, pos.0, &input.0, chilled, *state);
-        state.set_if_neq(next);
-        if let Some(sim::Cast::Throw(projectile)) = cast {
-            commands.spawn(projectile.bundle());
-        }
-    }
-}
-
-/// Every projectile, ours and others': where it is this tick. Others' arrive from the server
-/// a round trip late, with the position they had back then; this puts them where they really
-/// are now, on the same clock as our own player.
-fn predict_projectiles(
-    synced: SyncedLocalTimeline,
-    mut commands: Commands,
-    mut projectiles: Query<(Entity, &mut Pos, &Projectile)>,
-) {
-    let tick = synced.current_tick().0;
-    for (entity, mut pos, projectile) in &mut projectiles {
-        pos.set_if_neq(Pos(sim::projectile_pos(projectile, tick as f32)));
-        if sim::projectile_expired(pos.0, projectile, tick) {
-            // Rollback-aware despawn: restored if a rollback rewinds past this point.
-            commands.entity(entity).prediction_despawn();
         }
     }
 }

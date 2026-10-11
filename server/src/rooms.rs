@@ -18,11 +18,10 @@ use std::time::Duration;
 use arena_shared::protocol::*;
 use arena_shared::rooms::*;
 use bevy::prelude::*;
-use lightyear::prelude::input::native::ActionState;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
-use crate::{spawn_dummy, spawn_pickups, spawn_player};
+use crate::{Patrol, spawn_dummy, spawn_pickups, spawn_player};
 
 /// Server-only: the room a fighter, projectile or pickup is in.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -362,7 +361,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                 ctx.commands.entity(player).insert(Team(team));
             }
         }
-        RoomRequest::PlaceDummy(at) => {
+        RoomRequest::PlaceDummy { at, walks } => {
             let key = room_key.ok_or("You're not in a room")?;
             let room = lobby.rooms.get_mut(&key).expect("in it");
             if !room.practice {
@@ -374,11 +373,16 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             if !at.is_finite() || !arena_shared::map::map().walkable_at(at) {
                 return Err("A dummy can't stand there");
             }
+            let patrol = if walks { Some(Patrol::through(at).ok_or("No room for a dummy to walk there")?) } else { None };
             // Each class in turn.
             let class = ClassId::all().nth(room.dummies.len() % ClassId::all().count()).expect("a class");
             lobby.next_dummy += 1;
-            room.dummies.push(spawn_dummy(&mut ctx.commands, PeerId::Local(lobby.next_dummy), class, InRoom { key, net: room.net }, at));
-            info!(room = key.0, class = class.def().name, "target dummy placed");
+            let dummy = spawn_dummy(&mut ctx.commands, PeerId::Local(lobby.next_dummy), class, InRoom { key, net: room.net }, at);
+            if let Some(patrol) = patrol {
+                ctx.commands.entity(dummy).insert(patrol);
+            }
+            room.dummies.push(dummy);
+            info!(room = key.0, class = class.def().name, walks, "target dummy placed");
         }
         RoomRequest::NoCooldowns(on) => {
             let key = room_key.ok_or("You're not in a room")?;
@@ -522,17 +526,17 @@ fn handle_class_choices(
     }
 }
 
-/// A fighter whose input changes isn't idle.
+/// A fighter whose intent changes (by its player's commands) isn't idle.
 fn note_activity(
     time: Res<Time<Real>>,
     mut lobby: ResMut<Lobby>,
-    players: Query<(&ControlledBy, &ActionState<PlayerInput>), With<PlayerId>>,
+    players: Query<(&ControlledBy, &PlayerInput), With<PlayerId>>,
 ) {
     for (controlled_by, input) in &players {
         if let Some(guest) = lobby.guests.get_mut(&controlled_by.owner)
-            && guest.last_input != input.0
+            && guest.last_input != *input
         {
-            guest.last_input = input.0;
+            guest.last_input = *input;
             guest.active_at = time.elapsed();
         }
     }

@@ -39,8 +39,8 @@ use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use lightyear::prelude::*;
 
+use crate::Me;
 use crate::cloth::WardrobeAssets;
 use crate::feedback::AttackClock;
 use crate::arena::{self, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER};
@@ -77,7 +77,7 @@ impl SeenThrows {
 
 fn see_throws(
     shots: Query<&Projectile, Added<Projectile>>,
-    mut throwers: Query<(&PlayerId, &mut SeenThrows), Without<Predicted>>,
+    mut throwers: Query<(&PlayerId, &mut SeenThrows), Without<Me>>,
 ) {
     for shot in &shots {
         let Some((_, mut seen)) = throwers.iter_mut().find(|(id, _)| id.0 == shot.owner) else { continue };
@@ -208,22 +208,22 @@ fn moves(class_key: &str) -> &'static Moves {
 /// takes (at most the rest of it): draw, a clear hold at full draw, then a fast, committed
 /// strike, however long the windup.
 const DRAW_END: f32 = 0.5;
-const STRIKE_TICKS: f32 = 5.0;
+const STRIKE_TICKS: f32 = 2.5;
 /// How long (ticks) a strike's smear takes to snap back after it lands (`Moves::stretch`), and
 /// how much further down the arm the hand is pushed with it (a fraction of the stretch).
-const STRETCH_TICKS: f32 = 6.0;
+const STRETCH_TICKS: f32 = 3.0;
 const SMEAR_REACH: f32 = 0.4;
 /// A thrown weapon: ticks after a throw until a new one is in the hand.
-const REARM_TICKS: f32 = 12.0;
+const REARM_TICKS: f32 = 6.0;
 /// After the throw: how long (ticks) the follow-through is held, and when it's back to carrying.
-const FOLLOW_THROUGH: (f32, f32) = (3.0, 14.0);
+const FOLLOW_THROUGH: (f32, f32) = (1.5, 7.0);
 /// A melee windup started during the last strike's follow-through: how long (a fraction of the
 /// windup) what's left of the strike is still held before the blade comes back into the draw.
 const CHAIN_HOLD: f32 = 0.15;
 /// A thrown Q's flick: ticks after the throw until the arm starts and finishes coming back.
-const FLICK: (f32, f32) = (1.0, 10.0);
+const FLICK: (f32, f32) = (0.5, 5.0);
 /// A nova's slam: ticks after the cast until it starts and finishes rising out of it.
-const SLAM: (f32, f32) = (8.0, 24.0);
+const SLAM: (f32, f32) = (4.0, 12.0);
 /// How quickly a fighter turns toward where it wants to face, and eases in and out of its walk
 /// (per second, exponential).
 const TURN_RATE: f32 = 40.0;
@@ -492,7 +492,7 @@ fn pose_rigs(
         &AttackState,
         &AbilityState,
         Option<&SeenThrows>,
-        Has<Predicted>,
+        Has<Me>,
     )>,
     mut parts: Query<(&mut Transform, &mut Visibility), Without<Rig>>,
 ) {
@@ -668,7 +668,7 @@ fn pose_rigs(
 fn show_auras(
     time: Res<Time>,
     clock: Option<AttackClock>,
-    mut fighters: Query<(&Rig, &AttackState, Has<Predicted>, Option<&mut crate::swish::Blade>)>,
+    mut fighters: Query<(&Rig, &AttackState, Has<Me>, Option<&mut crate::swish::Blade>)>,
     mut parts: Query<(&mut Visibility, &mut Transform)>,
 ) {
     let t = time.elapsed_secs();

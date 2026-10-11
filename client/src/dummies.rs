@@ -3,7 +3,9 @@
 //! "No cooldowns" switches our Q's cooldown off and on (lit while off: what the server says, via
 //! our `AbilityState`). "Target dummy" places one: a ring under the cursor shows where it would stand
 //! (red where it can't), and the next left click stands it there (the server takes each class in
-//! turn); a right click or ESC cancels. Click it again for another. A hint says so meanwhile. Placing reads its own clicks (and ESC), before
+//! turn); a right click or ESC cancels. Click it again for another. A hint says so meanwhile.
+//! "Moving dummy" places one the same way that walks back and forth along a line through the spot
+//! (the server picks the line), to practice hitting something that moves. Placing reads its own clicks (and ESC), before
 //! the fight's controls and the menu, and takes them: a placing click never also attacks or walks.
 
 use arena_shared::config::PLAYER_RADIUS;
@@ -13,6 +15,8 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
+
+use crate::Me;
 
 use crate::arena::{self, palette, to_world};
 use crate::camera::CameraPlaced;
@@ -37,16 +41,20 @@ impl Plugin for DummiesPlugin {
     }
 }
 
-/// Whether we're placing a target dummy.
-#[derive(Resource, Default)]
-struct Placing(bool);
+/// Whether we're placing a target dummy, and if so whether it walks.
+#[derive(Resource, Default, PartialEq)]
+struct Placing(Option<Walks>);
+
+#[derive(Clone, Copy, PartialEq)]
+struct Walks(bool);
 
 /// The practice tools' panel, while practicing.
 #[derive(Component)]
 struct Tools;
 
+/// Places a dummy: a standing one, or (`Walks(true)`) one that walks back and forth.
 #[derive(Component)]
-struct DummyButton;
+struct DummyButton(Walks);
 
 #[derive(Component)]
 struct CooldownsButton;
@@ -90,7 +98,10 @@ fn show_tools(mut commands: Commands, room: Res<CurrentRoom>, tools: Query<Entit
                                 .spawn(Node { width: px(32.0), justify_content: JustifyContent::FlexEnd, ..default() })
                                 .with_child((CooldownsState, ui_text("OFF", 13.0, palette::ui::MUTED)));
                         });
-                    tools.spawn((DummyButton, HudButton, button("Target dummy", 13.0, palette::ui::PANEL, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5))));
+                    for (walks, label) in [(false, "Target dummy"), (true, "Moving dummy")] {
+                        let look = button(label, 13.0, palette::ui::PANEL, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5));
+                        tools.spawn((DummyButton(Walks(walks)), HudButton, look));
+                    }
                 })
                 .id();
             let header = commands.spawn((ToolsHeader { chevron, tools, open: true }, fold_header())).add_children(&[chevron, label]).id();
@@ -105,7 +116,7 @@ fn close_tools(mut commands: Commands, tools: Query<Entity, With<Tools>>, mut pl
     for tools in &tools {
         commands.entity(tools).despawn();
     }
-    placing.0 = false;
+    placing.0 = None;
 }
 
 /// The tools under the header: folded away, they keep their width (so the panel stays the same
@@ -144,17 +155,19 @@ fn fold_tools(
     }
 }
 
-/// The dummy button starts placing one (or, while placing, cancels it).
-fn use_tools(buttons: Query<Ref<Interaction>, With<DummyButton>>, mut placing: ResMut<Placing>) {
-    if buttons.iter().any(clicked) {
-        placing.0 = !placing.0;
+/// A dummy button starts placing its kind (or, while placing that kind, cancels it).
+fn use_tools(buttons: Query<(Ref<Interaction>, &DummyButton)>, mut placing: ResMut<Placing>) {
+    for (interaction, button) in &buttons {
+        if clicked(interaction) {
+            placing.0 = if placing.0 == Some(button.0) { None } else { Some(button.0) };
+        }
     }
 }
 
 /// The "No cooldowns" switch asks the server for the other way round from how our Q is now, and
 /// shows how it is.
 fn toggle_cooldowns(
-    me: Query<&AbilityState, With<Predicted>>,
+    me: Query<&AbilityState, With<Me>>,
     button: Single<(Ref<Interaction>, &mut BorderColor), With<CooldownsButton>>,
     state: Single<(&mut Text, &mut TextColor), With<CooldownsState>>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
@@ -190,23 +203,21 @@ fn place_dummy(
     controls: Query<&Interaction, With<HudButton>>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
-    if !placing.0 {
-        return;
-    }
+    let Some(Walks(walks)) = placing.0 else { return };
     let on_control = controls.iter().any(|i| *i != Interaction::None);
     if mouse.just_pressed(MouseButton::Left) && !on_control {
         if let Some(at) = cursor_ground(&window, *camera).filter(|at| map().walkable_at(*at)) {
-            request(&mut sender, RoomRequest::PlaceDummy(at));
-            placing.0 = false;
+            request(&mut sender, RoomRequest::PlaceDummy { at, walks });
+            placing.0 = None;
         }
         mouse.reset(MouseButton::Left);
     }
     if mouse.just_pressed(MouseButton::Right) {
-        placing.0 = false;
+        placing.0 = None;
         mouse.reset(MouseButton::Right);
     }
     if keys.just_pressed(KeyCode::Escape) {
-        placing.0 = false;
+        placing.0 = None;
         keys.reset(KeyCode::Escape);
     }
 }
@@ -239,7 +250,7 @@ fn show_marker(
     marker: Single<(&Marker, &mut Transform, &mut MeshMaterial3d<StandardMaterial>, &mut Visibility)>,
 ) {
     let (marker, mut transform, mut material, mut visibility) = marker.into_inner();
-    let at = cursor_ground(&window, *camera).filter(|_| placing.0);
+    let at = cursor_ground(&window, *camera).filter(|_| placing.0.is_some());
     visibility.set_if_neq(shown(at.is_some()));
     let Some(at) = at else { return };
     transform.translation = to_world(at, 0.04);
@@ -257,23 +268,24 @@ fn show_hint(mut commands: Commands, placing: Res<Placing>, hint: Query<Entity, 
     if !placing.is_changed() {
         return;
     }
-    match (placing.0, hint.single().ok()) {
-        (true, None) => {
-            commands.spawn((
-                Hint,
-                GameUi,
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: px(56.0),
-                    width: percent(100.0),
-                    justify_content: JustifyContent::Center,
-                    ..default()
-                },
-                Pickable::IGNORE,
-                children![ui_text("Click to place a target dummy  ·  right-click or ESC to cancel", 14.0, palette::ui::ACCENT)],
-            ));
-        }
-        (false, Some(hint)) => commands.entity(hint).despawn(),
-        _ => {}
+    // Rebuilt when it changes (switching from one kind of dummy to the other).
+    if let Ok(hint) = hint.single() {
+        commands.entity(hint).despawn();
+    }
+    if let Some(Walks(walks)) = placing.0 {
+        let what = if walks { "a moving dummy (it walks back and forth)" } else { "a target dummy" };
+        commands.spawn((
+            Hint,
+            GameUi,
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(56.0),
+                width: percent(100.0),
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            Pickable::IGNORE,
+            children![ui_text(format!("Click to place {what}  ·  right-click or ESC to cancel"), 14.0, palette::ui::ACCENT)],
+        ));
     }
 }

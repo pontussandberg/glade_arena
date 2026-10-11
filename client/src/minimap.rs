@@ -10,8 +10,8 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use lightyear::prelude::*;
 
+use crate::Me;
 use crate::camera::CameraPlaced;
 use crate::feedback::AttackClock;
 use crate::arena::{self, palette};
@@ -116,7 +116,7 @@ fn spawn_minimap(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 fn spawn_dots(
     mut commands: Commands,
     minimap: Single<Entity, With<Minimap>>,
-    new: Query<(Entity, Has<Predicted>), (With<PlayerId>, Added<Mesh3d>)>,
+    new: Query<(Entity, Has<Me>), (With<PlayerId>, Added<Mesh3d>)>,
 ) {
     for (player, is_me) in &new {
         let dot = commands

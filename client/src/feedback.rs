@@ -1,14 +1,19 @@
 //! Combat feedback: a health bar over every fighter with a cast bar under it while it winds up
-//! an attack, a white flash and a damage number when one takes damage (a crit's bigger and
+//! an attack, the health lost lingering on the bar a moment before it drains (gold, longer, and
+//! with the bar popping on a crit), a white flash and a damage number when one takes damage (a crit's bigger and
 //! golden), a green number when one is healed, and dead fighters disappearing until they
 //! respawn.
 
+use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use lightyear::core::time::TickInstant;
 use lightyear::interpolation::timeline::InterpolationTimeline;
+use lightyear::prelude::client::RemoteTimeline;
 use lightyear::prelude::*;
+
+use crate::Me;
 
 use crate::camera::CameraPlaced;
 use crate::arena::{palette, to_world};
@@ -45,6 +50,16 @@ const CAST_BAR_HEIGHT: f32 = 6.0;
 /// A mark across the health bar every this much health, for scale.
 const HP_PER_TICK: i32 = 25;
 const FLASH_SECONDS: f32 = 0.12;
+/// Health just lost stays on the bar as a pale chunk: white at the hit, paling to `SUN` over
+/// `TRAIL_HOLD` seconds (each new hit starts it over, so a combo adds up), then draining to the
+/// health left, closing `TRAIL_DRAIN` of the gap a second (eased: fast, then settling).
+const TRAIL_HOLD: f32 = 0.225;
+const TRAIL_DRAIN: f32 = 10.0;
+/// A crit's trail starts flame-gold (like its number) and holds `CRIT_TRAIL_HOLD` instead, and
+/// the bar pops `CRIT_BAR_POP` bigger, settling over `CRIT_BAR_POP_SECONDS`.
+const CRIT_TRAIL_HOLD: f32 = 0.6;
+const CRIT_BAR_POP: f32 = 0.15;
+const CRIT_BAR_POP_SECONDS: f32 = 0.15;
 /// How bright the flash is (emissive white on the fighter's own material).
 const FLASH_GLOW: f32 = 3.0;
 
@@ -67,9 +82,26 @@ const NUMBER_SPREAD: f32 = 14.0;
 struct Bars {
     player: Entity,
     health_fill: Entity,
+    trail: Entity,
     cast: Entity,
     cast_fill: Entity,
 }
+
+/// The health a bar's trail (`Bars::trail`) still shows, as a fraction of the most; the health
+/// it saw last frame, to tell a new hit; when the last hit landed; and when the last crit we
+/// saw (`CritAt`) landed, and whether the trail still shows one (until it has drained).
+#[derive(Component)]
+struct HealthTrail {
+    fraction: f32,
+    last: f32,
+    hit_at: f32,
+    crit_at: f32,
+    crit: bool,
+}
+
+/// When this fighter last took a crit we showed a number for.
+#[derive(Component)]
+struct CritAt(f32);
 
 /// The last health we showed for this fighter, to tell a hit from a heal or a respawn.
 #[derive(Component)]
@@ -111,7 +143,7 @@ fn spawn_world_ui(mut commands: Commands) {
 }
 
 /// Each fighter gets its bars once it has a body.
-fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, new: Query<(Entity, &ClassId, Has<Predicted>), (With<PlayerId>, Added<Mesh3d>)>) {
+fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, new: Query<(Entity, &ClassId, Has<Me>), (With<PlayerId>, Added<Mesh3d>)>) {
     let fill = |color: Color| (Node { width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(color));
     let frame = |node: Node| {
         (
@@ -121,6 +153,10 @@ fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, n
         )
     };
     for (player, class, is_me) in &new {
+        // Behind the fill (spawned before it), reaching past it to show health just lost.
+        let trail = commands
+            .spawn((Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(Color::WHITE)))
+            .id();
         let health_fill = commands.spawn(fill(Relation::of(is_me, false).color())).id();
         // Over the fill (spawned after it), at every `HP_PER_TICK` of the fighter's health.
         let max_hp = class.def().max_hp;
@@ -145,11 +181,13 @@ fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, n
             .id();
         commands
             .spawn((
-                Bars { player, health_fill, cast, cast_fill },
+                Bars { player, health_fill, trail, cast, cast_fill },
+                HealthTrail { fraction: 1.0, last: 1.0, hit_at: 0.0, crit_at: 0.0, crit: false },
                 ChildOf(*world_ui),
                 frame(Node { width: px(BAR_SIZE.x), height: px(BAR_SIZE.y), ..default() }),
                 Visibility::Hidden,
             ))
+            .add_child(trail)
             .add_child(health_fill)
             .add_children(&ticks)
             .add_child(cast);
@@ -179,23 +217,60 @@ fn over_bar(camera: &Camera, camera_transform: &GlobalTransform, pos: &Pos) -> O
     camera.world_to_viewport(camera_transform, to_world(pos.0, BAR_HEIGHT)).ok()
 }
 
+/// How far behind the latest state from the server our own fighter is drawn, in ticks: enough
+/// that the next update is (almost) always in by the time it's needed, so it moves smoothly
+/// between updates however unevenly they arrive (`render::glide_me`).
+pub(crate) const ME_BEHIND_TICKS: f32 = 1.0;
+
+/// The server tick our latest news from it is from, advancing smoothly with real time between
+/// packets (`advance_latest_clock`): a packet from tick T arrives about when this reads T.
+#[derive(Resource, Default)]
+pub(crate) struct LatestClock {
+    tick: Option<f32>,
+    /// The tick of the latest packet from the server.
+    pub(crate) latest: Option<u32>,
+}
+
+/// How hard each new packet pulls the clock toward its tick (a little: arrivals are uneven), and
+/// how far off it may be before it's set straight there instead (after a stall, at the start).
+const CLOCK_PULL: f32 = 0.1;
+const CLOCK_SNAP_TICKS: f32 = 4.0;
+
+pub(crate) fn advance_latest_clock(time: Res<Time<Real>>, remote: Query<&RemoteTimeline, With<Client>>, mut clock: ResMut<LatestClock>) {
+    let Some(latest) = remote.single().ok().and_then(|r| r.last_received_tick()).map(|t| t.0) else { return };
+    let mut tick = clock.tick.map_or(latest as f32, |t| t + time.delta_secs() * TICK_HZ as f32);
+    if clock.latest != Some(latest) {
+        let off = latest as f32 - tick;
+        tick = if off.abs() > CLOCK_SNAP_TICKS { latest as f32 } else { tick + off * CLOCK_PULL };
+    }
+    (clock.tick, clock.latest) = (Some(tick), Some(latest));
+}
+
 /// "Now" in fractional ticks, on the timeline a fighter is shown on, to compare with its
-/// `AttackState`: ours is predicted (our own windup starts at the click), others' are
-/// interpolated (their windup plays out in step with their delayed position).
+/// `AttackState`. Ours: `LatestClock` less `ME_BEHIND_TICKS`. Others' are interpolated (their
+/// windup plays out in step with their delayed position). Projectiles go by ours, so a shot
+/// coming at us is drawn where it is relative to us.
 #[derive(SystemParam)]
-pub(crate) struct AttackClock<'w, 's> {
-    local: SyncedLocalTimeline<'w, 's>,
-    fixed: Res<'w, Time<Fixed>>,
+pub(crate) struct AttackClock<'w> {
+    latest: Option<Res<'w, LatestClock>>,
     interpolation: Option<Res<'w, InterpolationTimeline>>,
 }
 
-impl AttackClock<'_, '_> {
-    pub(crate) fn now(&self, predicted: bool) -> f32 {
+impl AttackClock<'_> {
+    pub(crate) fn now(&self, me: bool) -> f32 {
         let ticks = |t: TickInstant| t.tick().0 as f32 + t.overstep().to_f32();
-        match &self.interpolation {
-            Some(timeline) if !predicted => ticks(timeline.now),
-            _ => ticks(self.local.instant(&self.fixed)),
+        let mine = self.latest.as_ref().and_then(|c| c.tick).map(|t| t - ME_BEHIND_TICKS);
+        match (&self.interpolation, mine) {
+            (Some(timeline), _) if !me => ticks(timeline.now),
+            (_, Some(mine)) => mine,
+            (Some(timeline), None) => ticks(timeline.now),
+            (None, None) => 0.0,
         }
+    }
+
+    /// The tick of the latest packet from the server: what a state that just arrived is from.
+    pub(crate) fn latest_tick(&self) -> Option<u32> {
+        self.latest.as_ref().and_then(|c| c.latest)
     }
 }
 
@@ -203,18 +278,23 @@ impl AttackClock<'_, '_> {
 /// changed, so a still scene doesn't make Bevy lay out the UI again every frame.
 fn place_bars(
     mut commands: Commands,
+    time: Res<Time>,
     clock: AttackClock,
     camera: Single<(&Camera, &GlobalTransform)>,
-    players: Query<(&Pos, &ClassId, Option<&Health>, &AttackState, Option<&SeenThrows>, Has<Predicted>)>,
-    mut bars: Query<(Entity, &Bars, &mut Node, &mut Visibility)>,
+    players: Query<(&Pos, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Option<&SeenThrows>, Has<Me>)>,
+    mut bars: Query<(Entity, &Bars, &mut HealthTrail, &mut Node, &mut UiTransform, &mut Visibility)>,
     mut parts: Query<(&mut Node, &mut Visibility), Without<Bars>>,
+    mut colors: Query<&mut BackgroundColor>,
 ) {
     let (camera, camera_transform) = *camera;
-    for (bar, ids, mut node, mut visibility) in &mut bars {
-        let Ok((pos, class, health, attack, seen, is_me)) = players.get(ids.player) else {
+    let now = time.elapsed_secs();
+    for (bar, ids, mut trail, mut node, mut transform, mut visibility) in &mut bars {
+        let Ok((pos, class, health, crit_at, attack, seen, is_me)) = players.get(ids.player) else {
             commands.entity(bar).despawn();
             continue;
         };
+        let health_fraction = health.map_or(1.0, |h| h.0 as f32 / class.def().max_hp as f32);
+        update_trail(&mut trail, health_fraction, crit_at.map(|c| c.0), now, time.delta_secs());
         let alive = health.is_none_or(Health::alive);
         let Some(screen) = over_bar(camera, camera_transform, pos).filter(|_| alive) else {
             visibility.set_if_neq(Visibility::Hidden);
@@ -232,7 +312,15 @@ fn place_bars(
                 set_fill(&mut fill, fraction);
             }
         };
-        fill_to(ids.health_fill, health.map_or(1.0, |h| h.0 as f32 / class.def().max_hp as f32));
+        fill_to(ids.health_fill, health_fraction);
+        fill_to(ids.trail, trail.fraction);
+        if let Ok(mut color) = colors.get_mut(ids.trail) {
+            let (start, hold) = if trail.crit { (palette::TORCH_FLAME, CRIT_TRAIL_HOLD) } else { (Color::WHITE, TRAIL_HOLD) };
+            let pale = ((now - trail.hit_at) / hold).min(1.0);
+            color.set_if_neq(BackgroundColor(start.mix(&palette::SUN, pale)));
+        }
+        let pop = 1.0 + CRIT_BAR_POP * (1.0 - (now - trail.crit_at) / CRIT_BAR_POP_SECONDS).max(0.0).powi(2);
+        transform.set_if_neq(UiTransform { scale: Vec2::splat(pop), ..default() });
         let windup = SeenThrows::windup(seen, attack);
         if let Some(windup) = windup {
             fill_to(ids.cast_fill, windup.progress(clock.now(is_me), *class));
@@ -240,6 +328,34 @@ fn place_bars(
         if let Ok((_, mut cast_visibility)) = parts.get_mut(ids.cast) {
             cast_visibility.set_if_neq(shown(windup.is_some()));
         }
+    }
+}
+
+/// Move a bar's trail along: up with the health at once (a heal or respawn), held where it was
+/// for `TRAIL_HOLD` after each hit (`CRIT_TRAIL_HOLD` while it shows a crit), then draining
+/// down to the health. A crit can be seen a frame apart from its health drop (they're separate
+/// components), so it starts the hold over too.
+fn update_trail(trail: &mut HealthTrail, health: f32, crit_at: Option<f32>, now: f32, dt: f32) {
+    if health < trail.last {
+        trail.hit_at = now;
+    }
+    trail.last = health;
+    if let Some(crit_at) = crit_at.filter(|&at| at > trail.crit_at) {
+        trail.crit_at = crit_at;
+        trail.crit = true;
+        trail.hit_at = now;
+    }
+    let hold = if trail.crit { CRIT_TRAIL_HOLD } else { TRAIL_HOLD };
+    if health >= trail.fraction {
+        trail.fraction = health;
+    } else if now - trail.hit_at >= hold {
+        let gap = (trail.fraction - health) * (-TRAIL_DRAIN * dt).exp();
+        // Snapped shut once too thin to see, so a still bar stops changing.
+        trail.fraction = if gap < 0.002 { health } else { health + gap };
+    }
+    // Not while the crit is fresh: its health drop may be yet to come.
+    if trail.fraction <= health && now - trail.crit_at >= hold {
+        trail.crit = false;
     }
 }
 
@@ -313,7 +429,7 @@ fn spawn_damage_numbers(
     mut commands: Commands,
     time: Res<Time>,
     world_ui: Single<Entity, With<WorldUi>>,
-    mut players: Query<(Entity, &RecentHits, Option<&mut ShownHits>, Has<Predicted>), Changed<RecentHits>>,
+    mut players: Query<(Entity, &RecentHits, Option<&mut ShownHits>, Has<Me>), Changed<RecentHits>>,
 ) {
     for (player, recent, shown, is_me) in &mut players {
         let Some(mut shown) = shown else {
@@ -323,6 +439,9 @@ fn spawn_damage_numbers(
         let last = std::mem::replace(&mut shown.0, recent.seq());
         for (i, hit) in recent.0.iter().filter(|hit| hit.seq > last).enumerate() {
             let crit = hit.kind == HitKind::Crit;
+            if crit {
+                commands.entity(player).insert(CritAt(time.elapsed_secs()));
+            }
             let (text, size, color) = match (hit.kind, is_me) {
                 (HitKind::Heal, _) => (format!("+{}", hit.amount), NUMBER_SIZE, palette::HEAL),
                 (HitKind::Crit, _) => (format!("{}!", hit.amount), CRIT_NUMBER_SIZE, palette::TORCH_FLAME),

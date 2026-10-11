@@ -1,5 +1,5 @@
-//! Input edge cases: one server and one client, mostly with the client stepped at an unhealthy
-//! rate.
+//! Command edge cases: one server and one client, mostly with the client stepped at an
+//! unhealthy rate.
 
 use std::time::{Duration, Instant};
 
@@ -81,14 +81,13 @@ impl Pair {
     }
 }
 
-/// Regression: our own projectiles used to carry `PlayerId` and be `Controlled`, so they also got
-/// an `InputMarker` and the client stopped writing the player's inputs. Holding fire keeps a
-/// projectile alive, so the player stayed stuck firing forever. Found in a ~4 fps headless browser.
+/// Regression: a player once stayed stuck firing forever after letting go, at ~4 fps (found in a
+/// headless browser). Letting go of fire must stop it, however slow the client.
 #[test]
 fn releasing_fire_stops_firing_at_4_fps() {
     let mut p = Pair::new(5898);
     let frame = Some(Duration::from_millis(250));
-    // Until our player is predicted (slow under load at 4 fps), then a little longer to settle.
+    // Until we have our player (slow under load at 4 fps), then a little longer to settle.
     let end = Instant::now() + Duration::from_secs(20);
     while !client_view(&mut p.client, CLIENT).is_some_and(|v| v.2) {
         assert!(Instant::now() < end, "never got our player at 4 fps");
@@ -96,8 +95,7 @@ fn releasing_fire_stops_firing_at_4_fps() {
     }
     p.run(Duration::from_secs(2), frame);
 
-    // Fire held for two frames: one frame's input alone can arrive too late under load and be
-    // dropped as stale. Still well under the cooldown, so one shot.
+    // Fire held for two frames, well under the cooldown, so one shot.
     p.input(PlayerInput { aim: Vec2::X, fire: true, ..default() });
     p.run(Duration::from_millis(500), frame);
     p.input(PlayerInput::default());
@@ -125,7 +123,7 @@ fn attacking_cancels_the_walk_until_the_next_click() {
     p.until(Duration::from_secs(1), "the attack goes off on the server", |p| {
         player::<AttackState>(&mut p.server, CLIENT).is_some_and(|a| a.windup.is_none())
     });
-    p.run(Duration::from_millis(100), SMOOTH); // inputs still in flight
+    p.run(Duration::from_millis(100), SMOOTH); // let anything in flight land
     let after_attack = p.server_pos();
     p.run(Duration::from_millis(250), SMOOTH);
     let drift = after_attack.distance(p.server_pos());
@@ -142,29 +140,32 @@ fn attacking_cancels_the_walk_until_the_next_click() {
     });
 }
 
-/// A client that stops sending inputs mid-move (frozen tab, hang) should stand still on the
-/// server instead of running on its last input until it times out.
+/// A client that freezes mid-walk (frozen tab, hang): its fighter carries on with its last order
+/// on the server, as in League, and walks all the way to the click. Once the client is back, its
+/// next command takes over.
 #[test]
-fn frozen_client_stops_moving_on_server() {
+fn frozen_client_keeps_its_last_order() {
     let mut p = Pair::new(5897);
-    p.run(Duration::from_secs(4), SMOOTH);
+    p.until(Duration::from_secs(5), "our player is spawned", |p| client_view(&mut p.client, CLIENT).is_some_and(|v| v.2));
 
-    // Click across the map, so the walk is still going when the client freezes.
+    // A click a few meters off, so the walk is still going when the client freezes.
     let start = p.server_pos();
-    p.input(PlayerInput { move_to: Some(Map::center(Map::tile_of(-start))), ..default() });
-    p.run(Duration::from_millis(500), SMOOTH);
-    let before_freeze = p.server_pos();
-    p.run(Duration::from_millis(1000), None);
-    let after_freeze = p.server_pos();
-    let drift = before_freeze.distance(after_freeze);
-    let speed = class_id(CLASS).def().move_speed;
-    println!("moved {drift:.2} units during a 1s freeze (full speed would be {speed})");
-    // Input still in flight plus the stale-input grace period: well under 0.5 s of movement.
-    assert!(drift < speed * 0.5, "server kept moving a frozen client");
+    let goal = map().nearest_walkable(Map::tile_of(start) + IVec2::new(0, 5), 2).expect("open ground nearby");
+    p.input(PlayerInput { move_to: Some(Map::center(goal)), ..default() });
+    p.run(Duration::from_millis(300), SMOOTH);
+    assert_ne!(p.server_pos(), start, "the walk didn't start");
+    // Under the 3 s it takes the server to drop a silent client.
+    p.run(Duration::from_secs(2), None);
+    assert_eq!(p.server_pos(), Map::center(goal), "a frozen client's fighter should finish its walk");
+
+    // Back: a new click is walked to.
+    let back = Map::center(Map::tile_of(start));
+    p.input(PlayerInput { move_to: Some(back), ..default() });
+    p.until(Duration::from_secs(5), "we walk back once unfrozen", |p| p.server_pos() == back);
 }
 
 /// Walking with the keys (free camera): the server walks the player that way at its speed,
-/// overriding a click, the client predicts the same spot, and letting go stops it.
+/// overriding a click, the client shows the same spot, and letting go stops it.
 #[test]
 fn key_walking_moves_on_the_server_and_stops_on_release() {
     let mut p = Pair::new(5887);
@@ -185,6 +186,6 @@ fn key_walking_moves_on_the_server_and_stops_on_release() {
     let stopped = p.server_pos();
     p.run(Duration::from_millis(300), SMOOTH);
     assert!(stopped.distance(p.server_pos()) < 0.01, "kept walking after the keys were let go");
-    let predicted = client_view(&mut p.client, CLIENT).unwrap().0;
-    assert!(predicted.distance(p.server_pos()) < 0.05, "client predicted {predicted}, server has {}", p.server_pos());
+    let shown = client_view(&mut p.client, CLIENT).unwrap().0;
+    assert!(shown.distance(p.server_pos()) < 0.05, "client shows {shown}, server has {}", p.server_pos());
 }

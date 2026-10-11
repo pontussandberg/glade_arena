@@ -1,9 +1,7 @@
-//! Wire protocol: replicated components, player inputs and messages.
+//! Wire protocol: replicated components, player commands and messages.
 
-use bevy::ecs::entity::MapEntities;
 use bevy::math::Curve;
 use bevy::prelude::*;
-use lightyear::input::prelude::InputConfig;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -37,13 +35,13 @@ impl Ease for Pos {
     }
 }
 
-/// Server-authoritative; replicated but never predicted. The maximum is the class's `max_hp`.
+/// Server-authoritative and replicated. The maximum is the class's `max_hp`.
 /// Zero means dead and waiting to respawn: hidden, and can't move or attack.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Health(pub i32);
 
 impl Health {
-    /// The one rule for "in the fight" on the client: prediction, drawing and the bot use it.
+    /// The one rule for "in the fight" on the client: drawing and the bot use it.
     pub fn alive(&self) -> bool {
         self.0 > 0
     }
@@ -91,9 +89,8 @@ impl RecentHits {
 }
 
 /// The auto-attack's state: the windup in progress (if any; the next may start once it's off),
-/// and when the last one went off. Predicted, so your own windup starts instantly and rollbacks
-/// restore it; replicated (and shown on the same delayed timeline as others' positions), so
-/// others see your windup coming.
+/// and when the last one went off. Server-authoritative and replicated: others' is shown on the
+/// same delayed timeline as their positions, so they see your windup coming.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct AttackState {
     pub windup: Option<Windup>,
@@ -147,8 +144,8 @@ fn hold<C>(start: C, _end: C, _t: f32) -> C {
 
 /// The Q ability's state: when it may be used again, when the global cooldown is over (shared by
 /// every ability on it, `GLOBAL_COOLDOWN_TICKS`), a dash in progress, and whether it has no
-/// cooldown of its own (practice's tool; the server sets it; the global cooldown still runs). Predicted (your own Q happens at the press),
-/// replicated and shown on the same delayed timeline as others' positions, like `AttackState`.
+/// cooldown of its own (practice's tool; the server sets it; the global cooldown still runs).
+/// Server-authoritative, replicated and shown like `AttackState`.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct AbilityState {
     pub ready_at: u32,
@@ -190,10 +187,8 @@ pub struct Dash {
 }
 
 /// Crowd control on a player: how much it's slowed and when, and when it's frozen in place
-/// (rooted). Server-authoritative like `Health`: replicated, never predicted. The spans are in
-/// ticks, so a client's own predicted movement replays them exactly after a rollback (a span
-/// that hadn't started yet doesn't apply to the ticks before it), and others' are shown on the
-/// timeline they're drawn on.
+/// (rooted). Server-authoritative like `Health`. The spans are in ticks, so each fighter's are
+/// shown on the timeline it's drawn on (a span that hadn't started yet doesn't apply before it).
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct Chilled {
     /// The fraction of speed taken away while `slowed`.
@@ -250,8 +245,7 @@ impl Chilled {
 }
 
 /// Walking faster: `HASTE_FACTOR` times as fast during the span. From a haste pickup.
-/// Server-authoritative like `Chilled` (replicated, never predicted, in ticks for the same
-/// reasons).
+/// Server-authoritative like `Chilled` (in ticks for the same reason).
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct Hasted(pub Span);
 
@@ -287,8 +281,7 @@ pub struct Pickup {
     pub taken_by: Option<PeerId>,
 }
 
-/// The player's most recent melee swing, for drawing it. Predicted, so your own swing shows
-/// instantly, and replicated, so others see it too.
+/// The player's most recent melee swing, for drawing it. Server-authoritative and replicated.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct LastSwing {
     pub tick: u32,
@@ -310,20 +303,16 @@ pub struct Projectile {
 }
 
 impl Projectile {
-    /// Everything a newly fired projectile spawns with, on both client and server. The shared
-    /// `PreSpawned` hash is what matches the server's copy to the one the client predicted.
+    /// Everything a newly fired projectile spawns with on the server.
     pub fn bundle(self) -> impl Bundle {
-        (
-            Name::from("Projectile"),
-            Pos(self.origin),
-            self,
-            PreSpawned::new(crate::sim::projectile_prespawn_hash(&self)),
-        )
+        (Name::from("Projectile"), Pos(self.origin), self)
     }
 }
 
-/// Everything a client sends each tick. Clients never send positions, only intent.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+/// What a player wants to do: kept by the server on its fighter, changed by the `PlayerCommand`s
+/// its client sends (the moment they arrive), and what the sim runs on each tick. Clients never
+/// send positions, only intent.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Reflect)]
 pub struct PlayerInput {
     /// Point the player right-clicked to walk to (`Map::walk_target` of the click). The sim
     /// pathfinds there; `None` stands still.
@@ -335,12 +324,54 @@ pub struct PlayerInput {
     pub aim: Vec2,
     /// Left mouse held: auto-attack toward `aim`.
     pub fire: bool,
-    /// Q pressed: use the ability toward `aim`. Sent for one tick per press.
+    /// Q pressed: use the ability toward `aim`. Set by `PlayerCommand::Cast`, used up by the next
+    /// tick.
     pub ability: bool,
 }
 
-impl MapEntities for PlayerInput {
-    fn map_entities<M: EntityMapper>(&mut self, _entity_mapper: &mut M) {}
+/// What a client tells the server its player should do, League style: sent when it happens, and
+/// applied by the server the moment it arrives (not scheduled for a future tick). Nothing is
+/// predicted: the client sees the result once the server's next update comes back.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub enum PlayerCommand {
+    /// Right click: walk to this point (`Map::walk_target` of the click).
+    MoveTo(Vec2),
+    /// Stop walking (S).
+    Stop,
+    /// Keys held to walk (WASD, free camera), this way; zero when none are.
+    Walk(Vec2),
+    /// Left mouse held (`fire`) toward `aim`. Sent when it's pressed or let go, and while it's
+    /// held, when the aim changes (at most once a tick).
+    Attack { aim: Vec2, fire: bool },
+    /// Q: use the ability toward this aim.
+    Cast(Vec2),
+}
+
+impl PlayerCommand {
+    /// What the command does to a player's intent.
+    pub fn apply(self, input: &mut PlayerInput) {
+        match self {
+            PlayerCommand::MoveTo(point) => {
+                input.move_to = Some(point);
+                input.walk = Vec2::ZERO;
+            }
+            PlayerCommand::Stop => input.move_to = None,
+            PlayerCommand::Walk(dir) => {
+                input.walk = dir;
+                if dir != Vec2::ZERO {
+                    input.move_to = None;
+                }
+            }
+            PlayerCommand::Attack { aim, fire } => {
+                input.aim = aim;
+                input.fire = fire;
+            }
+            PlayerCommand::Cast(aim) => {
+                input.aim = aim;
+                input.ability = true;
+            }
+        }
+    }
 }
 
 /// The class picked in the room's lobby. Once the match has started, the server spawns our
@@ -376,8 +407,9 @@ pub enum RoomRequest {
     SetTeam(u8),
     /// Leader only.
     Start,
-    /// Practice only: a target dummy standing at this point, the next class in turn.
-    PlaceDummy(Vec2),
+    /// Practice only: a target dummy at this point, the next class in turn: standing there, or
+    /// (`walks`) walking back and forth along a line through it.
+    PlaceDummy { at: Vec2, walks: bool },
     /// Practice only: our Q with no cooldown (ready again the moment it's used), or back to
     /// normal.
     NoCooldowns(bool),
@@ -405,17 +437,12 @@ pub struct ProtocolPlugin;
 
 impl Plugin for ProtocolPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(input::native::InputPlugin::<PlayerInput> {
-            // Inputs also carry the client's interpolation delay, so the server can judge hits
-            // against where the attacker actually saw their target (lag compensation).
-            config: InputConfig { lag_compensation: true, ..default() },
-        });
-
         app.add_channel::<Reliable>(ChannelSettings {
             mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
             ..default()
         })
         .add_direction(NetworkDirection::Bidirectional);
+        app.register_message::<PlayerCommand>().add_direction(NetworkDirection::ClientToServer);
         app.register_message::<ChooseClass>().add_direction(NetworkDirection::ClientToServer);
         app.register_message::<Hello>().add_direction(NetworkDirection::ClientToServer);
         app.register_message::<RoomRequest>().add_direction(NetworkDirection::ClientToServer);
@@ -429,15 +456,13 @@ impl Plugin for ProtocolPlugin {
         app.component::<RecentHits>().replicate();
         app.component::<Hasted>().replicate();
         app.component::<Pickup>().replicate();
-        app.component::<Pos>()
-            .replicate()
-            .predict()
-            .add_linear_interpolation();
-        app.component::<AttackState>().replicate().predict().add_interpolation_with(hold);
-        app.component::<LastSwing>().replicate().predict().add_interpolation_with(hold);
-        app.component::<AbilityState>().replicate().predict().add_interpolation_with(hold);
-        // Every client predicts every projectile, not just its own: they fly on rails, so each
-        // client can draw them where they really are, on the same clock as its own player.
-        app.component::<Projectile>().replicate().predict();
+        // Others' fighters are interpolated (smooth, a little in the past); our own isn't: it's
+        // shown as the server last said it was, for the least delay after a command.
+        app.component::<Pos>().replicate().add_linear_interpolation();
+        app.component::<AttackState>().replicate().add_interpolation_with(hold);
+        app.component::<LastSwing>().replicate().add_interpolation_with(hold);
+        app.component::<AbilityState>().replicate().add_interpolation_with(hold);
+        // Projectiles fly on rails: clients draw them from this alone (`sim::projectile_pos`).
+        app.component::<Projectile>().replicate();
     }
 }

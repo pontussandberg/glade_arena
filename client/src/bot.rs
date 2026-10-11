@@ -6,10 +6,8 @@ use arena_shared::classes::{AbilityKind, AttackKind};
 use arena_shared::map::map;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
-use lightyear::prelude::client::input::InputSystems;
-use lightyear::prelude::*;
 
-use crate::{DesiredInput, PlayerControls};
+use crate::{DesiredInput, Me, PlayerControls, SendCommands};
 
 /// How far inside its reach a melee bot starts a swing.
 const MELEE_LEAD: f32 = 0.6;
@@ -24,14 +22,14 @@ impl Plugin for BotPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Bot);
         app.configure_sets(Update, PlayerControls.run_if(|| false));
-        // Decide once per input tick, right before inputs are written.
-        app.add_systems(FixedPreUpdate, think.before(InputSystems::WriteClientInputs));
+        // Decide every frame, right before what changed is sent.
+        app.add_systems(Update, think.before(SendCommands));
     }
 }
 
 fn think(
-    me: Query<(&PlayerId, &ClassId, &Pos), With<Predicted>>,
-    others: Query<(&PlayerId, &Pos, &Health), Without<Predicted>>,
+    me: Query<(&PlayerId, &ClassId, &Pos), With<Me>>,
+    others: Query<(&PlayerId, &Pos, &Health), Without<Me>>,
     mut desired: ResMut<DesiredInput>,
 ) {
     let Ok((my_id, class, me)) = me.single() else { return };
