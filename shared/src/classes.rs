@@ -87,8 +87,9 @@ impl Chill {
 
 #[derive(Deserialize, Debug, Clone)]
 pub enum AttackKind {
-    /// Hits everyone in a cone in front of the attacker.
-    Melee { range: f32, arc_degrees: f32 },
+    /// A thrust: hits everyone whose body a straight lane `width` wide, out from the attacker
+    /// toward the aim, reaches.
+    Melee { range: f32, width: f32 },
     /// Flies straight until it hits someone, a blocking tile, or runs out of range. With
     /// `far_scale`, damage scales linearly from the attack's `damage` (point blank) to `far_scale`
     /// times it (after flying the full range).
@@ -241,6 +242,16 @@ impl AttackKind {
         }
     }
 
+    /// How far from your center a target's body can reach and still be hit: a thrust reaches a
+    /// body whose center is within its reach; a shot's front edge starts at the edge of you and
+    /// flies its range. (What the range circle shows.)
+    pub fn edge_reach(&self) -> f32 {
+        match *self {
+            AttackKind::Melee { range, .. } => range,
+            AttackKind::Projectile { radius, range, .. } => PLAYER_RADIUS + 2.0 * radius + range,
+        }
+    }
+
     /// How a projectile attack flies (`None` for melee).
     pub fn shot(&self) -> Option<Shot> {
         let AttackKind::Projectile { speed, radius, range, .. } = *self else { return None };
@@ -313,8 +324,8 @@ mod tests {
             assert!(c.attack.damage > 0 && c.attack.cooldown_ticks > 0, "{}: attack", c.id);
             assert!(c.attack.windup_ticks <= c.attack.cooldown_ticks, "{}: windup longer than the cooldown", c.id);
             match c.attack.kind {
-                AttackKind::Melee { range, arc_degrees } => {
-                    assert!((0.5..=4.0).contains(&range) && (10.0..=360.0).contains(&arc_degrees), "{}: melee", c.id);
+                AttackKind::Melee { range, width } => {
+                    assert!((0.5..=4.0).contains(&range) && (0.05..=3.0).contains(&width), "{}: melee", c.id);
                 }
                 AttackKind::Projectile { speed, radius, range, far_scale } => {
                     assert!(far_scale.is_none_or(|scale| (1.0..=5.0).contains(&scale)), "{}: far_scale", c.id);

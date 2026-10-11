@@ -340,6 +340,8 @@ pub enum RoomRequest {
     SetTeam(u8),
     /// Leader only.
     Start,
+    /// Practice only: a target dummy standing at this point, the next class in turn.
+    PlaceDummy(Vec2),
 }
 
 /// What the server tells a client about guests and rooms.

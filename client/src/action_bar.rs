@@ -157,7 +157,7 @@ fn icon_frame(tip: Entity, size: f32, from_center: f32, border: Color) -> impl B
             border: UiRect::all(px(2.0)),
             ..default()
         },
-        BackgroundColor(palette::ui::PANEL.with_alpha(0.9)),
+        BackgroundColor(palette::ui::PANEL),
         BorderColor::all(border),
     )
 }

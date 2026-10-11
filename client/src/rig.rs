@@ -1,7 +1,7 @@
 //! Fighters with moving parts (see `arena::fighter_rig`), animated smoothly but deliberately:
 //! eased keyframes in distinct beats (draw, hold, a fast committed strike), a walk with a light
 //! bob and sway, and every joint on a firm, nearly critically damped spring so motion is smoothed
-//! without wobbling (a tail, if the class has one, swings on a looser one).
+//! without wobbling (cloth that moves on its own is `cloth.rs`).
 //! Every fighter turns to face where it walks, swings or dashes (`Facing`), acts out its attack
 //! windup in step with the cast bar and strikes a pose while dashing; each class has its own
 //! `Moves`.
@@ -14,9 +14,12 @@
 //! is drawn, halfway through the cooldown. A thrown Q is a quick flick of the arm through the
 //! same throw.
 //!
-//! The revenant holds its sword low and ready. The windup raises it up and back over the
-//! shoulder, turning away; the strike chops it down through the target, stepping into it. A
-//! dash is a forward lunge with the blade swept back.
+//! The revenant fights like a fencer: its blade held out ahead of it, point low, always toward
+//! where it faces. The windup draws the sword arm back, the weapon shoulder turning away and the
+//! lead hand reaching out at the target, the point coming up level; the strike is a lunge,
+//! the arm driving the point straight out at the target as the lead leg steps long into it and
+//! the body leans in behind it, the blade smearing out longer for a moment as it lands. A dash is
+//! that lunge, held all the way through it.
 //!
 //! The frost mage carries its staff upright at its side. The windup raises it high toward the
 //! target, the off hand reaching out to gather the cold; the cast thrusts the crystal forward at
@@ -25,22 +28,25 @@
 //!
 //! Transforms are only written when they change, so a fighter standing still costs nothing.
 
-use std::f32::consts::{FRAC_PI_2, PI, TAU};
+use std::f32::consts::{FRAC_PI_2, TAU};
 
 use arena_shared::classes::{AbilityKind, AttackKind};
 use arena_shared::protocol::*;
+use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
+use crate::cloth::WardrobeAssets;
 use crate::feedback::AttackClock;
-use crate::arena::{self, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER, RIG_TAIL};
+use crate::arena::{self, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER};
 use crate::render::shown;
 
 pub struct RigPlugin;
 
 impl Plugin for RigPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins((crate::cloth::ClothPlugin, crate::swish::SwishPlugin));
         app.add_systems(Startup, load_rigs);
         app.add_systems(Update, (add_rigs, see_throws, turn_fighters, pose_rigs).chain().in_set(Posing));
     }
@@ -49,7 +55,7 @@ impl Plugin for RigPlugin {
 /// The spawn ticks of another fighter's latest auto-attack and Q throws, noted as their spears
 /// appear. Spears fly on our own clock (where they really are), but the thrower is drawn a round
 /// trip or so in the past: its body only gets to a throw after the spear is already flying. What
-/// shows a throw (the arm, the hand going empty, the cast bar, the telegraph) goes by this
+/// shows a throw (the arm, the hand going empty, the cast bar) goes by this
 /// instead, so the javelin isn't drawn in the hand and in the air at once.
 #[derive(Component, Default)]
 pub(crate) struct SeenThrows {
@@ -92,11 +98,6 @@ const SWAY: f32 = 0.02;
 /// on its tick.
 const JOINT_STIFFNESS: f32 = 32.0;
 const JOINT_DAMPING: f32 = 0.95;
-/// The tail: looser, and swung by walking and turning.
-const TAIL_STIFFNESS: f32 = 11.0;
-const TAIL_DAMPING: f32 = 0.7;
-const TAIL_WALK: f32 = 0.35;
-const TAIL_TURN: f32 = 0.06;
 
 /// How a rigged class moves. Keyframes are (carrying, fully drawn back, released, dashing),
 /// radians. Limbs: positive swings forward. Twist: negative turns the weapon (right, +Z)
@@ -119,6 +120,10 @@ struct Moves {
     throws: bool,
     /// How big the fighter is drawn (1 = the joints in `arena`).
     scale: f32,
+    /// How much longer the weapon is drawn for a moment as a strike lands (a fraction of its
+    /// length), the hand pushed out with it: a fighting game's smear, so the blade's tip reaches
+    /// as far as the strike does.
+    stretch: f32,
 }
 
 /// How the weapon sits in the hand.
@@ -126,11 +131,13 @@ enum Held {
     /// Kept pointing (a little above) the aim, whatever the arm and body do: a javelin ready to
     /// throw.
     OnTarget,
-    /// Fixed in the fist, along the arm and this far (radians) forward of it: a sword.
-    InHand(f32),
     /// Kept standing up, whatever the arm and body do, tipped this far (radians, keyframes like
     /// the joints') toward the facing: a staff.
     Upright([f32; 4]),
+    /// Like `Upright` (tipped all the way over: held out ahead), and turned in from the hand so
+    /// its point converges on the middle of the strike's lane at its far end: wherever the hand
+    /// is, off to the side, the point lands where the strike does. A thrusting blade.
+    Blade([f32; 4]),
 }
 
 const JAVELINIST: Moves = Moves {
@@ -146,21 +153,26 @@ const JAVELINIST: Moves = Moves {
     head_dip: [0.0, 0.2, -0.15, 0.0],
     held: Held::OnTarget,
     throws: true,
-    scale: 1.12,
+    scale: 1.16,
+    stretch: 0.0,
 };
 
 const REVENANT: Moves = Moves {
-    weapon_arm: [0.65, -2.7, 1.0, -1.5],
-    weapon_arm_untwist: 0.0,
-    lead_arm: [-0.2, 0.7, -0.6, -1.1],
-    lead_leg: [0.1, 0.45, 0.6, 0.65],
-    back_leg: [-0.1, -0.4, -0.65, -0.7],
-    twist: [0.0, -0.75, 0.5, 0.0],
-    lean: [0.0, 0.2, -0.4, -0.55],
-    head_dip: [0.0, 0.15, -0.25, 0.0],
-    held: Held::InHand(0.45),
+    // The dash (the fourth of each) is a lunge too, held all the way through it: the blade
+    // driven out ahead, the weapon shoulder leading.
+    weapon_arm: [0.45, -0.85, 1.5, 1.45],
+    weapon_arm_untwist: 0.8,
+    lead_arm: [-0.25, 0.95, -0.75, -0.9],
+    lead_leg: [0.12, 0.25, 0.8, 0.7],
+    back_leg: [-0.1, -0.35, -0.8, -0.75],
+    twist: [0.1, -0.7, 0.55, 0.5],
+    lean: [0.0, 0.15, -0.45, -0.5],
+    head_dip: [0.0, 0.1, -0.2, -0.15],
+    // Point forward and a little down in guard, level drawn back, through the lunge and dashing.
+    held: Held::Blade([2.0, 1.6, 1.55, 1.55]),
     throws: false,
-    scale: 1.0,
+    scale: 1.13,
+    stretch: 0.42,
 };
 
 const FROST_MAGE: Moves = Moves {
@@ -175,6 +187,7 @@ const FROST_MAGE: Moves = Moves {
     held: Held::Upright([0.08, -0.25, 1.0, -0.05]),
     throws: false,
     scale: 1.05,
+    stretch: 0.0,
 };
 
 /// The moves for a class's look (every class has one: `arena::FIGHTER_LOOKS`).
@@ -192,6 +205,10 @@ fn moves(class_key: &str) -> &'static Moves {
 /// strike, however long the windup.
 const DRAW_END: f32 = 0.5;
 const STRIKE_TICKS: f32 = 5.0;
+/// How long (ticks) a strike's smear takes to snap back after it lands (`Moves::stretch`), and
+/// how much further down the arm the hand is pushed with it (a fraction of the stretch).
+const STRETCH_TICKS: f32 = 6.0;
+const SMEAR_REACH: f32 = 0.4;
 /// A thrown weapon: ticks after a throw until a new one is in the hand.
 const REARM_TICKS: f32 = 12.0;
 /// After the throw: how long (ticks) the follow-through is held, and when it's back to carrying.
@@ -202,7 +219,7 @@ const FLICK: (f32, f32) = (1.0, 10.0);
 const SLAM: (f32, f32) = (8.0, 24.0);
 /// How quickly a fighter turns toward where it wants to face, and eases in and out of its walk
 /// (per second, exponential).
-const TURN_RATE: f32 = 28.0;
+const TURN_RATE: f32 = 40.0;
 const WALK_RATE: f32 = 10.0;
 /// How much the head turns and leans with the body (0: it stays square on the aim), so it moves
 /// with the shoulders through a strike instead of hanging still while the body turns under it.
@@ -210,12 +227,13 @@ const HEAD_FOLLOW: f32 = 0.3;
 /// How brightly the eyes (and other glowing parts) glow.
 const EYE_GLOW: f32 = 6.0;
 
-/// Rig meshes for each class, and its glow (eyes, crystals: the same for everyone of a class).
-/// Every other part is drawn in the fighter's own material (colors in the vertices), so a hit
-/// flashes all of it.
+/// Rig meshes for each class, and its glow (crystals: the same for everyone of a class), and the
+/// cold white everyone's eyes burn with. Every other part is drawn in the fighter's own material
+/// (colors in the vertices), so a hit flashes all of it.
 #[derive(Resource)]
 struct RigAssets {
     meshes: HashMap<ClassId, RigHandles>,
+    eye_glow: Handle<StandardMaterial>,
 }
 
 struct RigHandles {
@@ -227,7 +245,7 @@ struct RigHandles {
     glow: Handle<StandardMaterial>,
     held_glow: Option<Handle<Mesh>>,
     body_glow: Option<Handle<Mesh>>,
-    tail: Option<Handle<Mesh>>,
+    wardrobe: Option<WardrobeAssets>,
 }
 
 /// Which way a fighter faces, where it was last frame, and how far it moved and turned
@@ -256,7 +274,6 @@ struct Rig {
     /// Right (back) leg and left (lead) leg.
     legs: [Entity; 2],
     held: Entity,
-    tail: Option<Entity>,
     moves: &'static Moves,
     /// Walk cycles so far, and how much the fighter is walking (0..1, eased).
     stride: f32,
@@ -299,11 +316,14 @@ struct Joints {
     twist: Spring,
     lean: Spring,
     head_dip: Spring,
-    tail_swing: Spring,
-    tail_sway: Spring,
 }
 
-fn load_rigs(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn load_rigs(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
+) {
     let rigs = ClassId::all()
         .map(|c| {
             let rig = arena::fighter_rig(&c.def().id);
@@ -317,12 +337,12 @@ fn load_rigs(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mater
                 glow: materials.add(arena::glow(rig.glow, EYE_GLOW)),
                 held_glow: rig.held_glow.map(|mesh| meshes.add(mesh)),
                 body_glow: rig.body_glow.map(|mesh| meshes.add(mesh)),
-                tail: rig.tail.map(|tail| meshes.add(tail)),
+                wardrobe: rig.wardrobe.map(|wardrobe| WardrobeAssets::load(wardrobe, &mut meshes, &mut bindposes, &mut materials)),
             };
             (c, handles)
         })
         .collect();
-    commands.insert_resource(RigAssets { meshes: rigs });
+    commands.insert_resource(RigAssets { meshes: rigs, eye_glow: materials.add(arena::glow(arena::palette::SOUL, EYE_GLOW)) });
 }
 
 fn mirrored(right: Vec3) -> Vec3 {
@@ -347,13 +367,12 @@ fn add_rigs(
             arms: [part(&handles.arm, own, RIG_SHOULDER), part(&handles.arm, own, mirrored(RIG_SHOULDER))],
             legs: [part(&handles.leg, own, RIG_HIP), part(&handles.leg, own, mirrored(RIG_HIP))],
             held: part(&handles.held, own, RIG_HAND),
-            tail: handles.tail.as_ref().map(|tail| part(tail, own, RIG_TAIL)),
             moves: moves(&class.def().id),
             stride: 0.0,
             walking: 0.0,
             joints: Joints::default(),
         };
-        let eyes = part(&handles.eyes, &handles.glow, Vec3::ZERO);
+        let eyes = part(&handles.eyes, &assets.eye_glow, Vec3::ZERO);
         let held_glow = handles.held_glow.as_ref().map(|mesh| part(mesh, &handles.glow, Vec3::ZERO));
         let body_glow = handles.body_glow.as_ref().map(|mesh| part(mesh, &handles.glow, Vec3::ZERO));
         commands.entity(rig.head).add_child(eyes);
@@ -365,8 +384,11 @@ fn add_rigs(
             commands.entity(player).add_child(glow);
         }
         commands.entity(player).add_children(&[rig.head, rig.arms[0], rig.arms[1], rig.legs[0], rig.legs[1]]);
-        if let Some(tail) = rig.tail {
-            commands.entity(player).add_child(tail);
+        if let Some(wardrobe) = &handles.wardrobe {
+            crate::cloth::dress(&mut commands, player, rig.legs, own, wardrobe);
+        }
+        if matches!(rig.moves.held, Held::Blade(_)) {
+            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length: arena::BLADE_LENGTH, shown: 0 });
         }
         commands.entity(player).insert((
             rig,
@@ -523,20 +545,25 @@ fn pose_rigs(
         posed.translation.y = (-RIG_HIP.y * (1.0 - spread.cos()) + (2.0 * phase).cos().abs() * BOB * walk) * moves.scale;
         body.set_if_neq(posed);
 
-        // The tail swings back as it walks and out to the side as it turns, loosely.
-        let turning = facing.turned / dt.max(1e-3);
-        let tail = rig.tail.map(|tail| {
-            let swing = rig.joints.tail_swing.follow(-TAIL_WALK * rig.walking, dt, TAIL_STIFFNESS, TAIL_DAMPING);
-            let sway = rig.joints.tail_sway.follow(-TAIL_TURN * turning, dt, TAIL_STIFFNESS, TAIL_DAMPING);
-            (tail, Quat::from_rotation_z(swing) * Quat::from_rotation_x(sway))
-        });
-
         let unlean = lean.inverse();
         let weapon_arm = arm_turn(twist, weapon_arm);
+        // The pose the joints are heading for (not where their springs have got to): the body's
+        // lean and the weapon arm, and where the hand is (in the facing's frame, unscaled).
+        let (aimed_lean, aimed_arm) = (leaning(twist_to, lean_to, 0.0), arm_turn(twist_to, weapon_arm_to));
+        let aimed_hand = aimed_lean * (RIG_SHOULDER + aimed_arm * RIG_HAND);
+        // How far a blade turns in, toward where the strike lands: from where the hand is going
+        // (in meters) to the middle of the lane at its far end.
+        let converge = match (&moves.held, &def.attack.kind) {
+            (Held::Blade(_), AttackKind::Melee { range, .. }) => {
+                let hand = aimed_hand * moves.scale;
+                hand.z.atan2((range - hand.x).max(0.5))
+            }
+            _ => 0.0,
+        };
         let held_in = |weapon_arm: Quat, unlean: Quat| match moves.held {
             Held::OnTarget => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-(FRAC_PI_2 - 0.12)),
-            Held::InHand(forward) => Quat::from_rotation_z(PI + forward),
             Held::Upright(tip) => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-pose(tip)),
+            Held::Blade(tip) => weapon_arm.inverse() * unlean * Quat::from_rotation_y(converge) * Quat::from_rotation_z(-pose(tip)),
         };
         let held = held_in(weapon_arm, unlean);
         let rotations = [
@@ -552,20 +579,31 @@ fn pose_rigs(
         // the weapon arm at the hand, see `add_rigs`): child transforms aren't propagated until
         // after this frame's shots are placed.
         if moves.throws {
-            let aimed_lean = leaning(twist_to, lean_to, 0.0);
-            let aimed_arm = arm_turn(twist_to, weapon_arm_to);
             let aimed_body = Transform { rotation: facing_turn * aimed_lean, ..posed };
             let hand = Transform::from_translation(RIG_SHOULDER).with_rotation(aimed_arm)
                 * Transform::from_translation(RIG_HAND).with_rotation(held_in(aimed_arm, aimed_lean.inverse()));
             held_at.set_if_neq(HeldAt(aimed_body * hand));
         }
-        for (part, rotation) in rotations.into_iter().chain(tail) {
+        // The strike's smear: the weapon stretching out as the strike comes through, longest as
+        // it lands, snapping back over the next few ticks.
+        let smear = moves.stretch
+            * match (windup, released) {
+                (Some(_), _) => throw.powi(3),
+                (None, Some(since)) => 1.0 - ease(0.0, STRETCH_TICKS, since),
+                (None, None) => 0.0,
+            };
+        for (part, rotation) in rotations {
             if let Ok((mut transform, mut visibility)) = parts.get_mut(part) {
                 if transform.rotation != rotation {
                     transform.rotation = rotation;
                 }
                 if part == rig.held {
                     visibility.set_if_neq(shown(!empty_handed));
+                    let (scale, at) = (Vec3::new(1.0, 1.0 + smear, 1.0), RIG_HAND * (1.0 + SMEAR_REACH * smear));
+                    if transform.scale != scale || transform.translation != at {
+                        transform.scale = scale;
+                        transform.translation = at;
+                    }
                 }
             }
         }
