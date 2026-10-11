@@ -102,13 +102,13 @@ fn spawn_minimap(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                 border: UiRect::all(px(2.0)),
                 ..default()
             },
-            BorderColor::all(palette::ui::HOLLOW),
+            BorderColor::all(palette::ui::PANEL),
             ImageNode::new(images.add(image)),
         ))
         .with_child((
             ViewFrame,
             Node { position_type: PositionType::Absolute, border: UiRect::all(px(1.0)), ..default() },
-            BorderColor::all(palette::ui::LICHEN),
+            BorderColor::all(palette::ui::TEXT),
         ));
 }
 
@@ -131,7 +131,7 @@ fn spawn_dots(
                     ..default()
                 },
                 BackgroundColor(Relation::of(is_me, false).color()),
-                BorderColor::all(palette::ui::HOLLOW),
+                BorderColor::all(palette::ui::PANEL),
             ))
             .id();
         commands.entity(*minimap).add_child(dot);
@@ -182,7 +182,7 @@ fn spawn_markers(mut commands: Commands, minimap: Single<Entity, With<Minimap>>,
     for (pickup, info) in &new {
         let color = crate::pickups::color(info.kind);
         // Spawned showing its icon, as lying there; `update_markers` turns it into a timer.
-        let text = commands.spawn(ui_text(crate::pickups::icon(info.kind), MARKER_TEXT, palette::ui::HOLLOW)).id();
+        let text = commands.spawn(ui_text(crate::pickups::icon(info.kind), MARKER_TEXT, palette::ui::PANEL)).id();
         let at = on_minimap(info.at) - Vec2::splat(MARKER / 2.0);
         let marker = commands
             .spawn((
@@ -230,8 +230,8 @@ fn update_markers(
         }
         marker.showing = wanted;
         let (label, text_color, fill) = match wanted {
-            Some(seconds) => (seconds.to_string(), palette::ui::LICHEN, palette::ui::HOLLOW.with_alpha(0.85)),
-            None => (crate::pickups::icon(pickup.kind).to_string(), palette::ui::HOLLOW, crate::pickups::color(pickup.kind)),
+            Some(seconds) => (seconds.to_string(), palette::ui::TEXT, palette::ui::PANEL.with_alpha(0.85)),
+            None => (crate::pickups::icon(pickup.kind).to_string(), palette::ui::PANEL, crate::pickups::color(pickup.kind)),
         };
         background.set_if_neq(BackgroundColor(fill));
         if let Ok((mut text, mut current)) = texts.get_mut(marker.text) {
