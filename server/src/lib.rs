@@ -126,6 +126,7 @@ impl Plugin for ServerGamePlugin {
                 use_abilities,
                 move_projectiles,
                 resolve_projectile_hits,
+                restore_dummies,
                 respawn,
                 place_players,
             )
@@ -240,29 +241,71 @@ fn on_new_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
     commands.entity(trigger.entity).insert(ReplicationSender);
 }
 
+/// What every fighter is, player or dummy: who, of which class, where and on which side, and
+/// its fight state (health, crowd control, attack and ability, the positions hits are judged
+/// against), fresh.
+fn fighter(id: PeerId, class: ClassId, room: InRoom, team: Team, at: Vec2) -> impl Bundle {
+    (
+        PlayerId(id),
+        (class, team, room, room.rooms()),
+        Pos(at),
+        Health(class.def().max_hp),
+        (Chilled::default(), Hasted::default(), RecentHits::default()),
+        (AttackState::default(), AbilityState::default(), LastSwing::default()),
+        PosHistory::default(),
+    )
+}
+
 /// A room member's fighter, as `class`, on `team`. Despawned with the client's link when it
 /// disconnects; `rooms.rs` despawns it when the member leaves the room.
 fn spawn_player(commands: &mut Commands, link: Entity, id: PeerId, class: ClassId, room: InRoom, team: Team) -> Entity {
     commands
         .spawn((
             Name::from("Player"),
-            PlayerId(id),
-            (class, team, room, room.rooms()),
-            Pos::default(),
+            fighter(id, class, room, team, Vec2::ZERO),
             NeedsSpawnPoint,
-            Health(class.def().max_hp),
-            (Chilled::default(), Hasted::default(), RecentHits::default()),
-            AttackState::default(),
-            AbilityState::default(),
             DashHits::default(),
-            LastSwing::default(),
-            PosHistory::default(),
             InputGaps::default(),
             ActionState::<PlayerInput>::default(),
             // Replication starts in `place_players`, once it has a real position.
             ControlledBy { owner: link, lifetime: default() },
         ))
         .id()
+}
+
+/// Server-only: a target dummy, for practice: a fighter of `class` standing at a spot, never
+/// moving or attacking, hit like anyone else, and back to full health instead of dying.
+#[derive(Component)]
+pub(crate) struct Dummy;
+
+/// A target dummy of `class` standing `at` (a walkable spot) in `room`, as `id` (none of the
+/// clients'). Replicated straight away: it already stands where it'll stay.
+pub(crate) fn spawn_dummy(commands: &mut Commands, id: PeerId, class: ClassId, room: InRoom, at: Vec2) -> Entity {
+    commands
+        .spawn((
+            Name::from("Dummy"),
+            Dummy,
+            fighter(id, class, room, Team(arena_shared::rooms::NO_TEAM), at),
+            Replicate::to_clients(NetworkTarget::All),
+            InterpolationTarget::to_clients(NetworkTarget::All),
+        ))
+        .id()
+}
+
+/// A dummy that would die is back on the spot, fresh as a respawned player (full health, its
+/// slows, roots and haste gone); its hits still show.
+fn restore_dummies(
+    mut commands: Commands,
+    mut dummies: Query<(Entity, &ClassId, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, &mut AbilityState), (With<Dummy>, With<Dead>)>,
+) {
+    for (dummy, class, mut health, (mut chilled, mut hasted), mut attack, mut ability) in &mut dummies {
+        health.0 = class.def().max_hp;
+        chilled.set_if_neq(Chilled::default());
+        hasted.set_if_neq(Hasted::default());
+        attack.set_if_neq(AttackState::default());
+        ability.set_if_neq(AbilityState::default());
+        commands.entity(dummy).remove::<Dead>();
+    }
 }
 
 /// Places waiting players one at a time, each away from everyone already placed in their room,
@@ -340,7 +383,8 @@ fn spawn_pickups(commands: &mut Commands, room: InRoom) -> Vec<Entity> {
 fn take_pickups(
     timeline: Res<LocalTimeline>,
     mut pickups: Query<(&mut Pickup, &InRoom)>,
-    mut players: Query<(&PlayerId, &ClassId, &Pos, &mut Health, &mut Hasted, &mut RecentHits, &InRoom), InPlay>,
+    // Not dummies: one standing on a pickup's spot would take it every time it came back.
+    mut players: Query<(&PlayerId, &ClassId, &Pos, &mut Health, &mut Hasted, &mut RecentHits, &InRoom), (InPlay, Without<Dummy>)>,
 ) {
     let now = timeline.tick().0;
     for (mut pickup, room) in &mut pickups {
@@ -463,7 +507,8 @@ fn damage(
 fn respawn(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    mut dead: Query<(Entity, &ClassId, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, &mut AbilityState, &mut Dead)>,
+    // Dummies come back on the spot instead (`restore_dummies`).
+    mut dead: Query<(Entity, &ClassId, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, &mut AbilityState, &mut Dead), Without<Dummy>>,
 ) {
     let now = timeline.tick().0;
     for (player, class, mut health, (mut chilled, mut hasted), mut attack, mut ability, mut dead) in &mut dead {
@@ -618,7 +663,7 @@ fn use_abilities(
                 attack.ready_at = now.0;
             }
         }
-        let (next, cast) = sim::step_ability(now.0, id.0, *class, pos.0, &input.0, &attack, &chilled, *state);
+        let (next, cast) = sim::step_ability(now.0, id.0, *class, pos.0, &input.0, &chilled, *state);
         state.set_if_neq(next);
         match cast {
             Some(sim::Cast::Throw(projectile)) => spawn_projectile(&mut commands, projectile, side),

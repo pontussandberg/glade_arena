@@ -34,6 +34,7 @@ use lightyear::prelude::*;
 use crate::ChosenClass;
 use crate::browser::{LobbiesButton, Typing};
 use crate::camera::{CameraControl, CameraMoves, Orbit};
+use crate::arena::palette::ui::ACCENT;
 use crate::arena::{self, palette, to_world};
 use crate::render::{GameUi, Visuals, button, button_fill, clicked, key_chip, shown, ui_text};
 use crate::rooms::{CurrentRoom, Me, Notice, Picking, Screen, request};
@@ -78,8 +79,6 @@ const FRONT: f32 = FRAC_PI_2 - 0.4;
 const SWAY: (f32, f32) = (0.25, 0.35);
 const STAGE_DRAG: f32 = 0.008;
 
-/// The one accent: what's selected, and the way in.
-const ACCENT: Color = stat_frame::ACCENT;
 /// Spacing steps (pixels).
 const GAP: f32 = 8.0;
 const MARGIN: f32 = 40.0;
@@ -203,7 +202,7 @@ fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &m
     commands.spawn(light(palette::SPIRIT, 180_000.0, Vec3::new(-2.4, 2.6, 1.6)));
 
     let mote = meshes.add(Sphere::new(0.022).mesh().ico(1).unwrap());
-    let glow = materials.add(arena::glow(palette::ui::SPROUT, 6.0));
+    let glow = materials.add(arena::glow(palette::ui::ACCENT, 6.0));
     for i in 0..MOTES {
         // Spread evenly around the stage (golden angle), at varied distances and heights.
         let a = i as f32 * 2.399;
@@ -286,7 +285,7 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                         border: UiRect::bottom(px(2.0)),
                         ..default()
                     },
-                    BackgroundColor(palette::ui::HOLLOW.with_alpha(0.7)),
+                    BackgroundColor(palette::ui::PANEL),
                     BorderColor::all(ACCENT),
                 ))
                 .with_children(|badge| {
@@ -344,9 +343,9 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                                         ..default()
                                     },
                                     BorderColor::all(palette::ui::MUTED.with_alpha(0.5)),
-                                    BackgroundColor(palette::ui::HOLLOW.with_alpha(0.85)),
+                                    BackgroundColor(palette::ui::PANEL),
                                 ))
-                                .with_child(ui_text("CREATE / JOIN LOBBY", 14.0, palette::ui::LICHEN));
+                                .with_child(ui_text("CREATE / JOIN LOBBY", 14.0, palette::ui::TEXT));
                             column
                                 .spawn((
                                     EnterButton,
@@ -354,7 +353,7 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                                     Node { padding: UiRect::axes(px(36.0), px(16.0)), justify_content: JustifyContent::Center, ..default() },
                                     BackgroundColor(ACCENT),
                                 ))
-                                .with_child((EnterLabel, ui_text("PRACTICE", 18.0, palette::ui::HOLLOW)));
+                                .with_child((EnterLabel, ui_text("PRACTICE", 18.0, palette::ui::PANEL)));
                             column.spawn((EnterHint, ui_text("or press Enter", 11.0, palette::ui::MUTED), Node { align_self: AlignSelf::FlexEnd, ..default() }));
                         });
                 });
@@ -382,7 +381,7 @@ fn spawn_tile(tiles: &mut ChildSpawnerCommands, number: usize, class: ClassId) {
         ))
         .with_children(|tile| {
             tile.spawn(ui_text(number.to_string(), 11.0, palette::ui::MUTED));
-            tile.spawn(ui_text(def.name.clone(), 20.0, palette::ui::LICHEN));
+            tile.spawn(ui_text(def.name.clone(), 20.0, palette::ui::TEXT));
             tile.spawn(ui_text(def.role.to_uppercase(), 11.0, ACCENT));
         });
 }
@@ -423,9 +422,9 @@ fn pick_fighter(
     }
     for (tile, interaction, mut border, mut background) in &mut tiles {
         let (edge, fill) = match (tile.0 == lobby.selected, interaction) {
-            (true, _) => (ACCENT, palette::ui::OLIVE.with_alpha(0.9)),
-            (false, Interaction::Hovered) => (palette::ui::MUTED.with_alpha(0.6), palette::ui::HOLLOW.with_alpha(0.85)),
-            (false, _) => (palette::ui::MUTED.with_alpha(0.25), palette::ui::HOLLOW.with_alpha(0.7)),
+            (true, _) => (ACCENT, palette::ui::SELECTED),
+            (false, Interaction::Hovered) => (palette::ui::MUTED.with_alpha(0.6), palette::ui::PANEL),
+            (false, _) => (palette::ui::MUTED.with_alpha(0.25), palette::ui::PANEL),
         };
         border.set_if_neq(BorderColor::all(edge));
         background.set_if_neq(BackgroundColor(fill));
@@ -486,7 +485,7 @@ fn show_details(
         column.spawn((DetailsHeader, pane_header(open.0))).with_children(|header| {
             header.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2.0), ..default() }).with_children(|left| {
                 left.spawn(ui_text(def.role.to_uppercase(), 12.0, ACCENT));
-                left.spawn(ui_text(def.name.clone(), 36.0, palette::ui::LICHEN));
+                left.spawn(ui_text(def.name.clone(), 36.0, palette::ui::TEXT));
             });
             header.spawn(fold_chip(open.0));
         });
@@ -509,7 +508,7 @@ fn show_details(
 fn power(column: &mut ChildSpawnerCommands, badge: &str, color: Color, blurb: stat_frame::Blurb) {
     column.spawn(Node { column_gap: px(GAP * 1.5), align_items: AlignItems::Center, ..default() }).with_children(|row| {
         row.spawn(key_chip(badge, 13.0, color, color));
-        row.spawn(ui_text(blurb.name, 16.0, palette::ui::LICHEN));
+        row.spawn(ui_text(blurb.name, 16.0, palette::ui::TEXT));
     });
     if let Some(cooldown) = blurb.cooldown {
         column.spawn(ui_text(cooldown, 11.0, palette::ui::MUTED));
@@ -561,7 +560,7 @@ pub(crate) fn team_color(team: u8) -> Color {
 /// The room around a card's content, and its fill.
 pub(crate) const CARD_PADDING: f32 = GAP * 2.0;
 pub(crate) fn card_fill() -> Color {
-    palette::ui::HOLLOW.with_alpha(0.88)
+    palette::ui::PANEL
 }
 
 /// A card in a pane: a block of its own, dark, with room around its content.
@@ -625,7 +624,7 @@ fn show_room(
     commands.entity(panel).despawn_children().with_children(|panel| {
         panel.spawn(card()).with_children(|card| {
             card.spawn(label("Lobby"));
-            card.spawn(ui_text(view.name.clone(), 24.0, palette::ui::LICHEN));
+            card.spawn(ui_text(view.name.clone(), 24.0, palette::ui::TEXT));
             let (line, color) = match (view.started, leading) {
                 (true, _) => ("Match in progress", ACCENT),
                 (false, true) => ("Start when you're ready", palette::ui::MUTED),
@@ -638,15 +637,15 @@ fn show_room(
                 card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
                     for mode in [Mode::Ffa, Mode::Teams] {
                         let on = view.mode == mode;
-                        let fill = if on { palette::ui::OLIVE } else { palette::ui::SHADOW.with_alpha(0.8) };
+                        let fill = if on { palette::ui::SELECTED } else { palette::ui::BACKDROP };
                         let edge = if on { ACCENT } else { palette::ui::MUTED.with_alpha(0.3) };
-                        let text = if on { palette::ui::LICHEN } else { palette::ui::MUTED };
+                        let text = if on { palette::ui::TEXT } else { palette::ui::MUTED };
                         let mut switch = row.spawn((RoomButton(RoomRequest::SetMode(mode)), button(mode.label(), 12.0, fill, text, edge)));
                         switch.entry::<Node>().and_modify(|mut node| node.flex_grow = 1.0);
                     }
                 });
             } else {
-                card.spawn(ui_text(view.mode.label(), 13.0, palette::ui::LICHEN));
+                card.spawn(ui_text(view.mode.label(), 13.0, palette::ui::TEXT));
             }
         });
 
@@ -660,7 +659,7 @@ fn show_room(
             Mode::Teams => spawn_teams(card, view, my_id),
         });
 
-        let leave = button("Leave lobby", 12.0, palette::ui::HOLLOW.with_alpha(0.88), palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.3));
+        let leave = button("Leave lobby", 12.0, palette::ui::PANEL, palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.3));
         panel.spawn((RoomButton(RoomRequest::Leave), leave));
     });
 }
@@ -719,7 +718,7 @@ fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
                 match members.get(place) {
                     Some(member) => member_row(grid, cell(column, place + 1), view, member, my_id),
                     None => {
-                        grid.spawn((cell(column, place + 1), BackgroundColor(palette::ui::SHADOW.with_alpha(0.2))));
+                        grid.spawn((cell(column, place + 1), BackgroundColor(palette::ui::BACKDROP.with_alpha(0.2))));
                     }
                 }
             }
@@ -742,13 +741,13 @@ fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
 fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, member: &Member, my_id: u32) {
     let is_me = member.guest_id == my_id;
     let row = Node { flex_direction: FlexDirection::Column, row_gap: px(2.0), padding: UiRect::axes(px(GAP), px(GAP * 0.5)), ..node };
-    let tint = if is_me { ACCENT.with_alpha(0.14) } else { palette::ui::SHADOW.with_alpha(0.5) };
+    let tint = if is_me { ACCENT.with_alpha(0.14) } else { palette::ui::BACKDROP.with_alpha(0.5) };
     parent.spawn((row, BackgroundColor(tint))).with_children(|row| {
         if member.guest_id == view.leader {
             row.spawn(ui_text("LEADER", 9.0, palette::TORCH_FLAME));
         }
         // Ours in the accent: no team's color, so it reads as "you" on either side.
-        row.spawn(ui_text(member.name.clone(), 13.0, if is_me { ACCENT } else { palette::ui::LICHEN }));
+        row.spawn(ui_text(member.name.clone(), 13.0, if is_me { ACCENT } else { palette::ui::TEXT }));
         let fighter = member.class.map_or("Picking...".to_string(), |c| c.def().name.clone());
         row.spawn(Node { column_gap: px(GAP * 0.75), flex_wrap: FlexWrap::Wrap, ..default() }).with_children(|line| {
             line.spawn(ui_text(fighter, 11.0, palette::ui::MUTED));

@@ -18,7 +18,7 @@ projectile) and Q ability; all of it lives in `shared/assets/classes.ron`:
 | Class | Role | Auto-attack | Q |
 |---|---|---|---|
 | Javelinist | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`) | **Spirit Spear**: a fast spectral spear, thrown instantly (no windup, no root) |
-| Revenant | Duelist | Blade swings with a medium windup | **Rift Step**: dash through enemies, cutting each one; a hit readies the blade at once |
+| Revenant | Duelist | A long thrust down a narrow lane, with a medium windup | **Rift Step**: dash through enemies, cutting each one; a hit readies the blade at once |
 | Frost Mage | Controller | Frostbolts: little damage and shorter range (mid range), but each hit slows (40% for 2 s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5 s (no walking, no dashing) |
 
 Hits can carry **crowd control** (`chill` in `classes.ron`): a slow takes a share off walking
@@ -27,13 +27,14 @@ progress stops) but it can still attack. Slowed fighters take on a cold blue cas
 under their feet; frozen ones stand in ice.
 
 Every attack has a windup (`windup_ticks`): you stand still with your aim locked while a cast
-bar fills under your health bar (and, for a swing, a faint telegraph shows the fan it will
-cover), then it goes off. For the Javelinist and the Frost Mage the windup is the whole cooldown:
+bar fills under your health bar, then it goes off. For the Javelinist and the Frost Mage the windup is the whole cooldown:
 the bar is the attack, and holding fire keeps you planted, so to kite you have to stop firing.
 The Revenant's swing winds up for part of its cooldown. Everyone sees the windup, so attacks can
 be read and dodged. Attacking also cancels your walk: afterwards you stand still until you
 right click again (a click during the windup is kept and walked to once the attack is off);
-so does a dash. Abilities have their own cooldown (shown in the HUD) and are predicted like
+so does a dash. A dash may be used mid-windup: it moves you, and the attack still goes off when
+the windup's over, from wherever the dash took you (stab, then dash into place for it to land).
+Abilities have their own cooldown (shown in the HUD) and are predicted like
 everything else: your spear flies and your dash moves the moment you press Q, the server
 decides the hits.
 Killed players sit out 3 seconds, then respawn at full health.
@@ -50,7 +51,7 @@ shared/   protocol (replicated components, PlayerInput, messages), sim (pure gam
 server/   headless authoritative server (spawning, hit decisions, lag compensation, respawns);
           tests/integration/ has the end-to-end tests (one test binary: each links all of Bevy)
 client/   ClientNetPlugin (networking + prediction, headless-capable), bot (sparring AI);
-          render (fighters, shots, swings, telegraphs, dash streaks, novas, frost, HUD, input), camera,
+          render (fighters, shots, novas, frost, HUD, input), swish (a blade's wind), camera,
           action_bar (your passive and ability icons, cooldown, hover tooltips), stat_frame (a
           class's stats: in the lobby and bottom left in the arena), minimap,
           arena (the 3D scene and all meshes), rig (animated fighters: facing, walk cycle,
@@ -84,8 +85,8 @@ scripts/  build-web.sh, serve.mjs
   judges. A late spear shoots out of its thrower's hand fast and catches up within 0.2 s.
 - `AttackState` (cooldown, windup) and `AbilityState` (Q cooldown, dash) are predicted for your
   own player, so your windup, throw and dash start the moment you click or press Q. For others
-  they're interpolated on the same delayed timeline as their positions, so their cast bar,
-  telegraph and dash line up with where you see them; except that a throw shows the moment its
+  they're interpolated on the same delayed timeline as their positions, so their cast bar
+  and dash line up with where you see them; except that a throw shows the moment its
   spear appears (`SeenThrows`), which can be a little ahead of the thrower's body.
 - Other players are **interpolated** between server snapshots.
 - `Health` is server-only: replicated, never predicted. Melee, dash and nova damage are decided

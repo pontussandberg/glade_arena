@@ -20,9 +20,6 @@ pub struct Section {
     /// Superellipse exponent: 2 is an ellipse, higher squarer (a chest, a boot), 1 a diamond (a
     /// blade's edge).
     pub round: f32,
-    /// Pushes the sides forward (+depth) by this much at the widest, so the section curves round
-    /// like a cape across the back or a collar round the neck.
-    pub bend: f32,
     /// Jagged edge: points this far back along the path on every other vertex (icicles).
     pub jag: f32,
     /// Torn edge, for cloth: hangs back up to this far along the path, in broad scallops with a few
@@ -31,10 +28,6 @@ pub struct Section {
     /// Hangs back along the path this much more at the back (-depth) than at the front, easing
     /// round between: a hem longer behind.
     pub trail: f32,
-    /// Waves across a flat section (a cape, a strip of cloth): its middle pushed back and forth
-    /// along the depth axis this much, `wave_count` half-waves from side to side.
-    pub wave: f32,
-    pub wave_count: f32,
     /// Soft cloth folds: the section ripples in and out this much (a fraction of its size),
     /// `fold_count` times round. Lined up from section to section, so they run down as creases.
     pub folds: f32,
@@ -50,7 +43,7 @@ pub struct Section {
 impl Section {
     /// An elliptical section `half` across (depth, width) at `at`.
     pub fn new(at: Vec3, half: Vec2, color: Color) -> Self {
-        Section { at, half, round: 2.0, bend: 0.0, jag: 0.0, torn: 0.0, trail: 0.0, wave: 0.0, wave_count: 0.0, folds: 0.0, fold_count: 0, rough: ROUGH, color }
+        Section { at, half, round: 2.0, jag: 0.0, torn: 0.0, trail: 0.0, folds: 0.0, fold_count: 0, rough: ROUGH, color }
     }
 
     /// A round section of `radius` at `at`.
@@ -60,10 +53,6 @@ impl Section {
 
     pub fn squared(self, round: f32) -> Self {
         Section { round, ..self }
-    }
-
-    pub fn bent(self, bend: f32) -> Self {
-        Section { bend, ..self }
     }
 
     pub fn jagged(self, jag: f32) -> Self {
@@ -78,9 +67,6 @@ impl Section {
         Section { trail, ..self }
     }
 
-    pub fn waved(self, wave: f32, wave_count: f32) -> Self {
-        Section { wave, wave_count, ..self }
-    }
 
     pub fn folded(self, folds: f32, fold_count: u32) -> Self {
         Section { folds, fold_count, ..self }
@@ -124,12 +110,9 @@ pub fn smoothed(sections: &[Section], steps: usize) -> Vec<Section> {
                 at: catmull_rom([s0.at, s1.at, s2.at, s3.at], t),
                 half: half.truncate().max(Vec2::ZERO),
                 round: s1.round + (s2.round - s1.round) * t,
-                bend: s1.bend + (s2.bend - s1.bend) * t,
                 jag: 0.0,
                 torn: 0.0,
                 trail: s1.trail + (s2.trail - s1.trail) * t,
-                wave: s1.wave + (s2.wave - s1.wave) * t,
-                wave_count: s1.wave_count + (s2.wave_count - s1.wave_count) * t,
                 folds: s1.folds + (s2.folds - s1.folds) * t,
                 fold_count: s1.fold_count.max(s2.fold_count),
                 rough: s1.rough + (s2.rough - s1.rough) * t,
@@ -190,8 +173,7 @@ pub fn tube(sections: &[Section], sides: u32, caps: (bool, bool)) -> Mesh {
                     let fold = (a * s.fold_count as f32 + drift).sin() * (0.55 + 0.45 * (a * 2.3 + 0.7).sin());
                     let ripple = 1.0 + s.folds * fold + s.rough * wobble(a, along[i]);
                     let z = spow(a.sin(), 2.0 / s.round) * ripple;
-                    let wave = s.wave * (z * s.wave_count * std::f32::consts::PI + along[i] * 2.0).sin();
-                    let x = spow(a.cos(), 2.0 / s.round) * s.half.x * ripple + s.bend * z * z + wave;
+                    let x = spow(a.cos(), 2.0 / s.round) * s.half.x * ripple;
                     // Icicles: every other vertex hangs back, by a varying amount.
                     let icicle = if k % 2 == 0 { s.jag * (0.45 + 0.55 * ((k * 37 % 11) as f32 / 10.0)) } else { 0.0 };
                     // Torn cloth: broad scallops, and a few narrow strips hanging longer.
@@ -286,6 +268,65 @@ pub fn sweep(points: &[Vec3], radii: &[f32], sides: u32, color: Color) -> Mesh {
     }
     let pointed = radii.last().is_some_and(|r| *r < 1e-3);
     tube(&sections, sides, (true, !pointed))
+}
+
+/// A thin sheet of cloth (a coat's skirt, a streamer, a band of trim) through a grid of points:
+/// `rows` from the top down, each a line of points across it, all the same length. Each row's
+/// span to the next is in its color (`colors[row]`). Two layers `thickness` apart, facing away
+/// from each other, so it shows from both sides; shaded softly faceted, like a tube.
+pub fn sheet(rows: &[Vec<Vec3>], colors: &[Color], thickness: f32) -> Mesh {
+    let (n, m) = (rows.len(), rows[0].len());
+    assert!(n >= 2 && m >= 2 && rows.iter().all(|row| row.len() == m), "a sheet needs an even grid");
+    let at = |i: usize, j: usize| rows[i][j];
+    // A smooth normal at each point: across the sheet crossed with down it.
+    let normals: Vec<Vec<Vec3>> = (0..n)
+        .map(|i| {
+            (0..m)
+                .map(|j| {
+                    let across = at(i, (j + 1).min(m - 1)) - at(i, j.saturating_sub(1));
+                    let down = at((i + 1).min(n - 1), j) - at(i.saturating_sub(1), j);
+                    across.cross(down).normalize_or(Vec3::X)
+                })
+                .collect()
+        })
+        .collect();
+    let mut b = Builder::default();
+    for side in [1.0f32, -1.0] {
+        for i in 0..n - 1 {
+            let color = colors[i.min(colors.len() - 1)];
+            for j in 0..m - 1 {
+                let corners = [(i, j), (i, j + 1), (i + 1, j + 1), (i + 1, j)];
+                let [p0, p1, p2, p3] = corners.map(|(r, c)| at(r, c));
+                let face = ((p2 - p0).cross(p1 - p0) + (p3 - p0).cross(p2 - p0)).normalize_or_zero() * -side;
+                let base = b.positions.len() as u32;
+                for (r, c) in corners {
+                    let smooth = normals[r][c] * side;
+                    b.vertex(at(r, c) + smooth * thickness / 2.0, smooth.lerp(face, FACET).normalize_or(smooth), color);
+                }
+                // Wound to face the way this layer is pushed out.
+                if side > 0.0 {
+                    b.indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+                } else {
+                    b.indices.extend([base, base + 2, base + 1, base, base + 3, base + 2]);
+                }
+            }
+        }
+    }
+    b.build()
+}
+
+/// A grid of points for a `sheet`: `rows` spans from `v.0` to `v.1` down it and `cols` spans across
+/// it, each point `point(u, v)` (`u` 0..1 across).
+pub fn grid(rows: usize, cols: usize, v: (f32, f32), point: impl Fn(f32, f32) -> Vec3) -> Vec<Vec<Vec3>> {
+    (0..=rows)
+        .map(|i| v.0 + (v.1 - v.0) * i as f32 / rows as f32)
+        .map(|v| (0..=cols).map(|j| point(j as f32 / cols as f32, v)).collect())
+        .collect()
+}
+
+/// A `sheet`'s colors for `rows` spans: `cloth`, but the last `hem` in `edge`.
+pub fn hemmed(rows: usize, hem: usize, cloth: Color, edge: Color) -> Vec<Color> {
+    (0..rows).map(|i| if i + hem < rows { cloth } else { edge }).collect()
 }
 
 /// A box of `size` in `color`, centered on the origin, its edges and corners cut off `bevel` deep,

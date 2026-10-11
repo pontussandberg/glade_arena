@@ -22,7 +22,7 @@ use lightyear::prelude::input::native::ActionState;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
-use crate::{spawn_pickups, spawn_player};
+use crate::{spawn_dummy, spawn_pickups, spawn_player};
 
 /// Server-only: the room a fighter, projectile or pickup is in.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +79,8 @@ pub struct Lobby {
     rooms: BTreeMap<RoomKey, Room>,
     next_guest: u32,
     next_room: u32,
+    /// The last target dummy's number (its `PeerId::Local`).
+    next_dummy: u64,
     /// Lightyear rooms no longer used, to use again (there are only `u16::MAX` of them).
     free_net: Vec<RoomId>,
     /// The browser's list changed since it was last sent.
@@ -113,6 +115,8 @@ struct Room {
     /// Links, in the order they joined.
     members: Vec<Entity>,
     pickups: Vec<Entity>,
+    /// Target dummies, in the order they were placed (practice only).
+    dummies: Vec<Entity>,
     /// Members need to see it again.
     changed: bool,
 }
@@ -358,6 +362,24 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                 ctx.commands.entity(player).insert(Team(team));
             }
         }
+        RoomRequest::PlaceDummy(at) => {
+            let key = room_key.ok_or("You're not in a room")?;
+            let room = lobby.rooms.get_mut(&key).expect("in it");
+            if !room.practice {
+                return Err("Target dummies are for practice");
+            }
+            if room.dummies.len() >= MAX_DUMMIES {
+                return Err("That's enough dummies");
+            }
+            if !at.is_finite() || !arena_shared::map::map().walkable_at(at) {
+                return Err("A dummy can't stand there");
+            }
+            // Each class in turn.
+            let class = ClassId::all().nth(room.dummies.len() % ClassId::all().count()).expect("a class");
+            lobby.next_dummy += 1;
+            room.dummies.push(spawn_dummy(&mut ctx.commands, PeerId::Local(lobby.next_dummy), class, InRoom { key, net: room.net }, at));
+            info!(room = key.0, class = class.def().name, "target dummy placed");
+        }
         RoomRequest::Start => {
             let key = room_key.ok_or("You're not in a room")?;
             let room = lobby.rooms.get_mut(&key).expect("in it");
@@ -383,6 +405,9 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
     Ok(())
 }
 
+/// The most target dummies a practice room may have.
+const MAX_DUMMIES: usize = 12;
+
 /// A new room, led by `leader` (who still has to `join` it).
 fn create(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, leader: Entity, name: String, mode: Mode) -> RoomKey {
     lobby.next_room += 1;
@@ -390,7 +415,7 @@ fn create(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, leade
     let net = lobby.free_net.pop().unwrap_or_else(|| allocator.allocate());
     let pickups = spawn_pickups(&mut ctx.commands, InRoom { key, net });
     info!(room = key.0, name, ?mode, leader = lobby.guests[&leader].id, "room created");
-    lobby.rooms.insert(key, Room { name, mode, net, leader, started: false, practice: false, members: Vec::new(), pickups, changed: true });
+    lobby.rooms.insert(key, Room { name, mode, net, leader, started: false, practice: false, members: Vec::new(), pickups, dummies: Vec::new(), changed: true });
     key
 }
 
@@ -453,8 +478,8 @@ fn leave(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity) -> bool {
     match room.members.first() {
         None => {
             let room = lobby.rooms.remove(&key).expect("there");
-            for pickup in room.pickups {
-                ctx.commands.entity(pickup).try_despawn();
+            for thing in room.pickups.into_iter().chain(room.dummies) {
+                ctx.commands.entity(thing).try_despawn();
             }
             lobby.free_net.push(room.net);
             info!(room = key.0, "room closed");

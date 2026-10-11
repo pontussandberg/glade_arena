@@ -18,7 +18,7 @@ use crate::arena::palette;
 use crate::lobby::{SidePanel, card, fold_chip, label, pane_header};
 use crate::render::{ButtonFill, button, clicked, key_chip, ui_text};
 use crate::rooms::{Me, RoomList, Screen, request};
-use crate::stat_frame::ACCENT;
+use crate::arena::palette::ui::ACCENT;
 
 pub struct BrowserPlugin;
 
@@ -93,12 +93,12 @@ fn spawn_connecting(mut commands: Commands) {
                 row_gap: px(GAP * 2.0),
                 ..default()
             },
-            BackgroundColor(palette::ui::SHADOW),
+            BackgroundColor(palette::ui::BACKDROP),
             GlobalZIndex(20),
         ))
         .with_children(|screen| {
             screen.spawn(ui_text("ARENA", 18.0, palette::ui::MUTED));
-            screen.spawn((ConnectingText, ui_text("Connecting...", 16.0, palette::ui::LICHEN)));
+            screen.spawn((ConnectingText, ui_text("Connecting...", 16.0, palette::ui::TEXT)));
         });
 }
 
@@ -282,7 +282,7 @@ fn show_lobbies(
         }
 
         panel.spawn(card()).with_children(|card| {
-            card.spawn(ui_text("Join a lobby", 20.0, palette::ui::LICHEN));
+            card.spawn(ui_text("Join a lobby", 20.0, palette::ui::TEXT));
             if list.0.is_empty() {
                 card.spawn((
                     Node { justify_content: JustifyContent::Center, padding: UiRect::all(px(GAP * 2.0)), border: UiRect::all(px(1.0)), ..default() },
@@ -299,7 +299,7 @@ fn show_lobbies(
         });
 
         panel.spawn(card()).with_children(|card| {
-            card.spawn(ui_text("Create a lobby", 20.0, palette::ui::LICHEN));
+            card.spawn(ui_text("Create a lobby", 20.0, palette::ui::TEXT));
             card.spawn(ui_text("Lead it: pick the mode, and start when your friends are in.", 12.0, palette::ui::MUTED));
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
             card.spawn(label("Name"));
@@ -308,9 +308,9 @@ fn show_lobbies(
                 Button,
                 Node { padding: UiRect::axes(px(GAP), px(GAP * 0.75)), border: UiRect::all(px(1.0)), ..default() },
                 BorderColor::all(palette::ui::MUTED.with_alpha(0.5)),
-                BackgroundColor(palette::ui::SHADOW),
+                BackgroundColor(palette::ui::BACKDROP),
             ))
-            .with_child((NameField, ui_text("", 15.0, palette::ui::LICHEN)));
+            .with_child((NameField, ui_text("", 15.0, palette::ui::TEXT)));
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
             card.spawn(label("Mode"));
             card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
@@ -328,16 +328,16 @@ fn show_lobbies(
                             ..default()
                         },
                         BorderColor::all(palette::ui::MUTED.with_alpha(0.3)),
-                        BackgroundColor(palette::ui::SHADOW.with_alpha(0.8)),
+                        BackgroundColor(palette::ui::BACKDROP),
                     ))
                     .with_children(|tile| {
-                        tile.spawn(ui_text(mode.label(), 14.0, palette::ui::LICHEN));
+                        tile.spawn(ui_text(mode.label(), 14.0, palette::ui::TEXT));
                         tile.spawn(ui_text(what, 11.0, palette::ui::MUTED));
                     });
                 }
             });
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
-            card.spawn((CreateButton, button("CREATE LOBBY", 14.0, ACCENT, palette::ui::HOLLOW, ACCENT)));
+            card.spawn((CreateButton, button("CREATE LOBBY", 14.0, ACCENT, palette::ui::PANEL, ACCENT)));
         });
     });
 }
@@ -350,9 +350,9 @@ fn mark_lobbies_button(
 ) {
     let (interaction, mut fill, mut border) = button.into_inner();
     let (color, edge) = match (open.0, interaction) {
-        (true, _) => (palette::ui::OLIVE.with_alpha(0.9), ACCENT),
-        (false, Interaction::None) => (palette::ui::HOLLOW.with_alpha(0.85), palette::ui::MUTED.with_alpha(0.5)),
-        (false, _) => (palette::ui::OLIVE.with_alpha(0.9), palette::ui::MUTED.with_alpha(0.5)),
+        (true, _) => (palette::ui::SELECTED, ACCENT),
+        (false, Interaction::None) => (palette::ui::PANEL, palette::ui::MUTED.with_alpha(0.5)),
+        (false, _) => (palette::ui::SELECTED, palette::ui::MUTED.with_alpha(0.5)),
     };
     fill.set_if_neq(BackgroundColor(color));
     border.set_if_neq(BorderColor::all(edge));
@@ -376,8 +376,8 @@ fn spawn_header(panel: &mut ChildSpawnerCommands, list: &[RoomSummary], open: bo
     let live = list.iter().filter(|room| room.started).count();
     panel.spawn((PaneHeader, pane_header(open))).with_children(|header| {
         header.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Center, ..default() }).with_children(|left| {
-            left.spawn(ui_text("Lobbies", 18.0, palette::ui::LICHEN));
-            left.spawn(key_chip(list.len().to_string(), 11.0, palette::ui::LICHEN, palette::ui::MUTED.with_alpha(0.5)));
+            left.spawn(ui_text("Lobbies", 18.0, palette::ui::TEXT));
+            left.spawn(key_chip(list.len().to_string(), 11.0, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5)));
         });
         header.spawn(Node { column_gap: px(GAP * 1.5), align_items: AlignItems::Center, ..default() }).with_children(|right| {
             if live > 0 {
@@ -403,11 +403,11 @@ fn spawn_row(card: &mut ChildSpawnerCommands, room: &RoomSummary) {
             ..default()
         },
         BorderColor::all(if room.started { ACCENT } else { palette::ui::MUTED.with_alpha(0.4) }),
-        BackgroundColor(palette::ui::SHADOW.with_alpha(0.7)),
+        BackgroundColor(palette::ui::BACKDROP),
     ))
     .with_children(|row| {
         row.spawn(Node { flex_direction: FlexDirection::Column, flex_grow: 1.0, row_gap: px(2.0), ..default() }).with_children(|left| {
-            left.spawn(ui_text(room.name.clone(), 15.0, palette::ui::LICHEN));
+            left.spawn(ui_text(room.name.clone(), 15.0, palette::ui::TEXT));
             left.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Center, ..default() }).with_children(|line| {
                 let (state, color) = if room.started { ("LIVE", ACCENT) } else { ("WAITING", palette::ui::MUTED) };
                 line.spawn(ui_text(state, 10.0, color));
@@ -417,7 +417,7 @@ fn spawn_row(card: &mut ChildSpawnerCommands, room: &RoomSummary) {
         if room.full() {
             row.spawn(ui_text("Full", 12.0, palette::ui::MUTED));
         } else {
-            row.spawn((JoinButton(room.key), button("Join", 12.0, palette::ui::OLIVE, palette::ui::LICHEN, ACCENT)));
+            row.spawn((JoinButton(room.key), button("Join", 12.0, palette::ui::SELECTED, palette::ui::TEXT, ACCENT)));
         }
     });
 }
@@ -445,9 +445,9 @@ fn show_form(
     }
     for (mode, interaction, mut border, mut fill) in &mut modes {
         let (edge, color) = match (mode.0 == home.mode, interaction) {
-            (true, _) => (ACCENT, palette::ui::OLIVE),
-            (false, Interaction::None) => (palette::ui::MUTED.with_alpha(0.3), palette::ui::SHADOW.with_alpha(0.8)),
-            (false, _) => (palette::ui::MUTED.with_alpha(0.6), palette::ui::HOLLOW),
+            (true, _) => (ACCENT, palette::ui::SELECTED),
+            (false, Interaction::None) => (palette::ui::MUTED.with_alpha(0.3), palette::ui::BACKDROP),
+            (false, _) => (palette::ui::MUTED.with_alpha(0.6), palette::ui::PANEL),
         };
         border.set_if_neq(BorderColor::all(edge));
         fill.set_if_neq(BackgroundColor(color));
