@@ -21,8 +21,8 @@
 //! the body leans in behind it, the blade smearing out longer for a moment as it lands. A strike
 //! started before the last one has settled (holding fire, or clicking again quickly) chains onto
 //! it: the blade comes straight back into the draw, still raised, instead of sinking to the
-//! point-low carry in between. A dash is that lunge, held all
-//! the way through it.
+//! point-low carry in between. A dash is that lunge, held all the way through it; a dash taken
+//! mid-windup leaves the windup be, the fighter gliding along in its stance, facing the aim.
 //!
 //! The frost mage carries its staff upright at its side. The windup raises it high toward the
 //! target, the off hand reaching out to gather the cold; the cast thrusts the crystal forward at
@@ -438,9 +438,11 @@ fn turn_fighters(time: Res<Time>, mut fighters: Query<(&mut Facing, &Pos, &Attac
     let turn = rate(&time, TURN_RATE);
     for (mut facing, pos, attack, ability) in &mut fighters {
         let moved = pos.0 - facing.last_pos;
-        let wants = match (ability.dash, attack.windup) {
-            (Some(dash), _) => dash.dir,
-            (None, Some(windup)) => windup.dir,
+        let wants = match (attack.windup, ability.dash) {
+            (Some(windup), _) => windup.dir,
+            // Struck mid-dash: still facing the strike.
+            (None, Some(_)) if attack_in_dash(attack, ability) => facing.look,
+            (None, Some(dash)) => dash.dir,
             (None, None) if moved.length() > 0.01 => moved.normalize(),
             (None, None) => facing.look,
         };
@@ -451,6 +453,13 @@ fn turn_fighters(time: Res<Time>, mut fighters: Query<(&mut Facing, &Pos, &Attac
             *facing = Facing { look, last_pos: pos.0, moved, turned };
         }
     }
+}
+
+/// A dash with an attack in it (dashing mid-windup, or a windup going off mid-dash): it keeps
+/// the attack's look, facing the aim, its pose undisturbed, gliding without a stride. Only a
+/// dash on its own strikes the dash pose.
+fn attack_in_dash(attack: &AttackState, ability: &AbilityState) -> bool {
+    ability.dash.is_some_and(|dash| attack.windup.is_some() || attack.released_at.is_some_and(|at| at >= dash.started_at))
 }
 
 /// 0 below `from`, 1 above `to`, smooth in between.
@@ -491,8 +500,11 @@ fn pose_rigs(
     let dt = time.delta_secs().min(0.1);
     for (mut rig, facing, mut body, mut held_at, class, attack, ability, seen, is_me) in &mut rigs {
         let rig = &mut *rig;
-        rig.stride += facing.moved.length() * STRIDES_PER_METER;
-        let is_walking = if facing.moved.length() > 0.001 { 1.0 } else { 0.0 };
+        let gliding = attack_in_dash(attack, ability);
+        if !gliding {
+            rig.stride += facing.moved.length() * STRIDES_PER_METER;
+        }
+        let is_walking = if facing.moved.length() > 0.001 && !gliding { 1.0 } else { 0.0 };
         let walking = rig.walking + (is_walking - rig.walking) * ease_walk;
         rig.walking = if (walking - is_walking).abs() < 1e-3 { is_walking } else { walking };
         let phase = rig.stride.fract() * TAU;
@@ -537,7 +549,7 @@ fn pose_rigs(
             (None, None) => (0.0, 0.0, 0.0),
         };
         let flicked = since_throw(ability.used_at(*class), seen.and_then(|seen| seen.ability));
-        let mut dashing = if ability.dash.is_some() { 1.0 } else { 0.0 };
+        let mut dashing = if ability.dash.is_some() && !gliding { 1.0 } else { 0.0 };
         match (&def.ability.kind, flicked) {
             (AbilityKind::Projectile { .. }, Some(since)) => throw = throw.max(1.0 - ease(FLICK.0, FLICK.1, since)),
             // A nova's slam is its Q pose, like a dash's.
