@@ -494,8 +494,8 @@ fn read_local_input(
         }
     }
     // A left click that casts, aims (on the Q icon) or is for a HUD control doesn't also
-    // attack: no attacking until it's let go. A right click (MOBA camera) drops the aim, and
-    // doesn't walk (above); ESC drops it too (`esc_menu`).
+    // attack: no attacking until it's let go. A right click drops the aim (`drops_aim`); ESC
+    // does too (`esc_menu`).
     if mouse.just_pressed(MouseButton::Left) {
         if on_control {
             *held_click = true;
