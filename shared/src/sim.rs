@@ -353,8 +353,9 @@ mod tests {
         let target = Map::tile_of(from) + IVec2::new(0, 3);
         let (end, ticks) = walk(from, target, 500);
         assert_eq!(end, Map::center(target));
-        // 3 m at 6 m/s is 0.5 s = 32 ticks.
-        assert!((31..=34).contains(&ticks), "took {ticks} ticks");
+        // 3 m at 6 m/s is 0.5 s.
+        let half_second = TICK_HZ as u32 / 2;
+        assert!((half_second - 1..=half_second + 2).contains(&ticks), "took {ticks} ticks");
     }
 
     #[test]
