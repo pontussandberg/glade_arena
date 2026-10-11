@@ -71,6 +71,8 @@ pub struct AttackDef {
 
 /// Landing an auto-attack makes the next one, if started within `within_ticks` of the hit, wind
 /// up `faster` (the fraction of the windup cut). That quick one landing doesn't arm another.
+/// Armed by the server, which alone knows a hit landed. Melee only: projectile hits resolve
+/// apart from the shooter's attack state.
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FollowUp {
     pub within_ticks: u32,

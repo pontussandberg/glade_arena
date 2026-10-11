@@ -21,9 +21,8 @@
 //     chill (optional): crowd control each hit applies on top of its damage:
 //       (slow: fraction of speed taken away, slow_ticks: for how long, root_ticks: frozen in
 //       place this long: no walking, no dashing, and a dash in progress stops)
-//     follow_up (optional, melee only): landing a hit makes the next attack, if started within
-//       `within_ticks` of it, wind up `faster` (fraction of the windup cut: 0.75 = a quarter as
-//       long). That quick attack landing doesn't arm another.
+//     follow_up (optional, melee only): a hit quickens the next attack started within
+//       (within_ticks, faster: fraction of the windup cut, 0.75 = a quarter as long)
 //   ability       the Q ability, aimed at the cursor: name, description, cooldown_ticks, and
 //     kind: Projectile(speed, radius, range, damage)  thrown instantly: no windup, no root
 //           Dash(distance, ticks, damage)  dash toward the aim over `ticks`, through fighters,

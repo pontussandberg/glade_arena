@@ -101,9 +101,7 @@ pub struct AttackState {
     /// The tick the last attack went off (`None`: never). Kept rather than worked out from
     /// `ready_at`, which a Rift Step hit resets.
     pub released_at: Option<u32>,
-    /// With the attack's `follow_up`: an attack started by this tick winds up quick (`None`:
-    /// not armed). Armed by the server when a hit lands, so the client learns it a round trip
-    /// later, by a rollback.
+    /// An attack started by this tick winds up quick (`FollowUp`; `None`: not armed).
     pub quick_until: Option<u32>,
 }
 
