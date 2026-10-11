@@ -2,7 +2,7 @@
 //! lobby. Pick a fighter, see it up close, and go. Laid out like a classic character select:
 //!
 //! - the fighter stands on a stage filling the screen (drag to turn it)
-//! - who we are at the top, over the fighter but apart from it, so our name isn't taken for its name
+//! - who we are in a badge over the fighter's head, at one height for every fighter
 //! - what it is and does on the left, a pane that folds open and shut like the lobbies: its
 //!   header (role and name) always; open, cards under it with its stat frame (as in the arena),
 //!   and its passive and Q ability
@@ -56,7 +56,7 @@ impl Plugin for LobbyPlugin {
             (
                 (pick_fighter, fold_details, show_fighter, show_details, (show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena).chain(),
                 show_status,
-                turn_stage_camera.in_set(CameraMoves),
+                (turn_stage_camera, place_name_tag).chain().in_set(CameraMoves),
                 liven_stage,
             )
                 .run_if(in_state(Picking)),
@@ -78,6 +78,9 @@ const STAGE_RISE: f32 = 2.4;
 const FRONT: f32 = FRAC_PI_2 - 0.4;
 const SWAY: (f32, f32) = (0.25, 0.35);
 const STAGE_DRAG: f32 = 0.008;
+/// How high over the stage the name badge's bottom edge sits: over the tallest fighter (the
+/// frost mage's staff reaches past its head), so it stays put whichever is picked.
+const TAG_HEIGHT: f32 = 2.75;
 
 /// Spacing steps (pixels).
 const GAP: f32 = 8.0;
@@ -102,6 +105,10 @@ struct LobbyPart;
 
 #[derive(Component)]
 struct FighterTile(ClassId);
+
+/// Our name badge, over the fighter.
+#[derive(Component)]
+struct NameTag;
 
 #[derive(Component)]
 struct EnterButton;
@@ -249,7 +256,7 @@ fn liven_stage(time: Res<Time>, mut motes: Query<(&Mote, &mut Transform)>, mut t
     torch.intensity = TORCH_INTENSITY * f;
 }
 
-/// The screen over the stage: our `name` at the top, the selected fighter's details on the
+/// The screen over the stage: our `name` over the fighter (`place_name_tag`), the selected fighter's details on the
 /// left, the side panel on the right, and along the bottom the controls hint, the fighter tiles
 /// and the way in.
 fn spawn_screen(commands: &mut Commands, name: &str) {
@@ -271,17 +278,18 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
             // The bottom row in three columns: the outer two share what the middle leaves, so the
             // middle is centered.
             let side = |justify: JustifyContent| Node { flex_grow: 1.0, flex_basis: px(0.0), justify_content: justify, ..default() };
-            // Who we are, centered over the fighter. Out of the flow, so the panes either side
-            // start at the top.
+            // Who we are, centered over the fighter's head (its height set as the camera moves).
             screen
-                .spawn(Node {
-                    position_type: PositionType::Absolute,
-                    top: px(MARGIN),
-                    left: px(0.0),
-                    right: px(0.0),
-                    justify_content: JustifyContent::Center,
-                    ..default()
-                })
+                .spawn((
+                    NameTag,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(0.0),
+                        right: px(0.0),
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    },
+                ))
                 .with_children(|bar| {
                     bar.spawn((
                         Node {
@@ -544,6 +552,20 @@ fn turn_stage_camera(
     let sway = SWAY.0 * (*swaying_for * SWAY.1).sin();
     lobby.view.yaw = lobby.facing + sway;
     camera.set_if_neq(lobby.view.transform(to_world(STAGE, STAGE_AIM_HEIGHT)));
+}
+
+/// Keeps the name badge's bottom edge at `TAG_HEIGHT` over the stage, on screen. The camera only
+/// turns around the stage's upright, so that stays the same height while it sways or is dragged.
+fn place_name_tag(camera: Single<(&Camera, &Transform), With<Camera3d>>, mut tag: Single<&mut Node, With<NameTag>>) {
+    let (camera, transform) = *camera;
+    let (Some(size), Ok(at)) = (camera.logical_viewport_size(), camera.world_to_viewport(&GlobalTransform::from(*transform), to_world(STAGE, TAG_HEIGHT)))
+    else {
+        return;
+    };
+    let bottom = px(size.y - at.y);
+    if tag.bottom != bottom {
+        tag.bottom = bottom;
+    }
 }
 
 /// The in-game HUD and minimap stay hidden until we're in the arena.
