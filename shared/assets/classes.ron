@@ -76,7 +76,7 @@
     ),
     (
         id: "javelinist",
-        name: "Javelinist",
+        name: "Jav",
         role: "Marksman",
         blurb: "Hurls heavy javelins. The farther they fly, the harder they hit.",
         max_hp: 95,
