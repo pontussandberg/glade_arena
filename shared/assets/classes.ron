@@ -12,7 +12,7 @@
 //                   meanwhile (see the README). At most cooldown_ticks; equal makes the root
 //                   the whole attack: holding fire keeps you planted, to move you stop firing
 //     kind: Melee(range, width)             a thrust: hits everyone whose body a straight lane
-//             `width` wide reaches, out to `range` past the edge of you
+//             `width` wide reaches, out to `range` from your center
 //           Projectile(speed, radius, range) flies straight, stops at walls/rocks/trees;
 //             optional far_scale: damage after flying the full range, as a multiple of `damage`
 //             (point blank), scaling linearly by how far the shot flew (2.0 = double at full range)
@@ -76,7 +76,7 @@
             damage: 20,
             cooldown_ticks: 40,
             windup_ticks: 24,
-            kind: Melee(range: 2.4, width: 0.3),
+            kind: Melee(range: 3.75, width: 0.05),
         ),
         ability: (
             name: "Rift Step",

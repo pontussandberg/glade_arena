@@ -95,7 +95,7 @@ const NOVA_GROW_SECONDS: f32 = 0.1;
 const NOVA_SECONDS: f32 = 0.75;
 /// How fast (radians per second) the frost under a slowed fighter turns.
 const RUNE_TURN_RATE: f32 = 0.8;
-/// How wide (meters) the circle at the edge of your shots' range is.
+/// How wide (meters) the circle at the edge of your auto-attack's range is.
 const RANGE_CIRCLE_WIDTH: f32 = 0.05;
 
 /// Who a fighter is to you (kept up to date on each fighter by `mark_relations`). Only its health
@@ -132,7 +132,7 @@ impl Relation {
 #[derive(Resource)]
 pub(crate) struct Visuals {
     fighters: HashMap<ClassId, Handle<Mesh>>,
-    /// A circle at the edge of a projectile class's auto-attack range, shown around you.
+    /// A circle at the edge of a class's auto-attack range, shown around you.
     range_circles: HashMap<ClassId, Handle<Mesh>>,
     /// A nova's burst (see `arena::NovaMeshes`).
     novas: HashMap<ClassId, arena::NovaMeshes<Handle<Mesh>>>,
@@ -165,7 +165,7 @@ pub(crate) enum Look {
     Wind,
     /// The white glow on a thrown spear's point.
     Spark,
-    /// The faint circle at the edge of your shots' range.
+    /// The faint circle at the edge of your auto-attack's range.
     Range,
     /// See-through, glowing ice: novas and frozen fighters, whoever's.
     Frost,
@@ -298,7 +298,7 @@ pub(crate) struct GameUi;
 #[derive(Component)]
 struct DestinationMarker;
 
-/// The faint circle at the edge of your shots' range: shown with A (MOBA camera), hidden again
+/// The faint circle at the edge of your auto-attack's range: shown with A (MOBA camera), hidden again
 /// by the next key or click (`toggle_range_circle`).
 #[derive(Component)]
 struct RangeCircle;
@@ -317,16 +317,17 @@ fn setup_scene(
     ));
     commands.insert_resource(Visuals {
         fighters: ClassId::all().map(|c| (c, meshes.add(arena::fighter_mesh(&c.def().id)))).collect(),
-        // Where a shot's front edge stops: it starts at the edge of the shooter and flies its
-        // range, so a fighter whose body reaches over the circle can be hit.
+        // Where an auto-attack stops reaching, so a fighter whose body reaches over the circle can
+        // be hit: a shot's front edge starts at the edge of the shooter and flies its range; a
+        // thrust reaches a body whose center is within its reach, so whose edge is within its
+        // range.
         range_circles: ClassId::all()
-            .filter_map(|c| match c.def().attack.kind {
-                AttackKind::Projectile { radius, range, .. } => {
-                    let outer = PLAYER_RADIUS + 2.0 * radius + range;
-                    let circle = Annulus::new(outer - RANGE_CIRCLE_WIDTH, outer).mesh().resolution(96).build();
-                    Some((c, meshes.add(circle)))
-                }
-                AttackKind::Melee { .. } => None,
+            .map(|c| {
+                let outer = match c.def().attack.kind {
+                    AttackKind::Projectile { radius, range, .. } => PLAYER_RADIUS + 2.0 * radius + range,
+                    AttackKind::Melee { range, .. } => range,
+                };
+                (c, meshes.add(Annulus::new(outer - RANGE_CIRCLE_WIDTH, outer).mesh().resolution(96).build()))
             })
             .collect(),
         novas: ClassId::all()
@@ -455,7 +456,7 @@ fn read_local_input(
         move_to = None;
     }
     *last_pos = me;
-    // Placing target dummies: a right click stops it (and doesn't walk).
+    // Placing a target dummy: a right click cancels it (and doesn't walk).
     let stop_placing = placing.on && !mode.free && mouse.just_pressed(MouseButton::Right);
     if stop_placing {
         placing.on = false;
@@ -499,6 +500,7 @@ fn read_local_input(
             *held_click = true;
         } else if placing.on {
             placing.at = cursor;
+            placing.on = false;
             *held_click = true;
         } else if on_icon {
             aiming.0 = ability_ready;

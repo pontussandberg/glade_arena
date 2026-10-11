@@ -662,8 +662,7 @@ fn fist(color: Color, top: f32, width: f32) -> Mesh {
 /// The revenant's body, a fallen paladin's, lean and quick, under its moving cloth
 /// (`revenant_wardrobe`): a fitted long coat, its bodice closed down the front with iron clasps
 /// between dark lapels, a high collar flaring open at the throat, a wide belt (the coat's tails
-/// hang from under it), a leather baldric across the chest, a single small pauldron of blackened
-/// steel on the left shoulder, and an empty scabbard at the left hip (its sword long since drawn).
+/// hang from under it), and a single pauldron of blackened steel on the left shoulder.
 fn revenant_body() -> Mesh {
     let bodice = tube(
         &smoothed(
@@ -720,21 +719,6 @@ fn revenant_body() -> Mesh {
         (true, true),
     ));
     parts.push(bevel_box(Vec3::new(0.025, 0.06, 0.065), 0.008, palette::IRON).translated_by(Vec3::new(0.172, 0.86, 0.04)));
-    // The baldric: across the chest from the right shoulder to the left hip, and across the back.
-    for front in [1.0, -1.0] {
-        let strap = [Vec3::new(0.0, 1.38, 0.2), Vec3::new(0.13 * front, 1.3, 0.13), Vec3::new(0.172 * front, 1.12, 0.0), Vec3::new(0.155 * front, 0.95, -0.14), Vec3::new(0.0, 0.88, -0.19)];
-        parts.push(sweep(&strap, &[0.011; 5], 8, palette::DARK_LEATHER));
-    }
-    // The scabbard: wide front to back, hanging from the hip down and back past the left leg.
-    let scabbard = [
-        (0.02, 0.84, -0.225, 0.05, palette::ASH),
-        (0.0, 0.78, -0.245, 0.048, palette::DARK_LEATHER),
-        (-0.1, 0.52, -0.29, 0.044, palette::DARK_LEATHER),
-        (-0.185, 0.28, -0.32, 0.037, palette::ASH),
-        (-0.22, 0.18, -0.33, 0.0, palette::ASH),
-    ]
-    .map(|(x, y, z, w, color)| Section::new(Vec3::new(x, y, z), Vec2::new(w, 0.018), color));
-    parts.push(tube(&scabbard, 12, (true, false)));
     parts.push(shoulder_plates(-1.0));
     sculpted(parts)
 }
@@ -746,17 +730,18 @@ fn shoulder_plates(side: f32) -> Mesh {
     let mut parts = Vec::new();
     // Each plate (from, to: how far out along the shoulder), sloping down with the shoulder and
     // overlapping the next, the cap the broadest.
-    for (i, (from, to)) in [(0.19, 0.3), (0.27, 0.34), (0.315, 0.375)].into_iter().enumerate() {
-        let shrink = 1.0 - 0.07 * i as f32;
+    // Arched clear over the coat's squared shoulder (front to back and over its top).
+    for (i, (from, to)) in [(0.2, 0.31), (0.28, 0.35), (0.325, 0.385)].into_iter().enumerate() {
+        let shrink = 1.0 - 0.06 * i as f32;
         let rows: Vec<Vec<Vec3>> = (0..=4)
             .map(|r| from + (to - from) * r as f32 / 4.0)
             .map(|z| {
                 // Out along the shoulder it drops and curls in a little tighter.
-                let down = 0.75 * (z - 0.19) + 0.012 * i as f32;
-                let (reach, rise) = (0.168 * shrink - 0.06 * (z - 0.19), 0.105 * shrink - 0.04 * (z - 0.19));
+                let down = 0.55 * (z - 0.2) + 0.015 * i as f32;
+                let (reach, rise) = (0.178 * shrink - 0.05 * (z - 0.2), 0.122 * shrink - 0.04 * (z - 0.2));
                 (0..=14)
                     .map(|k| -1.2 + 2.4 * k as f32 / 14.0)
-                    .map(|t| Vec3::new(reach * t.sin(), 1.345 - down + rise * t.cos(), z * side))
+                    .map(|t| Vec3::new(reach * t.sin(), 1.33 - down + rise * t.cos(), z * side))
                     .collect()
             })
             .collect();

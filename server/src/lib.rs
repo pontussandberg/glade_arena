@@ -654,7 +654,7 @@ fn use_abilities(
                 attack.ready_at = now.0;
             }
         }
-        let (next, cast) = sim::step_ability(now.0, id.0, *class, pos.0, &input.0, &attack, &chilled, *state);
+        let (next, cast) = sim::step_ability(now.0, id.0, *class, pos.0, &input.0, &chilled, *state);
         state.set_if_neq(next);
         match cast {
             Some(sim::Cast::Throw(projectile)) => spawn_projectile(&mut commands, projectile, side),

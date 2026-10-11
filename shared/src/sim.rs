@@ -146,9 +146,9 @@ pub enum Cast {
 }
 
 /// One tick of the Q ability. Pressing it while it's ready uses it toward the aim: a projectile
-/// ability throws and a nova bursts at once (returned here); a dash starts (not while winding up
-/// an attack, nor while rooted) and runs for its ticks, moved by `move_player`. A root stops a
-/// dash in progress.
+/// ability throws and a nova bursts at once (returned here); a dash starts (mid-windup too, the
+/// attack still going off when it's over; not while rooted) and runs for its ticks, moved by
+/// `move_player`. A root stops a dash in progress.
 #[allow(clippy::too_many_arguments)]
 pub fn step_ability(
     tick: u32,
@@ -156,7 +156,6 @@ pub fn step_ability(
     class: ClassId,
     pos: Vec2,
     input: &PlayerInput,
-    attack: &AttackState,
     chilled: &Chilled,
     mut state: AbilityState,
 ) -> (AbilityState, Option<Cast>) {
@@ -175,7 +174,9 @@ pub fn step_ability(
             let origin = shot_spawn(pos, dir, radius);
             Some(Cast::Throw(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: true }))
         }
-        AbilityKind::Dash { .. } if attack.windup.is_none() && !rooted => {
+        // Mid-windup too: the windup goes on, and the attack still goes off when it's over, from
+        // wherever the dash took you (still aimed where it was locked).
+        AbilityKind::Dash { .. } if !rooted => {
             state.dash = Some(Dash { started_at: tick, dir });
             None
         }
@@ -502,11 +503,11 @@ mod tests {
     fn thrown_ability_goes_off_at_once_then_waits_for_its_cooldown() {
         let class = thrower();
         let me = PeerId::Netcode(1);
-        let (state, thrown) = step_ability(10, me, class, Vec2::ZERO, &press_q(Vec2::X), &AttackState::default(), &default(), default());
+        let (state, thrown) = step_ability(10, me, class, Vec2::ZERO, &press_q(Vec2::X), &default(), default());
         let Some(Cast::Throw(projectile)) = thrown else { panic!("thrown the tick Q is pressed") };
         assert!(projectile.ability && projectile.spawn_tick == 10);
         let cooldown = class.def().ability.cooldown_ticks;
-        let again = |tick| step_ability(tick, me, class, Vec2::ZERO, &press_q(Vec2::X), &AttackState::default(), &default(), state).1;
+        let again = |tick| step_ability(tick, me, class, Vec2::ZERO, &press_q(Vec2::X), &default(), state).1;
         assert!(again(10 + cooldown - 1).is_none(), "used again during its cooldown");
         assert!(again(10 + cooldown).is_some());
         // Its own speed, separate from the auto-attack's (and the same tick gets another hash).
@@ -523,12 +524,12 @@ mod tests {
         for from in SPAWN_POINTS {
             for i in 0..8 {
                 let dir = Vec2::from_angle(i as f32 * std::f32::consts::FRAC_PI_4);
-                let (mut state, _) = step_ability(1, PeerId::Netcode(1), class, from, &press_q(dir), &AttackState::default(), &default(), default());
+                let (mut state, _) = step_ability(1, PeerId::Netcode(1), class, from, &press_q(dir), &default(), default());
                 let mut pos = from;
                 for tick in 2..=1 + ticks + 3 {
                     pos = move_player(pos, &PlayerInput::default(), class, &AttackState::default(), &state, &default(), &default(), tick);
                     assert!(map().walkable_at(pos), "dashed into a wall at {pos}");
-                    state = step_ability(tick, PeerId::Netcode(1), class, pos, &PlayerInput::default(), &AttackState::default(), &default(), state).0;
+                    state = step_ability(tick, PeerId::Netcode(1), class, pos, &PlayerInput::default(), &default(), state).0;
                 }
                 assert!(state.dash.is_none(), "the dash should be over");
                 longest = longest.max(from.distance(pos));
@@ -539,11 +540,20 @@ mod tests {
     }
 
     #[test]
-    fn no_dash_while_winding_up_an_attack() {
+    fn a_dash_mid_windup_moves_you_and_the_attack_still_goes_off() {
         let class = dasher();
+        let from = SPAWN_POINTS[0];
         let (_, winding) = attack_ticks(class, &aim(Vec2::X, true), 10, 10);
-        let (state, _) = step_ability(11, PeerId::Netcode(1), class, Vec2::ZERO, &press_q(Vec2::X), &winding, &default(), default());
-        assert!(state.dash.is_none() && state.ready_at == 0, "dashed (or spent the cooldown) mid-windup");
+        let (dashing, _) = step_ability(11, PeerId::Netcode(1), class, from, &press_q(Vec2::Y), &default(), default());
+        assert!(dashing.dash.is_some(), "no dash mid-windup");
+        let moved = move_player(from, &PlayerInput::default(), class, &winding, &dashing, &default(), &default(), 11);
+        assert_ne!(moved, from, "the dash didn't move you mid-windup");
+        let windup = class.def().attack.windup_ticks;
+        let (released, _) = (11..=10 + windup).fold((None, winding), |(released, state), tick| {
+            let (next, attack) = step_attack(tick, PeerId::Netcode(1), class, moved, &PlayerInput::default(), state);
+            (released.or(attack.map(|_| tick)), next)
+        });
+        assert_eq!(released, Some(10 + windup), "the dash cancelled the attack");
     }
 
     /// The first class whose auto-attack chills / whose Q is a nova.
@@ -594,7 +604,7 @@ mod tests {
         assert!((step(100 + HASTE_TICKS) - normal * HASTE_FACTOR).abs() < 1e-5);
         assert!((step(101 + HASTE_TICKS) - normal).abs() < 1e-5, "still hasted after it wore off");
         // Dashes aren't sped up.
-        let (dashing, _) = step_ability(101, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &attack, &warm, idle);
+        let (dashing, _) = step_ability(101, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &warm, idle);
         assert_eq!(
             move_player(from, &walk, class, &attack, &dashing, &warm, &hasted, 102),
             move_player(from, &walk, class, &attack, &dashing, &warm, &Hasted::default(), 102)
@@ -615,14 +625,14 @@ mod tests {
         assert_eq!(move_player(from, &walk, class, &attack, &idle, &chilled, &default(), 11), from, "walked while rooted");
         assert_ne!(move_player(from, &walk, class, &attack, &idle, &chilled, &default(), 75), from, "still rooted after it wore off");
 
-        let (state, _) = step_ability(11, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &attack, &chilled, idle);
+        let (state, _) = step_ability(11, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &chilled, idle);
         assert!(state.dash.is_none() && state.ready_at == 0, "dashed (or spent the cooldown) while rooted");
 
         // A dash in progress when the root lands goes no further, and ends.
-        let (dashing, _) = step_ability(9, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &attack, &default(), idle);
+        let (dashing, _) = step_ability(9, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &default(), idle);
         assert!(dashing.dash.is_some());
         assert_eq!(move_player(from, &walk, class, &attack, &dashing, &chilled, &default(), 11), from, "dashed on while rooted");
-        let (stopped, _) = step_ability(11, PeerId::Netcode(1), class, from, &PlayerInput::default(), &attack, &chilled, dashing);
+        let (stopped, _) = step_ability(11, PeerId::Netcode(1), class, from, &PlayerInput::default(), &chilled, dashing);
         assert!(stopped.dash.is_none(), "the dash should stop");
     }
 
@@ -630,8 +640,7 @@ mod tests {
     fn nova_bursts_at_once_around_the_caster_only() {
         let class = novaer();
         let AbilityKind::Nova { radius, .. } = class.def().ability.kind else { unreachable!() };
-        let idle = AttackState::default();
-        let (state, cast) = step_ability(10, PeerId::Netcode(1), class, Vec2::ZERO, &press_q(Vec2::X), &idle, &default(), default());
+        let (state, cast) = step_ability(10, PeerId::Netcode(1), class, Vec2::ZERO, &press_q(Vec2::X), &default(), default());
         assert!(matches!(cast, Some(Cast::Nova)), "no nova the tick Q is pressed");
         assert_eq!(state.ready_at, 10 + class.def().ability.cooldown_ticks);
         let dirs = [Vec2::X, Vec2::Y, -Vec2::X, Vec2::new(0.6, -0.8)];

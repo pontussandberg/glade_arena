@@ -18,7 +18,8 @@
 //! where it faces. The windup draws the sword arm back, the weapon shoulder turning away and the
 //! lead hand reaching out at the target, the point coming up level; the strike is a lunge,
 //! the arm driving the point straight out at the target as the lead leg steps long into it and
-//! the body leans in behind it. A dash is a forward lunge with the blade swept back.
+//! the body leans in behind it, the blade smearing out longer for a moment as it lands. A dash is
+//! that lunge, held all the way through it.
 //!
 //! The frost mage carries its staff upright at its side. The windup raises it high toward the
 //! target, the off hand reaching out to gather the cold; the cast thrusts the crystal forward at
@@ -124,6 +125,10 @@ struct Moves {
     throws: bool,
     /// How big the fighter is drawn (1 = the joints in `arena`).
     scale: f32,
+    /// How much longer the weapon is drawn for a moment as a strike lands (a fraction of its
+    /// length), the hand pushed out with it: a fighting game's smear, so the blade's tip reaches
+    /// as far as the strike does.
+    stretch: f32,
 }
 
 /// How the weapon sits in the hand.
@@ -132,9 +137,12 @@ enum Held {
     /// throw.
     OnTarget,
     /// Kept standing up, whatever the arm and body do, tipped this far (radians, keyframes like
-    /// the joints') toward the facing: a staff (or, tipped all the way over, a blade held out
-    /// toward the facing).
+    /// the joints') toward the facing: a staff.
     Upright([f32; 4]),
+    /// Like `Upright` (tipped all the way over: held out ahead), and turned in from the hand so
+    /// its point converges on the middle of the strike's lane at its far end: wherever the hand
+    /// is, off to the side, the point lands where the strike does. A thrusting blade.
+    Blade([f32; 4]),
 }
 
 const JAVELINIST: Moves = Moves {
@@ -151,22 +159,25 @@ const JAVELINIST: Moves = Moves {
     held: Held::OnTarget,
     throws: true,
     scale: 1.16,
+    stretch: 0.0,
 };
 
 const REVENANT: Moves = Moves {
-    weapon_arm: [0.45, -0.85, 1.5, -1.2],
+    // The dash (the fourth of each) is a lunge too, held all the way through it: the blade
+    // driven out ahead, the weapon shoulder leading.
+    weapon_arm: [0.45, -0.85, 1.5, 1.45],
     weapon_arm_untwist: 0.8,
-    lead_arm: [-0.25, 0.95, -0.75, -1.1],
-    lead_leg: [0.12, 0.25, 0.8, 0.65],
-    back_leg: [-0.1, -0.35, -0.8, -0.7],
-    twist: [0.1, -0.7, 0.55, 0.0],
-    lean: [0.0, 0.15, -0.45, -0.55],
-    head_dip: [0.0, 0.1, -0.2, 0.0],
-    // Point forward and a little down in guard, level drawn back and through the lunge, swept
-    // back and down dashing.
-    held: Held::Upright([2.0, 1.6, 1.55, -2.3]),
+    lead_arm: [-0.25, 0.95, -0.75, -0.9],
+    lead_leg: [0.12, 0.25, 0.8, 0.7],
+    back_leg: [-0.1, -0.35, -0.8, -0.75],
+    twist: [0.1, -0.7, 0.55, 0.5],
+    lean: [0.0, 0.15, -0.45, -0.5],
+    head_dip: [0.0, 0.1, -0.2, -0.15],
+    // Point forward and a little down in guard, level drawn back, through the lunge and dashing.
+    held: Held::Blade([2.0, 1.6, 1.55, 1.55]),
     throws: false,
     scale: 1.13,
+    stretch: 0.42,
 };
 
 const FROST_MAGE: Moves = Moves {
@@ -181,6 +192,7 @@ const FROST_MAGE: Moves = Moves {
     held: Held::Upright([0.08, -0.25, 1.0, -0.05]),
     throws: false,
     scale: 1.05,
+    stretch: 0.0,
 };
 
 /// The moves for a class's look (every class has one: `arena::FIGHTER_LOOKS`).
@@ -198,6 +210,8 @@ fn moves(class_key: &str) -> &'static Moves {
 /// strike, however long the windup.
 const DRAW_END: f32 = 0.5;
 const STRIKE_TICKS: f32 = 5.0;
+/// How long (ticks) a strike's smear takes to snap back after it lands (`Moves::stretch`).
+const STRETCH_TICKS: f32 = 6.0;
 /// A thrown weapon: ticks after a throw until a new one is in the hand.
 const REARM_TICKS: f32 = 12.0;
 /// After the throw: how long (ticks) the follow-through is held, and when it's back to carrying.
@@ -552,9 +566,19 @@ fn pose_rigs(
 
         let unlean = lean.inverse();
         let weapon_arm = arm_turn(twist, weapon_arm);
+        // How far a blade turns in, toward where the strike lands: from where the hand is going
+        // (in the facing's frame, in meters) to the middle of the lane at its far end.
+        let converge = match (&moves.held, &def.attack.kind) {
+            (Held::Blade(_), AttackKind::Melee { range, .. }) => {
+                let hand = leaning(twist_to, lean_to, 0.0) * (RIG_SHOULDER + arm_turn(twist_to, weapon_arm_to) * RIG_HAND) * moves.scale;
+                hand.z.atan2((range - hand.x).max(0.5))
+            }
+            _ => 0.0,
+        };
         let held_in = |weapon_arm: Quat, unlean: Quat| match moves.held {
             Held::OnTarget => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-(FRAC_PI_2 - 0.12)),
             Held::Upright(tip) => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-pose(tip)),
+            Held::Blade(tip) => weapon_arm.inverse() * unlean * Quat::from_rotation_y(converge) * Quat::from_rotation_z(-pose(tip)),
         };
         let held = held_in(weapon_arm, unlean);
         let rotations = [
@@ -577,6 +601,14 @@ fn pose_rigs(
                 * Transform::from_translation(RIG_HAND).with_rotation(held_in(aimed_arm, aimed_lean.inverse()));
             held_at.set_if_neq(HeldAt(aimed_body * hand));
         }
+        // The strike's smear: the weapon stretching out as the strike comes through, longest as
+        // it lands, snapping back over the next few ticks.
+        let smear = moves.stretch
+            * match (windup, released) {
+                (Some(_), _) => throw.powi(3),
+                (None, Some(since)) => 1.0 - ease(0.0, STRETCH_TICKS, since),
+                (None, None) => 0.0,
+            };
         for (part, rotation) in rotations.into_iter().chain(tail) {
             if let Ok((mut transform, mut visibility)) = parts.get_mut(part) {
                 if transform.rotation != rotation {
@@ -584,6 +616,11 @@ fn pose_rigs(
                 }
                 if part == rig.held {
                     visibility.set_if_neq(shown(!empty_handed));
+                    let (scale, at) = (Vec3::new(1.0, 1.0 + smear, 1.0), RIG_HAND * (1.0 + 0.4 * smear));
+                    if transform.scale != scale || transform.translation != at {
+                        transform.scale = scale;
+                        transform.translation = at;
+                    }
                 }
             }
         }

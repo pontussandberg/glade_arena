@@ -272,16 +272,16 @@ fn predict_ability(
     synced: SyncedLocalTimeline,
     mut commands: Commands,
     mut players: Query<
-        (&PlayerId, &ClassId, &Pos, &ActionState<PlayerInput>, &AttackState, &Chilled, &mut AbilityState, &Health),
+        (&PlayerId, &ClassId, &Pos, &ActionState<PlayerInput>, &Chilled, &mut AbilityState, &Health),
         With<Predicted>,
     >,
 ) {
     let tick = synced.current_tick().0;
-    for (id, class, pos, input, attack, chilled, mut state, health) in &mut players {
+    for (id, class, pos, input, chilled, mut state, health) in &mut players {
         if !health.alive() {
             continue;
         }
-        let (next, cast) = sim::step_ability(tick, id.0, *class, pos.0, &input.0, attack, chilled, *state);
+        let (next, cast) = sim::step_ability(tick, id.0, *class, pos.0, &input.0, chilled, *state);
         state.set_if_neq(next);
         if let Some(sim::Cast::Throw(projectile)) = cast {
             commands.spawn(projectile.bundle());

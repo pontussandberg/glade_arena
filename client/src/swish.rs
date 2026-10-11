@@ -1,12 +1,10 @@
 //! A blade's wind: what a melee swing leaves in the air. A faint trail follows the blade itself
-//! wherever it moves fast (a lunge, a dash), so it shows where the sword just was; and each swing
-//! drives out a burst of wind level with the blade along the lane it reaches: rippling ribbons of
-//! air across its width out to its reach, shooting out and drifting up as they fade. Air casts no
-//! shadow. The same whoever swung (who it
-//! was shows in the health bar).
+//! wherever it moves fast (a lunge, a dash), so it shows where the sword just was; and each strike
+//! leaves a mark, one thin, sharp line of wind along the blade where it was as the strike landed,
+//! lingering a moment as it fades. Air casts no shadow. The same whoever swung (who it was shows
+//! in the health bar).
 
 use std::collections::VecDeque;
-use std::f32::consts::PI;
 
 use arena_shared::classes::AttackKind;
 use arena_shared::protocol::*;
@@ -18,15 +16,15 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
-use crate::arena::{self, palette, to_world};
+use crate::arena::{self, palette};
 
 pub struct SwishPlugin;
 
 impl Plugin for SwishPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_swish);
-        app.add_systems(Update, (add_trails, show_swishes, drive_swishes));
-        app.add_systems(PostUpdate, trail_blades.after(TransformSystems::Propagate));
+        app.add_systems(Update, (add_trails, drive_marks));
+        app.add_systems(PostUpdate, (trail_blades, show_marks).after(TransformSystems::Propagate));
     }
 }
 
@@ -41,20 +39,19 @@ const TRAIL_LIFE: f32 = 0.16;
 const TRAIL_SPEED: (f32, f32) = (6.0, 13.0);
 const TRAIL_BLADE: [f32; 3] = [0.3, 1.1, 1.72];
 
-/// The burst each swing drives out: how many swishes, how long they last (seconds), how high
-/// they are if the blade can't be found, and how many steps they fade in (one shared material
-/// each).
-const SWISHES: usize = 9;
-const SWISH_LIFE: f32 = 0.42;
-const SWISH_HEIGHT: f32 = 1.25;
-const SWISH_FADES: usize = 8;
-/// The air's color, and how see-through its swishes are at their brightest.
+/// The mark a strike leaves: how long it lasts (seconds), the stretch of the blade it's drawn
+/// along (up the blade from the grip, as stretched as it is when the strike lands), and how many
+/// steps it fades in (one shared material each).
+const MARK_LIFE: f32 = 0.32;
+const MARK_BLADE: (f32, f32) = (0.25, 1.82);
+const MARK_FADES: usize = 8;
+/// The air's color, and how see-through the mark is at its brightest.
 const AIR: Color = palette::SILVER;
-const AIR_ALPHA: f32 = 0.3;
+const MARK_ALPHA: f32 = 0.85;
 
 #[derive(Resource)]
 struct SwishAssets {
-    swish: Handle<Mesh>,
+    mark: Handle<Mesh>,
     /// Brightest first.
     fades: Vec<Handle<StandardMaterial>>,
     trail: Handle<StandardMaterial>,
@@ -62,18 +59,18 @@ struct SwishAssets {
 
 fn load_swish(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     commands.insert_resource(SwishAssets {
-        swish: meshes.add(swish_mesh()),
-        fades: (0..SWISH_FADES).map(|i| materials.add(arena::translucent(AIR, AIR_ALPHA * (1.0 - i as f32 / SWISH_FADES as f32), 1.5))).collect(),
-        trail: materials.add(arena::translucent(AIR, 0.55, 1.8)),
+        mark: meshes.add(mark_mesh()),
+        fades: (0..MARK_FADES).map(|i| materials.add(arena::translucent(AIR, MARK_ALPHA * (1.0 - i as f32 / MARK_FADES as f32), 2.0))).collect(),
+        trail: materials.add(arena::translucent(AIR, 0.47, 1.8)),
     });
 }
 
-/// One swish: a thin ribbon of air along +X, 1 long, bowing to one side (+Z) and rippling as it
-/// goes, a gentle rise and fall along it: brightest along its middle, fading to nothing at its
-/// ends and edges. Nearly level (it lies in the plane the blade thrust in); both faces.
-fn swish_mesh() -> Mesh {
-    const STEPS: usize = 24;
-    let curve = |t: f32| Vec3::new(t, 0.035 * (t * 2.0 * PI + 0.6).sin() * t, 0.1 * (t * PI).sin() + 0.03 * (t * 3.0 * PI).sin());
+/// The mark: one thin, sharp line of wind along +X, 1 long, in two crossed planes (flat and
+/// upright, so it shows from any angle): tapering to a needle point at its far end and fading out
+/// at its near one, a bright core down its middle. Both faces.
+fn mark_mesh() -> Mesh {
+    const STEPS: usize = 12;
+    const HALF_WIDTH: f32 = 0.025;
     let mut positions = Vec::new();
     let mut colors = Vec::new();
     let mut tri = |corners: [Vec3; 3], alphas: [f32; 3]| {
@@ -84,20 +81,20 @@ fn swish_mesh() -> Mesh {
             }
         }
     };
-    let edge = |t: f32| {
-        let at = curve(t);
-        let along = (curve((t + 0.01).min(1.0)) - curve((t - 0.01).max(0.0))).normalize();
-        // Across the ribbon, level; widest a little past its middle.
-        let across = along.cross(Vec3::Y).normalize() * 0.08 * (t * PI).sin().powf(0.6).max(0.1);
-        (at, across, (t * PI).sin().powf(0.8))
-    };
-    for i in 0..STEPS {
-        let (t0, t1) = (i as f32 / STEPS as f32, (i + 1) as f32 / STEPS as f32);
-        let ((p0, w0, a0), (p1, w1, a1)) = (edge(t0), edge(t1));
-        // Two strips each side of its spine: bright along it, clear at its edges.
-        for side in [1.0, -1.0] {
-            tri([p0, p0 + w0 * side, p1], [a0, 0.0, a1]);
-            tri([p1, p0 + w0 * side, p1 + w1 * side], [a1, 0.0, 0.0]);
+    // Widest a little short of the tip, a needle point at it; clear at the near end.
+    let width = |t: f32| HALF_WIDTH * (t / 0.17).min(1.0) * ((1.0 - t) / 0.23).min(1.0).powf(0.6);
+    let alpha = |t: f32| (t / 0.35).min(1.0).powf(1.5);
+    for across in [Vec3::Z, Vec3::Y] {
+        for i in 0..STEPS {
+            let (t0, t1) = (i as f32 / STEPS as f32, (i + 1) as f32 / STEPS as f32);
+            let (p0, p1) = (Vec3::X * t0, Vec3::X * t1);
+            let (w0, w1) = (across * width(t0), across * width(t1));
+            let (a0, a1) = (alpha(t0), alpha(t1));
+            // Bright along its spine, clear at its edges.
+            for side in [1.0, -1.0] {
+                tri([p0, p0 + w0 * side, p1], [a0, 0.0, a1]);
+                tri([p1, p0 + w0 * side, p1 + w1 * side], [a1, 0.0, 0.0]);
+            }
         }
     }
     Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
@@ -106,92 +103,76 @@ fn swish_mesh() -> Mesh {
         .with_computed_flat_normals()
 }
 
-/// A swish from a swing `started` (seconds): fanned `dir` (radians about Y) out from `at` (the
-/// swinger, at the blade's height), from `from` out to the swing's `reach`, bowing to the `side`
-/// and `lift`ed a little above or below the blade.
+/// A strike's mark, from `started` (seconds): drawn `from` the blade's base to its tip as the
+/// strike landed.
 #[derive(Component)]
-struct Swish {
+struct Mark {
     started: f32,
-    at: Vec3,
-    dir: f32,
-    from: f32,
-    reach: f32,
-    side: f32,
-    lift: f32,
+    from: Vec3,
+    to: Vec3,
 }
 
-impl Swish {
-    /// Where it is `t` (0..1) of the way through: shooting out to the reach (fast, then slowing),
-    /// widening, its ripples deepening, drifting up as it fades like smoke.
+impl Mark {
+    /// Where it is `t` (0..1) of the way through: drawn on out to the tip in an instant, then
+    /// lingering, thinning as it fades.
     fn transform(&self, t: f32) -> Transform {
-        let out = 1.0 - (1.0 - t).powi(3);
-        let start = self.from * (0.6 + 0.4 * out);
-        let length = (self.reach - start) * (0.55 + 0.45 * out);
-        Transform::from_translation(self.at + Quat::from_rotation_y(self.dir) * Vec3::X * start + Vec3::Y * (self.lift + 0.1 * t))
-            .with_rotation(Quat::from_rotation_y(self.dir))
-            .with_scale(Vec3::new(length, 1.0 + 1.2 * out, self.side * (0.8 + 0.9 * out)))
+        let drawn = (t / 0.12).min(1.0);
+        let thin = 1.0 - 0.6 * t;
+        let along = self.to - self.from;
+        Transform::from_translation(self.from)
+            .with_rotation(Quat::from_rotation_arc(Vec3::X, along.normalize_or(Vec3::X)))
+            .with_scale(Vec3::new(along.length() * (0.4 + 0.6 * drawn), thin, thin))
     }
 }
 
-/// A burst of swishes for each new melee swing, level with the blade (so it lines up with it from
-/// any angle) and running along its lane, across its width and out to its reach. `LastSwing` is
-/// predicted for our own player (instant) and replicated for others; rollbacks may rewrite it
-/// with the same value, so each is drawn once.
-fn show_swishes(
+/// A mark for each new melee swing, along the blade where it is as the strike lands (after it's
+/// posed and placed, so it's exactly there). `LastSwing` is predicted for our own player (instant)
+/// and replicated for others; rollbacks may rewrite it with the same value, so each is drawn once.
+fn show_marks(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<SwishAssets>,
-    swings: Query<(Entity, &ClassId, &Pos, &LastSwing, &Blade), Changed<LastSwing>>,
+    swings: Query<(Entity, &ClassId, &LastSwing, &Blade), Changed<LastSwing>>,
     blades: Query<&GlobalTransform>,
     mut shown: Local<HashMap<Entity, u32>>,
 ) {
     let now = time.elapsed_secs();
-    for (entity, class, pos, swing, blade) in &swings {
-        let AttackKind::Melee { width, .. } = class.def().attack.kind else { continue };
-        if shown.get(&entity).is_some_and(|&tick| swing.tick <= tick) {
+    for (entity, class, swing, blade) in &swings {
+        if !matches!(class.def().attack.kind, AttackKind::Melee { .. }) || shown.get(&entity).is_some_and(|&tick| swing.tick <= tick) {
             continue;
         }
         shown.insert(entity, swing.tick);
-        // Level with the blade's middle, where it is as the swing lands.
-        let height = blades.get(blade.0).map_or(SWISH_HEIGHT, |held| held.transform_point(Vec3::Y * TRAIL_BLADE[1]).y);
-        let (reach, aim) = (class.def().attack.kind.reach(), swing.dir.to_angle());
-        let side_of = Quat::from_rotation_y(aim) * Vec3::Z;
-        // Something uneven but the same each time for a swing, so no two look alike.
-        let jitter = |i: usize, k: u32| ((i as u32 * 7 + k * 13).wrapping_add(swing.tick).wrapping_mul(2_654_435_761) >> 24) as f32 / 255.0;
-        for i in 0..SWISHES {
-            // Across the lane (the middle one along the blade), the outer ones starting a little
-            // further out and bowing outward, each a little above or below the blade.
-            let across = i as f32 / (SWISHES - 1) as f32 * 2.0 - 1.0;
-            let swish = Swish {
-                started: now,
-                at: to_world(pos.0, height) + side_of * across * (width / 2.0 + 0.06),
-                dir: aim,
-                from: 0.3 + 0.2 * across.abs() + 0.15 * jitter(i, 1),
-                reach,
-                side: if across < 0.0 { -1.0 } else { 1.0 },
-                lift: 0.12 * (jitter(i, 2) - 0.5),
-            };
-            commands.spawn((Mesh3d(assets.swish.clone()), MeshMaterial3d(assets.fades[0].clone()), swish.transform(0.0), swish, NotShadowCaster, NotShadowReceiver));
-        }
+        let Ok(held) = blades.get(blade.0) else { continue };
+        let mark = Mark { started: now, from: held.transform_point(Vec3::Y * MARK_BLADE.0), to: held.transform_point(Vec3::Y * MARK_BLADE.1) };
+        let transform = mark.transform(0.0);
+        commands.spawn((
+            Mesh3d(assets.mark.clone()),
+            MeshMaterial3d(assets.fades[0].clone()),
+            transform,
+            GlobalTransform::from(transform),
+            mark,
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
     }
 }
 
-/// Swishes shoot out, widen and fade, and are gone.
-fn drive_swishes(
+/// Marks draw on, linger, thin and fade, and are gone.
+fn drive_marks(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<SwishAssets>,
-    mut swishes: Query<(Entity, &Swish, &mut Transform, &mut MeshMaterial3d<StandardMaterial>)>,
+    mut marks: Query<(Entity, &Mark, &mut Transform, &mut MeshMaterial3d<StandardMaterial>)>,
 ) {
     let now = time.elapsed_secs();
-    for (entity, swish, mut transform, mut material) in &mut swishes {
-        let t = (now - swish.started) / SWISH_LIFE;
+    for (entity, mark, mut transform, mut material) in &mut marks {
+        let t = (now - mark.started) / MARK_LIFE;
         if t >= 1.0 {
             commands.entity(entity).despawn();
             continue;
         }
-        *transform = swish.transform(t);
-        let fade = &assets.fades[((t * SWISH_FADES as f32) as usize).min(SWISH_FADES - 1)];
+        *transform = mark.transform(t);
+        let fade = &assets.fades[((t * MARK_FADES as f32) as usize).min(MARK_FADES - 1)];
         if material.0 != *fade {
             material.0 = fade.clone();
         }
