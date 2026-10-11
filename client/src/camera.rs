@@ -12,8 +12,8 @@ use arena_shared::protocol::{PlayerId, Pos};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
-use crate::Me;
 
+use crate::Me;
 use crate::arena;
 
 /// Camera direction and distance at zoom 1.0: 28 m up, 19 m back from the point it looks at

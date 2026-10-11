@@ -10,8 +10,8 @@ use arena_shared::classes::{AttackKind, ClassDef, seconds};
 use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
-use crate::Me;
 
+use crate::Me;
 use crate::arena::palette;
 use crate::arena::palette::ui::ACCENT;
 use crate::lobby;

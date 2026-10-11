@@ -10,8 +10,8 @@ use arena_shared::classes::AbilityKind;
 use arena_shared::config::{GLOBAL_COOLDOWN_TICKS, TICK_HZ};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
-use crate::Me;
 
+use crate::Me;
 use crate::feedback::AttackClock;
 use crate::arena::palette;
 use crate::render::{GameUi, shown, ui_text};

@@ -10,8 +10,8 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use crate::Me;
 
+use crate::Me;
 use crate::camera::CameraPlaced;
 use crate::feedback::AttackClock;
 use crate::arena::{self, palette};

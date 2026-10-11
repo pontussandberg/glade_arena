@@ -11,9 +11,8 @@ use arena_shared::classes::AbilityKind;
 use arena_shared::config::PLAYER_RADIUS;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
-use crate::Me;
 
-use crate::DesiredInput;
+use crate::{DesiredInput, Me};
 use crate::arena::{self, palette};
 use crate::render::{HudButton, clicked, shown, ui_text};
 use crate::rooms::{load_setting, save_setting};

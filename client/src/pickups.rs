@@ -9,8 +9,8 @@ use std::f32::consts::FRAC_PI_2;
 
 use arena_shared::protocol::*;
 use bevy::prelude::*;
-use crate::Me;
 
+use crate::Me;
 use crate::feedback::AttackClock;
 use crate::arena::{self, palette, to_world};
 use crate::render::shown;

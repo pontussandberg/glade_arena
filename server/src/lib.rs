@@ -256,9 +256,12 @@ fn spawn_player(commands: &mut Commands, link: Entity, id: PeerId, class: ClassI
 }
 
 /// Server-only: a target dummy, for practice: a fighter of `class` standing at a spot, never
-/// moving or attacking, hit like anyone else, and back to full health instead of dying.
+/// moving or attacking, hit like anyone else, and back to full health instead of dying. `home`
+/// is where it was placed, where it comes back to.
 #[derive(Component)]
-pub(crate) struct Dummy;
+pub(crate) struct Dummy {
+    home: Vec2,
+}
 
 /// A target dummy of `class` standing `at` (a walkable spot) in `room`, as `id` (none of the
 /// clients'). Replicated straight away: it already stands where it'll stay.
@@ -266,7 +269,7 @@ pub(crate) fn spawn_dummy(commands: &mut Commands, id: PeerId, class: ClassId, r
     commands
         .spawn((
             Name::from("Dummy"),
-            Dummy,
+            Dummy { home: at },
             fighter(id, class, room, Team(arena_shared::rooms::NO_TEAM), at),
             Replicate::to_clients(NetworkTarget::All),
             InterpolationTarget::to_clients(NetworkTarget::All),
@@ -321,19 +324,20 @@ fn walk_dummies(timeline: Res<LocalTimeline>, mut dummies: Query<(&mut Pos, &Cla
     }
 }
 
-/// A dummy that would die is back on the spot, fresh as a respawned player (full health, its
+/// A dummy that would die is back on its spot (where it was placed), fresh as a respawned player (full health, its
 /// slows, roots and haste gone); its hits still show.
 fn restore_dummies(
     mut commands: Commands,
-    mut dummies: Query<(Entity, &ClassId, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, &mut AbilityState), (With<Dummy>, With<Dead>)>,
+    mut dummies: Query<(Entity, &Dummy, &ClassId, &mut Pos, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, &mut AbilityState), With<Dead>>,
 ) {
-    for (dummy, class, mut health, (mut chilled, mut hasted), mut attack, mut ability) in &mut dummies {
+    for (entity, dummy, class, mut pos, mut health, (mut chilled, mut hasted), mut attack, mut ability) in &mut dummies {
+        pos.set_if_neq(Pos(dummy.home));
         health.0 = class.def().max_hp;
         chilled.set_if_neq(Chilled::default());
         hasted.set_if_neq(Hasted::default());
         attack.set_if_neq(AttackState::default());
         ability.set_if_neq(AbilityState::default());
-        commands.entity(dummy).remove::<Dead>();
+        commands.entity(entity).remove::<Dead>();
     }
 }
 
@@ -376,24 +380,23 @@ struct Tap {
 /// ever drives the fighter it controls; commands while it has none (still picking a class) are
 /// dropped.
 fn apply_commands(
-    mut links: Query<(Entity, &mut MessageReceiver<PlayerCommand>), With<ClientOf>>,
+    mut links: Query<&mut MessageReceiver<PlayerCommand>, With<ClientOf>>,
     mut players: Query<(&ControlledBy, &mut PlayerInput, &mut Tap)>,
 ) {
-    for (link, mut receiver) in &mut links {
-        let mut player = players.iter_mut().find(|(controlled_by, ..)| controlled_by.owner == link);
+    for (controlled_by, mut input, mut tap) in &mut players {
+        let Ok(mut receiver) = links.get_mut(controlled_by.owner) else { continue };
         for command in receiver.receive() {
-            let Some((_, input, tap)) = &mut player else { continue };
             match command {
                 PlayerCommand::Attack { aim, fire: true } => {
                     tap.pressed = true;
                     tap.release = false;
-                    PlayerCommand::Attack { aim, fire: true }.apply(input);
+                    PlayerCommand::Attack { aim, fire: true }.apply(&mut input);
                 }
                 PlayerCommand::Attack { aim, fire: false } if tap.pressed => {
                     tap.release = true;
                     input.aim = aim;
                 }
-                command => command.apply(input),
+                command => command.apply(&mut input),
             }
         }
     }

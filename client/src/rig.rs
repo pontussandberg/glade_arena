@@ -39,8 +39,8 @@ use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use crate::Me;
 
+use crate::Me;
 use crate::cloth::WardrobeAssets;
 use crate::feedback::AttackClock;
 use crate::arena::{self, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER};
