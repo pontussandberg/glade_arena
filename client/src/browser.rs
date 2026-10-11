@@ -328,7 +328,7 @@ fn show_lobbies(
                             ..default()
                         },
                         BorderColor::all(palette::ui::MUTED.with_alpha(0.3)),
-                        BackgroundColor(palette::ui::BACKDROP.with_alpha(0.8)),
+                        BackgroundColor(palette::ui::BACKDROP),
                     ))
                     .with_children(|tile| {
                         tile.spawn(ui_text(mode.label(), 14.0, palette::ui::TEXT));
@@ -350,9 +350,9 @@ fn mark_lobbies_button(
 ) {
     let (interaction, mut fill, mut border) = button.into_inner();
     let (color, edge) = match (open.0, interaction) {
-        (true, _) => (palette::ui::SELECTED.with_alpha(0.9), ACCENT),
-        (false, Interaction::None) => (palette::ui::PANEL.with_alpha(0.85), palette::ui::MUTED.with_alpha(0.5)),
-        (false, _) => (palette::ui::SELECTED.with_alpha(0.9), palette::ui::MUTED.with_alpha(0.5)),
+        (true, _) => (palette::ui::SELECTED, ACCENT),
+        (false, Interaction::None) => (palette::ui::PANEL, palette::ui::MUTED.with_alpha(0.5)),
+        (false, _) => (palette::ui::SELECTED, palette::ui::MUTED.with_alpha(0.5)),
     };
     fill.set_if_neq(BackgroundColor(color));
     border.set_if_neq(BorderColor::all(edge));
@@ -403,7 +403,7 @@ fn spawn_row(card: &mut ChildSpawnerCommands, room: &RoomSummary) {
             ..default()
         },
         BorderColor::all(if room.started { ACCENT } else { palette::ui::MUTED.with_alpha(0.4) }),
-        BackgroundColor(palette::ui::BACKDROP.with_alpha(0.7)),
+        BackgroundColor(palette::ui::BACKDROP),
     ))
     .with_children(|row| {
         row.spawn(Node { flex_direction: FlexDirection::Column, flex_grow: 1.0, row_gap: px(2.0), ..default() }).with_children(|left| {
@@ -446,7 +446,7 @@ fn show_form(
     for (mode, interaction, mut border, mut fill) in &mut modes {
         let (edge, color) = match (mode.0 == home.mode, interaction) {
             (true, _) => (ACCENT, palette::ui::SELECTED),
-            (false, Interaction::None) => (palette::ui::MUTED.with_alpha(0.3), palette::ui::BACKDROP.with_alpha(0.8)),
+            (false, Interaction::None) => (palette::ui::MUTED.with_alpha(0.3), palette::ui::BACKDROP),
             (false, _) => (palette::ui::MUTED.with_alpha(0.6), palette::ui::PANEL),
         };
         border.set_if_neq(BorderColor::all(edge));

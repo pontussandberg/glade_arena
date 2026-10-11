@@ -70,7 +70,7 @@ pub enum FrameStyle {
 pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, style: FrameStyle) -> HealthParts {
     let def = class.def();
     let (width, padding, border, fill) = match style {
-        FrameStyle::Hud => (px(WIDTH), 12.0, 1.0, palette::ui::PANEL.with_alpha(0.85)),
+        FrameStyle::Hud => (px(WIDTH), 12.0, 1.0, palette::ui::PANEL),
         FrameStyle::Card => (auto(), lobby::CARD_PADDING, 0.0, lobby::card_fill()),
     };
     let mut parts = HealthParts { frame: Entity::PLACEHOLDER, text: Entity::PLACEHOLDER };

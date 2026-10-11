@@ -388,7 +388,7 @@ pub(crate) fn corner_panel(right: bool, gap: f32) -> impl Bundle {
             padding: UiRect::axes(px(10.0), px(8.0)),
             ..default()
         },
-        BackgroundColor(palette::ui::PANEL.with_alpha(0.6)),
+        BackgroundColor(palette::ui::PANEL),
     )
 }
 

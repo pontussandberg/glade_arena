@@ -230,7 +230,7 @@ fn update_markers(
         }
         marker.showing = wanted;
         let (label, text_color, fill) = match wanted {
-            Some(seconds) => (seconds.to_string(), palette::ui::TEXT, palette::ui::PANEL.with_alpha(0.85)),
+            Some(seconds) => (seconds.to_string(), palette::ui::TEXT, palette::ui::PANEL),
             None => (crate::pickups::icon(pickup.kind).to_string(), palette::ui::PANEL, crate::pickups::color(pickup.kind)),
         };
         background.set_if_neq(BackgroundColor(fill));

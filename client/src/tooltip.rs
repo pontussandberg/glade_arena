@@ -51,7 +51,7 @@ pub(crate) fn tip(side: Side, left: f32, width: f32) -> impl Bundle {
             border: UiRect::all(px(1.0)),
             ..default()
         },
-        BackgroundColor(palette::ui::PANEL.with_alpha(0.95)),
+        BackgroundColor(palette::ui::PANEL),
         BorderColor::all(palette::ui::MUTED.with_alpha(0.4)),
         GlobalZIndex(30),
         Visibility::Hidden,

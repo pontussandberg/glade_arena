@@ -285,7 +285,7 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                         border: UiRect::bottom(px(2.0)),
                         ..default()
                     },
-                    BackgroundColor(palette::ui::PANEL.with_alpha(0.7)),
+                    BackgroundColor(palette::ui::PANEL),
                     BorderColor::all(ACCENT),
                 ))
                 .with_children(|badge| {
@@ -343,7 +343,7 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                                         ..default()
                                     },
                                     BorderColor::all(palette::ui::MUTED.with_alpha(0.5)),
-                                    BackgroundColor(palette::ui::PANEL.with_alpha(0.85)),
+                                    BackgroundColor(palette::ui::PANEL),
                                 ))
                                 .with_child(ui_text("CREATE / JOIN LOBBY", 14.0, palette::ui::TEXT));
                             column
@@ -422,9 +422,9 @@ fn pick_fighter(
     }
     for (tile, interaction, mut border, mut background) in &mut tiles {
         let (edge, fill) = match (tile.0 == lobby.selected, interaction) {
-            (true, _) => (ACCENT, palette::ui::SELECTED.with_alpha(0.9)),
-            (false, Interaction::Hovered) => (palette::ui::MUTED.with_alpha(0.6), palette::ui::PANEL.with_alpha(0.85)),
-            (false, _) => (palette::ui::MUTED.with_alpha(0.25), palette::ui::PANEL.with_alpha(0.7)),
+            (true, _) => (ACCENT, palette::ui::SELECTED),
+            (false, Interaction::Hovered) => (palette::ui::MUTED.with_alpha(0.6), palette::ui::PANEL),
+            (false, _) => (palette::ui::MUTED.with_alpha(0.25), palette::ui::PANEL),
         };
         border.set_if_neq(BorderColor::all(edge));
         background.set_if_neq(BackgroundColor(fill));
@@ -560,7 +560,7 @@ pub(crate) fn team_color(team: u8) -> Color {
 /// The room around a card's content, and its fill.
 pub(crate) const CARD_PADDING: f32 = GAP * 2.0;
 pub(crate) fn card_fill() -> Color {
-    palette::ui::PANEL.with_alpha(0.88)
+    palette::ui::PANEL
 }
 
 /// A card in a pane: a block of its own, dark, with room around its content.
@@ -637,7 +637,7 @@ fn show_room(
                 card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
                     for mode in [Mode::Ffa, Mode::Teams] {
                         let on = view.mode == mode;
-                        let fill = if on { palette::ui::SELECTED } else { palette::ui::BACKDROP.with_alpha(0.8) };
+                        let fill = if on { palette::ui::SELECTED } else { palette::ui::BACKDROP };
                         let edge = if on { ACCENT } else { palette::ui::MUTED.with_alpha(0.3) };
                         let text = if on { palette::ui::TEXT } else { palette::ui::MUTED };
                         let mut switch = row.spawn((RoomButton(RoomRequest::SetMode(mode)), button(mode.label(), 12.0, fill, text, edge)));
@@ -659,7 +659,7 @@ fn show_room(
             Mode::Teams => spawn_teams(card, view, my_id),
         });
 
-        let leave = button("Leave lobby", 12.0, palette::ui::PANEL.with_alpha(0.88), palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.3));
+        let leave = button("Leave lobby", 12.0, palette::ui::PANEL, palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.3));
         panel.spawn((RoomButton(RoomRequest::Leave), leave));
     });
 }
