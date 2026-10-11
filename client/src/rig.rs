@@ -486,7 +486,7 @@ fn pose_rigs(
         let (draw, mut throw) = match (windup, released) {
             (Some(windup), _) => {
                 let progress = windup.progress(now, *class);
-                let strike_start = (1.0 - STRIKE_TICKS / def.attack.windup_ticks.max(1) as f32).max(DRAW_END);
+                let strike_start = (1.0 - STRIKE_TICKS / windup.ticks(*class).max(1) as f32).max(DRAW_END);
                 (ease(0.0, DRAW_END, progress), ease_out(strike_start, 1.0, progress))
             }
             (None, Some(since)) => (0.0, 1.0 - ease(FOLLOW_THROUGH.0, FOLLOW_THROUGH.1, since)),

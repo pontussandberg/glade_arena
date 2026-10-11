@@ -495,7 +495,7 @@ fn show_details(
         stat_frame::spawn_frame(column, lobby.selected, stat_frame::FrameStyle::Card);
         column.spawn(card()).with_children(|card| {
             if let Some(passive) = stat_frame::passive_blurb(def) {
-                power(card, "PASSIVE", palette::TORCH_FLAME, passive);
+                power(card, "P", palette::TORCH_FLAME, passive);
                 card.spawn(Node { height: px(GAP), ..default() });
             }
             power(card, "Q", palette::SPIRIT, stat_frame::ability_blurb(def));

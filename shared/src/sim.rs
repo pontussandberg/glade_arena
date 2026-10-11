@@ -100,7 +100,8 @@ pub enum Attack {
 /// from wherever the player stands then (winding up roots it, but a dash mid-windup still moves
 /// it). Released before a new one may start, so with a windup as long as the cooldown, holding
 /// fire winds the next one up on the very tick the last goes off: rooted throughout, one attack
-/// per cooldown.
+/// per cooldown. A windup started while `quick_until` is armed is quick (`follow_up`); starting
+/// one disarms it either way.
 pub fn step_attack(
     tick: u32,
     owner: PeerId,
@@ -127,7 +128,8 @@ pub fn step_attack(
         && tick >= state.ready_at
         && let Some(dir) = input.aim.try_normalize()
     {
-        state.windup = Some(Windup { started_at: tick, dir });
+        let quick = state.quick_until.take().is_some_and(|until| tick <= until);
+        state.windup = Some(Windup { started_at: tick, dir, quick });
         state.ready_at = tick + attack.cooldown_ticks;
     }
     (state, released)
@@ -428,6 +430,25 @@ mod tests {
                 assert!(state.windup.is_some(), "{}: free to walk at tick {tick} while holding fire", class.def().id);
             }
         }
+    }
+
+    #[test]
+    fn an_armed_follow_up_winds_up_quick_once_and_only_in_time() {
+        let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some()) else { return };
+        let attack = &class.def().attack;
+        let quick = attack.quick_windup_ticks();
+        assert!(quick < attack.windup_ticks, "{}: follow_up doesn't quicken", class.def().id);
+        let fire = aim(Vec2::X, true);
+        let start = |at: u32, quick_until| {
+            let state = AttackState { quick_until: Some(quick_until), ..default() };
+            step_attack(at, PeerId::Netcode(1), class, Vec2::ZERO, &fire, state).0
+        };
+        let armed = start(10, 10);
+        assert_eq!(armed.windup.map(|w| w.releases_at(class)), Some(10 + quick));
+        assert_eq!(armed.quick_until, None, "the quick windup should use it up");
+        let late = start(11, 10);
+        assert_eq!(late.windup.map(|w| w.releases_at(class)), Some(11 + attack.windup_ticks), "quick after the window");
+        assert_eq!(late.quick_until, None);
     }
 
     #[test]

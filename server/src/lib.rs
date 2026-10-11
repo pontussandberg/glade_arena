@@ -583,6 +583,7 @@ fn attack(
     let now = timeline.tick();
     for (id, class, pos, input, controlled_by, mut state, mut last_swing, (room, team)) in &mut attackers {
         let side = (*room, *team);
+        let quick = state.windup.is_some_and(|windup| windup.quick);
         let (next, released) = sim::step_attack(now.0, id.0, *class, pos.0, &input.0, *state);
         // Only on change: AttackState is replicated.
         state.set_if_neq(next);
@@ -594,9 +595,14 @@ fn attack(
                 let seen_at = view_time(now, controlled_by.owner, &delays);
                 let blow = Blow { amount: class.def().attack.damage, chill: class.def().attack.chill, can_crit: true };
                 let with = (id.0, *class, "auto-attack");
-                hit_where_seen(&mut commands, now.0, &mut targets, seen_at, with, side, blow, |_, seen| {
+                let landed = hit_where_seen(&mut commands, now.0, &mut targets, seen_at, with, side, blow, |_, seen| {
                     sim::melee_hits(pos.0, swing.dir, *class, seen)
                 });
+                // A landed swing (not itself a quick one) arms a quick next one. The client
+                // predicted none and is corrected by a rollback.
+                if let Some(follow_up) = class.def().attack.follow_up.filter(|_| landed > 0 && !quick) {
+                    state.quick_until = Some(now.0 + follow_up.within_ticks);
+                }
             }
         }
     }
