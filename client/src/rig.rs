@@ -33,6 +33,7 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 use arena_shared::classes::{AbilityKind, AttackKind};
 use arena_shared::protocol::*;
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use lightyear::prelude::*;
@@ -48,7 +49,7 @@ impl Plugin for RigPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((crate::cloth::ClothPlugin, crate::swish::SwishPlugin));
         app.add_systems(Startup, load_rigs);
-        app.add_systems(Update, (add_rigs, see_throws, turn_fighters, pose_rigs).chain().in_set(Posing));
+        app.add_systems(Update, (add_rigs, see_throws, turn_fighters, pose_rigs, show_auras).chain().in_set(Posing));
     }
 }
 
@@ -227,6 +228,13 @@ const HEAD_FOLLOW: f32 = 0.3;
 /// How brightly the eyes (and other glowing parts) glow.
 const EYE_GLOW: f32 = 6.0;
 
+/// How see-through a weapon's aura is, and how fast (radians per second) and how much it swells.
+const AURA_ALPHA: f32 = 0.42;
+const AURA_PULSE: (f32, f32) = (9.0, 0.15);
+/// How fast the glint twinkles (radians per second) and spins (radians per second).
+const GLINT_TWINKLE: f32 = 7.0;
+const GLINT_SPIN: f32 = 2.5;
+
 /// Rig meshes for each class, and its glow (crystals: the same for everyone of a class), and the
 /// cold white everyone's eyes burn with. Every other part is drawn in the fighter's own material
 /// (colors in the vertices), so a hit flashes all of it.
@@ -245,6 +253,8 @@ struct RigHandles {
     glow: Handle<StandardMaterial>,
     held_glow: Option<Handle<Mesh>>,
     body_glow: Option<Handle<Mesh>>,
+    held_aura: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    held_glint: Option<(Handle<Mesh>, Handle<StandardMaterial>, Vec3)>,
     wardrobe: Option<WardrobeAssets>,
 }
 
@@ -274,6 +284,10 @@ struct Rig {
     /// Right (back) leg and left (lead) leg.
     legs: [Entity; 2],
     held: Entity,
+    /// The held weapon's aura (`RigMeshes::held_aura`), if it has one.
+    aura: Option<Entity>,
+    /// And the glint at its point.
+    glint: Option<Entity>,
     moves: &'static Moves,
     /// Walk cycles so far, and how much the fighter is walking (0..1, eased).
     stride: f32,
@@ -337,6 +351,8 @@ fn load_rigs(
                 glow: materials.add(arena::glow(rig.glow, EYE_GLOW)),
                 held_glow: rig.held_glow.map(|mesh| meshes.add(mesh)),
                 body_glow: rig.body_glow.map(|mesh| meshes.add(mesh)),
+                held_aura: rig.held_aura.map(|mesh| (meshes.add(mesh), materials.add(arena::translucent(rig.glow, AURA_ALPHA, EYE_GLOW)))),
+                held_glint: rig.held_glint.map(|(mesh, at)| (meshes.add(mesh), materials.add(arena::glow(Color::WHITE, EYE_GLOW)), at)),
                 wardrobe: rig.wardrobe.map(|wardrobe| WardrobeAssets::load(wardrobe, &mut meshes, &mut bindposes, &mut materials)),
             };
             (c, handles)
@@ -367,6 +383,8 @@ fn add_rigs(
             arms: [part(&handles.arm, own, RIG_SHOULDER), part(&handles.arm, own, mirrored(RIG_SHOULDER))],
             legs: [part(&handles.leg, own, RIG_HIP), part(&handles.leg, own, mirrored(RIG_HIP))],
             held: part(&handles.held, own, RIG_HAND),
+            aura: handles.held_aura.as_ref().map(|(mesh, material)| part(mesh, material, Vec3::ZERO)),
+            glint: handles.held_glint.as_ref().map(|(mesh, material, at)| part(mesh, material, *at)),
             moves: moves(&class.def().id),
             stride: 0.0,
             walking: 0.0,
@@ -379,6 +397,10 @@ fn add_rigs(
         commands.entity(rig.arms[0]).add_child(rig.held);
         if let Some(glow) = held_glow {
             commands.entity(rig.held).add_child(glow);
+        }
+        for shown_armed in rig.aura.into_iter().chain(rig.glint) {
+            commands.entity(shown_armed).insert((Visibility::Hidden, NotShadowCaster, NotShadowReceiver));
+            commands.entity(rig.held).add_child(shown_armed);
         }
         if let Some(glow) = body_glow {
             commands.entity(player).add_child(glow);
@@ -486,7 +508,7 @@ fn pose_rigs(
         let (draw, mut throw) = match (windup, released) {
             (Some(windup), _) => {
                 let progress = windup.progress(now, *class);
-                let strike_start = (1.0 - STRIKE_TICKS / def.attack.windup_ticks.max(1) as f32).max(DRAW_END);
+                let strike_start = (1.0 - STRIKE_TICKS / windup.ticks(*class).max(1) as f32).max(DRAW_END);
                 (ease(0.0, DRAW_END, progress), ease_out(strike_start, 1.0, progress))
             }
             (None, Some(since)) => (0.0, 1.0 - ease(FOLLOW_THROUGH.0, FOLLOW_THROUGH.1, since)),
@@ -605,6 +627,37 @@ fn pose_rigs(
                         transform.translation = at;
                     }
                 }
+            }
+        }
+    }
+}
+
+/// A weapon's aura and glint show while the attack's `follow_up` is armed or quickening the
+/// windup in progress: the aura swelling and shrinking a little, the glint spinning and flaring.
+fn show_auras(
+    time: Res<Time>,
+    clock: Option<AttackClock>,
+    fighters: Query<(&Rig, &AttackState, Has<Predicted>)>,
+    mut parts: Query<(&mut Visibility, &mut Transform)>,
+) {
+    let t = time.elapsed_secs();
+    let pulse = 1.0 + AURA_PULSE.1 * (t * AURA_PULSE.0).sin();
+    // Mostly small, flaring sharply once a twinkle.
+    let flare = 0.4 + 1.0 * (0.5 + 0.5 * (t * GLINT_TWINKLE).sin()).powi(6);
+    for (rig, attack, is_me) in &fighters {
+        // Hidden without a synced clock (e.g. after a disconnect): no telling when the window ends.
+        let on = clock.as_ref().is_some_and(|clock| attack.quick_at(clock.now(is_me)) || attack.windup.is_some_and(|w| w.quick));
+        if let Some((mut visibility, mut transform)) = rig.aura.and_then(|aura| parts.get_mut(aura).ok()) {
+            visibility.set_if_neq(shown(on));
+            if on {
+                transform.scale = Vec3::new(pulse, 1.0, pulse);
+            }
+        }
+        if let Some((mut visibility, mut transform)) = rig.glint.and_then(|glint| parts.get_mut(glint).ok()) {
+            visibility.set_if_neq(shown(on));
+            if on {
+                transform.scale = Vec3::splat(flare);
+                transform.rotation = Quat::from_rotation_y(t * GLINT_SPIN);
             }
         }
     }

@@ -173,7 +173,7 @@ fn png(width: usize, height: usize, pixels: &[[u8; 3]]) -> Vec<u8> {
 #[ignore = "writes images; run by hand when working on models"]
 fn preview_fighters() {
     let dir = std::env::var("PREVIEW_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
-    let views = [Vec3::X, Vec3::new(1.0, 0.25, 0.9), Vec3::new(-1.0, 0.3, -0.8), Vec3::new(0.0, 30.0, 16.0)];
+    let views = [Vec3::X, Vec3::new(1.0, 0.25, 0.9), Vec3::new(-1.0, 0.3, -0.8), crate::camera::OFFSET];
     for class in arena::FIGHTER_LOOKS {
         // The weapon alone, flat on and edge on.
         let rig = arena::fighter_rig(class);

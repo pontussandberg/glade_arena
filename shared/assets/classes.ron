@@ -21,11 +21,15 @@
 //     chill (optional): crowd control each hit applies on top of its damage:
 //       (slow: fraction of speed taken away, slow_ticks: for how long, root_ticks: frozen in
 //       place this long: no walking, no dashing, and a dash in progress stops)
+//     follow_up (optional, melee only): each hit quickens the next attack started within
+//       (within_ticks, faster: fraction of the windup cut, 0.75 = a quarter as long; the
+//       cooldown loses as many ticks), so a string of hits stays quick. Armed between one
+//       attack going off and the next starting, so it works with the windup as long as the
+//       cooldown too
 //   ability       the Q ability, aimed at the cursor: name, description, cooldown_ticks, and
 //     kind: Projectile(speed, radius, range, damage)  thrown instantly: no windup, no root
 //           Dash(distance, ticks, damage)  dash toward the aim over `ticks`, through fighters,
-//             cutting each one crossed for `damage`; stops at walls. With resets_attack, landing
-//             a hit readies the auto-attack at once.
+//             cutting each one crossed for `damage`; stops at walls.
 //           Nova(radius, damage, chill)  a burst around you, at once: everyone within `radius`
 //             (and not behind a wall) takes `damage` and `chill`
 //   passive (optional)  shown to players, nothing more: Some((name, description)). Its effect
@@ -34,7 +38,8 @@
 // Descriptions (the passive's and the ability's) can name this class's numbers in braces, filled
 // in when shown, so the words follow a retune: {far_scale} (the auto-attack's damage after its full
 // range, as a percent of point blank), {attack_slow} / {attack_slow_time} (the auto-attack's slow,
-// as a percent / in seconds), {crit}, {crit_vs_frozen}, {crit_multiplier} (as percentages),
+// as a percent / in seconds), {follow_up_time} / {follow_up_faster} (the follow_up's window, in
+// seconds / how much shorter the windup, as a percent), {crit}, {crit_vs_frozen}, {crit_multiplier} (as percentages),
 // {ability_damage}, {ability_reach} (a thrown ability's range, a dash's distance, a nova's
 // radius, in meters), {ability_root} (a nova's root, in seconds). A Q that deals damage must name
 // {ability_damage}.
@@ -51,16 +56,21 @@
         move_speed: 5.6,
         attack: (
             damage: 20,
-            cooldown_ticks: 40,
-            windup_ticks: 24,
+            cooldown_ticks: 42,
+            windup_ticks: 42,
             kind: Melee(range: 3.75, width: 0.05),
+            follow_up: Some((within_ticks: 96, faster: 0.6)),
         ),
         ability: (
             name: "Rift Step",
-            description: "Dash through enemies, cutting each one for {ability_damage} damage. A hit readies your blade at once.",
+            description: "Dash through enemies, cutting each one for {ability_damage} damage.",
             cooldown_ticks: 320,
-            kind: Dash(distance: 6.0, ticks: 10, damage: 18, resets_attack: true),
+            kind: Dash(distance: 6.0, ticks: 10, damage: 18),
         ),
+        passive: Some((
+            name: "Follow Through",
+            description: "Each auto-attack that lands makes your next one's windup {follow_up_faster} shorter, if you swing again within {follow_up_time}. Keep landing hits to keep them fast.",
+        )),
         crit: (chance: 0.1),
     ),
     (

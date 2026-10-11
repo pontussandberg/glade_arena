@@ -583,22 +583,29 @@ fn attack(
     let now = timeline.tick();
     for (id, class, pos, input, controlled_by, mut state, mut last_swing, (room, team)) in &mut attackers {
         let side = (*room, *team);
-        let (next, released) = sim::step_attack(now.0, id.0, *class, pos.0, &input.0, *state);
-        // Only on change: AttackState is replicated.
-        state.set_if_neq(next);
-        let Some(attack) = released else { continue };
-        match attack {
-            sim::Attack::Projectile(projectile) => spawn_projectile(&mut commands, projectile, side),
-            sim::Attack::Melee(swing) => {
+        // In two halves (`sim::step_attack`): a swing that lands arms a quick windup in between.
+        let (mut next, released) = sim::release_attack(now.0, id.0, *class, pos.0, *state);
+        match released {
+            None => {}
+            Some(sim::Attack::Projectile(projectile)) => spawn_projectile(&mut commands, projectile, side),
+            Some(sim::Attack::Melee(swing)) => {
                 *last_swing = swing;
                 let seen_at = view_time(now, controlled_by.owner, &delays);
                 let blow = Blow { amount: class.def().attack.damage, chill: class.def().attack.chill, can_crit: true };
                 let with = (id.0, *class, "auto-attack");
-                hit_where_seen(&mut commands, now.0, &mut targets, seen_at, with, side, blow, |_, seen| {
+                let landed = hit_where_seen(&mut commands, now.0, &mut targets, seen_at, with, side, blow, |_, seen| {
                     sim::melee_hits(pos.0, swing.dir, *class, seen)
                 });
+                // `FollowUp`: the client predicted none and is corrected by a rollback.
+                if landed > 0
+                    && let Some(follow_up) = class.def().attack.follow_up
+                {
+                    next.quick_until = Some(now.0 + follow_up.within_ticks);
+                }
             }
         }
+        // Only on change: AttackState is replicated.
+        state.set_if_neq(sim::start_attack(now.0, *class, &input.0, next));
     }
 }
 
@@ -609,9 +616,7 @@ struct DashHits(u32, Vec<PeerId>);
 
 /// Q abilities. Thrown ones are spawned (and matched to the client's prespawned copy). Dashes
 /// cut whoever the dasher passes through, judged against where the dasher saw them, each target
-/// once per dash; with `resets_attack`, a hit readies the auto-attack (the client predicted it
-/// still cooling down and is corrected by a rollback). A rooted dasher cuts no one (its dash
-/// stops). Novas hit everyone around the caster, judged against where the caster saw them.
+/// once per dash. A rooted dasher cuts no one (its dash stops). Novas hit everyone around the caster, judged against where the caster saw them.
 fn use_abilities(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
@@ -623,7 +628,6 @@ fn use_abilities(
             &Pos,
             &ActionState<PlayerInput>,
             &ControlledBy,
-            &mut AttackState,
             &mut AbilityState,
             &mut DashHits,
             (&InRoom, &Team),
@@ -636,13 +640,13 @@ fn use_abilities(
     // Read up front: `targets` holds every player's `Chilled` mutably. A root or slow landing
     // during this loop starts next tick anyway.
     let chills: Vec<(PeerId, Chilled)> = targets.iter().map(|(_, id, .., chilled, _)| (id.0, *chilled)).collect();
-    for (id, class, pos, input, controlled_by, mut attack, mut state, mut hits, (room, team)) in &mut users {
+    for (id, class, pos, input, controlled_by, mut state, mut hits, (room, team)) in &mut users {
         let side = (*room, *team);
         let chilled = chills.iter().find(|(p, _)| *p == id.0).map(|(_, c)| *c).unwrap_or_default();
         // Cut whoever this tick's dash step reached (`move_players` just made it). Checked before
         // the ability steps, which ends the dash on its last tick: so every step is checked, the
         // last one included, and the spot the dash started from isn't.
-        if let (Some(dash), AbilityKind::Dash { damage: cut, resets_attack, .. }) = (state.dash, &class.def().ability.kind)
+        if let (Some(dash), AbilityKind::Dash { damage: cut, .. }) = (state.dash, &class.def().ability.kind)
             && !chilled.rooted_at(now.0)
         {
             if hits.0 != dash.started_at {
@@ -652,16 +656,13 @@ fn use_abilities(
             let seen_at = view_time(now, controlled_by.owner, &delays);
             let with = (id.0, *class, class.def().ability.name.as_str());
             let blow = Blow { amount: *cut, chill: Chill::default(), can_crit: false };
-            let cut_now = hit_where_seen(&mut commands, now.0, &mut targets, seen_at, with, side, blow, |target, seen| {
+            hit_where_seen(&mut commands, now.0, &mut targets, seen_at, with, side, blow, |target, seen| {
                 let fresh = !hits.1.contains(&target) && sim::dash_hits(pos.0, seen);
                 if fresh {
                     hits.1.push(target);
                 }
                 fresh
             });
-            if cut_now > 0 && *resets_attack && attack.windup.is_none() && attack.ready_at > now.0 {
-                attack.ready_at = now.0;
-            }
         }
         let (next, cast) = sim::step_ability(now.0, id.0, *class, pos.0, &input.0, &chilled, *state);
         state.set_if_neq(next);

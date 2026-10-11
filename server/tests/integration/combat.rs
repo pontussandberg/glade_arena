@@ -45,16 +45,18 @@ fn reach() -> f32 {
 
 #[test]
 fn melee_hits_where_the_attacker_saw_the_target() {
-    let mut d = duel_at_close_range(5895);
-    let b_goal = Vec2::new(-12.5, -6.5);
-    assert!(map().line_walkable(B_SPOT, b_goal));
-    let full = b_health(&mut d);
-
     // B runs away. A's swing goes off with B at the edge of reach *as A sees it*, which is
     // already out of reach on the server: only lag compensation can land this hit. A starts
-    // winding up early by the distance B covers during the windup.
-    set_input(&mut d.b, PlayerInput { move_to: Some(Map::center(Map::tile_of(b_goal))), ..default() });
+    // winding up early by the distance B covers during the windup, so B starts right in front
+    // of A (bodies may overlap): from farther, B would be past that point before it began.
     let lead = class_id(B_CLASS).def().move_speed * windup(A_CLASS).as_secs_f32();
+    let b_start = A_SPOT + Vec2::X * 0.2;
+    assert!(reach() - 0.3 - lead > 0.4, "test setup: the windup is too long for B to start in reach");
+    let mut d = Duel::placed(5895, (A_CLASS, A_SPOT), (B_CLASS, b_start));
+    let b_goal = Vec2::new(-12.5, -6.5);
+    assert!(map().line_walkable(b_start, b_goal));
+    let full = b_health(&mut d);
+    set_input(&mut d.b, PlayerInput { move_to: Some(Map::center(Map::tile_of(b_goal))), ..default() });
     d.until(Duration::from_secs(3), "B nearly at the edge of A's reach, as A sees it", |d| {
         sees(&mut d.a, B).unwrap().distance(A_SPOT) > reach() - 0.3 - lead
     });

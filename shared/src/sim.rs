@@ -100,21 +100,29 @@ pub enum Attack {
 /// from wherever the player stands then (winding up roots it, but a dash mid-windup still moves
 /// it). Released before a new one may start, so with a windup as long as the cooldown, holding
 /// fire winds the next one up on the very tick the last goes off: rooted throughout, one attack
-/// per cooldown.
+/// per cooldown. A windup started while `quick_until` is armed is quick (`follow_up`); starting
+/// one disarms it either way.
 pub fn step_attack(
     tick: u32,
     owner: PeerId,
     class: ClassId,
     pos: Vec2,
     input: &PlayerInput,
-    mut state: AttackState,
+    state: AttackState,
 ) -> (AttackState, Option<Attack>) {
-    let attack = &class.def().attack;
+    let (state, released) = release_attack(tick, owner, class, pos, state);
+    (start_attack(tick, class, input, state), released)
+}
+
+/// `step_attack`'s first half: the windup going off, if it's over. The server resolves the swing
+/// (and arms `quick_until` if it landed) before the second half, `start_attack`, so a windup
+/// started on the same tick is quickened by it.
+pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, mut state: AttackState) -> (AttackState, Option<Attack>) {
     let mut released = None;
     if let Some(Windup { dir, .. }) = state.windup.filter(|windup| tick >= windup.releases_at(class)) {
         state.windup = None;
         state.released_at = Some(tick);
-        released = Some(match attack.kind {
+        released = Some(match class.def().attack.kind {
             AttackKind::Projectile { radius, .. } => {
                 let origin = shot_spawn(pos, dir, radius);
                 Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: false })
@@ -122,15 +130,24 @@ pub fn step_attack(
             AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir }),
         });
     }
+    (state, released)
+}
+
+/// `step_attack`'s second half: a new windup starting, if fire is held and the attack is ready.
+pub fn start_attack(tick: u32, class: ClassId, input: &PlayerInput, mut state: AttackState) -> AttackState {
+    let attack = &class.def().attack;
     if state.windup.is_none()
         && input.fire
         && tick >= state.ready_at
         && let Some(dir) = input.aim.try_normalize()
     {
-        state.windup = Some(Windup { started_at: tick, dir });
-        state.ready_at = tick + attack.cooldown_ticks;
+        let windup = Windup { started_at: tick, dir, quick: state.quick_at(tick as f32) };
+        state.quick_until = None;
+        // The same pause after the windup, quick or not.
+        state.ready_at = windup.releases_at(class) + attack.cooldown_ticks - attack.windup_ticks;
+        state.windup = Some(windup);
     }
-    (state, released)
+    state
 }
 
 /// Where a shot starts: at the edge of the shooter, so it doesn't start inside them.
@@ -428,6 +445,26 @@ mod tests {
                 assert!(state.windup.is_some(), "{}: free to walk at tick {tick} while holding fire", class.def().id);
             }
         }
+    }
+
+    #[test]
+    fn an_armed_follow_up_winds_up_quick_once_and_only_in_time() {
+        let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some()) else { return };
+        let attack = &class.def().attack;
+        let quick = attack.quick_windup_ticks();
+        assert!(quick < attack.windup_ticks, "{}: follow_up doesn't quicken", class.def().id);
+        let fire = aim(Vec2::X, true);
+        let start = |at: u32, quick_until| {
+            let state = AttackState { quick_until: Some(quick_until), ..default() };
+            step_attack(at, PeerId::Netcode(1), class, Vec2::ZERO, &fire, state).0
+        };
+        let armed = start(10, 10);
+        assert_eq!(armed.windup.map(|w| w.releases_at(class)), Some(10 + quick));
+        assert_eq!(armed.quick_until, None, "the quick windup should use it up");
+        assert_eq!(armed.ready_at, 10 + quick + attack.cooldown_ticks - attack.windup_ticks, "the cooldown should shrink as much");
+        let late = start(11, 10);
+        assert_eq!(late.windup.map(|w| w.releases_at(class)), Some(11 + attack.windup_ticks), "quick after the window");
+        assert_eq!(late.quick_until, None);
     }
 
     #[test]

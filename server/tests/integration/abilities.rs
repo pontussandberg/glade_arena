@@ -48,25 +48,13 @@ fn spirit_spear_flies_at_once_and_hits() {
 }
 
 #[test]
-fn rift_step_cuts_through_and_readies_the_blade() {
+fn rift_step_cuts_through() {
     let mut d = duel(5891, "revenant", "javelinist");
     let AbilityKind::Dash { damage, .. } = class_id("revenant").def().ability.kind else { panic!("not a dash") };
     let full = server_player(&mut d.server, B).1;
 
-    // Swing at nothing (away from B), so the blade is cooling down when the dash lands.
-    edit_input(&mut d.a, |i| (i.aim, i.fire) = (-Vec2::X, true));
-    d.until(Duration::from_secs(1), "A's swing starts", |d| attack_state(&mut d.a, A).windup.is_some());
-    edit_input(&mut d.a, |i| i.fire = false);
-    d.until(Duration::from_secs(1), "A's swing goes off", |d| attack_state(&mut d.a, A).windup.is_none());
-    let server_tick = |d: &mut Duel| d.server.world().resource::<LocalTimeline>().tick().0;
-    assert!(attack_state(&mut d.server, A).ready_at > server_tick(&mut d), "the blade should be cooling down");
-
     a_uses_q_at_b(&mut d);
     d.until(Duration::from_secs(2), "the dash cuts B", |d| server_player(&mut d.server, B).1 == full - damage);
-    assert!(
-        attack_state(&mut d.server, A).ready_at <= server_tick(&mut d),
-        "a dash that cuts someone should ready the blade at once"
-    );
     // Through, not into: A ends up past B, and B was cut once.
     d.run(Duration::from_millis(500));
     let (a_pos, _) = server_player(&mut d.server, A);
