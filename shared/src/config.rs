@@ -19,6 +19,9 @@ pub const DEV_PRIVATE_KEY: [u8; 32] = [0; 32];
 // Per-class numbers are in `assets/classes.ron`; the map is in `map.rs`.
 /// Body radius used for hits (projectiles and melee reach).
 pub const PLAYER_RADIUS: f32 = 0.5;
+/// The global cooldown (1 s): using an ability on it (`AbilityDef::global_cooldown`, the default)
+/// keeps every ability on it from being used again for this long, whatever their own cooldowns.
+pub const GLOBAL_COOLDOWN_TICKS: u32 = TICK_HZ as u32;
 /// How long a killed player is out of the fight before respawning (3 s).
 pub const RESPAWN_TICKS: u32 = 3 * TICK_HZ as u32;
 

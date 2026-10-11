@@ -147,17 +147,26 @@ fn hold<C>(start: C, _end: C, _t: f32) -> C {
     start
 }
 
-/// The Q ability's state: when it may be used again, a dash in progress, and whether it has no
-/// cooldown (practice's tool; the server sets it). Predicted (your own Q happens at the press),
+/// The Q ability's state: when it may be used again, when the global cooldown is over (shared by
+/// every ability on it, `GLOBAL_COOLDOWN_TICKS`), a dash in progress, and whether it has no
+/// cooldown of its own (practice's tool; the server sets it; the global cooldown still runs). Predicted (your own Q happens at the press),
 /// replicated and shown on the same delayed timeline as others' positions, like `AttackState`.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct AbilityState {
     pub ready_at: u32,
+    pub global_ready_at: u32,
     pub dash: Option<Dash>,
     pub free: bool,
 }
 
 impl AbilityState {
+    /// When the class's ability may be used next: its own cooldown over, and the global one if
+    /// it's on it.
+    pub fn usable_at(&self, class: ClassId) -> u32 {
+        let own = if self.free { 0 } else { self.ready_at };
+        if class.def().ability.global_cooldown { own.max(self.global_ready_at) } else { own }
+    }
+
     /// When the ability was last used (`None`: never).
     pub fn used_at(&self, class: ClassId) -> Option<u32> {
         let cooldown = if self.free { 0 } else { class.def().ability.cooldown_ticks };

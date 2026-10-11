@@ -181,7 +181,7 @@ pub fn step_ability(
     if state.dash.is_some_and(|dash| dash.left < 1e-4) || rooted {
         state.dash = None;
     }
-    let Some(dir) = input.aim.try_normalize().filter(|_| input.ability && (tick >= state.ready_at || state.free)) else {
+    let Some(dir) = input.aim.try_normalize().filter(|_| input.ability && tick >= state.usable_at(class)) else {
         return (state, None);
     };
     let cast = match ability.kind {
@@ -199,6 +199,9 @@ pub fn step_ability(
         AbilityKind::Nova { .. } => Some(Cast::Nova),
     };
     state.ready_at = if state.free { tick } else { tick + ability.cooldown_ticks };
+    if ability.global_cooldown {
+        state.global_ready_at = tick + GLOBAL_COOLDOWN_TICKS;
+    }
     (state, cast)
 }
 
@@ -549,6 +552,19 @@ mod tests {
         let auto = Projectile { ability: false, ..projectile };
         assert_ne!(class.def().shot(true), class.def().shot(false));
         assert_ne!(projectile_prespawn_hash(&projectile), projectile_prespawn_hash(&auto));
+    }
+
+    #[test]
+    fn with_no_cooldown_an_ability_still_waits_for_the_global_cooldown() {
+        let class = thrower();
+        assert!(class.def().ability.global_cooldown);
+        let me = PeerId::Netcode(1);
+        let free = AbilityState { free: true, ..default() };
+        let (state, thrown) = step_ability(10, me, class, Vec2::ZERO, &press_q(Vec2::X), &default(), free);
+        assert!(thrown.is_some());
+        let again = |tick| step_ability(tick, me, class, Vec2::ZERO, &press_q(Vec2::X), &default(), state).1;
+        assert!(again(10 + GLOBAL_COOLDOWN_TICKS - 1).is_none(), "used again during the global cooldown");
+        assert!(again(10 + GLOBAL_COOLDOWN_TICKS).is_some(), "its own cooldown should be none");
     }
 
     /// A dash from `from` toward `dir` run to its end: where it ended, and how many ticks it moved.

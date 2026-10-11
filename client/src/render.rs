@@ -426,7 +426,7 @@ fn read_local_input(
     keys: Res<ButtonInput<KeyCode>>,
     window: Option<Single<&Window>>,
     camera: Single<(&Camera, &GlobalTransform)>,
-    me: Query<(&Pos, &AbilityState), (With<Predicted>, With<PlayerId>)>,
+    me: Query<(&Pos, &ClassId, &AbilityState), (With<Predicted>, With<PlayerId>)>,
     (mode, cast_mode, clock): (Res<CameraMode>, Res<CastMode>, AttackClock),
     hud: Query<
         (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Has<AbilityIcon>),
@@ -438,9 +438,9 @@ fn read_local_input(
     mut desired: ResMut<DesiredInput>,
 ) {
     let me = me.single().ok();
-    // A normal cast only aims while Q is ready, as in LoL.
-    let ability_ready = me.is_some_and(|(_, ability)| ability.ready_at as f32 <= clock.now(true));
-    let me = me.map(|(p, _)| p.0);
+    // A normal cast only aims while Q is ready (the global cooldown over too), as in LoL.
+    let ability_ready = me.is_some_and(|(_, class, ability)| ability.usable_at(*class) as f32 <= clock.now(true));
+    let me = me.map(|(p, ..)| p.0);
     let (camera, camera_transform) = *camera;
     // Whether the cursor is on a HUD control, or on the Q icon. Tested on the nodes themselves,
     // so nothing drawn over them can get in the way.
