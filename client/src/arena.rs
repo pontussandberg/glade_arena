@@ -1042,10 +1042,14 @@ fn sword_glow() -> Mesh {
     sculpted(parts)
 }
 
-/// A soft shell of light around the revenant's blade, from the guard to a little past the point.
+/// A soft shell of light around the revenant's blade (`BLADE`, padded out), from the guard to a
+/// little past the point.
 fn blade_aura() -> Mesh {
-    let sections = [(0.08, 0.045, 0.08), (0.45, 0.05, 0.09), (1.1, 0.05, 0.095), (1.45, 0.045, 0.085), (1.65, 0.03, 0.05), (1.84, 0.0, 0.0)]
-        .map(|(y, depth, width)| Section::new(Vec3::Y * y, Vec2::new(depth, width), Color::WHITE));
+    let mut sections: Vec<Section> = BLADE[..BLADE.len() - 1]
+        .iter()
+        .map(|&(y, depth, width, z)| Section::new(Vec3::new(0.0, y, z), Vec2::new(depth + 0.03, width * 2.0), Color::WHITE))
+        .collect();
+    sections.push(Section::new(Vec3::Y * (BLADE_LENGTH + 0.08), Vec2::ZERO, Color::WHITE));
     tube(&smoothed(&sections, 2), 12, (true, false))
 }
 

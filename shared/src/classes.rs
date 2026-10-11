@@ -139,14 +139,8 @@ pub enum AbilityKind {
     /// Thrown instantly toward the aim (no windup, no root), fixed damage.
     Projectile { speed: f32, radius: f32, range: f32, damage: i32 },
     /// A dash toward the aim over `ticks`, through fighters, cutting each one crossed for
-    /// `damage`; stops at walls. With `resets_attack`, landing a hit readies the auto-attack.
-    Dash {
-        distance: f32,
-        ticks: u32,
-        damage: i32,
-        #[serde(default)]
-        resets_attack: bool,
-    },
+    /// `damage`; stops at walls.
+    Dash { distance: f32, ticks: u32, damage: i32 },
     /// A burst around the user, at once: everyone within `radius` (center to body, not behind a
     /// wall) takes `damage` and `chill`.
     Nova {

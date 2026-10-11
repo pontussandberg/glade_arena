@@ -33,6 +33,7 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 use arena_shared::classes::{AbilityKind, AttackKind};
 use arena_shared::protocol::*;
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use lightyear::prelude::*;
@@ -227,6 +228,13 @@ const HEAD_FOLLOW: f32 = 0.3;
 /// How brightly the eyes (and other glowing parts) glow.
 const EYE_GLOW: f32 = 6.0;
 
+/// How see-through a weapon's aura is, and how fast (radians per second) and how much it swells.
+const AURA_ALPHA: f32 = 0.42;
+const AURA_PULSE: (f32, f32) = (9.0, 0.15);
+/// How fast the glint twinkles (radians per second) and spins (radians per second).
+const GLINT_TWINKLE: f32 = 7.0;
+const GLINT_SPIN: f32 = 2.5;
+
 /// Rig meshes for each class, and its glow (crystals: the same for everyone of a class), and the
 /// cold white everyone's eyes burn with. Every other part is drawn in the fighter's own material
 /// (colors in the vertices), so a hit flashes all of it.
@@ -391,7 +399,7 @@ fn add_rigs(
             commands.entity(rig.held).add_child(glow);
         }
         for shown_armed in rig.aura.into_iter().chain(rig.glint) {
-            commands.entity(shown_armed).insert(Visibility::Hidden);
+            commands.entity(shown_armed).insert((Visibility::Hidden, NotShadowCaster, NotShadowReceiver));
             commands.entity(rig.held).add_child(shown_armed);
         }
         if let Some(glow) = body_glow {
@@ -624,25 +632,6 @@ fn pose_rigs(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use arena_shared::protocol::ClassId;
-
-    #[test]
-    fn every_class_has_moves() {
-        for class in ClassId::all() {
-            super::moves(&class.def().id);
-        }
-    }
-}
-
-/// How see-through a weapon's aura is, and how fast (radians per second) and how much it swells.
-const AURA_ALPHA: f32 = 0.42;
-const AURA_PULSE: (f32, f32) = (9.0, 0.15);
-/// How fast the glint twinkles (radians per second) and spins (radians per second).
-const GLINT_TWINKLE: f32 = 7.0;
-const GLINT_SPIN: f32 = 2.5;
-
 /// A weapon's aura and glint show while the attack's `follow_up` is armed or quickening the
 /// windup in progress: the aura swelling and shrinking a little, the glint spinning and flaring.
 fn show_auras(
@@ -656,9 +645,8 @@ fn show_auras(
     // Mostly small, flaring sharply once a twinkle.
     let flare = 0.4 + 1.0 * (0.5 + 0.5 * (t * GLINT_TWINKLE).sin()).powi(6);
     for (rig, attack, is_me) in &fighters {
-        let now = clock.as_ref().map_or(0.0, |clock| clock.now(is_me));
-        let armed = attack.quick_until.is_some_and(|until| now <= until as f32);
-        let on = armed || attack.windup.is_some_and(|windup| windup.quick);
+        // Hidden without a synced clock (e.g. after a disconnect): no telling when the window ends.
+        let on = clock.as_ref().is_some_and(|clock| attack.quick_at(clock.now(is_me)) || attack.windup.is_some_and(|w| w.quick));
         if let Some((mut visibility, mut transform)) = rig.aura.and_then(|aura| parts.get_mut(aura).ok()) {
             visibility.set_if_neq(shown(on));
             if on {
@@ -671,6 +659,18 @@ fn show_auras(
                 transform.scale = Vec3::splat(flare);
                 transform.rotation = Quat::from_rotation_y(t * GLINT_SPIN);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arena_shared::protocol::ClassId;
+
+    #[test]
+    fn every_class_has_moves() {
+        for class in ClassId::all() {
+            super::moves(&class.def().id);
         }
     }
 }

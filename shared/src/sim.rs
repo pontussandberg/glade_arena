@@ -108,14 +108,21 @@ pub fn step_attack(
     class: ClassId,
     pos: Vec2,
     input: &PlayerInput,
-    mut state: AttackState,
+    state: AttackState,
 ) -> (AttackState, Option<Attack>) {
-    let attack = &class.def().attack;
+    let (state, released) = release_attack(tick, owner, class, pos, state);
+    (start_attack(tick, class, input, state), released)
+}
+
+/// `step_attack`'s first half: the windup going off, if it's over. The server resolves the swing
+/// (and arms `quick_until` if it landed) before the second half, `start_attack`, so a windup
+/// started on the same tick is quickened by it.
+pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, mut state: AttackState) -> (AttackState, Option<Attack>) {
     let mut released = None;
     if let Some(Windup { dir, .. }) = state.windup.filter(|windup| tick >= windup.releases_at(class)) {
         state.windup = None;
         state.released_at = Some(tick);
-        released = Some(match attack.kind {
+        released = Some(match class.def().attack.kind {
             AttackKind::Projectile { radius, .. } => {
                 let origin = shot_spawn(pos, dir, radius);
                 Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: false })
@@ -123,18 +130,24 @@ pub fn step_attack(
             AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir }),
         });
     }
+    (state, released)
+}
+
+/// `step_attack`'s second half: a new windup starting, if fire is held and the attack is ready.
+pub fn start_attack(tick: u32, class: ClassId, input: &PlayerInput, mut state: AttackState) -> AttackState {
+    let attack = &class.def().attack;
     if state.windup.is_none()
         && input.fire
         && tick >= state.ready_at
         && let Some(dir) = input.aim.try_normalize()
     {
-        let quick = state.quick_until.take().is_some_and(|until| tick <= until);
-        let windup = Windup { started_at: tick, dir, quick };
-        // A quick windup takes as much off the cooldown as off itself: the same pause after.
-        state.ready_at = tick + attack.cooldown_ticks - (attack.windup_ticks - windup.ticks(class));
+        let windup = Windup { started_at: tick, dir, quick: state.quick_at(tick as f32) };
+        state.quick_until = None;
+        // The same pause after the windup, quick or not.
+        state.ready_at = windup.releases_at(class) + attack.cooldown_ticks - attack.windup_ticks;
         state.windup = Some(windup);
     }
-    (state, released)
+    state
 }
 
 /// Where a shot starts: at the edge of the shooter, so it doesn't start inside them.

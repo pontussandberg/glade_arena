@@ -99,10 +99,17 @@ pub struct AttackState {
     pub ready_at: u32,
     pub windup: Option<Windup>,
     /// The tick the last attack went off (`None`: never). Kept rather than worked out from
-    /// `ready_at`, which a Rift Step hit resets.
+    /// `ready_at`, which depends on whether the windup was quick.
     pub released_at: Option<u32>,
     /// An attack started by this tick winds up quick (`FollowUp`; `None`: not armed).
     pub quick_until: Option<u32>,
+}
+
+impl AttackState {
+    /// Would an attack started at `now` (a fractional tick) wind up quick?
+    pub fn quick_at(&self, now: f32) -> bool {
+        self.quick_until.is_some_and(|until| now <= until as f32)
+    }
 }
 
 /// An attack winding up: aim locked toward `dir`, goes off `ticks(class)` after `started_at`.

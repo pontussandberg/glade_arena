@@ -18,7 +18,7 @@ use crate::arena;
 
 /// Camera direction and distance at zoom 1.0: 28 m up, 19 m back from the point it looks at
 /// (about 56° down).
-const OFFSET: Vec3 = Vec3::new(0.0, 28.2, 19.0);
+pub(crate) const OFFSET: Vec3 = Vec3::new(0.0, 28.2, 19.0);
 /// How far in and out the MOBA camera zooms.
 const ZOOM_RANGE: (f32, f32) = (0.3, 0.91);
 
