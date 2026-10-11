@@ -1,8 +1,8 @@
 //! A blade's wind: what a thrusting blade leaves in the air. A faint trail follows the blade
-//! itself wherever it moves fast (a lunge, a dash), so it shows where the sword just was; and each
-//! strike leaves a mark, one thin, sharp line of wind along the blade where it was as the strike
-//! landed, lingering a moment as it fades. Air casts no shadow. The same whoever swung (who it was
-//! shows in the health bar).
+//! itself wherever it moves fast (a lunge, a dash), so it shows where the sword just was, twice as
+//! bright while its Follow Through is on; and each strike leaves a mark, one thin, sharp line of
+//! wind along the blade where it was as the strike landed, lingering a moment as it fades. Air
+//! casts no shadow. The same whoever swung (who it was shows in the health bar).
 
 use std::collections::VecDeque;
 
@@ -26,12 +26,14 @@ impl Plugin for SwishPlugin {
 }
 
 /// On a fighter holding a blade out (`rig.rs`): the blade (its grip at the origin, the blade
-/// along +Y), how long it is, and the last swing a mark was drawn for.
+/// along +Y), how long it is, the last swing a mark was drawn for, and whether its attack's
+/// `follow_up` is on (`rig::show_auras`), which brightens its trail.
 #[derive(Component)]
 pub(crate) struct Blade {
     pub(crate) held: Entity,
     pub(crate) length: f32,
     pub(crate) shown: u32,
+    pub(crate) quickened: bool,
 }
 
 impl Blade {
@@ -48,6 +50,8 @@ impl Blade {
 const TRAIL_LIFE: f32 = 0.16;
 const TRAIL_SPEED: (f32, f32) = (6.0, 13.0);
 const TRAIL_BLADE: [f32; 3] = [0.17, 0.63, 1.0];
+/// How bright the trail is when the blade isn't quickened (`Blade::quickened`; it's 1 when it is).
+const TRAIL_DIM: f32 = 0.5;
 
 /// The mark a strike leaves: how long it lasts (seconds), where along the blade it starts (a
 /// fraction of its length; it runs to the tip), and how many steps it fades in (one shared
@@ -255,6 +259,7 @@ fn trail_blades(
             trail.samples.pop_front();
         }
         let samples = trail.samples.make_contiguous();
+        let brightness = if blade.quickened { 1.0 } else { TRAIL_DIM };
         // How bright it is at each sample: by how fast the tip was moving there, and how fresh.
         let alpha = |i: usize| {
             let (at, place) = samples[i];
@@ -264,7 +269,7 @@ fn trail_blades(
             };
             let fast = ((speed - TRAIL_SPEED.0) / (TRAIL_SPEED.1 - TRAIL_SPEED.0)).clamp(0.0, 1.0);
             let fresh = 1.0 - (now - at) / TRAIL_LIFE;
-            fast * fresh * fresh
+            fast * fresh * fresh * brightness
         };
         let showing = visible.get() && (0..samples.len()).any(|i| alpha(i) > 0.01);
         if let Ok(mut visibility) = drawn.get_mut(trail.entity) {
