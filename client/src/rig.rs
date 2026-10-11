@@ -18,8 +18,10 @@
 //! where it faces. The windup draws the sword arm back, the weapon shoulder turning away and the
 //! lead hand reaching out at the target, the point coming up level; the strike is a lunge,
 //! the arm driving the point straight out at the target as the lead leg steps long into it and
-//! the body leans in behind it, the blade smearing out longer for a moment as it lands. A dash is
-//! that lunge, held all the way through it.
+//! the body leans in behind it, the blade smearing out longer for a moment as it lands. Holding
+//! fire chains the strikes: the blade comes straight back from each into the next draw, still
+//! raised, instead of sinking to the point-low carry in between. A dash is that lunge, held all
+//! the way through it.
 //!
 //! The frost mage carries its staff upright at its side. The windup raises it high toward the
 //! target, the off hand reaching out to gather the cold; the cast thrusts the crystal forward at
@@ -214,6 +216,10 @@ const SMEAR_REACH: f32 = 0.4;
 const REARM_TICKS: f32 = 12.0;
 /// After the throw: how long (ticks) the follow-through is held, and when it's back to carrying.
 const FOLLOW_THROUGH: (f32, f32) = (3.0, 14.0);
+/// A melee windup chained onto the last strike (started while its follow-through holds): how
+/// long (a fraction of the windup) the strike is still held before the blade comes straight back
+/// into the draw.
+const CHAIN_HOLD: f32 = 0.15;
 /// A thrown Q's flick: ticks after the throw until the arm starts and finishes coming back.
 const FLICK: (f32, f32) = (1.0, 10.0);
 /// A nova's slam: ticks after the cast until it starts and finishes rising out of it.
@@ -505,14 +511,25 @@ fn pose_rigs(
         };
         let released = since_throw(attack.released_at, seen.and_then(|seen| seen.attack));
         let windup = SeenThrows::windup(seen, attack);
-        let (draw, mut throw) = match (windup, released) {
+        // Holding fire with a melee weapon chains each windup onto the last strike: the blade goes
+        // from the strike straight back into the draw, still raised, never down to carrying.
+        let chained = |windup: &Windup| {
+            matches!(def.attack.kind, AttackKind::Melee { .. })
+                && attack.released_at.is_some_and(|at| windup.started_at as f32 <= at as f32 + FOLLOW_THROUGH.0)
+        };
+        let (draw, mut throw, strike) = match (windup, released) {
             (Some(windup), _) => {
                 let progress = windup.progress(now, *class);
                 let strike_start = (1.0 - STRIKE_TICKS / windup.ticks(*class).max(1) as f32).max(DRAW_END);
-                (ease(0.0, DRAW_END, progress), ease_out(strike_start, 1.0, progress))
+                let strike = ease_out(strike_start, 1.0, progress);
+                if chained(&windup) {
+                    (1.0, strike.max(1.0 - ease(CHAIN_HOLD, DRAW_END, progress)), strike)
+                } else {
+                    (ease(0.0, DRAW_END, progress), strike, strike)
+                }
             }
-            (None, Some(since)) => (0.0, 1.0 - ease(FOLLOW_THROUGH.0, FOLLOW_THROUGH.1, since)),
-            (None, None) => (0.0, 0.0),
+            (None, Some(since)) => (0.0, 1.0 - ease(FOLLOW_THROUGH.0, FOLLOW_THROUGH.1, since), 0.0),
+            (None, None) => (0.0, 0.0, 0.0),
         };
         let flicked = since_throw(ability.used_at(*class), seen.and_then(|seen| seen.ability));
         let mut dashing = if ability.dash.is_some() { 1.0 } else { 0.0 };
@@ -607,13 +624,9 @@ fn pose_rigs(
             held_at.set_if_neq(HeldAt(aimed_body * hand));
         }
         // The strike's smear: the weapon stretching out as the strike comes through, longest as
-        // it lands, snapping back over the next few ticks.
-        let smear = moves.stretch
-            * match (windup, released) {
-                (Some(_), _) => throw.powi(3),
-                (None, Some(since)) => 1.0 - ease(0.0, STRETCH_TICKS, since),
-                (None, None) => 0.0,
-            };
+        // it lands, snapping back over the next few ticks (into a chained windup too).
+        let landed = released.map_or(0.0, |since| 1.0 - ease(0.0, STRETCH_TICKS, since));
+        let smear = moves.stretch * strike.powi(3).max(landed);
         for (part, rotation) in rotations {
             if let Ok((mut transform, mut visibility)) = parts.get_mut(part) {
                 if transform.rotation != rotation {
