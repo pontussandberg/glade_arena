@@ -147,19 +147,21 @@ fn hold<C>(start: C, _end: C, _t: f32) -> C {
     start
 }
 
-/// The Q ability's state: when it may be used again, and a dash in progress. Predicted (your
-/// own Q happens at the press), replicated and shown on the same delayed timeline as others'
-/// positions, like `AttackState`.
+/// The Q ability's state: when it may be used again, a dash in progress, and whether it has no
+/// cooldown (practice's tool; the server sets it). Predicted (your own Q happens at the press),
+/// replicated and shown on the same delayed timeline as others' positions, like `AttackState`.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct AbilityState {
     pub ready_at: u32,
     pub dash: Option<Dash>,
+    pub free: bool,
 }
 
 impl AbilityState {
     /// When the ability was last used (`None`: never).
     pub fn used_at(&self, class: ClassId) -> Option<u32> {
-        (self.ready_at > 0).then(|| self.ready_at.saturating_sub(class.def().ability.cooldown_ticks))
+        let cooldown = if self.free { 0 } else { class.def().ability.cooldown_ticks };
+        (self.ready_at > 0).then(|| self.ready_at.saturating_sub(cooldown))
     }
 }
 
@@ -361,6 +363,9 @@ pub enum RoomRequest {
     Start,
     /// Practice only: a target dummy standing at this point, the next class in turn.
     PlaceDummy(Vec2),
+    /// Practice only: our Q with no cooldown (ready again the moment it's used), or back to
+    /// normal.
+    NoCooldowns(bool),
 }
 
 /// What the server tells a client about guests and rooms.

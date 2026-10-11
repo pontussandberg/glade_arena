@@ -181,7 +181,7 @@ pub fn step_ability(
     if state.dash.is_some_and(|dash| dash.left < 1e-4) || rooted {
         state.dash = None;
     }
-    let Some(dir) = input.aim.try_normalize().filter(|_| input.ability && tick >= state.ready_at) else {
+    let Some(dir) = input.aim.try_normalize().filter(|_| input.ability && (tick >= state.ready_at || state.free)) else {
         return (state, None);
     };
     let cast = match ability.kind {
@@ -198,7 +198,7 @@ pub fn step_ability(
         AbilityKind::Dash { .. } => return (state, None),
         AbilityKind::Nova { .. } => Some(Cast::Nova),
     };
-    state.ready_at = tick + ability.cooldown_ticks;
+    state.ready_at = if state.free { tick } else { tick + ability.cooldown_ticks };
     (state, cast)
 }
 
