@@ -1,7 +1,8 @@
 # Arena
 
 Browser PvP arena brawler: top-down 3D presentation on 2D gameplay rules, with one authoritative
-server, client-side prediction, and interpolation of other players.
+server and League-style netcode: clients send commands, nothing is predicted, and other players
+are interpolated.
 
 The fight happens in a forest clearing on a 1 m tile grid: a river through the middle, crossed by
 a stone bridge and two fords, with ruined walls, boulders and trees for cover. Movement is
@@ -35,9 +36,9 @@ be read and dodged. Attacking also cancels your walk: afterwards you stand still
 right click again (a click during the windup is kept and walked to once the attack is off);
 so does a dash. A dash may be used mid-windup: it moves you, and the attack still goes off when
 the windup's over, from wherever the dash took you (stab, then dash into place for it to land).
-Abilities have their own cooldown (shown in the HUD) and are predicted like
-everything else: your spear flies and your dash moves the moment you press Q, the server
-decides the hits.
+Abilities have their own cooldown (shown in the HUD). Like everything else they happen on the
+server: your spear flies and your dash moves once the server has your Q, about a round trip
+after you press it.
 Killed players sit out 3 seconds, then respawn at full health.
 
 Stack: **Bevy 0.19 + Lightyear 0.30** (pinned together), Rust everywhere. The browser client is
@@ -49,9 +50,9 @@ the same Rust code compiled to WASM, talking WebTransport to the server.
 shared/   protocol (replicated components, PlayerInput, messages), sim (pure gameplay rules),
           map (the tile map, A* pathfinding, line-of-movement checks), classes (+ assets/classes.ron),
           config
-server/   headless authoritative server (spawning, hit decisions, lag compensation, respawns);
+server/   headless authoritative server (commands, spawning, hit decisions, respawns);
           tests/integration/ has the end-to-end tests (one test binary: each links all of Bevy)
-client/   ClientNetPlugin (networking + prediction, headless-capable), bot (sparring AI);
+client/   ClientNetPlugin (networking + commands, headless-capable), bot (sparring AI);
           render (fighters, shots, novas, frost, HUD, input), swish (a blade's wind), camera,
           action_bar (your passive and ability icons, cooldown, hover tooltips), stat_frame (a
           class's stats: in the lobby and bottom left in the arena), minimap,
@@ -65,43 +66,34 @@ scripts/  build-web.sh, serve.mjs
 ### How a tick works
 
 - After connecting, a client sends `ChooseClass` once; the server spawns its player then.
-- Clients send only **inputs** (`PlayerInput`: the tile they right-clicked, aim, fire held, Q
-  pressed) once a tick (32 Hz, not every frame), never positions. A Q press is sent for exactly
-  one tick.
-- The server runs `shared::sim` on those inputs (pathfinding toward the clicked tile, attack
-  windups and cooldowns, Q abilities and dashes, projectile flight), decides hits and damage, and
-  replicates state at 20 Hz.
+- Clients send only **commands** (`PlayerCommand`: walk to the point they right-clicked, stop,
+  walk with the keys, attack held toward an aim, cast Q), League style, never positions. They're
+  sent when something changes (a click goes out right away; the aim while attacking at most once
+  a tick) on a reliable channel, and the server applies each one the moment it arrives, to the
+  player's intent (`PlayerInput`), which the sim runs on every tick. The server drops a
+  destination by itself when you arrive, attack or dash, and a fighter carries on with its last
+  order if its client goes quiet.
+- The server runs `shared::sim` on those intents (pathfinding toward the clicked tile, attack
+  windups and cooldowns, Q abilities and dashes, projectile flight) at 32 Hz, decides hits and
+  damage, and replicates state every tick.
 - Pathfinding is A* over the shared tile map, smoothed into straight lines where the way is
-  clear. It runs inside the sim, so the client predicts exactly the route the server walks.
-  The map uses no platform math functions (sin, atan2), so native and WASM agree to the bit.
+  clear. The map uses no platform math functions (sin, atan2), so native and WASM agree to the
+  bit (the client picks the clicked point, `walk_target`, that the server walks to).
 - Walls, rocks, trees and the forest edge block movement and shots; water blocks movement only.
-- The client runs the **same** `shared::sim` functions on its own player and projectiles right
-  away (prediction). When server state disagrees, Lightyear rolls back and replays.
-- Projectiles are **prespawned**: the client spawns its shot immediately with a hash
-  (`projectile_prespawn_hash`, different for an auto-attack and a Q thrown in the same tick), and
-  the server's copy is matched to it when it arrives.
-- **Every client predicts every projectile**, not just its own. A shot flies on rails: its
-  position is a pure function of the tick (`sim::projectile_pos`, from its origin, direction and
-  spawn tick). So others' shots, which reach you a round trip late, are still drawn where they
-  really are, on the same clock as your own player, and what you see dodge is what the server
-  judges. A late spear shoots out of its thrower's hand fast and catches up within 0.2 s.
-- `AttackState` (cooldown, windup) and `AbilityState` (Q cooldown, dash) are predicted for your
-  own player, so your windup, throw and dash start the moment you click or press Q. For others
-  they're interpolated on the same delayed timeline as their positions, so their cast bar
-  and dash line up with where you see them; except that a throw shows the moment its
-  spear appears (`SeenThrows`), which can be a little ahead of the thrower's body.
-- Other players are **interpolated** between server snapshots.
-- `Health` is server-only: replicated, never predicted. Melee, dash and nova damage are decided
-  by the server too (and a hit arming Follow Through: your client is corrected by a rollback);
-  your own swing (`LastSwing`) is predicted so it shows instantly.
-- So is `Chilled` (slows and roots). It holds tick spans, so when one lands on you a round trip
-  late, the rollback it causes replays your movement with it from exactly the tick it began.
-- **Lag compensation:** you see others slightly in the past, so the server keeps a short
-  position history and judges your swings, dashes and novas against where *you* saw the target (up to
-  ~250 ms back, using the interpolation delay your inputs carry). Projectiles are judged in the
-  present instead ("favor the target"): they can be dodged, and the target sees them exactly as
-  judged; the shooter may sometimes see a shot pass through someone who had already stepped
-  aside.
+- **Nothing is predicted.** Your own fighter is shown as the server last said it was (not
+  interpolated, for the least delay), so a click shows about a round trip later: ~75-100 ms on a
+  60 ms link, not noticeable below ~40 ms ping. The destination marker shows at once.
+- Other players are **interpolated** between server updates, a little in the past. Their
+  `AttackState` and `AbilityState` are shown on that same timeline, so a cast bar and a dash line
+  up with where you see them; except that a throw shows the moment its spear appears
+  (`SeenThrows`), which can be a little ahead of the thrower's body.
+- **Projectiles** fly on rails: a shot's position is a pure function of the tick
+  (`sim::projectile_pos`, from its origin, direction and spawn tick), so clients draw them from
+  that alone, on your own fighter's clock: a shot coming at you is drawn where it is relative to
+  you.
+- **Every hit is judged where everyone is on the server** at that tick (no lag compensation, as
+  in League): melee, dashes, novas and projectiles alike. What you dodge on the server, you
+  dodged; an attacker at high ping may see a swing that looked in reach miss.
 - `classes.ron` is compiled into both sides, and its hash is part of the protocol id: a client
   built with different class numbers can't connect.
 
@@ -129,16 +121,16 @@ cargo never removes outdated ones itself.
 #                 cooldowns, far_scale, Q throws, dashes (full distance, never into a wall,
 #                 not mid-swing), slows, roots (stopping walks and dashes), novas
 #   classes       the class file parses and every class has sane numbers
-#   netcode.rs    click-to-move prediction, reconciliation, interpolation, unreachable clicks,
-#                 predicted windup, prespawned shot, server-decided hit, rollback on server
-#                 correction (one bot at 60ms + 2% loss)
-#   combat.rs     melee hits where the attacker saw the target (lag compensation), misses out
-#                 of reach, death and respawn
-#   abilities.rs  spirit spear predicted at once (no windup) and hitting; rift step cutting
+#   netcode.rs    a command showing about a round trip later, own view and interpolation
+#                 matching the server, unreachable clicks, server corrections, windup and
+#                 shot, server-decided hit (one bot at 60ms + 2% loss)
+#   combat.rs     melee judged where the target is on the server (standing in and out of
+#                 reach, running past), death and respawn
+#   abilities.rs  spirit spear thrown at once (no windup) and hitting; rift step cutting
 #                 through a target once and readying the blade, cutting where it ends but not
-#                 who it leaves behind; frost nova freezing a revenant (no walk, no dash, its
-#                 own client rolled back to the spot), then letting it go; frostbolts slowing
-#   inputs.rs     4 fps client releasing fire; frozen client stops moving server-side;
+#                 who it leaves behind; frost nova freezing a revenant (no walk, no dash),
+#                 then letting it go; frostbolts slowing
+#   inputs.rs     4 fps client releasing fire; a frozen client's fighter finishing its walk;
 #                 attacking cancels the walk, a click during the windup is kept
 cargo test
 
@@ -174,18 +166,18 @@ the right mouse button and dragging (or the arrow keys) turns it, the wheel (or 
 down to arm's length. There the right button only turns the camera: click to move is off. Tab
 moves it on to the next fighter, to watch them play (and after the last, back to
 you). V again goes back. The keys for the current camera are listed
-top left, under the ping (with the free camera also jitter and rollbacks).
+top left, under the ping (with the free camera also jitter).
 
 Two tabs work: a hidden tab keeps simulating and networking without rendering (see
 `client/src/hidden_tab.rs`, which works around Bevy 0.19 ignoring Lightyear's keepalive). If a
-client does freeze, the server stops its player after ~8 ticks (`neutralize_stale_inputs`) and
-drops it after 3s; the HUD then says DISCONNECTED and a page reload rejoins.
+client does freeze, its fighter carries on with its last order, and the server drops it after
+3s; the HUD then says DISCONNECTED and a page reload rejoins.
 
 ## Logs
 
 The server logs to stderr. At info: start, connects and disconnects (with the reason), joins,
-kills, a `status` line every minute (players, each client's ping, jitter and input gaps), and
-warnings when the server hitches or a client's inputs stop arriving for over a second. Debug
+kills, a `status` line every minute (players, each client's ping and jitter), and warnings
+when the server hitches. Debug
 adds every hit and respawn: `RUST_LOG=info,arena_server=debug,lightyear=warn`.
 `ARENA_LOG_FORMAT=json` writes one JSON object per line, for a log collector. Panics are logged
 too (`server/src/logging.rs`).
@@ -221,8 +213,7 @@ deploy restarts the server, which disconnects everyone playing.
 - More classes, and more abilities (W/E/R); a balance pass (in bot duels the Revenant's
   dash-and-swing tends to beat the Jav; the Frost Mage is new and untuned)
 - Network debug overlay (lag sliders, server ghost), room codes, switching class without rejoining
-- Visual smoothing: frame interpolation between ticks and correction blending after rollbacks
+- Visual smoothing: your own fighter moves in 32 Hz steps (it's shown as last received);
+  interpolate it between ticks
 - Accounts service issuing netcode connect tokens (currently a shared zero dev key)
 - WASM size: 44 MB raw / ~10 MB gzipped; add wasm-opt and brotli, and a loading bar
-- Lightyear 0.30 drops input messages more than 64 ticks (2 s at 32 Hz) from the server tick; fine for real
-  clients, but worth knowing if you ever add large input delay

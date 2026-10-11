@@ -12,8 +12,8 @@ use arena_shared::protocol::{PlayerId, Pos};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
-use lightyear::prelude::Predicted;
 
+use crate::Me;
 use crate::arena;
 
 /// Camera direction and distance at zoom 1.0: 28 m up, 19 m back from the point it looks at
@@ -200,7 +200,7 @@ fn release_cursor(cursor: &mut CursorOptions) {
 fn next_fighter(
     keys: Res<ButtonInput<KeyCode>>,
     mut mode: ResMut<CameraMode>,
-    fighters: Query<(Entity, &PlayerId, Has<Predicted>), With<Mesh3d>>,
+    fighters: Query<(Entity, &PlayerId, Has<Me>), With<Mesh3d>>,
 ) {
     if !mode.free || !keys.just_pressed(KeyCode::Tab) {
         return;
@@ -222,7 +222,7 @@ fn follow_camera(
     scroll: Res<AccumulatedMouseScroll>,
     mut mode: ResMut<CameraMode>,
     // Its own transform, set this frame (`GlobalTransform` lags a frame and would jitter).
-    me: Query<&Transform, (With<Predicted>, With<PlayerId>, Without<Camera3d>)>,
+    me: Query<&Transform, (With<Me>, With<PlayerId>, Without<Camera3d>)>,
     fighters: Query<&Transform, (With<PlayerId>, Without<Camera3d>)>,
     mut camera: Single<&mut Transform, With<Camera3d>>,
     window: Single<(&mut Window, &mut CursorOptions)>,
@@ -279,7 +279,7 @@ fn follow_camera(
 /// wheel.
 fn move_camera(
     scroll: Res<AccumulatedMouseScroll>,
-    me: Query<&Pos, (With<Predicted>, With<PlayerId>)>,
+    me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     camera: Single<(&mut Transform, &mut CameraRig)>,
 ) {
     let (mut transform, mut rig) = camera.into_inner();

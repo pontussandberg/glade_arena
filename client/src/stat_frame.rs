@@ -10,8 +10,8 @@ use arena_shared::classes::{AttackKind, ClassDef, seconds};
 use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
-use lightyear::prelude::*;
 
+use crate::Me;
 use crate::arena::palette;
 use crate::arena::palette::ui::ACCENT;
 use crate::lobby;
@@ -186,7 +186,7 @@ pub fn ability_blurb(def: &ClassDef) -> Blurb {
 /// Builds your frame in the corner once your own player exists.
 fn spawn_my_frame(
     mut commands: Commands,
-    me: Query<&ClassId, Added<Predicted>>,
+    me: Query<&ClassId, Added<Me>>,
     frames: Query<Entity, With<MyFrame>>,
     corner: Single<Entity, With<Corner>>,
 ) {
@@ -202,7 +202,7 @@ fn spawn_my_frame(
 
 /// Your health, as it is.
 fn update_health(
-    me: Query<(&ClassId, Option<&Health>), (With<Predicted>, With<PlayerId>)>,
+    me: Query<(&ClassId, Option<&Health>), (With<Me>, With<PlayerId>)>,
     frame: Option<Single<&MyFrame>>,
     mut texts: Query<&mut Text>,
 ) {

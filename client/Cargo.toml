@@ -24,9 +24,7 @@ lightyear = { workspace = true, features = [
   "std",
   "client",
   "replication",
-  "prediction",
   "interpolation",
-  "input_native",
   "netcode",
   "webtransport",
 ] }

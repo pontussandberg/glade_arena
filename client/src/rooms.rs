@@ -14,7 +14,6 @@ use arena_shared::protocol::*;
 use arena_shared::rooms::*;
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
-use lightyear::prelude::input::native::InputMarker;
 use lightyear::prelude::*;
 
 use crate::ChosenClass;
@@ -181,7 +180,7 @@ fn enter_game(
     mut next: ResMut<NextState<Screen>>,
     room: Res<CurrentRoom>,
     leaving: Res<Leaving>,
-    me: Query<(), (With<PlayerId>, With<InputMarker<PlayerInput>>)>,
+    me: Query<(), (With<PlayerId>, With<crate::Me>)>,
 ) {
     match (screen.get(), me.is_empty()) {
         (Screen::Home | Screen::Room, false) => next.set(Screen::InGame),

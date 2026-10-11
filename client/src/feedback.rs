@@ -4,12 +4,16 @@
 //! golden), a green number when one is healed, and dead fighters disappearing until they
 //! respawn.
 
+use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use lightyear::core::time::TickInstant;
 use lightyear::interpolation::timeline::InterpolationTimeline;
+use lightyear::prelude::client::RemoteTimeline;
 use lightyear::prelude::*;
+
+use crate::Me;
 
 use crate::camera::CameraPlaced;
 use crate::arena::{palette, to_world};
@@ -139,7 +143,7 @@ fn spawn_world_ui(mut commands: Commands) {
 }
 
 /// Each fighter gets its bars once it has a body.
-fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, new: Query<(Entity, &ClassId, Has<Predicted>), (With<PlayerId>, Added<Mesh3d>)>) {
+fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, new: Query<(Entity, &ClassId, Has<Me>), (With<PlayerId>, Added<Mesh3d>)>) {
     let fill = |color: Color| (Node { width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(color));
     let frame = |node: Node| {
         (
@@ -213,23 +217,60 @@ fn over_bar(camera: &Camera, camera_transform: &GlobalTransform, pos: &Pos) -> O
     camera.world_to_viewport(camera_transform, to_world(pos.0, BAR_HEIGHT)).ok()
 }
 
+/// How far behind the latest state from the server our own fighter is drawn, in ticks: enough
+/// that the next update is (almost) always in by the time it's needed, so it moves smoothly
+/// between updates however unevenly they arrive (`render::glide_me`).
+pub(crate) const ME_BEHIND_TICKS: f32 = 1.0;
+
+/// The server tick our latest news from it is from, advancing smoothly with real time between
+/// packets (`advance_latest_clock`): a packet from tick T arrives about when this reads T.
+#[derive(Resource, Default)]
+pub(crate) struct LatestClock {
+    tick: Option<f32>,
+    /// The tick of the latest packet from the server.
+    pub(crate) latest: Option<u32>,
+}
+
+/// How hard each new packet pulls the clock toward its tick (a little: arrivals are uneven), and
+/// how far off it may be before it's set straight there instead (after a stall, at the start).
+const CLOCK_PULL: f32 = 0.1;
+const CLOCK_SNAP_TICKS: f32 = 4.0;
+
+pub(crate) fn advance_latest_clock(time: Res<Time<Real>>, remote: Query<&RemoteTimeline, With<Client>>, mut clock: ResMut<LatestClock>) {
+    let Some(latest) = remote.single().ok().and_then(|r| r.last_received_tick()).map(|t| t.0) else { return };
+    let mut tick = clock.tick.map_or(latest as f32, |t| t + time.delta_secs() * TICK_HZ as f32);
+    if clock.latest != Some(latest) {
+        let off = latest as f32 - tick;
+        tick = if off.abs() > CLOCK_SNAP_TICKS { latest as f32 } else { tick + off * CLOCK_PULL };
+    }
+    (clock.tick, clock.latest) = (Some(tick), Some(latest));
+}
+
 /// "Now" in fractional ticks, on the timeline a fighter is shown on, to compare with its
-/// `AttackState`: ours is predicted (our own windup starts at the click), others' are
-/// interpolated (their windup plays out in step with their delayed position).
+/// `AttackState`. Ours: `LatestClock` less `ME_BEHIND_TICKS`. Others' are interpolated (their
+/// windup plays out in step with their delayed position). Projectiles go by ours, so a shot
+/// coming at us is drawn where it is relative to us.
 #[derive(SystemParam)]
-pub(crate) struct AttackClock<'w, 's> {
-    local: SyncedLocalTimeline<'w, 's>,
-    fixed: Res<'w, Time<Fixed>>,
+pub(crate) struct AttackClock<'w> {
+    latest: Option<Res<'w, LatestClock>>,
     interpolation: Option<Res<'w, InterpolationTimeline>>,
 }
 
-impl AttackClock<'_, '_> {
-    pub(crate) fn now(&self, predicted: bool) -> f32 {
+impl AttackClock<'_> {
+    pub(crate) fn now(&self, me: bool) -> f32 {
         let ticks = |t: TickInstant| t.tick().0 as f32 + t.overstep().to_f32();
-        match &self.interpolation {
-            Some(timeline) if !predicted => ticks(timeline.now),
-            _ => ticks(self.local.instant(&self.fixed)),
+        let mine = self.latest.as_ref().and_then(|c| c.tick).map(|t| t - ME_BEHIND_TICKS);
+        match (&self.interpolation, mine) {
+            (Some(timeline), _) if !me => ticks(timeline.now),
+            (_, Some(mine)) => mine,
+            (Some(timeline), None) => ticks(timeline.now),
+            (None, None) => 0.0,
         }
+    }
+
+    /// The tick of the latest packet from the server: what a state that just arrived is from.
+    pub(crate) fn latest_tick(&self) -> Option<u32> {
+        self.latest.as_ref().and_then(|c| c.latest)
     }
 }
 
@@ -240,7 +281,7 @@ fn place_bars(
     time: Res<Time>,
     clock: AttackClock,
     camera: Single<(&Camera, &GlobalTransform)>,
-    players: Query<(&Pos, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Option<&SeenThrows>, Has<Predicted>)>,
+    players: Query<(&Pos, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Option<&SeenThrows>, Has<Me>)>,
     mut bars: Query<(Entity, &Bars, &mut HealthTrail, &mut Node, &mut UiTransform, &mut Visibility)>,
     mut parts: Query<(&mut Node, &mut Visibility), Without<Bars>>,
     mut colors: Query<&mut BackgroundColor>,
@@ -388,7 +429,7 @@ fn spawn_damage_numbers(
     mut commands: Commands,
     time: Res<Time>,
     world_ui: Single<Entity, With<WorldUi>>,
-    mut players: Query<(Entity, &RecentHits, Option<&mut ShownHits>, Has<Predicted>), Changed<RecentHits>>,
+    mut players: Query<(Entity, &RecentHits, Option<&mut ShownHits>, Has<Me>), Changed<RecentHits>>,
 ) {
     for (player, recent, shown, is_me) in &mut players {
         let Some(mut shown) = shown else {

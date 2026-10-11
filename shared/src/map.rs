@@ -5,7 +5,8 @@
 //! both banks are equally good.
 //!
 //! Everything here must give identical results on every platform (native server, wasm client),
-//! because the client predicts movement with it. So the shapes use only +, -, *, / and sqrt,
+//! so both agree on it (the client picks the point a click walks to, `walk_target`, and draws
+//! shots by `sim`). So the shapes use only +, -, *, / and sqrt,
 //! which IEEE floats compute identically everywhere; no sin/atan2 from the platform's libm.
 
 use std::cell::RefCell;
@@ -434,7 +435,7 @@ impl Map {
 
 impl Map {
     /// `find_path`, remembered. Movement asks for the same (tile, target) pair every tick until
-    /// the player changes tile, and again on every rollback replay; the answer only depends on
+    /// the player changes tile; the answer only depends on
     /// those two tiles, so a cache returns exactly what a fresh search would.
     fn cached_path(&self, from: IVec2, to: IVec2) -> Option<Rc<[IVec2]>> {
         thread_local! {
