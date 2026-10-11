@@ -66,7 +66,8 @@ scripts/  build-web.sh, serve.mjs
 
 - After connecting, a client sends `ChooseClass` once; the server spawns its player then.
 - Clients send only **inputs** (`PlayerInput`: the tile they right-clicked, aim, fire held, Q
-  pressed) at 64 Hz, never positions. A Q press is sent for exactly one tick.
+  pressed) once a tick (32 Hz, not every frame), never positions. A Q press is sent for exactly
+  one tick.
 - The server runs `shared::sim` on those inputs (pathfinding toward the clicked tile, attack
   windups and cooldowns, Q abilities and dashes, projectile flight), decides hits and damage, and
   replicates state at 20 Hz.
@@ -223,5 +224,5 @@ deploy restarts the server, which disconnects everyone playing.
 - Visual smoothing: frame interpolation between ticks and correction blending after rollbacks
 - Accounts service issuing netcode connect tokens (currently a shared zero dev key)
 - WASM size: 44 MB raw / ~10 MB gzipped; add wasm-opt and brotli, and a loading bar
-- Lightyear 0.30 drops input messages more than 64 ticks (1s) from the server tick; fine for real
+- Lightyear 0.30 drops input messages more than 64 ticks (2 s at 32 Hz) from the server tick; fine for real
   clients, but worth knowing if you ever add large input delay

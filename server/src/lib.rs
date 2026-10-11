@@ -177,7 +177,7 @@ struct Dead {
 /// A respawning player is moved to its spawn point this long before it comes back to life:
 /// longer than other clients' interpolation delay, so they never see it slide from where it
 /// died to where it respawns (it's still hidden while that happens).
-const PLACE_BEFORE_RESPAWN_TICKS: u32 = 16;
+const PLACE_BEFORE_RESPAWN_TICKS: u32 = TICK_HZ as u32 / 4;
 
 /// Players who can move, attack and be hit: placed and alive.
 type InPlay = (Without<NeedsSpawnPoint>, Without<Dead>);
@@ -336,7 +336,7 @@ fn place_players(
 /// When a player's inputs stop arriving in time, lightyear keeps repeating the last one it got,
 /// which papers over short gaps. Past this many ticks we stop trusting it: a frozen or badly
 /// hitching client should stand still, not keep running and firing on its last input.
-const STALE_INPUT_TICKS: i32 = 8;
+const STALE_INPUT_TICKS: i32 = TICK_HZ as i32 / 8;
 
 fn neutralize_stale_inputs(
     timeline: Res<LocalTimeline>,
@@ -427,7 +427,7 @@ fn take_pickups(
 // the present (`resolve_projectile_hits`).
 
 /// How far back a hit may be judged: ~250 ms.
-const MAX_REWIND_TICKS: u32 = 16;
+const MAX_REWIND_TICKS: u32 = TICK_HZ as u32 / 4;
 
 /// Recent positions, one per consecutive tick, newest last: (tick, position after that tick's
 /// movement). Cleared on teleport.

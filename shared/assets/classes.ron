@@ -4,13 +4,13 @@
 // Their order here is the order everywhere: the class picker and its number keys, the default
 // pick, and the order target dummies come in.
 //
-// Units: meters, meters per second, ticks (64 per second), degrees.
+// Units: meters, meters per second, ticks (32 per second), degrees.
 //   id            stable key (also picks the class's look in the client)
 //   max_hp        health at spawn and respawn
 //   move_speed    walking speed
 //   attack        the left-click auto-attack, aimed at the cursor (skillshot)
 //     damage
-//     windup_ticks  from click to the attack going off, the whole attack (64 = one per second):
+//     windup_ticks  from click to the attack going off, the whole attack (32 = one per second):
 //                   the next may start the tick it goes off. You stand still with your aim
 //                   locked meanwhile (see the README): holding fire keeps you planted, to move
 //                   you stop firing
@@ -59,15 +59,15 @@
         move_speed: 3.7,
         attack: (
             damage: 20,
-            windup_ticks: 60,
+            windup_ticks: 30,
             kind: Melee(range: 3.75, width: 0.05),
-            follow_up: Some((within_ticks: 96, attack_speed: 1.0)),
+            follow_up: Some((within_ticks: 48, attack_speed: 1.0)),
         ),
         ability: (
             name: "Rift Step",
             description: "Dash forward, dealing {ability_damage} damage to each enemy you pass through.",
-            cooldown_ticks: 512,
-            kind: Dash(distance: 6.0, ticks: 10, damage: 18),
+            cooldown_ticks: 256,
+            kind: Dash(distance: 6.0, ticks: 5, damage: 18),
         ),
         passive: Some((
             name: "Follow Through",
@@ -84,13 +84,13 @@
         move_speed: 3.7,
         attack: (
             damage: 16,
-            windup_ticks: 48,
+            windup_ticks: 24,
             kind: Projectile(speed: 15.0, radius: 0.25, range: 15.0, far_scale: Some(2.25)),
         ),
         ability: (
             name: "Spirit Spear",
             description: "Instantly hurl a fast spectral spear for {ability_damage} damage. No windup: throw on the move.",
-            cooldown_ticks: 384,
+            cooldown_ticks: 192,
             kind: Projectile(speed: 32.0, radius: 0.2, range: 13.0, damage: 22),
         ),
         passive: Some((
@@ -108,15 +108,15 @@
         move_speed: 3.7,
         attack: (
             damage: 8,
-            windup_ticks: 44,
+            windup_ticks: 22,
             kind: Projectile(speed: 17.0, radius: 0.28, range: 10.0),
-            chill: (slow: 0.4, slow_ticks: 128),
+            chill: (slow: 0.4, slow_ticks: 64),
         ),
         ability: (
             name: "Frost Nova",
             description: "Instantly deal {ability_damage} damage to everyone within {ability_reach} and freeze them in place for {ability_root}: no walking, no dashing.",
-            cooldown_ticks: 448,
-            kind: Nova(radius: 3.5, damage: 6, chill: (root_ticks: 160)),
+            cooldown_ticks: 224,
+            kind: Nova(radius: 3.5, damage: 6, chill: (root_ticks: 80)),
         ),
         passive: Some((
             name: "Shatter",

@@ -131,7 +131,7 @@ fn frost_nova_freezes_a_revenant_then_lets_it_go() {
     let (from, from_tick) = (server_player(&mut d.server, B).0, server_tick(&mut d));
     d.run(Duration::from_millis(300));
     let (to, to_tick) = (server_player(&mut d.server, B).0, server_tick(&mut d));
-    let speed = from.distance(to) / ((to_tick - from_tick) as f32 / 64.0);
+    let speed = from.distance(to) / ((to_tick - from_tick) as f32 / arena_shared::config::TICK_HZ as f32);
     let expected = class_id("revenant").def().move_speed;
     println!("thawed B walked {speed:.2} m/s (expected {expected:.2})");
     assert!((speed - expected).abs() < 0.3, "thawed B walked at {speed} m/s, expected {expected}");
