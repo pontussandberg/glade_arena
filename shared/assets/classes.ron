@@ -55,10 +55,10 @@
         move_speed: 5.6,
         attack: (
             damage: 20,
-            cooldown_ticks: 40,
-            windup_ticks: 36,
+            cooldown_ticks: 46,
+            windup_ticks: 42,
             kind: Melee(range: 3.75, width: 0.05),
-            follow_up: Some((within_ticks: 96, faster: 0.5)),
+            follow_up: Some((within_ticks: 96, faster: 0.6)),
         ),
         ability: (
             name: "Rift Step",
