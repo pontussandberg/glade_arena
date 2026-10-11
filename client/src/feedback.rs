@@ -38,10 +38,12 @@ impl Plugin for FeedbackPlugin {
 }
 
 /// Bar size in pixels, and how high above a fighter's feet it floats.
-const BAR_SIZE: Vec2 = Vec2::new(56.0, 7.0);
+const BAR_SIZE: Vec2 = Vec2::new(76.0, 10.0);
 const BAR_HEIGHT: f32 = 2.3;
 /// The cast bar hangs right under the health bar, as wide and a bit thinner.
-const CAST_BAR_HEIGHT: f32 = 5.0;
+const CAST_BAR_HEIGHT: f32 = 6.0;
+/// A mark across the health bar every this much health, for scale.
+const HP_PER_TICK: i32 = 25;
 const FLASH_SECONDS: f32 = 0.12;
 /// How bright the flash is (emissive white on the fighter's own material).
 const FLASH_GLOW: f32 = 3.0;
@@ -109,7 +111,7 @@ fn spawn_world_ui(mut commands: Commands) {
 }
 
 /// Each fighter gets its bars once it has a body.
-fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, new: Query<(Entity, Has<Predicted>), (With<PlayerId>, Added<Mesh3d>)>) {
+fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, new: Query<(Entity, &ClassId, Has<Predicted>), (With<PlayerId>, Added<Mesh3d>)>) {
     let fill = |color: Color| (Node { width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(color));
     let frame = |node: Node| {
         (
@@ -118,8 +120,19 @@ fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, n
             BorderColor::all(palette::ui::PANEL),
         )
     };
-    for (player, is_me) in &new {
+    for (player, class, is_me) in &new {
         let health_fill = commands.spawn(fill(Relation::of(is_me, false).color())).id();
+        // Over the fill (spawned after it), at every `HP_PER_TICK` of the fighter's health.
+        let max_hp = class.def().max_hp;
+        let ticks: Vec<Entity> = (1..)
+            .map(|n| n * HP_PER_TICK)
+            .take_while(|&hp| hp < max_hp)
+            .map(|hp| {
+                let left = percent(100.0 * hp as f32 / max_hp as f32);
+                let node = Node { position_type: PositionType::Absolute, left, width: px(1.0), height: percent(100.0), ..default() };
+                commands.spawn((node, BackgroundColor(palette::ui::PANEL.with_alpha(0.85)))).id()
+            })
+            .collect();
         // Pale, so it never reads as a (colored) health bar.
         let cast_fill = commands.spawn(fill(palette::SUN)).id();
         // Absolute inside the health bar's border, so shift left by it to line the two up.
@@ -137,7 +150,9 @@ fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, n
                 frame(Node { width: px(BAR_SIZE.x), height: px(BAR_SIZE.y), ..default() }),
                 Visibility::Hidden,
             ))
-            .add_children(&[health_fill, cast]);
+            .add_child(health_fill)
+            .add_children(&ticks)
+            .add_child(cast);
     }
 }
 
