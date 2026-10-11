@@ -13,7 +13,7 @@
   hard-reload the page (Ctrl+Shift+R).
 - The server is up once its output has the line `server starting port=5888 ...` (nothing mentions
   8080). The log is colored, so strip ANSI codes before matching
-  (`sed 's/\[[0-9;]*m//g'`). Wait for that line or a build error (`^error`, `could not
+  (`sed 's/\x1b\[[0-9;]*m//g'`). Wait for that line or a build error (`^error`, `could not
   compile`) with a bounded loop, never one that only waits for success.
 - Use the `dev` profile locally: it compiles much faster than the default `wasm-release` (thin
   LTO, one codegen unit), at the cost of a bigger, slower wasm. `wasm-release` is for deploys.
