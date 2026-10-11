@@ -408,7 +408,10 @@ impl Plugin for ProtocolPlugin {
         app.add_plugins(input::native::InputPlugin::<PlayerInput> {
             // Inputs also carry the client's interpolation delay, so the server can judge hits
             // against where the attacker actually saw their target (lag compensation).
-            config: InputConfig { lag_compensation: true, ..default() },
+            // Sent once a tick, not every frame (lightyear's default): a browser can't send a
+            // datagram every frame while the page is busy with input, and the backlog grew the
+            // ping without bound under lots of clicks.
+            config: InputConfig { lag_compensation: true, send_interval: crate::config::TICK_DURATION, ..default() },
         });
 
         app.add_channel::<Reliable>(ChannelSettings {
