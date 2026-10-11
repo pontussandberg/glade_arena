@@ -321,6 +321,8 @@ pub struct RigMeshes {
     /// A see-through shell of the same glow around the held weapon, in its space: shown while the
     /// attack's `follow_up` is armed (`rig::show_auras`).
     pub held_aura: Option<Mesh>,
+    /// A sharp glint of white light shown with the aura, and where it sits (the weapon's point).
+    pub held_glint: Option<(Mesh, Vec3)>,
     /// Cloth that moves (see `cloth.rs`), in the fighter's space.
     pub wardrobe: Option<Wardrobe>,
 }
@@ -349,6 +351,7 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             held_glow: None,
             body_glow: None,
             held_aura: None,
+            held_glint: None,
             wardrobe: Some(javelinist_wardrobe()),
         },
         "revenant" => RigMeshes {
@@ -361,6 +364,7 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             held_glow: Some(sword_glow()),
             body_glow: Some(revenant_glow()),
             held_aura: Some(blade_aura()),
+            held_glint: Some((glint(), Vec3::Y * BLADE_LENGTH)),
             wardrobe: Some(revenant_wardrobe()),
         },
         "frost_mage" => RigMeshes {
@@ -373,6 +377,7 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             held_glow: Some(staff_crystals()),
             body_glow: Some(frost_mage_glow()),
             held_aura: None,
+            held_glint: None,
             wardrobe: Some(frost_mage_wardrobe()),
         },
         _ => unreachable!("no rig for class {class_key:?} (add it to FIGHTER_LOOKS)"),
@@ -1042,6 +1047,15 @@ fn blade_aura() -> Mesh {
     let sections = [(0.08, 0.045, 0.08), (0.45, 0.05, 0.09), (1.1, 0.05, 0.095), (1.45, 0.045, 0.085), (1.65, 0.03, 0.05), (1.84, 0.0, 0.0)]
         .map(|(y, depth, width)| Section::new(Vec3::Y * y, Vec2::new(depth, width), Color::WHITE));
     tube(&smoothed(&sections, 2), 12, (true, false))
+}
+
+/// A glint: a star of three long, thin crystals crossed through its middle, so it reads as a
+/// sharp twinkle from any angle.
+fn glint() -> Mesh {
+    let ray = || gem_mesh(0.12).scaled_by(Vec3::new(0.08, 1.0, 0.08));
+    let x = ray().rotated_by(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
+    let z = ray().rotated_by(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
+    sculpted(vec![tinted(ray(), Color::WHITE), tinted(x, Color::WHITE), tinted(z, Color::WHITE)])
 }
 
 /// The frost mage's body, under its moving cloth (`frost_mage_wardrobe`): a robe from the waist

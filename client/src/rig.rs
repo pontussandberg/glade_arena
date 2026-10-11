@@ -246,6 +246,7 @@ struct RigHandles {
     held_glow: Option<Handle<Mesh>>,
     body_glow: Option<Handle<Mesh>>,
     held_aura: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    held_glint: Option<(Handle<Mesh>, Handle<StandardMaterial>, Vec3)>,
     wardrobe: Option<WardrobeAssets>,
 }
 
@@ -277,6 +278,8 @@ struct Rig {
     held: Entity,
     /// The held weapon's aura (`RigMeshes::held_aura`), if it has one.
     aura: Option<Entity>,
+    /// And the glint at its point.
+    glint: Option<Entity>,
     moves: &'static Moves,
     /// Walk cycles so far, and how much the fighter is walking (0..1, eased).
     stride: f32,
@@ -341,6 +344,7 @@ fn load_rigs(
                 held_glow: rig.held_glow.map(|mesh| meshes.add(mesh)),
                 body_glow: rig.body_glow.map(|mesh| meshes.add(mesh)),
                 held_aura: rig.held_aura.map(|mesh| (meshes.add(mesh), materials.add(arena::translucent(rig.glow, AURA_ALPHA, EYE_GLOW)))),
+                held_glint: rig.held_glint.map(|(mesh, at)| (meshes.add(mesh), materials.add(arena::glow(Color::WHITE, EYE_GLOW)), at)),
                 wardrobe: rig.wardrobe.map(|wardrobe| WardrobeAssets::load(wardrobe, &mut meshes, &mut bindposes, &mut materials)),
             };
             (c, handles)
@@ -372,6 +376,7 @@ fn add_rigs(
             legs: [part(&handles.leg, own, RIG_HIP), part(&handles.leg, own, mirrored(RIG_HIP))],
             held: part(&handles.held, own, RIG_HAND),
             aura: handles.held_aura.as_ref().map(|(mesh, material)| part(mesh, material, Vec3::ZERO)),
+            glint: handles.held_glint.as_ref().map(|(mesh, material, at)| part(mesh, material, *at)),
             moves: moves(&class.def().id),
             stride: 0.0,
             walking: 0.0,
@@ -385,9 +390,9 @@ fn add_rigs(
         if let Some(glow) = held_glow {
             commands.entity(rig.held).add_child(glow);
         }
-        if let Some(aura) = rig.aura {
-            commands.entity(aura).insert(Visibility::Hidden);
-            commands.entity(rig.held).add_child(aura);
+        for shown_armed in rig.aura.into_iter().chain(rig.glint) {
+            commands.entity(shown_armed).insert(Visibility::Hidden);
+            commands.entity(rig.held).add_child(shown_armed);
         }
         if let Some(glow) = body_glow {
             commands.entity(player).add_child(glow);
@@ -632,26 +637,40 @@ mod tests {
 }
 
 /// How see-through a weapon's aura is, and how fast (radians per second) and how much it swells.
-const AURA_ALPHA: f32 = 0.28;
-const AURA_PULSE: (f32, f32) = (9.0, 0.12);
+const AURA_ALPHA: f32 = 0.42;
+const AURA_PULSE: (f32, f32) = (9.0, 0.15);
+/// How fast the glint twinkles (radians per second) and spins (radians per second).
+const GLINT_TWINKLE: f32 = 7.0;
+const GLINT_SPIN: f32 = 2.5;
 
-/// A weapon's aura shows while the attack's `follow_up` is armed or quickening the windup in
-/// progress, swelling and shrinking a little.
+/// A weapon's aura and glint show while the attack's `follow_up` is armed or quickening the
+/// windup in progress: the aura swelling and shrinking a little, the glint spinning and flaring.
 fn show_auras(
     time: Res<Time>,
     clock: Option<AttackClock>,
     fighters: Query<(&Rig, &AttackState, Has<Predicted>)>,
-    mut auras: Query<(&mut Visibility, &mut Transform)>,
+    mut parts: Query<(&mut Visibility, &mut Transform)>,
 ) {
-    let pulse = 1.0 + AURA_PULSE.1 * (time.elapsed_secs() * AURA_PULSE.0).sin();
+    let t = time.elapsed_secs();
+    let pulse = 1.0 + AURA_PULSE.1 * (t * AURA_PULSE.0).sin();
+    // Mostly small, flaring sharply once a twinkle.
+    let flare = 0.4 + 1.0 * (0.5 + 0.5 * (t * GLINT_TWINKLE).sin()).powi(6);
     for (rig, attack, is_me) in &fighters {
-        let Some((mut visibility, mut transform)) = rig.aura.and_then(|aura| auras.get_mut(aura).ok()) else { continue };
         let now = clock.as_ref().map_or(0.0, |clock| clock.now(is_me));
         let armed = attack.quick_until.is_some_and(|until| now <= until as f32);
         let on = armed || attack.windup.is_some_and(|windup| windup.quick);
-        visibility.set_if_neq(shown(on));
-        if on {
-            transform.scale = Vec3::new(pulse, 1.0, pulse);
+        if let Some((mut visibility, mut transform)) = rig.aura.and_then(|aura| parts.get_mut(aura).ok()) {
+            visibility.set_if_neq(shown(on));
+            if on {
+                transform.scale = Vec3::new(pulse, 1.0, pulse);
+            }
+        }
+        if let Some((mut visibility, mut transform)) = rig.glint.and_then(|glint| parts.get_mut(glint).ok()) {
+            visibility.set_if_neq(shown(on));
+            if on {
+                transform.scale = Vec3::splat(flare);
+                transform.rotation = Quat::from_rotation_y(t * GLINT_SPIN);
+            }
         }
     }
 }
