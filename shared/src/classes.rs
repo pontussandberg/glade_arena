@@ -56,9 +56,8 @@ impl Crit {
 pub struct AttackDef {
     /// Damage on hit (for projectiles with `far_scale`: point blank, the lowest).
     pub damage: i32,
-    pub cooldown_ticks: u32,
-    /// Ticks from starting an attack to it going off; you stand still meanwhile. At most
-    /// `cooldown_ticks`: as long as it, the attack roots you for its whole cycle.
+    /// Ticks from starting an attack to it going off, the whole attack: the next may start the
+    /// tick it goes off. You stand still meanwhile, so holding fire keeps you planted.
     pub windup_ticks: u32,
     pub kind: AttackKind,
     /// Crowd control each hit applies (none by default).
@@ -69,15 +68,15 @@ pub struct AttackDef {
     pub follow_up: Option<FollowUp>,
 }
 
-/// Landing an auto-attack makes the next one, if started within `within_ticks` of the hit, wind
-/// up `faster` (the fraction of the windup cut), its cooldown cut by as much. Quick ones that land arm the next too, so a
-/// string of hits stays quick.
+/// Landing an auto-attack gives the next one, if started within `within_ticks` of the hit,
+/// `attack_speed` more attack speed (0.6 = 60% more attacks per second: the windup divided by
+/// 1.6). Only that one attack: a miss loses it, a quick one that lands arms the next.
 /// Armed by the server, which alone knows a hit landed. Melee only: projectile hits resolve
 /// apart from the shooter's attack state.
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FollowUp {
     pub within_ticks: u32,
-    pub faster: f32,
+    pub attack_speed: f32,
 }
 
 /// Crowd control a hit applies on top of its damage: a slow (`slow` is the fraction of speed
@@ -198,7 +197,7 @@ impl ClassDef {
             ("crit_multiplier", percent(CRIT_MULTIPLIER)),
         ];
         if let Some(follow_up) = self.attack.follow_up {
-            all.extend([("follow_up_time", seconds(follow_up.within_ticks)), ("follow_up_faster", percent(follow_up.faster))]);
+            all.extend([("follow_up_time", seconds(follow_up.within_ticks)), ("follow_up_speed", percent(follow_up.attack_speed))]);
         }
         let reach = match self.ability.kind {
             AbilityKind::Projectile { range, .. } => range,
@@ -237,7 +236,7 @@ impl AbilityKind {
 impl AttackDef {
     /// The windup of an attack quickened by `follow_up` (the plain windup without one).
     pub fn quick_windup_ticks(&self) -> u32 {
-        self.follow_up.map_or(self.windup_ticks, |f| (self.windup_ticks as f32 * (1.0 - f.faster)).round() as u32)
+        self.follow_up.map_or(self.windup_ticks, |f| (self.windup_ticks as f32 / (1.0 + f.attack_speed)).round() as u32)
     }
 
     /// Damage after the full range as a multiple of point blank (1 without `far_scale`).
@@ -345,8 +344,7 @@ mod tests {
             assert!(all[..i].iter().all(|o| o.id != c.id), "duplicate class id {}", c.id);
             assert!((1..=1000).contains(&c.max_hp), "{}: max_hp", c.id);
             assert!((1.0..=12.0).contains(&c.move_speed), "{}: move_speed", c.id);
-            assert!(c.attack.damage > 0 && c.attack.cooldown_ticks > 0, "{}: attack", c.id);
-            assert!(c.attack.windup_ticks <= c.attack.cooldown_ticks, "{}: windup longer than the cooldown", c.id);
+            assert!(c.attack.damage > 0 && c.attack.windup_ticks > 0, "{}: attack", c.id);
             match c.attack.kind {
                 AttackKind::Melee { range, width } => {
                     assert!((0.5..=4.0).contains(&range) && (0.05..=3.0).contains(&width), "{}: melee", c.id);
@@ -377,10 +375,10 @@ mod tests {
                 }
             }
             chill_is_sane(&c.id, c.attack.chill);
-            if let Some(FollowUp { within_ticks, faster }) = c.attack.follow_up {
+            if let Some(FollowUp { within_ticks, attack_speed }) = c.attack.follow_up {
                 // Only a swing knows it landed when it goes off (`server::attack`).
                 assert!(matches!(c.attack.kind, AttackKind::Melee { .. }), "{}: follow_up on a projectile", c.id);
-                assert!((0.0..1.0).contains(&faster) && within_ticks > 0, "{}: follow_up", c.id);
+                assert!((0.0..=3.0).contains(&attack_speed) && within_ticks > 0, "{}: follow_up", c.id);
             }
             if let Some(passive) = &c.passive {
                 assert!(!passive.name.is_empty() && !passive.description.is_empty(), "{}: passive", c.id);
@@ -411,7 +409,7 @@ mod tests {
     #[test]
     fn far_scale_scales_with_distance() {
         let kind = |far_scale| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_scale };
-        let attack = |kind| AttackDef { damage: 10, cooldown_ticks: 40, windup_ticks: 10, kind, chill: Chill::default(), follow_up: None };
+        let attack = |kind| AttackDef { damage: 10, windup_ticks: 10, kind, chill: Chill::default(), follow_up: None };
         assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(3.0))).damage_at(d)), [10, 20, 30, 30]);
         assert_eq!(attack(kind(None)).damage_at(5.0), 10);
     }

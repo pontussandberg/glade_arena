@@ -147,7 +147,7 @@ fn stats(def: &ClassDef) -> [(&'static str, String, Option<String>); 5] {
     let crit_text = def.describe("{crit}");
     let crit_tip = def.describe("The chance your auto-attacks land a critical strike, dealing {crit_multiplier} of normal damage.");
     let attack = &def.attack;
-    let per_second = TICK_HZ as f32 / attack.cooldown_ticks as f32;
+    let per_second = TICK_HZ as f32 / attack.windup_ticks as f32;
     let range = match attack.kind {
         AttackKind::Melee { range, .. } => format!("{range} m, melee"),
         AttackKind::Projectile { range, .. } => format!("{range} m, ranged"),

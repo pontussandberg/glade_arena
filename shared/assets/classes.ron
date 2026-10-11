@@ -9,10 +9,11 @@
 //   max_hp        health at spawn and respawn
 //   move_speed    walking speed
 //   attack        the left-click auto-attack, aimed at the cursor (skillshot)
-//     damage, cooldown_ticks (time between attacks; 64 = one per second)
-//     windup_ticks  from click to the attack going off; you stand still with your aim locked
-//                   meanwhile (see the README). At most cooldown_ticks; equal makes the root
-//                   the whole attack: holding fire keeps you planted, to move you stop firing
+//     damage
+//     windup_ticks  from click to the attack going off, the whole attack (64 = one per second):
+//                   the next may start the tick it goes off. You stand still with your aim
+//                   locked meanwhile (see the README): holding fire keeps you planted, to move
+//                   you stop firing
 //     kind: Melee(range, width)             a thrust: hits everyone whose body a straight lane
 //             `width` wide reaches, out to `range` from your center
 //           Projectile(speed, radius, range) flies straight, stops at walls/rocks/trees;
@@ -21,11 +22,10 @@
 //     chill (optional): crowd control each hit applies on top of its damage:
 //       (slow: fraction of speed taken away, slow_ticks: for how long, root_ticks: frozen in
 //       place this long: no walking, no dashing, and a dash in progress stops)
-//     follow_up (optional, melee only): each hit quickens the next attack started within
-//       (within_ticks, faster: fraction of the windup cut, 0.75 = a quarter as long; the
-//       cooldown loses as many ticks), so a string of hits stays quick. Armed between one
-//       attack going off and the next starting, so it works with the windup as long as the
-//       cooldown too
+//     follow_up (optional, melee only): landing a hit gives the next attack, if started
+//       within `within_ticks`, `attack_speed` more attack speed (0.6 = 60% more attacks per
+//       second: the windup divided by 1.6). Only that one attack: a miss loses it, a quick one
+//       that lands arms the next
 //   ability       the Q ability, aimed at the cursor: name, description, cooldown_ticks, and
 //     kind: Projectile(speed, radius, range, damage)  thrown instantly: no windup, no root
 //           Dash(distance, ticks, damage)  dash `distance` toward the aim, through fighters,
@@ -41,8 +41,8 @@
 // Descriptions (the passive's and the ability's) can name this class's numbers in braces, filled
 // in when shown, so the words follow a retune: {far_scale} (the auto-attack's damage after its full
 // range, as a percent of point blank), {attack_slow} / {attack_slow_time} (the auto-attack's slow,
-// as a percent / in seconds), {follow_up_time} / {follow_up_faster} (the follow_up's window, in
-// seconds / how much shorter the windup, as a percent), {crit}, {crit_vs_frozen}, {crit_multiplier} (as percentages),
+// as a percent / in seconds), {follow_up_time} / {follow_up_speed} (the follow_up's window, in
+// seconds / its attack speed, as a percent), {crit}, {crit_vs_frozen}, {crit_multiplier} (as percentages),
 // {ability_damage}, {ability_reach} (a thrown ability's range, a dash's distance, a nova's
 // radius, in meters), {ability_root} (a nova's root, in seconds). A Q that deals damage must name
 // {ability_damage}.
@@ -59,10 +59,9 @@
         move_speed: 3.7,
         attack: (
             damage: 20,
-            cooldown_ticks: 60,
             windup_ticks: 60,
             kind: Melee(range: 3.75, width: 0.05),
-            follow_up: Some((within_ticks: 96, faster: 0.72)),
+            follow_up: Some((within_ticks: 96, attack_speed: 1.0)),
         ),
         ability: (
             name: "Rift Step",
@@ -72,7 +71,7 @@
         ),
         passive: Some((
             name: "Follow Through",
-            description: "Each auto-attack that lands makes your next one's windup {follow_up_faster} shorter, if you swing again within {follow_up_time}. Keep landing hits to keep them fast.",
+            description: "Landing an auto-attack gives your next one +{follow_up_speed} attack speed, if you swing again within {follow_up_time}. Miss and you lose it.",
         )),
         crit: (chance: 0.1),
     ),
@@ -85,7 +84,6 @@
         move_speed: 3.7,
         attack: (
             damage: 16,
-            cooldown_ticks: 48,
             windup_ticks: 48,
             kind: Projectile(speed: 15.0, radius: 0.25, range: 15.0, far_scale: Some(2.25)),
         ),
@@ -110,7 +108,6 @@
         move_speed: 3.7,
         attack: (
             damage: 8,
-            cooldown_ticks: 44,
             windup_ticks: 44,
             kind: Projectile(speed: 17.0, radius: 0.28, range: 10.0),
             chill: (slow: 0.4, slow_ticks: 128),
