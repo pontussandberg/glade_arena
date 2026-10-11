@@ -21,6 +21,9 @@
 //     chill (optional): crowd control each hit applies on top of its damage:
 //       (slow: fraction of speed taken away, slow_ticks: for how long, root_ticks: frozen in
 //       place this long: no walking, no dashing, and a dash in progress stops)
+//     follow_up (optional, melee only): landing a hit makes the next attack, if started within
+//       `within_ticks` of it, wind up `faster` (fraction of the windup cut: 0.75 = a quarter as
+//       long). That quick attack landing doesn't arm another.
 //   ability       the Q ability, aimed at the cursor: name, description, cooldown_ticks, and
 //     kind: Projectile(speed, radius, range, damage)  thrown instantly: no windup, no root
 //           Dash(distance, ticks, damage)  dash toward the aim over `ticks`, through fighters,
@@ -34,7 +37,8 @@
 // Descriptions (the passive's and the ability's) can name this class's numbers in braces, filled
 // in when shown, so the words follow a retune: {far_scale} (the auto-attack's damage after its full
 // range, as a percent of point blank), {attack_slow} / {attack_slow_time} (the auto-attack's slow,
-// as a percent / in seconds), {crit}, {crit_vs_frozen}, {crit_multiplier} (as percentages),
+// as a percent / in seconds), {follow_up_time} / {follow_up_faster} (the follow_up's window, in
+// seconds / how much faster, as a percent), {crit}, {crit_vs_frozen}, {crit_multiplier} (as percentages),
 // {ability_damage}, {ability_reach} (a thrown ability's range, a dash's distance, a nova's
 // radius, in meters), {ability_root} (a nova's root, in seconds). A Q that deals damage must name
 // {ability_damage}.
@@ -54,6 +58,7 @@
             cooldown_ticks: 40,
             windup_ticks: 24,
             kind: Melee(range: 3.75, width: 0.05),
+            follow_up: Some((within_ticks: 128, faster: 0.75)),
         ),
         ability: (
             name: "Rift Step",
@@ -61,6 +66,10 @@
             cooldown_ticks: 320,
             kind: Dash(distance: 6.0, ticks: 10, damage: 18, resets_attack: true),
         ),
+        passive: Some((
+            name: "Follow Through",
+            description: "Landing an auto-attack makes your next one, within {follow_up_time}, cast {follow_up_faster} faster. That quick one landing doesn't do it again.",
+        )),
         crit: (chance: 0.1),
     ),
     (

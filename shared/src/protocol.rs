@@ -101,24 +101,36 @@ pub struct AttackState {
     /// The tick the last attack went off (`None`: never). Kept rather than worked out from
     /// `ready_at`, which a Rift Step hit resets.
     pub released_at: Option<u32>,
+    /// With the attack's `follow_up`: an attack started by this tick winds up quick (`None`:
+    /// not armed). Armed by the server when a hit lands, so the client learns it a round trip
+    /// later, by a rollback.
+    pub quick_until: Option<u32>,
 }
 
-/// An attack winding up: aim locked toward `dir`, goes off `windup_ticks` after `started_at`.
+/// An attack winding up: aim locked toward `dir`, goes off `ticks(class)` after `started_at`.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Windup {
     pub started_at: u32,
     pub dir: Vec2,
+    /// Wound up quick, by the attack's `follow_up`.
+    pub quick: bool,
 }
 
 impl Windup {
+    /// How long it winds up.
+    pub fn ticks(&self, class: ClassId) -> u32 {
+        let attack = &class.def().attack;
+        if self.quick { attack.quick_windup_ticks() } else { attack.windup_ticks }
+    }
+
     /// The tick the attack goes off.
     pub fn releases_at(&self, class: ClassId) -> u32 {
-        self.started_at + class.def().attack.windup_ticks
+        self.started_at + self.ticks(class)
     }
 
     /// How far along the windup is at `now` (a fractional tick), from 0 to 1.
     pub fn progress(&self, now: f32, class: ClassId) -> f32 {
-        let windup = class.def().attack.windup_ticks.max(1) as f32;
+        let windup = self.ticks(class).max(1) as f32;
         ((now - self.started_at as f32) / windup).clamp(0.0, 1.0)
     }
 }
