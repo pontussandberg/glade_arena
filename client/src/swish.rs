@@ -1,9 +1,8 @@
 //! A blade's wind: what a thrusting blade leaves in the air. A faint trail follows the blade
 //! itself wherever it moves fast (a lunge, a dash), so it shows where the sword just was, twice as
-//! bright while its Follow Through is on; and each
-//! strike leaves a mark, one thin, sharp line of wind along the blade where it was as the strike
-//! landed, lingering a moment as it fades. Air casts no shadow. The same whoever swung (who it was
-//! shows in the health bar).
+//! bright while its Follow Through is on; and each strike leaves a mark, one thin, sharp line of
+//! wind along the blade where it was as the strike landed, lingering a moment as it fades. Air
+//! casts no shadow. The same whoever swung (who it was shows in the health bar).
 
 use std::collections::VecDeque;
 
