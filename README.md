@@ -22,7 +22,8 @@ projectile) and Q ability; all of it lives in `shared/assets/classes.ron`:
 | Frost Mage | Controller | Frostbolts: little damage and shorter range (mid range), but each hit slows (40% for 2 s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5 s (no walking, no dashing) |
 
 Hits can carry **crowd control** (`chill` in `classes.ron`): a slow takes a share off walking
-and dashing speed, a root freezes a fighter in place (it can't walk or dash, and a dash in
+and dashing speed (a dash still goes its full distance, just slower; a haste speeds it up the
+same way), a root freezes a fighter in place (it can't walk or dash, and a dash in
 progress stops) but it can still attack. Slowed fighters take on a cold blue cast and frost turns
 under their feet; frozen ones stand in ice.
 

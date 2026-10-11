@@ -224,16 +224,18 @@ fn cancel_walk_on_attack(
 fn predict_player_movement(
     synced: SyncedLocalTimeline,
     mut players: Query<
-        (&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &AbilityState, (&Chilled, &Hasted), &Health),
+        (&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &mut AbilityState, (&Chilled, &Hasted), &Health),
         (With<Predicted>, With<PlayerId>),
     >,
 ) {
     let tick = synced.current_tick().0;
-    for (mut pos, class, input, attack, ability, (chilled, hasted), health) in &mut players {
+    for (mut pos, class, input, attack, mut ability, (chilled, hasted), health) in &mut players {
         if !health.alive() {
             continue;
         }
-        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, ability, chilled, hasted, tick)));
+        let mut next = *ability;
+        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, &mut next, chilled, hasted, tick)));
+        ability.set_if_neq(next);
     }
 }
 

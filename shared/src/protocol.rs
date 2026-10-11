@@ -163,11 +163,13 @@ impl AbilityState {
     }
 }
 
-/// A dash: moving toward `dir` for the class's dash ticks after `started_at`.
+/// A dash: moving toward `dir` from `started_at` until it has covered the class's dash distance
+/// (`left` is how much of it is still to go).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Dash {
     pub started_at: u32,
     pub dir: Vec2,
+    pub left: f32,
 }
 
 /// Crowd control on a player: how much it's slowed and when, and when it's frozen in place
