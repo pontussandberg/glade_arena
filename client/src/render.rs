@@ -423,10 +423,10 @@ fn setup_scene(
                 padding: UiRect::axes(px(10.0), px(8.0)),
                 ..default()
             },
-            BackgroundColor(palette::ui::HOLLOW.with_alpha(0.6)),
+            BackgroundColor(palette::ui::PANEL.with_alpha(0.6)),
         ))
         .with_children(|corner| {
-            corner.spawn((Status, ui_text("connecting...", 12.0, palette::ui::LICHEN)));
+            corner.spawn((Status, ui_text("connecting...", 12.0, palette::ui::TEXT)));
             let chevron = corner
                 .spawn((
                     Node {
@@ -1233,7 +1233,7 @@ fn update_key_hints(
     };
     commands.entity(*hints).despawn_children().with_children(|grid| {
         for (key, action) in keys {
-            grid.spawn(key_chip(*key, 11.0, palette::ui::LICHEN, palette::ui::MUTED.with_alpha(0.5)));
+            grid.spawn(key_chip(*key, 11.0, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5)));
             grid.spawn(ui_text(*action, 12.0, palette::ui::MUTED));
         }
         crate::casting::spawn_toggle_row(grid, cast_mode.quick);

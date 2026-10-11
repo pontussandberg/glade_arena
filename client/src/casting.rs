@@ -103,7 +103,7 @@ pub(crate) fn spawn_toggle_row(grid: &mut ChildSpawnerCommands, quick: bool) {
         HudButton,
         hover_shows(tip),
         Node { margin: UiRect::top(px(ROW_GAP)), ..default() },
-        ui_text("Quick cast", 12.0, palette::ui::LICHEN),
+        ui_text("Quick cast", 12.0, palette::ui::TEXT),
     ));
 }
 
@@ -114,7 +114,7 @@ fn toggle_tip() -> impl Bundle {
             Node { column_gap: px(8.0), ..default() },
             children![
                 (Node { width: px(26.0), ..default() }, children![ui_text(state, 13.0, color)]),
-                ui_text(what, 13.0, palette::ui::LICHEN),
+                ui_text(what, 13.0, palette::ui::TEXT),
             ],
         )
     };

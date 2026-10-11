@@ -93,26 +93,27 @@ pub mod palette {
     pub const HASTE: Color = Color::srgb_u8(0x58, 0xA8, 0xFF);
 
     /// The UI's own theme, "Bronze": panels, text and accents, apart from the world's.
-    /// What marks a fighter, an ability or a pickup keeps its world color.
+    /// What marks a fighter, an ability or a pickup keeps its world color. Named by role, so a
+    /// new theme only changes the values. The loading screen in `client/web/index.html` mirrors
+    /// these.
     pub mod ui {
         use bevy::color::Color;
 
-        /// The backdrop behind full-screen menus: `OLIVE` at a quarter.
-        pub const SHADOW: Color = Color::srgb_u8(0x22, 0x14, 0x0A);
-        /// Panels, cards and tooltips; text on a `SPROUT` fill: `OLIVE` at 40%.
-        pub const HOLLOW: Color = Color::srgb_u8(0x37, 0x20, 0x10);
+        /// The backdrop behind full-screen menus: `SELECTED` at a quarter.
+        pub const BACKDROP: Color = Color::srgb_u8(0x22, 0x14, 0x0A);
+        /// Panels, cards and tooltips; text on an `ACCENT` fill: `SELECTED` at 40%.
+        pub const PANEL: Color = Color::srgb_u8(0x37, 0x20, 0x10);
         /// What's selected, and filled buttons that aren't the main one.
-        pub const OLIVE: Color = Color::srgb_u8(0x89, 0x51, 0x29);
+        pub const SELECTED: Color = Color::srgb_u8(0x89, 0x51, 0x29);
         /// Secondary text and thin borders.
         pub const MUTED: Color = Color::srgb_u8(0x8A, 0x6E, 0x29);
-        /// Text: `SPROUT` halfway to white.
-        pub const LICHEN: Color = Color::srgb_u8(0xD6, 0xBC, 0x98);
+        /// Text: `ACCENT` halfway to white.
+        pub const TEXT: Color = Color::srgb_u8(0xD6, 0xBC, 0x98);
         /// The one accent: the role, what's selected, the main button.
-        pub const SPROUT: Color = Color::srgb_u8(0xAD, 0x7A, 0x32);
+        pub const ACCENT: Color = Color::srgb_u8(0xAD, 0x7A, 0x32);
     }
 
-    /// The lobby stage's warm dusk, behind the green UI (an autumn hollow, so the olive panels
-    /// stand out from it instead of melting into it).
+    /// The lobby stage's warm dusk, behind the UI.
     pub mod stage {
         use bevy::color::Color;
 

@@ -12,7 +12,7 @@ use crate::camera::CameraControl;
 use crate::arena::palette;
 use crate::render::{button, clicked, ui_text};
 use crate::rooms::{CurrentRoom, Leaving, Screen, leave_room, request};
-use crate::stat_frame::ACCENT;
+use crate::arena::palette::ui::ACCENT;
 
 pub struct EscMenuPlugin;
 
@@ -83,15 +83,15 @@ fn toggle_menu(
                 row_gap: px(12.0),
                 ..default()
             },
-            BackgroundColor(palette::ui::SHADOW.with_alpha(0.7)),
+            BackgroundColor(palette::ui::BACKDROP.with_alpha(0.7)),
             GlobalZIndex(30),
         ))
         .with_children(|menu| {
             menu.spawn(ui_text("MENU", 12.0, ACCENT));
-            menu.spawn(ui_text(title, 20.0, palette::ui::LICHEN));
+            menu.spawn(ui_text(title, 20.0, palette::ui::TEXT));
             menu.spawn(Node { height: px(12.0), ..default() });
-            menu.spawn((ResumeButton, button("Back to the fight", 16.0, ACCENT, palette::ui::HOLLOW, ACCENT)));
-            let quiet = |label: &'static str| button(label, 16.0, palette::ui::HOLLOW, palette::ui::LICHEN, palette::ui::MUTED.with_alpha(0.5));
+            menu.spawn((ResumeButton, button("Back to the fight", 16.0, ACCENT, palette::ui::PANEL, ACCENT)));
+            let quiet = |label: &'static str| button(label, 16.0, palette::ui::PANEL, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5));
             if practice {
                 menu.spawn((LeaveButton, quiet("Leave practice")));
             } else {
