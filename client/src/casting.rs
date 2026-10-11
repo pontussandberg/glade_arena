@@ -1,6 +1,6 @@
 //! Quick cast and normal cast, LoL-style. Quick cast sends Q off toward the cursor the moment
 //! it's pressed; normal cast first shows where it will go (the aim indicator, on the ground at
-//! your feet) and casts it on the next left click (a right click drops it). The quick cast switch,
+//! your feet) and casts it on the next left click (a right click drops it, without walking). The quick cast switch,
 //! in the key hints, picks which one plain Q is; Shift+Q is always the other. Clicking the Q icon
 //! is always a normal cast. The choice is kept in the browser (`localStorage`). The keys
 //! themselves are read in `render::read_local_input`.

@@ -460,10 +460,13 @@ fn read_local_input(
         move_to = None;
     }
     *last_pos = me;
+    // A right click (MOBA camera) while aiming a normal cast only drops the aim: it doesn't walk.
+    let right_click = !mode.free && mouse.just_pressed(MouseButton::Right);
+    let drops_aim = right_click && aiming.0;
     // Once per click: holding the button doesn't keep re-targeting. Not with the free camera:
     // there the right button turns the camera, and WASD walks.
-    if !mode.free
-        && mouse.just_pressed(MouseButton::Right)
+    if right_click
+        && !drops_aim
         && let Some(cursor) = cursor
         && let Some(point) = map().walk_target(cursor, 4)
     {
@@ -492,7 +495,7 @@ fn read_local_input(
     }
     // A left click that casts, aims (on the Q icon) or is for a HUD control doesn't also
     // attack: no attacking until it's let go. A right click (MOBA camera) drops the aim, and
-    // walks as usual; ESC drops it too (`esc_menu`).
+    // doesn't walk (above); ESC drops it too (`esc_menu`).
     if mouse.just_pressed(MouseButton::Left) {
         if on_control {
             *held_click = true;
@@ -505,7 +508,7 @@ fn read_local_input(
             *held_click = true;
         }
     }
-    if !mode.free && mouse.just_pressed(MouseButton::Right) {
+    if drops_aim {
         aiming.0 = false;
     }
     if !mouse.pressed(MouseButton::Left) {
