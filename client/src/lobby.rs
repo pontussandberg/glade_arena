@@ -516,8 +516,9 @@ fn power(column: &mut ChildSpawnerCommands, badge: &str, color: Color, blurb: st
     column.spawn(ui_text(blurb.description, 13.0, palette::ui::MUTED));
 }
 
-/// Keeps the camera on the fighter, swaying gently around its front; dragging (left button,
-/// anywhere but a button) turns it.
+/// Keeps the camera on the fighter, swaying gently around its front; dragging (left or right
+/// button, anywhere but a button) turns it, and holding either holds the sway, so the camera
+/// stays where it's dragged.
 fn turn_stage_camera(
     time: Res<Time>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -525,12 +526,17 @@ fn turn_stage_camera(
     buttons: Query<&Interaction>,
     mut lobby: ResMut<Lobby>,
     mut camera: Single<&mut Transform, With<Camera3d>>,
+    mut swaying_for: Local<f32>,
 ) {
     let on_button = buttons.iter().any(|i| *i != Interaction::None);
-    if mouse.pressed(MouseButton::Left) && !on_button {
+    let held = mouse.any_pressed([MouseButton::Left, MouseButton::Right]);
+    if held && !on_button {
         lobby.facing -= motion.delta.x * STAGE_DRAG;
     }
-    let sway = SWAY.0 * (time.elapsed_secs() * SWAY.1).sin();
+    if !held {
+        *swaying_for += time.delta_secs();
+    }
+    let sway = SWAY.0 * (*swaying_for * SWAY.1).sin();
     lobby.view.yaw = lobby.facing + sway;
     camera.set_if_neq(lobby.view.transform(to_world(STAGE, STAGE_AIM_HEIGHT)));
 }
