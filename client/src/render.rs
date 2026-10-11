@@ -967,15 +967,33 @@ fn fly_shots(
     }
 }
 
-/// The ping (with the free camera, for watching the netcode, also the jitter and rollbacks), or
-/// that we're connecting or cut off; and when you're dead, how long until you're back.
+/// Frames counted toward the shown frame rate: the seconds and frames so far, and the rate shown,
+/// recounted twice a second so the text doesn't churn every frame.
+#[derive(Default)]
+struct FrameRate {
+    seconds: f32,
+    frames: u32,
+    shown: u32,
+}
+
+/// The ping and frame rate (with the free camera, for watching the netcode, also the jitter and
+/// rollbacks), or that we're connecting or cut off; and when you're dead, how long until you're
+/// back.
 fn update_status(
+    time: Res<Time<Real>>,
+    mut frame_rate: Local<FrameRate>,
     mut status: Single<&mut Text, With<Status>>,
     client: Query<(&Link, Has<Connected>, Option<&Disconnected>), With<Client>>,
     metrics: Option<Res<lightyear::prediction::prelude::PredictionMetrics>>,
     me: Query<&Health, (With<Predicted>, With<PlayerId>)>,
     mode: Res<CameraMode>,
 ) {
+    frame_rate.seconds += time.delta_secs();
+    frame_rate.frames += 1;
+    if frame_rate.seconds >= 0.5 {
+        frame_rate.shown = (frame_rate.frames as f32 / frame_rate.seconds).round() as u32;
+        *frame_rate = FrameRate { shown: frame_rate.shown, ..default() };
+    }
     let Ok((link, connected, disconnected)) = client.single() else { return };
     let mut text = String::new();
     if let Some(disconnected) = disconnected {
@@ -984,7 +1002,7 @@ fn update_status(
         text.push_str("connecting...");
     } else {
         let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
-        let _ = write!(text, "ping {:.0} ms", ms(link.stats.rtt));
+        let _ = write!(text, "ping {:.0} ms   {} fps", ms(link.stats.rtt), frame_rate.shown);
         if mode.free {
             let rollbacks = metrics.map_or(0, |m| m.rollbacks);
             let _ = write!(text, "   jitter {:.0} ms   rollbacks {rollbacks}", ms(link.stats.jitter));
