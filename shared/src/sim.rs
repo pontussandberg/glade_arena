@@ -91,8 +91,8 @@ pub fn arrived(pos: Vec2, target: Vec2) -> bool {
 pub enum Attack {
     /// Spawn this projectile.
     Projectile(Projectile),
-    /// A swing (`quick`: from a quick windup); the server resolves who it hits (`melee_hits`).
-    Melee { swing: LastSwing, quick: bool },
+    /// A swing; the server resolves who it hits (`melee_hits`).
+    Melee(LastSwing),
 }
 
 /// One tick of the auto-attack. Holding fire while the attack is ready starts a windup: the aim
@@ -112,7 +112,7 @@ pub fn step_attack(
 ) -> (AttackState, Option<Attack>) {
     let attack = &class.def().attack;
     let mut released = None;
-    if let Some(Windup { dir, quick, .. }) = state.windup.filter(|windup| tick >= windup.releases_at(class)) {
+    if let Some(Windup { dir, .. }) = state.windup.filter(|windup| tick >= windup.releases_at(class)) {
         state.windup = None;
         state.released_at = Some(tick);
         released = Some(match attack.kind {
@@ -120,7 +120,7 @@ pub fn step_attack(
                 let origin = shot_spawn(pos, dir, radius);
                 Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: false })
             }
-            AttackKind::Melee { .. } => Attack::Melee { swing: LastSwing { tick, dir }, quick },
+            AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir }),
         });
     }
     if state.windup.is_none()

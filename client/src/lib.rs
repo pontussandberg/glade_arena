@@ -260,7 +260,7 @@ fn predict_attack(
             sim::Attack::Projectile(projectile) => {
                 commands.spawn(projectile.bundle());
             }
-            sim::Attack::Melee { swing, .. } => *last_swing = swing,
+            sim::Attack::Melee(swing) => *last_swing = swing,
         }
     }
 }

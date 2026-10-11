@@ -589,7 +589,7 @@ fn attack(
         let Some(attack) = released else { continue };
         match attack {
             sim::Attack::Projectile(projectile) => spawn_projectile(&mut commands, projectile, side),
-            sim::Attack::Melee { swing, quick } => {
+            sim::Attack::Melee(swing) => {
                 *last_swing = swing;
                 let seen_at = view_time(now, controlled_by.owner, &delays);
                 let blow = Blow { amount: class.def().attack.damage, chill: class.def().attack.chill, can_crit: true };
@@ -599,7 +599,6 @@ fn attack(
                 });
                 // `FollowUp`: the client predicted none and is corrected by a rollback.
                 if landed > 0
-                    && !quick
                     && let Some(follow_up) = class.def().attack.follow_up
                 {
                     state.quick_until = Some(now.0 + follow_up.within_ticks);

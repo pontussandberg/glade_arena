@@ -21,8 +21,9 @@
 //     chill (optional): crowd control each hit applies on top of its damage:
 //       (slow: fraction of speed taken away, slow_ticks: for how long, root_ticks: frozen in
 //       place this long: no walking, no dashing, and a dash in progress stops)
-//     follow_up (optional, melee only): a hit quickens the next attack started within
-//       (within_ticks, faster: fraction of the windup cut, 0.75 = a quarter as long)
+//     follow_up (optional, melee only): each hit quickens the next attack started within
+//       (within_ticks, faster: fraction of the windup cut, 0.75 = a quarter as long), so a
+//       string of hits stays quick
 //   ability       the Q ability, aimed at the cursor: name, description, cooldown_ticks, and
 //     kind: Projectile(speed, radius, range, damage)  thrown instantly: no windup, no root
 //           Dash(distance, ticks, damage)  dash toward the aim over `ticks`, through fighters,
@@ -55,7 +56,7 @@
         attack: (
             damage: 20,
             cooldown_ticks: 40,
-            windup_ticks: 24,
+            windup_ticks: 30,
             kind: Melee(range: 3.75, width: 0.05),
             follow_up: Some((within_ticks: 128, faster: 0.75)),
         ),
@@ -67,7 +68,7 @@
         ),
         passive: Some((
             name: "Follow Through",
-            description: "Landing an auto-attack makes your next one, within {follow_up_time}, cast {follow_up_faster} faster. That quick one landing doesn't do it again.",
+            description: "Each auto-attack that lands makes your next one cast {follow_up_faster} faster, if you swing again within {follow_up_time}. Keep landing hits to keep them fast.",
         )),
         crit: (chance: 0.1),
     ),
