@@ -65,7 +65,7 @@
         ability: (
             name: "Rift Step",
             description: "Dash forward, dealing {ability_damage} damage to each enemy you pass through.",
-            cooldown_ticks: 320,
+            cooldown_ticks: 512,
             kind: Dash(distance: 6.0, ticks: 10, damage: 18),
         ),
         passive: Some((
