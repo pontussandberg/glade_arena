@@ -1052,7 +1052,7 @@ fn blade_aura() -> Mesh {
 /// A glint: a star of three long, thin crystals crossed through its middle, so it reads as a
 /// sharp twinkle from any angle.
 fn glint() -> Mesh {
-    let ray = || gem_mesh(0.12).scaled_by(Vec3::new(0.08, 1.0, 0.08));
+    let ray = || gem_mesh(0.2).scaled_by(Vec3::new(0.07, 1.0, 0.07));
     let x = ray().rotated_by(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
     let z = ray().rotated_by(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
     sculpted(vec![tinted(ray(), Color::WHITE), tinted(x, Color::WHITE), tinted(z, Color::WHITE)])
