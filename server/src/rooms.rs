@@ -380,6 +380,14 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             room.dummies.push(spawn_dummy(&mut ctx.commands, PeerId::Local(lobby.next_dummy), class, InRoom { key, net: room.net }, at));
             info!(room = key.0, class = class.def().name, "target dummy placed");
         }
+        RoomRequest::NoCooldowns(on) => {
+            let key = room_key.ok_or("You're not in a room")?;
+            if !lobby.rooms[&key].practice {
+                return Err("No cooldowns is for practice");
+            }
+            let player = ctx.player_of(link).ok_or("You're not in the arena")?;
+            ctx.commands.entity(player).entry::<AbilityState>().and_modify(move |mut ability| ability.free = on);
+        }
         RoomRequest::Start => {
             let key = room_key.ok_or("You're not in a room")?;
             let room = lobby.rooms.get_mut(&key).expect("in it");

@@ -37,29 +37,35 @@ fn walk_step(pos: Vec2, step: Vec2) -> Vec2 {
 }
 
 /// One tick (`tick`) of a player's movement: frozen in place while rooted, dashing, standing
-/// still while winding up an attack, or walking at its class's speed. A slow takes its share off
-/// walking and dashing alike; a haste speeds up walking only (on top of a slow). What both the
-/// server and the predicting client run.
+/// still while winding up an attack, or walking at its class's speed. A slow or a haste changes
+/// how fast it walks and dashes alike (a dash still goes its full distance, just slower or
+/// faster: each step comes off what's `left` of it here, and `step_ability` ends it once that's
+/// none). What both the server and the predicting client run.
 #[allow(clippy::too_many_arguments)]
 pub fn move_player(
     pos: Vec2,
     input: &PlayerInput,
     class: ClassId,
     attack: &AttackState,
-    ability: &AbilityState,
+    ability: &mut AbilityState,
     chilled: &Chilled,
     hasted: &Hasted,
     tick: u32,
 ) -> Vec2 {
-    let speed = chilled.speed_factor(tick);
+    let speed = chilled.speed_factor(tick) * hasted.speed_factor(tick);
     if chilled.rooted_at(tick) {
         pos
-    } else if let Some(dash) = ability.dash {
-        dash_step(pos, dash.dir, class, speed)
+    } else if let Some(dash) = &mut ability.dash {
+        let AbilityKind::Dash { distance, ticks, .. } = class.def().ability.kind else { return pos };
+        let step = (distance / ticks as f32 * speed).min(dash.left);
+        // Counted whether or not a wall (or water's edge, anything unwalkable) stops it.
+        dash.left -= step;
+        let next = pos + dash.dir * step;
+        if map().line_walkable(pos, next) { next } else { pos }
     } else if attack.windup.is_some() {
         pos
     } else {
-        step_player(pos, input, class.def().move_speed * speed * hasted.speed_factor(tick))
+        step_player(pos, input, class.def().move_speed * speed)
     }
 }
 
@@ -71,14 +77,6 @@ pub fn touches_pickup(pos: Vec2, at: Vec2) -> bool {
 /// How much a heal pickup restores to a player of `max_hp`.
 pub fn heal_amount(max_hp: i32) -> i32 {
     (max_hp as f32 * HEAL_FRACTION).ceil() as i32
-}
-
-/// One tick of a dash, at `speed` of its full pace; a wall (or water's edge, anything
-/// unwalkable) stops it.
-fn dash_step(pos: Vec2, dir: Vec2, class: ClassId, speed: f32) -> Vec2 {
-    let AbilityKind::Dash { distance, ticks, .. } = class.def().ability.kind else { return pos };
-    let next = pos + dir * (distance / ticks as f32 * speed);
-    if map().line_walkable(pos, next) { next } else { pos }
 }
 
 /// True once a player stands on the clicked point (pulled in, if it hugs a wall: where the walk
@@ -95,12 +93,11 @@ pub enum Attack {
     Melee(LastSwing),
 }
 
-/// One tick of the auto-attack. Holding fire while the attack is ready starts a windup: the aim
-/// locks and the cooldown starts. When the windup is over the attack goes off (returned here)
+/// One tick of the auto-attack. Holding fire with no windup in progress starts one: the aim
+/// locks. When the windup is over the attack goes off (returned here)
 /// from wherever the player stands then (winding up roots it, but a dash mid-windup still moves
-/// it). Released before a new one may start, so with a windup as long as the cooldown, holding
-/// fire winds the next one up on the very tick the last goes off: rooted throughout, one attack
-/// per cooldown. A windup started while `quick_until` is armed is quick (`follow_up`); starting
+/// it). Released before a new one may start, so holding fire winds the next one up on the very
+/// tick the last goes off: rooted throughout, one attack per windup. A windup started while `quick_until` is armed is quick (`follow_up`); starting
 /// one disarms it either way.
 pub fn step_attack(
     tick: u32,
@@ -111,7 +108,7 @@ pub fn step_attack(
     state: AttackState,
 ) -> (AttackState, Option<Attack>) {
     let (state, released) = release_attack(tick, owner, class, pos, state);
-    (start_attack(tick, class, input, state), released)
+    (start_attack(tick, input, state), released)
 }
 
 /// `step_attack`'s first half: the windup going off, if it's over. The server resolves the swing
@@ -133,19 +130,14 @@ pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, mut s
     (state, released)
 }
 
-/// `step_attack`'s second half: a new windup starting, if fire is held and the attack is ready.
-pub fn start_attack(tick: u32, class: ClassId, input: &PlayerInput, mut state: AttackState) -> AttackState {
-    let attack = &class.def().attack;
+/// `step_attack`'s second half: a new windup starting, if fire is held and none is in progress.
+pub fn start_attack(tick: u32, input: &PlayerInput, mut state: AttackState) -> AttackState {
     if state.windup.is_none()
         && input.fire
-        && tick >= state.ready_at
         && let Some(dir) = input.aim.try_normalize()
     {
-        let windup = Windup { started_at: tick, dir, quick: state.quick_at(tick as f32) };
+        state.windup = Some(Windup { started_at: tick, dir, quick: state.quick_at(tick as f32) });
         state.quick_until = None;
-        // The same pause after the windup, quick or not.
-        state.ready_at = windup.releases_at(class) + attack.cooldown_ticks - attack.windup_ticks;
-        state.windup = Some(windup);
     }
     state
 }
@@ -165,8 +157,8 @@ pub enum Cast {
 
 /// One tick of the Q ability. Pressing it while it's ready uses it toward the aim: a projectile
 /// ability throws and a nova bursts at once (returned here); a dash starts (mid-windup too, the
-/// attack still going off when it's over; not while rooted) and runs for its ticks, moved by
-/// `move_player`. A root stops a dash in progress.
+/// attack still going off when it's over; not while rooted) and runs until it has covered its
+/// distance, moved by `move_player`. A root stops a dash in progress.
 #[allow(clippy::too_many_arguments)]
 pub fn step_ability(
     tick: u32,
@@ -179,12 +171,11 @@ pub fn step_ability(
 ) -> (AbilityState, Option<Cast>) {
     let ability = &class.def().ability;
     let rooted = chilled.rooted_at(tick);
-    if let (Some(dash), AbilityKind::Dash { ticks, .. }) = (state.dash, &ability.kind)
-        && (tick >= dash.started_at + ticks || rooted)
-    {
+    // Not quite zero: rounding leaves a sliver after the last full step.
+    if state.dash.is_some_and(|dash| dash.left < 1e-4) || rooted {
         state.dash = None;
     }
-    let Some(dir) = input.aim.try_normalize().filter(|_| input.ability && tick >= state.ready_at) else {
+    let Some(dir) = input.aim.try_normalize().filter(|_| input.ability && tick >= state.usable_at(class)) else {
         return (state, None);
     };
     let cast = match ability.kind {
@@ -194,14 +185,17 @@ pub fn step_ability(
         }
         // Mid-windup too: the windup goes on, and the attack still goes off when it's over, from
         // wherever the dash took you (still aimed where it was locked).
-        AbilityKind::Dash { .. } if !rooted => {
-            state.dash = Some(Dash { started_at: tick, dir });
+        AbilityKind::Dash { distance, .. } if !rooted => {
+            state.dash = Some(Dash { started_at: tick, dir, left: distance });
             None
         }
         AbilityKind::Dash { .. } => return (state, None),
         AbilityKind::Nova { .. } => Some(Cast::Nova),
     };
-    state.ready_at = tick + ability.cooldown_ticks;
+    state.ready_at = if state.free { tick } else { tick + ability.cooldown_ticks };
+    if ability.global_cooldown {
+        state.global_ready_at = tick + GLOBAL_COOLDOWN_TICKS;
+    }
     (state, cast)
 }
 
@@ -426,21 +420,21 @@ mod tests {
     }
 
     #[test]
-    fn attacks_go_off_after_the_windup_once_per_cooldown() {
+    fn attacks_go_off_once_per_windup() {
         for class in ClassId::all() {
-            let (windup, cooldown) = (class.def().attack.windup_ticks, class.def().attack.cooldown_ticks);
-            let (released, state) = attack_ticks(class, &aim(Vec2::X, true), 10, 10 + 2 * cooldown + windup);
-            let expected = vec![10 + windup, 10 + cooldown + windup, 10 + 2 * cooldown + windup];
+            let windup = class.def().attack.windup_ticks;
+            let (released, state) = attack_ticks(class, &aim(Vec2::X, true), 10, 10 + 3 * windup);
+            let expected = vec![10 + windup, 10 + 2 * windup, 10 + 3 * windup];
             assert_eq!(released, expected, "{}", class.def().id);
             assert_eq!(state.released_at, released.last().copied(), "{}: last release", class.def().id);
         }
     }
 
     #[test]
-    fn holding_fire_with_a_full_length_windup_keeps_you_rooted() {
-        for class in ClassId::all().filter(|c| c.def().attack.windup_ticks == c.def().attack.cooldown_ticks) {
+    fn holding_fire_keeps_you_rooted() {
+        for class in ClassId::all() {
             let mut state = AttackState::default();
-            for tick in 10..10 + 3 * class.def().attack.cooldown_ticks {
+            for tick in 10..10 + 3 * class.def().attack.windup_ticks {
                 state = step_attack(tick, PeerId::Netcode(1), class, Vec2::ZERO, &aim(Vec2::X, true), state).0;
                 assert!(state.windup.is_some(), "{}: free to walk at tick {tick} while holding fire", class.def().id);
             }
@@ -461,7 +455,6 @@ mod tests {
         let armed = start(10, 10);
         assert_eq!(armed.windup.map(|w| w.releases_at(class)), Some(10 + quick));
         assert_eq!(armed.quick_until, None, "the quick windup should use it up");
-        assert_eq!(armed.ready_at, 10 + quick + attack.cooldown_ticks - attack.windup_ticks, "the cooldown should shrink as much");
         let late = start(11, 10);
         assert_eq!(late.windup.map(|w| w.releases_at(class)), Some(11 + attack.windup_ticks), "quick after the window");
         assert_eq!(late.quick_until, None);
@@ -487,8 +480,8 @@ mod tests {
         let (_, winding) = attack_ticks(class, &aim(Vec2::X, true), 10, 10);
         assert!(winding.windup.is_some());
         let (idle, warm) = (AbilityState::default(), Chilled::default());
-        assert_eq!(move_player(from, &walk, class, &winding, &idle, &warm, &default(), 11), from, "moved during the windup");
-        assert_ne!(move_player(from, &walk, class, &AttackState::default(), &idle, &warm, &default(), 11), from, "rooted without attacking");
+        assert_eq!(move_player(from, &walk, class, &winding, &mut { idle }, &warm, &default(), 11), from, "moved during the windup");
+        assert_ne!(move_player(from, &walk, class, &AttackState::default(), &mut { idle }, &warm, &default(), 11), from, "rooted without attacking");
     }
 
     #[test]
@@ -555,26 +548,66 @@ mod tests {
     }
 
     #[test]
-    fn dashes_cover_their_distance_and_never_end_up_in_a_wall() {
+    fn with_no_cooldown_an_ability_still_waits_for_the_global_cooldown() {
+        let class = thrower();
+        assert!(class.def().ability.global_cooldown);
+        let me = PeerId::Netcode(1);
+        let free = AbilityState { free: true, ..default() };
+        let (state, thrown) = step_ability(10, me, class, Vec2::ZERO, &press_q(Vec2::X), &default(), free);
+        assert!(thrown.is_some());
+        let again = |tick| step_ability(tick, me, class, Vec2::ZERO, &press_q(Vec2::X), &default(), state).1;
+        assert!(again(10 + GLOBAL_COOLDOWN_TICKS - 1).is_none(), "used again during the global cooldown");
+        assert!(again(10 + GLOBAL_COOLDOWN_TICKS).is_some(), "its own cooldown should be none");
+    }
+
+    /// A dash from `from` toward `dir` run to its end: where it ended, and how many ticks it moved.
+    fn dash_run(from: Vec2, dir: Vec2, chilled: &Chilled, hasted: &Hasted) -> (Vec2, u32) {
         let class = dasher();
-        let AbilityKind::Dash { distance, ticks, .. } = class.def().ability.kind else { unreachable!() };
+        let (mut state, _) = step_ability(1, PeerId::Netcode(1), class, from, &press_q(dir), chilled, default());
+        let (mut pos, mut tick) = (from, 1);
+        while state.dash.is_some() {
+            tick += 1;
+            assert!(tick < 1000, "the dash never ended");
+            pos = move_player(pos, &PlayerInput::default(), class, &AttackState::default(), &mut state, chilled, hasted, tick);
+            assert!(map().walkable_at(pos), "dashed into a wall at {pos}");
+            state = step_ability(tick, PeerId::Netcode(1), class, pos, &PlayerInput::default(), chilled, state).0;
+        }
+        (pos, tick - 1)
+    }
+
+    /// Every way out of every spawn point.
+    fn dash_starts() -> impl Iterator<Item = (Vec2, Vec2)> {
+        SPAWN_POINTS.into_iter().flat_map(|from| (0..8).map(move |i| (from, Vec2::from_angle(i as f32 * std::f32::consts::FRAC_PI_4))))
+    }
+
+    #[test]
+    fn dashes_cover_their_distance_and_never_end_up_in_a_wall() {
+        let AbilityKind::Dash { distance, .. } = dasher().def().ability.kind else { unreachable!() };
         let mut longest: f32 = 0.0;
-        for from in SPAWN_POINTS {
-            for i in 0..8 {
-                let dir = Vec2::from_angle(i as f32 * std::f32::consts::FRAC_PI_4);
-                let (mut state, _) = step_ability(1, PeerId::Netcode(1), class, from, &press_q(dir), &default(), default());
-                let mut pos = from;
-                for tick in 2..=1 + ticks + 3 {
-                    pos = move_player(pos, &PlayerInput::default(), class, &AttackState::default(), &state, &default(), &default(), tick);
-                    assert!(map().walkable_at(pos), "dashed into a wall at {pos}");
-                    state = step_ability(tick, PeerId::Netcode(1), class, pos, &PlayerInput::default(), &default(), state).0;
-                }
-                assert!(state.dash.is_none(), "the dash should be over");
-                longest = longest.max(from.distance(pos));
-                assert!(from.distance(pos) <= distance + 1e-3, "dashed too far");
-            }
+        for (from, dir) in dash_starts() {
+            let (to, _) = dash_run(from, dir, &default(), &default());
+            assert!(from.distance(to) <= distance + 1e-3, "dashed too far");
+            longest = longest.max(from.distance(to));
         }
         assert!((longest - distance).abs() < 1e-3, "no open dash went its full distance ({longest})");
+    }
+
+    #[test]
+    fn a_slow_or_a_haste_changes_how_fast_a_dash_goes_not_how_far() {
+        let AbilityKind::Dash { distance, ticks, .. } = dasher().def().ability.kind else { unreachable!() };
+        let (from, dir) = dash_starts()
+            .find(|&(from, dir)| (dash_run(from, dir, &default(), &default()).0.distance(from) - distance).abs() < 1e-3)
+            .unwrap();
+        let mut slowed = Chilled::default();
+        slowed.apply(chiller().def().attack.chill, 0);
+        let mut hasted = Hasted::default();
+        hasted.start(0);
+        let (end, took) = dash_run(from, dir, &default(), &default());
+        assert_eq!(took, ticks);
+        let (slowed_end, slowed_took) = dash_run(from, dir, &slowed, &default());
+        let (hasted_end, hasted_took) = dash_run(from, dir, &default(), &hasted);
+        assert!(slowed_end.distance(end) < 1e-3 && hasted_end.distance(end) < 1e-3, "went a different distance");
+        assert!(slowed_took > ticks && hasted_took < ticks, "went at the same pace ({slowed_took}, {hasted_took})");
     }
 
     #[test]
@@ -584,7 +617,7 @@ mod tests {
         let (_, winding) = attack_ticks(class, &aim(Vec2::X, true), 10, 10);
         let (dashing, _) = step_ability(11, PeerId::Netcode(1), class, from, &press_q(Vec2::Y), &default(), default());
         assert!(dashing.dash.is_some(), "no dash mid-windup");
-        let moved = move_player(from, &PlayerInput::default(), class, &winding, &dashing, &default(), &default(), 11);
+        let moved = move_player(from, &PlayerInput::default(), class, &winding, &mut { dashing }, &default(), &default(), 11);
         assert_ne!(moved, from, "the dash didn't move you mid-windup");
         let windup = class.def().attack.windup_ticks;
         let (released, _) = (11..=10 + windup).fold((None, winding), |(released, state), tick| {
@@ -616,7 +649,7 @@ mod tests {
         let from = SPAWN_POINTS[0];
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let (attack, ability) = (AttackState::default(), AbilityState::default());
-        let step = |chilled: &Chilled| move_player(from, &walk, chiller(), &attack, &ability, chilled, &default(), 101).distance(from);
+        let step = |chilled: &Chilled| move_player(from, &walk, chiller(), &attack, &mut { ability }, chilled, &default(), 101).distance(from);
         assert!((step(&chilled) - step(&Chilled::default()) * (1.0 - chill.slow)).abs() < 1e-5);
 
         // A weaker slow doesn't replace a stronger one; the same one again renews it.
@@ -635,18 +668,16 @@ mod tests {
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let class = dasher();
         let (attack, idle, warm) = (AttackState::default(), AbilityState::default(), Chilled::default());
-        let step = |tick| move_player(from, &walk, class, &attack, &idle, &warm, &hasted, tick).distance(from);
+        let step = |tick| move_player(from, &walk, class, &attack, &mut { idle }, &warm, &hasted, tick).distance(from);
         let normal = class.def().move_speed * TICK_DT;
         assert!((step(100) - normal).abs() < 1e-5, "hasted on the tick it was taken");
         assert!((step(101) - normal * HASTE_FACTOR).abs() < 1e-5);
         assert!((step(100 + HASTE_TICKS) - normal * HASTE_FACTOR).abs() < 1e-5);
         assert!((step(101 + HASTE_TICKS) - normal).abs() < 1e-5, "still hasted after it wore off");
-        // Dashes aren't sped up.
+        // Dashes are sped up just as much.
         let (dashing, _) = step_ability(101, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &warm, idle);
-        assert_eq!(
-            move_player(from, &walk, class, &attack, &dashing, &warm, &hasted, 102),
-            move_player(from, &walk, class, &attack, &dashing, &warm, &Hasted::default(), 102)
-        );
+        let dash = |hasted: &Hasted| move_player(from, &walk, class, &attack, &mut { dashing }, &warm, hasted, 102).distance(from);
+        assert!((dash(&hasted) - dash(&default()) * HASTE_FACTOR).abs() < 1e-5);
         assert!(touches_pickup(from, from + Vec2::X * PICKUP_RADIUS));
         assert!(!touches_pickup(from, from + Vec2::X * (PICKUP_RADIUS + 0.01)));
         assert_eq!(heal_amount(95), 48);
@@ -660,8 +691,8 @@ mod tests {
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let class = dasher();
         let (attack, idle) = (AttackState::default(), AbilityState::default());
-        assert_eq!(move_player(from, &walk, class, &attack, &idle, &chilled, &default(), 11), from, "walked while rooted");
-        assert_ne!(move_player(from, &walk, class, &attack, &idle, &chilled, &default(), 75), from, "still rooted after it wore off");
+        assert_eq!(move_player(from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 11), from, "walked while rooted");
+        assert_ne!(move_player(from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 75), from, "still rooted after it wore off");
 
         let (state, _) = step_ability(11, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &chilled, idle);
         assert!(state.dash.is_none() && state.ready_at == 0, "dashed (or spent the cooldown) while rooted");
@@ -669,7 +700,7 @@ mod tests {
         // A dash in progress when the root lands goes no further, and ends.
         let (dashing, _) = step_ability(9, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &default(), idle);
         assert!(dashing.dash.is_some());
-        assert_eq!(move_player(from, &walk, class, &attack, &dashing, &chilled, &default(), 11), from, "dashed on while rooted");
+        assert_eq!(move_player(from, &walk, class, &attack, &mut { dashing }, &chilled, &default(), 11), from, "dashed on while rooted");
         let (stopped, _) = step_ability(11, PeerId::Netcode(1), class, from, &PlayerInput::default(), &chilled, dashing);
         assert!(stopped.dash.is_none(), "the dash should stop");
     }

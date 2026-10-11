@@ -2,7 +2,7 @@
 //! lobby. Pick a fighter, see it up close, and go. Laid out like a classic character select:
 //!
 //! - the fighter stands on a stage filling the screen (drag to turn it)
-//! - who we are at the top, over the fighter but apart from it, so our name isn't taken for its name
+//! - who we are in a badge over the fighter's head, at one height for every fighter
 //! - what it is and does on the left, a pane that folds open and shut like the lobbies: its
 //!   header (role and name) always; open, cards under it with its stat frame (as in the arena),
 //!   and its passive and Q ability
@@ -10,7 +10,7 @@
 //! - on the right, the side panel: at home, the lobbies to join or create (`browser.rs`, opened
 //!   with "Create / join lobby"); in a room, its name and mode, who's in it (by team), the team
 //!   buttons, and for the leader the mode switch
-//! - the way in at the bottom right (the button, or Enter): at home, practice; in a room, the
+//! - the way in at the bottom right: at home, practice; in a room, the
 //!   leader's start, or once the match is on, into the arena
 //!
 //! In a room, the picked fighter goes to the server as it's picked: the others see it, and the
@@ -56,7 +56,7 @@ impl Plugin for LobbyPlugin {
             (
                 (pick_fighter, fold_details, show_fighter, show_details, (show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena).chain(),
                 show_status,
-                turn_stage_camera.in_set(CameraMoves),
+                (turn_stage_camera, place_name_tag).chain().in_set(CameraMoves),
                 liven_stage,
             )
                 .run_if(in_state(Picking)),
@@ -78,6 +78,9 @@ const STAGE_RISE: f32 = 2.4;
 const FRONT: f32 = FRAC_PI_2 - 0.4;
 const SWAY: (f32, f32) = (0.25, 0.35);
 const STAGE_DRAG: f32 = 0.008;
+/// How high over the stage the name badge's bottom edge sits: over the tallest fighter (the
+/// frost mage's staff reaches past its head), so it stays put whichever is picked.
+const TAG_HEIGHT: f32 = 2.75;
 
 /// Spacing steps (pixels).
 const GAP: f32 = 8.0;
@@ -103,15 +106,16 @@ struct LobbyPart;
 #[derive(Component)]
 struct FighterTile(ClassId);
 
+/// Our name badge, over the fighter.
+#[derive(Component)]
+struct NameTag;
+
 #[derive(Component)]
 struct EnterButton;
 
 /// The way in's text, and the hint under it.
 #[derive(Component)]
 struct EnterLabel;
-
-#[derive(Component)]
-struct EnterHint;
 
 /// The left column's content, rebuilt for the selected fighter.
 #[derive(Component)]
@@ -252,7 +256,7 @@ fn liven_stage(time: Res<Time>, mut motes: Query<(&Mote, &mut Transform)>, mut t
     torch.intensity = TORCH_INTENSITY * f;
 }
 
-/// The screen over the stage: a top bar with our `name`, the selected fighter's details on the
+/// The screen over the stage: our `name` over the fighter (`place_name_tag`), the selected fighter's details on the
 /// left, the side panel on the right, and along the bottom the controls hint, the fighter tiles
 /// and the way in.
 fn spawn_screen(commands: &mut Commands, name: &str) {
@@ -271,29 +275,38 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
             GlobalZIndex(10),
         ))
         .with_children(|screen| {
-            // The top bar and the bottom row in three columns: the outer two share what the middle
-            // leaves, so the middle is centered.
+            // The bottom row in three columns: the outer two share what the middle leaves, so the
+            // middle is centered.
             let side = |justify: JustifyContent| Node { flex_grow: 1.0, flex_basis: px(0.0), justify_content: justify, ..default() };
-            // The game on the left, who we are in the middle, over the fighter.
-            screen.spawn(Node { align_items: AlignItems::Center, ..default() }).with_children(|bar| {
-                bar.spawn(side(JustifyContent::FlexStart)).with_child(ui_text("ARENA", 18.0, palette::ui::MUTED));
-                bar.spawn((
+            // Who we are, centered over the fighter's head (its height set as the camera moves).
+            screen
+                .spawn((
+                    NameTag,
                     Node {
-                        column_gap: px(GAP * 1.5),
-                        align_items: AlignItems::Center,
-                        padding: UiRect::axes(px(12.0), px(4.0)),
-                        border: UiRect::bottom(px(2.0)),
+                        position_type: PositionType::Absolute,
+                        left: px(0.0),
+                        right: px(0.0),
+                        justify_content: JustifyContent::Center,
                         ..default()
                     },
-                    BackgroundColor(palette::ui::PANEL),
-                    BorderColor::all(ACCENT),
                 ))
-                .with_children(|badge| {
-                    badge.spawn(label("Guest"));
-                    badge.spawn(ui_text(name, 16.0, ACCENT));
+                .with_children(|bar| {
+                    bar.spawn((
+                        Node {
+                            column_gap: px(GAP * 1.5),
+                            align_items: AlignItems::Center,
+                            padding: UiRect::axes(px(12.0), px(4.0)),
+                            border: UiRect::bottom(px(2.0)),
+                            ..default()
+                        },
+                        BackgroundColor(palette::ui::PANEL),
+                        BorderColor::all(ACCENT),
+                    ))
+                    .with_children(|badge| {
+                        badge.spawn(label("Guest"));
+                        badge.spawn(ui_text(name, 16.0, ACCENT));
+                    });
                 });
-                bar.spawn(side(JustifyContent::FlexEnd));
-            });
             screen.spawn((
                 SidePanel,
                 Visibility::Hidden,
@@ -309,14 +322,15 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
             ));
             screen.spawn((
                 Details,
-                // Fills the height between the top bar and the bottom row, its content from the
-                // top: the name stays put whichever fighter is picked, however long its details.
+                // Fills the height above the bottom row, its content from the top (level with
+                // the side panel's): the name stays put whichever fighter is picked, however long
+                // its details.
                 Node {
                     flex_direction: FlexDirection::Column,
                     flex_grow: 1.0,
                     row_gap: px(GAP * 1.5),
                     width: px(340.0),
-                    margin: UiRect::vertical(px(GAP * 3.0)),
+                    margin: UiRect::bottom(px(GAP * 3.0)),
                     ..default()
                 },
             ));
@@ -354,7 +368,6 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                                     BackgroundColor(ACCENT),
                                 ))
                                 .with_child((EnterLabel, ui_text("PRACTICE", 18.0, palette::ui::PANEL)));
-                            column.spawn((EnterHint, ui_text("or press Enter", 11.0, palette::ui::MUTED), Node { align_self: AlignSelf::FlexEnd, ..default() }));
                         });
                 });
             });
@@ -541,6 +554,22 @@ fn turn_stage_camera(
     camera.set_if_neq(lobby.view.transform(to_world(STAGE, STAGE_AIM_HEIGHT)));
 }
 
+/// Keeps the name badge's bottom edge at `TAG_HEIGHT` over the stage, on screen. The camera only
+/// turns around the stage's upright, so that stays the same height while it sways or is dragged.
+fn place_name_tag(camera: Single<(&Camera, &Transform), With<Camera3d>>, mut tag: Single<&mut Node, With<NameTag>>) {
+    let (camera, transform) = *camera;
+    let (Some(size), Ok(at)) = (camera.logical_viewport_size(), camera.world_to_viewport(&GlobalTransform::from(*transform), to_world(STAGE, TAG_HEIGHT)))
+    else {
+        return;
+    };
+    // Whole pixels, so the camera's sway doesn't nudge it (and lay the screen out again) by
+    // rounding error every frame.
+    let bottom = px((size.y - at.y).round());
+    if tag.bottom != bottom {
+        tag.bottom = bottom;
+    }
+}
+
 /// The in-game HUD and minimap stay hidden until we're in the arena.
 fn hide_game_ui(mut game_ui: Query<&mut Visibility, With<GameUi>>) {
     for mut visibility in &mut game_ui {
@@ -600,7 +629,7 @@ pub(crate) fn label(text: &str) -> impl Bundle {
 /// switch. Who's in it: in free-for-all a list; in teams the two side by side, with the way to
 /// switch sides under ours. Then the way out. Rebuilt when the room changes, or we come to it.
 ///
-/// Names are in one neutral color; ours is in the accent (on a tinted row), as in the top bar.
+/// Names are in one neutral color; ours is in the accent (on a tinted row), as in the badge over the fighter.
 fn show_room(
     mut commands: Commands,
     room: Res<CurrentRoom>,
@@ -804,13 +833,11 @@ fn way_in(screen: Screen, view: Option<&RoomView>, me: Option<&Me>) -> WayIn {
     }
 }
 
-/// The button or Enter: at home, practice as the selected fighter; in a room, the leader starts
+/// The button: at home, practice as the selected fighter; in a room, the leader starts
 /// the match (everyone goes in as what they picked), and once it's on, in we go. We're taken to
 /// the arena when our fighter appears. "Create / join lobby" is there at home only.
 #[allow(clippy::too_many_arguments)]
 fn enter_arena(
-    keys: Res<ButtonInput<KeyCode>>,
-    typing: Res<Typing>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     screen: Res<State<Screen>>,
     room: Res<CurrentRoom>,
@@ -818,8 +845,7 @@ fn enter_arena(
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
     button: Single<(Ref<Interaction>, &mut BackgroundColor), With<EnterButton>>,
     mut label: Single<&mut Text, With<EnterLabel>>,
-    mut hint: Single<&mut Visibility, (With<EnterHint>, Without<LobbiesButton>)>,
-    mut lobbies: Single<&mut Visibility, (With<LobbiesButton>, Without<EnterHint>)>,
+    mut lobbies: Single<&mut Visibility, With<LobbiesButton>>,
 ) {
     let way = way_in(*screen.get(), room.0.as_ref(), me.as_deref());
     // Its look is `browser.rs`'s, where it opens the lobbies.
@@ -833,7 +859,6 @@ fn enter_arena(
     if label.0 != text {
         label.0 = text.to_string();
     }
-    hint.set_if_neq(shown(way != WayIn::Wait));
     let (interaction, mut background) = button.into_inner();
     let fill = match (way, *interaction) {
         (WayIn::Wait, _) => palette::ui::MUTED.with_alpha(0.5),
@@ -841,7 +866,7 @@ fn enter_arena(
         _ => ACCENT.lighter(0.08),
     };
     background.set_if_neq(BackgroundColor(fill));
-    if !clicked(interaction) && !(keys.just_pressed(KeyCode::Enter) && !typing.0) {
+    if !clicked(interaction) {
         return;
     }
     // The button goes in on the press: forget the held button, or our fighter could spawn while

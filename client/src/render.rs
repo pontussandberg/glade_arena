@@ -352,6 +352,10 @@ fn setup_scene(
     commands
         .spawn(corner_panel(false, 8.0))
         .with_children(|corner| {
+            let home = Node { padding: UiRect::all(px(5.0)), border: UiRect::all(px(1.0)), ..default() };
+            corner
+                .spawn((crate::esc_menu::HomeButton, HudButton, button_fill(palette::ui::PANEL), home, BorderColor::all(palette::ui::MUTED.with_alpha(0.5))))
+                .with_children(|button| pixel_art(button, HOUSE, 2.0, palette::ui::TEXT));
             corner.spawn((Status, ui_text("connecting...", 12.0, palette::ui::TEXT)));
             let chevron = corner.spawn(chevron(false)).id();
             let label = corner.spawn(ui_text("Controls", 12.0, palette::ui::MUTED)).id();
@@ -422,7 +426,7 @@ fn read_local_input(
     keys: Res<ButtonInput<KeyCode>>,
     window: Option<Single<&Window>>,
     camera: Single<(&Camera, &GlobalTransform)>,
-    me: Query<(&Pos, &AbilityState), (With<Predicted>, With<PlayerId>)>,
+    me: Query<(&Pos, &ClassId, &AbilityState), (With<Predicted>, With<PlayerId>)>,
     (mode, cast_mode, clock): (Res<CameraMode>, Res<CastMode>, AttackClock),
     hud: Query<
         (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Has<AbilityIcon>),
@@ -434,9 +438,9 @@ fn read_local_input(
     mut desired: ResMut<DesiredInput>,
 ) {
     let me = me.single().ok();
-    // A normal cast only aims while Q is ready, as in LoL.
-    let ability_ready = me.is_some_and(|(_, ability)| ability.ready_at as f32 <= clock.now(true));
-    let me = me.map(|(p, _)| p.0);
+    // A normal cast only aims while Q is ready (the global cooldown over too), as in LoL.
+    let ability_ready = me.is_some_and(|(_, class, ability)| ability.usable_at(*class) as f32 <= clock.now(true));
+    let me = me.map(|(p, ..)| p.0);
     let (camera, camera_transform) = *camera;
     // Whether the cursor is on a HUD control, or on the Q icon. Tested on the nodes themselves,
     // so nothing drawn over them can get in the way.
@@ -833,6 +837,33 @@ pub(crate) fn button(label: impl Into<String>, size: f32, fill: Color, text_colo
         BorderColor::all(border),
         children![ui_text(label, size, text_color)],
     )
+}
+
+/// The Home button's icon, a house: `#` is a pixel, `.` is see-through.
+const HOUSE: &[&str] = &[
+    "....#....",
+    "...###.#.",
+    "..#####..",
+    ".#######.",
+    "#########",
+    ".##...##.",
+    ".##...##.",
+    ".##...##.",
+];
+
+/// Pixel art drawn from `rows` (`#` a pixel, anything else see-through), each pixel `pixel`
+/// pixels square, in `color`.
+pub(crate) fn pixel_art(parent: &mut ChildSpawnerCommands, rows: &[&str], pixel: f32, color: Color) {
+    parent.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|art| {
+        for row in rows {
+            art.spawn(Node::default()).with_children(|line| {
+                for c in row.chars() {
+                    let fill = if c == '#' { color } else { Color::NONE };
+                    line.spawn((Node { width: px(pixel), height: px(pixel), ..default() }, BackgroundColor(fill), Pickable::IGNORE));
+                }
+            });
+        }
+    });
 }
 
 /// What makes a node a button that lights up like `button`'s, on `fill`, for one laid out by hand.

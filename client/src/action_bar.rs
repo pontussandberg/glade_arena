@@ -1,12 +1,13 @@
 //! Your abilities, LoL-style: a square icon at the bottom center of your own screen, with a dark
-//! clock-wipe sweeping away clockwise and the seconds left while it cools down, and your passive
+//! clock-wipe sweeping away clockwise and the seconds left while it cools down (over it, a
+//! quicker, paler wipe for the global cooldown, if it's on it), and your passive
 //! (if your class has one) in a smaller square beside it. Hovering either shows what it does.
 //! Only you see them.
 
 use std::f32::consts::TAU;
 
 use arena_shared::classes::AbilityKind;
-use arena_shared::config::TICK_HZ;
+use arena_shared::config::{GLOBAL_COOLDOWN_TICKS, TICK_HZ};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use lightyear::prelude::*;
@@ -39,6 +40,7 @@ const TIP_WIDTH: f32 = 280.0;
 #[derive(Component)]
 pub(crate) struct AbilityIcon {
     wipe: Entity,
+    global_wipe: Entity,
     seconds: Entity,
 }
 
@@ -58,6 +60,7 @@ fn spawn_icon(mut commands: Commands, me: Query<&ClassId, Added<Predicted>>, par
     let fill = || Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() };
     let centered = || Node { justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..fill() };
     let wipe = commands.spawn((fill(), BackgroundGradient::default(), Visibility::Hidden)).id();
+    let global_wipe = commands.spawn((fill(), BackgroundGradient::default(), Visibility::Hidden)).id();
     let seconds = commands.spawn(ui_text("", 22.0, palette::ui::TEXT)).id();
     let seconds_box = commands.spawn(centered()).add_child(seconds).id();
     let picture = match ability.kind {
@@ -107,12 +110,12 @@ fn spawn_icon(mut commands: Commands, me: Query<&ClassId, Added<Predicted>>, par
     let tip = tooltip(&mut commands, stat_frame::ability_blurb(class.def()), ICON);
     commands
         .spawn((
-            AbilityIcon { wipe, seconds },
+            AbilityIcon { wipe, global_wipe, seconds },
             ActionBarPart,
             GameUi,
             icon_frame(tip, ICON, -ICON / 2.0, palette::SPIRIT),
         ))
-        .add_children(&[picture, wipe, seconds_box, key, name, tip]);
+        .add_children(&[picture, wipe, global_wipe, seconds_box, key, name, tip]);
     if let Some(blurb) = stat_frame::passive_blurb(class.def()) {
         spawn_passive(&mut commands, blurb);
     }
@@ -174,56 +177,74 @@ fn tooltip(commands: &mut Commands, blurb: Blurb, size: f32) -> Entity {
         .id()
 }
 
+/// How far round a wipe is with `left` of `total` ticks to go, in `WIPE_STEPS`.
+fn step_of(left: f32, total: f32) -> u32 {
+    ((1.0 - left / total).clamp(0.0, 1.0) * WIPE_STEPS) as u32
+}
+
+/// A wipe `step`s round: `shade` over the part of the circle still to go, clockwise from twelve
+/// o'clock.
+fn wipe_gradient(step: u32, shade: Color) -> BackgroundGradient {
+    let done = step as f32 / WIPE_STEPS * TAU;
+    let stops = vec![
+        AngularColorStop::new(Color::NONE, 0.0),
+        AngularColorStop::new(Color::NONE, done),
+        AngularColorStop::new(shade, done),
+        AngularColorStop::new(shade, TAU),
+    ];
+    BackgroundGradient::from(ConicGradient::new(UiPosition::CENTER, stops))
+}
+
 /// Steps the wipe moves in per turn: finer than a pixel at the icon's edge, so it looks smooth
 /// but isn't rebuilt every frame.
 const WIPE_STEPS: f32 = 256.0;
 
 /// While Q cools down: the wipe (dark over the part of the circle still to go, clockwise from
-/// twelve o'clock) and the seconds left (tenths under one); when it's ready, a bright frame.
-/// Only writes what visibly changed.
+/// twelve o'clock) and the seconds left (tenths under one). Over it, while the global cooldown
+/// runs (if Q is on it), its own quicker wipe, pale, so the cooldown shows through. When it's
+/// ready, a bright frame. Only writes what visibly changed.
 fn update_icon(
     clock: AttackClock,
     me: Query<(&ClassId, &AbilityState), With<Predicted>>,
     icons: Single<(&AbilityIcon, &mut BorderColor)>,
     mut wipes: Query<(&mut BackgroundGradient, &mut Visibility)>,
     mut texts: Query<&mut Text>,
-    mut shown_now: Local<Option<(u32, u32)>>,
+    // What each wipe shows (its step, while it runs) and the label, as last written.
+    mut shown_now: Local<(Option<u32>, Option<u32>, String)>,
 ) {
     let (icon, mut border) = icons.into_inner();
     let Ok((class, ability)) = me.single() else { return };
-    let cooldown = class.def().ability.cooldown_ticks as f32;
-    let left = (ability.ready_at as f32 - clock.now(true)).max(0.0);
-    let cooling = left > 0.0;
-    border.set_if_neq(BorderColor::all(if cooling { palette::ui::MUTED } else { palette::SPIRIT }));
-    // What the icon should show, quantized: the wipe's step, and the label in tenths of a second
-    // under one second (whole seconds, rounded up, above).
+    let now = clock.now(true);
+    let left = (ability.cooldown_over_at() as f32 - now).max(0.0);
+    let global_left = (ability.global_over_at(*class) as f32 - now).max(0.0);
+    let own = (left > 0.0).then(|| step_of(left, class.def().ability.cooldown_ticks as f32));
+    let global = (global_left > 0.0).then(|| step_of(global_left, GLOBAL_COOLDOWN_TICKS as f32));
+    border.set_if_neq(BorderColor::all(if own.is_some() || global.is_some() { palette::ui::MUTED } else { palette::SPIRIT }));
+    // The seconds left: tenths under one second, whole seconds (rounded up) above.
     let seconds = left / TICK_HZ as f32;
-    let label = if seconds >= 1.0 { seconds.ceil() as u32 * 10 } else { (seconds * 10.0).ceil() as u32 };
-    let step = ((1.0 - left / cooldown).clamp(0.0, 1.0) * WIPE_STEPS) as u32;
-    let wanted = cooling.then_some((step, label));
-    if *shown_now == wanted {
-        return;
-    }
-    *shown_now = wanted;
-    if let Ok((mut wipe, mut visibility)) = wipes.get_mut(icon.wipe) {
-        visibility.set_if_neq(shown(cooling));
-        if cooling {
-            let done = step as f32 / WIPE_STEPS * TAU;
-            let shade = palette::ui::BACKDROP.with_alpha(0.8);
-            let stops = vec![
-                AngularColorStop::new(Color::NONE, 0.0),
-                AngularColorStop::new(Color::NONE, done),
-                AngularColorStop::new(shade, done),
-                AngularColorStop::new(shade, TAU),
-            ];
-            *wipe = BackgroundGradient::from(ConicGradient::new(UiPosition::CENTER, stops));
+    let label = match own {
+        None => String::new(),
+        Some(_) if seconds >= 1.0 => (seconds.ceil() as u32).to_string(),
+        Some(_) => format!("0.{}", (seconds * 10.0).ceil() as u32),
+    };
+    let (shown_own, shown_global, shown_label) = &mut *shown_now;
+    let mut set_wipe = |entity: Entity, step: Option<u32>, was: &mut Option<u32>, shade: Color| {
+        if *was == step {
+            return;
         }
-    }
-    if let Ok(mut text) = texts.get_mut(icon.seconds) {
-        text.0 = match (cooling, label >= 10) {
-            (false, _) => String::new(),
-            (true, true) => (label / 10).to_string(),
-            (true, false) => format!("0.{label}"),
-        };
+        *was = step;
+        let Ok((mut wipe, mut visibility)) = wipes.get_mut(entity) else { return };
+        visibility.set_if_neq(shown(step.is_some()));
+        if let Some(step) = step {
+            *wipe = wipe_gradient(step, shade);
+        }
+    };
+    set_wipe(icon.wipe, own, shown_own, palette::ui::BACKDROP.with_alpha(0.8));
+    set_wipe(icon.global_wipe, global, shown_global, palette::ui::TEXT.with_alpha(0.3));
+    if *shown_label != label
+        && let Ok(mut text) = texts.get_mut(icon.seconds)
+    {
+        text.0.clone_from(&label);
+        *shown_label = label;
     }
 }

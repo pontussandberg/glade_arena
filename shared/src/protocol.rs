@@ -90,16 +90,14 @@ impl RecentHits {
     }
 }
 
-/// The auto-attack's state: when the next one may start, the windup in progress (if any), and
-/// when the last one went off. Predicted, so your own windup starts instantly and rollbacks
+/// The auto-attack's state: the windup in progress (if any; the next may start once it's off),
+/// and when the last one went off. Predicted, so your own windup starts instantly and rollbacks
 /// restore it; replicated (and shown on the same delayed timeline as others' positions), so
 /// others see your windup coming.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct AttackState {
-    pub ready_at: u32,
     pub windup: Option<Windup>,
-    /// The tick the last attack went off (`None`: never). Kept rather than worked out from
-    /// `ready_at`, which depends on whether the windup was quick.
+    /// The tick the last attack went off (`None`: never).
     pub released_at: Option<u32>,
     /// An attack started by this tick winds up quick (`FollowUp`; `None`: not armed).
     pub quick_until: Option<u32>,
@@ -147,27 +145,48 @@ fn hold<C>(start: C, _end: C, _t: f32) -> C {
     start
 }
 
-/// The Q ability's state: when it may be used again, and a dash in progress. Predicted (your
-/// own Q happens at the press), replicated and shown on the same delayed timeline as others'
-/// positions, like `AttackState`.
+/// The Q ability's state: when it may be used again, when the global cooldown is over (shared by
+/// every ability on it, `GLOBAL_COOLDOWN_TICKS`), a dash in progress, and whether it has no
+/// cooldown of its own (practice's tool; the server sets it; the global cooldown still runs). Predicted (your own Q happens at the press),
+/// replicated and shown on the same delayed timeline as others' positions, like `AttackState`.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct AbilityState {
     pub ready_at: u32,
+    pub global_ready_at: u32,
     pub dash: Option<Dash>,
+    pub free: bool,
 }
 
 impl AbilityState {
+    /// When the ability's own cooldown is over (at once, with none).
+    pub fn cooldown_over_at(&self) -> u32 {
+        if self.free { 0 } else { self.ready_at }
+    }
+
+    /// When the global cooldown is over for the class's ability (at once, if it's not on it).
+    pub fn global_over_at(&self, class: ClassId) -> u32 {
+        if class.def().ability.global_cooldown { self.global_ready_at } else { 0 }
+    }
+
+    /// When the class's ability may be used next: both cooldowns over.
+    pub fn usable_at(&self, class: ClassId) -> u32 {
+        self.cooldown_over_at().max(self.global_over_at(class))
+    }
+
     /// When the ability was last used (`None`: never).
     pub fn used_at(&self, class: ClassId) -> Option<u32> {
-        (self.ready_at > 0).then(|| self.ready_at.saturating_sub(class.def().ability.cooldown_ticks))
+        let cooldown = if self.free { 0 } else { class.def().ability.cooldown_ticks };
+        (self.ready_at > 0).then(|| self.ready_at.saturating_sub(cooldown))
     }
 }
 
-/// A dash: moving toward `dir` for the class's dash ticks after `started_at`.
+/// A dash: moving toward `dir` from `started_at` until it has covered the class's dash distance
+/// (`left` is how much of it is still to go).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Dash {
     pub started_at: u32,
     pub dir: Vec2,
+    pub left: f32,
 }
 
 /// Crowd control on a player: how much it's slowed and when, and when it's frozen in place
@@ -359,6 +378,9 @@ pub enum RoomRequest {
     Start,
     /// Practice only: a target dummy standing at this point, the next class in turn.
     PlaceDummy(Vec2),
+    /// Practice only: our Q with no cooldown (ready again the moment it's used), or back to
+    /// normal.
+    NoCooldowns(bool),
 }
 
 /// What the server tells a client about guests and rooms.

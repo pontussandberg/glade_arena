@@ -358,11 +358,13 @@ fn neutralize_stale_inputs(
 
 fn move_players(
     timeline: Res<LocalTimeline>,
-    mut players: Query<(&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &AbilityState, &Chilled, &Hasted), InPlay>,
+    mut players: Query<(&mut Pos, &ClassId, &ActionState<PlayerInput>, &AttackState, &mut AbilityState, &Chilled, &Hasted), InPlay>,
 ) {
     let now = timeline.tick().0;
-    for (mut pos, class, input, attack, ability, chilled, hasted) in &mut players {
-        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, ability, chilled, hasted, now)));
+    for (mut pos, class, input, attack, mut ability, chilled, hasted) in &mut players {
+        let mut next = *ability;
+        pos.set_if_neq(Pos(sim::move_player(pos.0, &input.0, *class, attack, &mut next, chilled, hasted, now)));
+        ability.set_if_neq(next);
     }
 }
 
@@ -521,7 +523,8 @@ fn respawn(
             chilled.set_if_neq(Chilled::default());
             hasted.set_if_neq(Hasted::default());
             *attack = AttackState::default();
-            *ability = AbilityState::default();
+            // Practice's No cooldowns stays as it was.
+            *ability = AbilityState { free: ability.free, ..default() };
             commands.entity(player).remove::<Dead>();
             debug!(?player, "respawned");
         }
@@ -605,7 +608,7 @@ fn attack(
             }
         }
         // Only on change: AttackState is replicated.
-        state.set_if_neq(sim::start_attack(now.0, *class, &input.0, next));
+        state.set_if_neq(sim::start_attack(now.0, &input.0, next));
     }
 }
 
