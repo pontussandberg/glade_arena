@@ -1,4 +1,4 @@
-//! The in-game menu, opened and closed with ESC: back to the fight; in a lobby, back to it (to
+//! The in-game menu, opened and closed with ESC (or opened with the HUD's Home button): back to the fight; in a lobby, back to it (to
 //! pick another fighter, still in the room) or out of it altogether; in practice, home. The room
 //! goes on without us. While it's open, the fight's controls and the camera's are off.
 
@@ -19,7 +19,7 @@ pub struct EscMenuPlugin;
 impl Plugin for EscMenuPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(Update, (PlayerControls, CameraControl).run_if(not(menu_open)));
-        app.add_systems(Update, (toggle_menu.in_set(MenuKey), menu_buttons).chain().run_if(in_state(Screen::InGame)));
+        app.add_systems(Update, (toggle_menu.in_set(MenuKey), home_button, menu_buttons).chain().run_if(in_state(Screen::InGame)));
         app.add_systems(OnExit(Screen::InGame), close_menu);
     }
 }
@@ -31,6 +31,10 @@ pub(crate) struct MenuKey;
 /// The menu, while it's open.
 #[derive(Component)]
 struct EscMenu;
+
+/// The HUD's button that opens the menu (`render.rs` puts it in the top-left panel).
+#[derive(Component)]
+pub(crate) struct HomeButton;
 
 #[derive(Component)]
 struct ResumeButton;
@@ -67,6 +71,23 @@ fn toggle_menu(
         commands.entity(menu).despawn();
         return;
     }
+    open_menu(&mut commands, &room, &mut desired);
+}
+
+/// The Home button opens the menu (closing it is the menu's own buttons, or ESC).
+fn home_button(
+    mut commands: Commands,
+    home: Query<Ref<Interaction>, With<HomeButton>>,
+    menu: Query<(), With<EscMenu>>,
+    room: Res<CurrentRoom>,
+    mut desired: ResMut<crate::DesiredInput>,
+) {
+    if menu.is_empty() && home.iter().any(clicked) {
+        open_menu(&mut commands, &room, &mut desired);
+    }
+}
+
+fn open_menu(commands: &mut Commands, room: &CurrentRoom, desired: &mut crate::DesiredInput) {
     // Stand still and stop attacking while away from the controls.
     desired.0 = default();
     let practice = room.0.as_ref().is_none_or(|r| r.practice);
