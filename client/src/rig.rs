@@ -416,7 +416,7 @@ fn add_rigs(
             crate::cloth::dress(&mut commands, player, rig.legs, own, wardrobe);
         }
         if matches!(rig.moves.held, Held::Blade(_)) {
-            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length: arena::BLADE_LENGTH, shown: 0 });
+            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length: arena::BLADE_LENGTH, shown: 0, quickened: false });
         }
         commands.entity(player).insert((
             rig,
@@ -664,19 +664,25 @@ fn pose_rigs(
 
 /// A weapon's aura and glint show while the attack's `follow_up` is armed or quickening the
 /// windup in progress: the aura swelling and shrinking a little, the glint spinning and flaring.
+/// A blade's trail brightens with them (`swish::Blade::quickened`).
 fn show_auras(
     time: Res<Time>,
     clock: Option<AttackClock>,
-    fighters: Query<(&Rig, &AttackState, Has<Predicted>)>,
+    mut fighters: Query<(&Rig, &AttackState, Has<Predicted>, Option<&mut crate::swish::Blade>)>,
     mut parts: Query<(&mut Visibility, &mut Transform)>,
 ) {
     let t = time.elapsed_secs();
     let pulse = 1.0 + AURA_PULSE.1 * (t * AURA_PULSE.0).sin();
     // Mostly small, flaring sharply once a twinkle.
     let flare = 0.4 + 1.0 * (0.5 + 0.5 * (t * GLINT_TWINKLE).sin()).powi(6);
-    for (rig, attack, is_me) in &fighters {
+    for (rig, attack, is_me, blade) in &mut fighters {
         // Hidden without a synced clock (e.g. after a disconnect): no telling when the window ends.
         let on = clock.as_ref().is_some_and(|clock| attack.quick_at(clock.now(is_me)) || attack.windup.is_some_and(|w| w.quick));
+        if let Some(mut blade) = blade
+            && blade.quickened != on
+        {
+            blade.quickened = on;
+        }
         if let Some((mut visibility, mut transform)) = rig.aura.and_then(|aura| parts.get_mut(aura).ok()) {
             visibility.set_if_neq(shown(on));
             if on {
