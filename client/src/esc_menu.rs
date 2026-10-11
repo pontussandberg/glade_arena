@@ -1,6 +1,7 @@
 //! The in-game menu, opened and closed with ESC: back to the fight; in a lobby, back to it (to
-//! pick another fighter, still in the room) or out of it altogether; in practice, home. The room
-//! goes on without us. While it's open, the fight's controls and the camera's are off.
+//! pick another fighter, still in the room) or out of it altogether; in practice, place target
+//! dummies (`dummies.rs`) or go home. The room goes on without us. While it's open, the fight's
+//! controls and the camera's are off.
 
 use arena_shared::protocol::RoomRequest;
 use bevy::prelude::*;
@@ -39,6 +40,10 @@ struct LobbyButton;
 #[derive(Component)]
 struct LeaveButton;
 
+/// Practice: start placing target dummies (`dummies.rs`).
+#[derive(Component)]
+struct DummiesButton;
+
 fn menu_open(menu: Query<(), With<EscMenu>>) -> bool {
     !menu.is_empty()
 }
@@ -50,8 +55,14 @@ fn toggle_menu(
     room: Res<CurrentRoom>,
     mut desired: ResMut<crate::DesiredInput>,
     mut aiming: ResMut<crate::casting::Aiming>,
+    mut placing: ResMut<crate::dummies::Placing>,
 ) {
     if !keys.just_pressed(KeyCode::Escape) {
+        return;
+    }
+    // ESC first stops placing dummies.
+    if placing.on {
+        placing.on = false;
         return;
     }
     // ESC first drops a normal cast's aim; the next one opens the menu.
@@ -93,6 +104,7 @@ fn toggle_menu(
             menu.spawn((ResumeButton, button("Back to the fight", 16.0, ACCENT, palette::ui::HOLLOW, ACCENT)));
             let quiet = |label: &'static str| button(label, 16.0, palette::ui::HOLLOW, palette::ui::LICHEN, palette::ui::MUTED.with_alpha(0.5));
             if practice {
+                menu.spawn((DummiesButton, quiet("Place target dummies")));
                 menu.spawn((LeaveButton, quiet("Leave practice")));
             } else {
                 menu.spawn((LobbyButton, quiet("Back to the lobby")));
@@ -108,12 +120,17 @@ fn menu_buttons(
     resume: Query<Ref<Interaction>, With<ResumeButton>>,
     lobby: Query<Ref<Interaction>, With<LobbyButton>>,
     leave: Query<Ref<Interaction>, With<LeaveButton>>,
+    dummies: Query<Ref<Interaction>, With<DummiesButton>>,
+    mut placing: ResMut<crate::dummies::Placing>,
     mut leaving: ResMut<Leaving>,
     menu: Query<Entity, With<EscMenu>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
-    if resume.iter().any(clicked) {
+    if dummies.iter().any(clicked) {
+        placing.on = true;
+    }
+    if resume.iter().any(clicked) || dummies.iter().any(clicked) {
         // Or the click would be taken for an attack.
         mouse.reset(MouseButton::Left);
         for menu in &menu {

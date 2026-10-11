@@ -662,6 +662,7 @@ mod tests {
         assert!(run(0.12, Vec3::X * 5.0, 25.0) < 0.35, "{class}: swings out turning");
         let settling = run(1.0, Vec3::ZERO, 0.0);
         assert!(settling < 0.4, "{class}: settles ({settling:.2} m)");
-        assert!(run(0.5, Vec3::ZERO, 0.0) < 0.15, "{class}: settled");
+        let settled = run(0.5, Vec3::ZERO, 0.0);
+        assert!(settled < 0.15, "{class}: settled ({settled:.2} m)");
     }
 }

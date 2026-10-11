@@ -221,20 +221,18 @@ pub fn projectile_hits(projectile_pos: Vec2, projectile: &Projectile, player_pos
     projectile_pos.distance(player_pos) <= PLAYER_RADIUS + shot(projectile).radius
 }
 
-/// Does a swing from `attacker` toward `dir` reach `target`? In range, inside the arc, and not
-/// through a wall. Only the server decides this (melee damage isn't predicted).
+/// Does a swing from `attacker` toward `dir` reach `target`? Its lane reaches the target's body
+/// (like a shot as wide as the lane, out to the swing's reach), and not through a wall. Only the
+/// server decides this (melee damage isn't predicted).
 pub fn melee_hits(attacker: Vec2, dir: Vec2, class: ClassId, target: Vec2) -> bool {
     let kind = &class.def().attack.kind;
-    let AttackKind::Melee { arc_degrees, .. } = *kind else { return false };
+    let AttackKind::Melee { width, .. } = *kind else { return false };
     let to_target = target - attacker;
-    let distance = to_target.length();
-    if distance > kind.reach() {
-        return false;
-    }
-    // Overlapping bodies always connect; otherwise the target's center must be inside the arc.
-    let in_arc = distance <= PLAYER_RADIUS
-        || to_target.dot(dir) / distance >= (arc_degrees.to_radians() / 2.0).cos();
-    in_arc && map().shot_clear(attacker, target)
+    let dir = dir.normalize_or_zero();
+    let (along, across) = (to_target.dot(dir), to_target.perp_dot(dir).abs());
+    // Overlapping bodies always connect.
+    let in_lane = to_target.length() <= PLAYER_RADIUS || ((0.0..=kind.reach()).contains(&along) && across <= width / 2.0 + PLAYER_RADIUS);
+    in_lane && map().shot_clear(attacker, target)
 }
 
 /// Damage of a projectile hitting at `tick`: the ability's, or the auto-attack's by how far it
@@ -656,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn melee_hits_in_front_within_range_only() {
+    fn melee_hits_its_lane_within_range_only() {
         let class = fighter();
         let at = SPAWN_POINTS[0];
         let reach = class.def().attack.kind.reach() - 0.05;
@@ -664,6 +662,10 @@ mod tests {
         assert!(!melee_hits(at, Vec2::Y, class, at + Vec2::Y * (reach + 0.2)), "just out of reach");
         assert!(!melee_hits(at, Vec2::Y, class, at - Vec2::Y * 1.0), "behind");
         assert!(melee_hits(at, Vec2::Y, class, at - Vec2::Y * 0.3), "bodies overlapping");
+        let AttackKind::Melee { width, .. } = class.def().attack.kind else { unreachable!() };
+        let edge = width / 2.0 + PLAYER_RADIUS;
+        assert!(melee_hits(at, Vec2::Y, class, at + Vec2::new(edge - 0.05, 1.0)), "a body overlapping the lane");
+        assert!(!melee_hits(at, Vec2::Y, class, at + Vec2::new(edge + 0.05, 1.0)), "beside the lane");
         assert!(!melee_hits(at, Vec2::Y, shooter(), at + Vec2::Y), "projectile classes don't swing");
     }
 

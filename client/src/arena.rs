@@ -76,8 +76,8 @@ pub mod palette {
     /// HUD text.
     pub const INK: Color = Color::srgb_u8(0x1E, 0x2A, 0x23);
 
-    // Who a fighter is to you, in what marks it (health bar, ground ring, minimap dot,
-    // telegraph): never in its model, its shots or its swings. You are blue, enemies red and
+    // Who a fighter is to you, in what marks it (health bar, ground ring, minimap dot):
+    // never in its model, its shots or its swings. You are blue, enemies red and
     // allies (once there are teams) green.
     pub const YOU: Color = Color::srgb_u8(0x4C, 0x9E, 0xE0);
     pub const ENEMY: Color = Color::srgb_u8(0xD9, 0x45, 0x3B);
@@ -170,7 +170,7 @@ pub fn glow(color: Color, strength: f32) -> StandardMaterial {
     StandardMaterial { emissive: LinearRgba::from(color) * strength, unlit: true, ..matte(color) }
 }
 
-/// See-through glow: swing flashes and telegraphs.
+/// See-through glow: swishes, streaks and auras.
 pub fn translucent(color: Color, alpha: f32, strength: f32) -> StandardMaterial {
     StandardMaterial { alpha_mode: AlphaMode::Blend, ..glow(color.with_alpha(alpha), strength) }
 }
@@ -624,22 +624,6 @@ fn hood_brim(cloth: Color, edge: Color, layer: f32) -> Mesh {
 }
 
 
-/// A shoulder plate in `color` on the `side` (±1, +Z the right) shoulder: a thin, domed shell, a
-/// smaller one overlapping out from under it down the arm. Centered on the shoulder, rising up
-/// (+Y).
-fn pauldron(color: Color, side: f32) -> Mesh {
-    let shell = |r: f32| {
-        let dome = [(-0.035, 1.0), (-0.02, 1.02), (0.02, 0.93), (0.06, 0.7), (0.085, 0.38), (0.093, 0.0)];
-        tube(
-            &smoothed(&dome.map(|(y, scale)| Section::new(Vec3::Y * y, Vec2::new(0.92, 1.0) * r * scale, color).exact()), 2),
-            24,
-            (true, false),
-        )
-    };
-    let lame = shell(0.135).rotated_by(Quat::from_rotation_x(side * 0.3)).translated_by(Vec3::new(0.0, -0.055, side * 0.04));
-    sculpted(vec![shell(0.15), lame])
-}
-
 /// A leg hanging from the hip in `cloth`, `thigh` and `knee` thick (wide for baggy trousers),
 /// into a soft `boot` with a toe.
 fn booted_leg(cloth: Color, boot: Color, thigh: f32, knee: f32) -> Mesh {
@@ -688,8 +672,11 @@ fn revenant_body() -> Mesh {
                 ring(0.005, 0.88, (0.147, 0.177), palette::ROBE),
                 ring(0.015, 1.02, (0.153, 0.19), palette::ROBE).folded(0.015, 7),
                 ring(0.02, 1.17, (0.155, 0.215), palette::ROBE).squared(2.2),
-                ring(0.0, 1.32, (0.135, 0.228), palette::ROBE).squared(2.3),
-                ring(-0.01, 1.41, (0.1, 0.15), palette::ROBE),
+                // The shoulders: squared out over the shoulder joints (the sleeves come out from
+                // under them), sloping up to the collar.
+                ring(0.01, 1.27, (0.145, 0.27), palette::ROBE).squared(2.6),
+                ring(0.0, 1.34, (0.13, 0.31), palette::ROBE).squared(3.2),
+                ring(-0.01, 1.4, (0.11, 0.23), palette::ROBE).squared(2.6),
                 ring(-0.01, 1.47, (0.08, 0.1), palette::TATTERS),
             ],
             3,
@@ -748,9 +735,35 @@ fn revenant_body() -> Mesh {
     ]
     .map(|(x, y, z, w, color)| Section::new(Vec3::new(x, y, z), Vec2::new(w, 0.018), color));
     parts.push(tube(&scabbard, 12, (true, false)));
-    let plate = pauldron(palette::BLACK_STEEL, -1.0).scaled_by(Vec3::new(0.75, 0.7, 0.75));
-    parts.push(plate.rotated_by(Quat::from_rotation_x(-0.55)).translated_by(Vec3::new(-0.01, 1.37, -0.235)));
+    parts.push(shoulder_plates(-1.0));
     sculpted(parts)
+}
+
+/// Small plates of blackened steel over the `side` (±1, +Z the right) shoulder: a broad cap and
+/// two lames below it, each curving from the front of the shoulder over it to the back,
+/// overlapping down the arm.
+fn shoulder_plates(side: f32) -> Mesh {
+    let mut parts = Vec::new();
+    // Each plate (from, to: how far out along the shoulder), sloping down with the shoulder and
+    // overlapping the next, the cap the broadest.
+    for (i, (from, to)) in [(0.19, 0.3), (0.27, 0.34), (0.315, 0.375)].into_iter().enumerate() {
+        let shrink = 1.0 - 0.07 * i as f32;
+        let rows: Vec<Vec<Vec3>> = (0..=4)
+            .map(|r| from + (to - from) * r as f32 / 4.0)
+            .map(|z| {
+                // Out along the shoulder it drops and curls in a little tighter.
+                let down = 0.75 * (z - 0.19) + 0.012 * i as f32;
+                let (reach, rise) = (0.168 * shrink - 0.06 * (z - 0.19), 0.105 * shrink - 0.04 * (z - 0.19));
+                (0..=14)
+                    .map(|k| -1.2 + 2.4 * k as f32 / 14.0)
+                    .map(|t| Vec3::new(reach * t.sin(), 1.345 - down + rise * t.cos(), z * side))
+                    .collect()
+            })
+            .collect();
+        parts.push(sheet(&rows, &[palette::BLACK_STEEL], 0.014));
+    }
+    // Stacked from the lowest up, each over the one below.
+    sculpted(parts.into_iter().rev().collect())
 }
 
 /// What glows on the revenant's body: the brooch at its collar, a long diamond of wisp light with
@@ -791,8 +804,7 @@ fn coat_tail_point(side: f32, u: f32, v: f32, ragged: bool) -> Vec3 {
 
 /// The revenant's moving cloth: the two long tails of its coat, split up the back and open wide
 /// at the front, sweeping down behind it, their torn hems smouldering in wisp light; a tattered
-/// tabard down the front; and the bandana round its brow, its two long tails streaming from the
-/// knot behind its head.
+/// tabard down the front.
 fn revenant_wardrobe() -> Wardrobe {
     const ROWS: usize = 18;
     const COLS: usize = 22;
@@ -835,43 +847,14 @@ fn revenant_wardrobe() -> Wardrobe {
         Weave { hold: (9.0, 2.0), damping: 5.0, air: 0.3, inertia: 0.3, gravity: 8.0, flutter: 0.4, joined: false, wisps: 0.0 },
     );
 
-    // The bandana's tails, in the head's space, from the knot down its back, their ends burning
-    // away.
-    let bandana_tail = |side: f32, length: usize| {
-        let chain: Vec<Vec3> = [(-0.135, 0.21, 0.02), (-0.175, 0.12, 0.035), (-0.225, 0.0, 0.05), (-0.27, -0.18, 0.065), (-0.3, -0.38, 0.08), (-0.315, -0.58, 0.09)]
-            [..length]
-            .iter()
-            .map(|&(x, y, z)| Vec3::new(x, y, z * side))
-            .collect();
-        let sections: Vec<Section> = chain
-            .iter()
-            .enumerate()
-            .map(|(k, &at)| {
-                let half = if k + 1 == length { 0.0 } else { 0.026 + 0.014 * k as f32 / (length - 1) as f32 };
-                Section::new(at, Vec2::new(0.0, half), palette::SHROUD)
-            })
-            .collect();
-        let path = smoothed(&sections, 4);
-        let rows = |from: usize| -> Vec<Vec<Vec3>> {
-            path[from..].iter().map(|s| (0..=4).map(|j| (j as f32 / 4.0 * 2.0 - 1.0) * s.half.y).map(|z| s.at + Vec3::new(-1.5 * z * z, 0.0, z)).collect()).collect()
-        };
-        let cloth_rows = rows(0);
-        let glow = sheet(&rows(path.len() - 5), &[Color::WHITE], 0.016);
-        Drape::new(
-            sheet(&cloth_rows, &[palette::SHROUD], 0.007),
-            Some(glow),
-            vec![chain],
-            Weave { hold: (4.0, 1.5), damping: 6.5, air: 0.3, inertia: 0.45, gravity: 4.5, flutter: 1.4, joined: false, wisps: 2.0 },
-        )
-        .on_head()
-    };
-
     Wardrobe {
-        drapes: vec![tail(1.0), tail(-1.0), tabard, bandana_tail(1.0, 6), bandana_tail(-1.0, 5)],
+        drapes: vec![tail(1.0), tail(-1.0), tabard],
         trim: palette::WISP,
         body: vec![
             Column { center: Vec2::ZERO, half: Vec2::new(0.17, 0.205), from: 0.3, to: 0.9 },
             Column { center: Vec2::ZERO, half: Vec2::new(0.2, 0.25), from: 0.9, to: 1.4 },
+            // The collar.
+            Column { center: Vec2::new(-0.01, 0.0), half: Vec2::new(0.16, 0.175), from: 1.4, to: 1.58 },
         ],
         leg_radius: 0.1,
     }
@@ -917,7 +900,7 @@ fn head_wrap(height: impl Fn(f32) -> f32, half: impl Fn(f32) -> f32, grow: f32, 
 
 /// The revenant's head, wrapped all over in a faded bandana but for a dark slit its eyes burn
 /// white in: the crown wound in layered bands, a wrap round the brow (lower at the front) and
-/// another over the jaw and mouth, knotted behind (its tails are cloth: `revenant_wardrobe`).
+/// another over the jaw and mouth, tied in a knot behind.
 fn revenant_head() -> Mesh {
     let cloth = palette::SHROUD;
     let fold = cloth.darker(0.04);
@@ -944,8 +927,13 @@ fn revenant_head() -> Mesh {
     // Over the jaw and mouth, up to just under the eyes.
     parts.push(head_wrap(|_| 0.1, |_| 0.052, 1.08, fold));
     parts.push(head_wrap(|t| 0.13 - 0.02 * (1.0 - t.cos()) / 2.0, |_| 0.024, 1.13, cloth));
-    // The knot behind.
-    parts.push(tinted(ball(1.0).scaled_by(Vec3::new(0.03, 0.034, 0.042)).translated_by(Vec3::new(-0.13, 0.215, 0.0)), cloth));
+    // The knot behind: a bulge of cloth, its two cut ends just poking out below it.
+    let knot = Vec3::new(-0.13, 0.215, 0.0);
+    parts.push(tinted(ball(1.0).scaled_by(Vec3::new(0.036, 0.04, 0.05)).translated_by(knot), cloth));
+    for side in [1.0, -1.0] {
+        let end = [knot + Vec3::new(-0.01, -0.01, side * 0.018), knot + Vec3::new(-0.035, -0.045, side * 0.03), knot + Vec3::new(-0.045, -0.075, side * 0.036)];
+        parts.push(sweep(&end, &[0.016, 0.012, 0.0], 6, fold));
+    }
     sculpted(parts)
 }
 
@@ -964,17 +952,19 @@ fn chain_link(at: Vec3, turned: bool) -> Mesh {
     sweep(&loop_points, &[0.0055; 13], 6, palette::IRON)
 }
 
-/// A robe sleeve starting inside the pauldron and widening to a tattered cuff, over an ash
+/// A fitted coat sleeve starting under the coat's shoulder and widening a little to a turned-back,
+/// tattered cuff, over a dark leather
 /// gauntlet closing into a fist, an iron manacle round the wrist trailing a broken chain.
 fn revenant_arm() -> Mesh {
     let sleeve = tube(
         &smoothed(
             &[
-                ring(0.0, 0.06, (0.07, 0.07), palette::ROBE),
-                ring(0.0, -0.1, (0.08, 0.08), palette::ROBE).folded(0.02, 6),
-                ring(0.0, -0.22, (0.095, 0.095), palette::ROBE).folded(0.04, 6),
-                ring(0.0, -0.27, (0.105, 0.105), palette::TATTERS).folded(0.05, 6),
-                ring(-0.01, -0.33, (0.115, 0.115), palette::TATTERS).torn(0.08).trailing(0.04).folded(0.05, 6),
+                ring(0.0, 0.0, (0.058, 0.06), palette::ROBE),
+                ring(0.0, -0.1, (0.064, 0.066), palette::ROBE).folded(0.02, 6),
+                ring(0.0, -0.21, (0.07, 0.07), palette::ROBE).folded(0.035, 6),
+                ring(0.0, -0.27, (0.078, 0.078), palette::ROBE).folded(0.04, 6),
+                ring(-0.004, -0.28, (0.09, 0.09), palette::TATTERS).folded(0.03, 6),
+                ring(-0.008, -0.34, (0.096, 0.096), palette::TATTERS).torn(0.05).trailing(0.04).folded(0.04, 6),
             ],
             2,
         ),
@@ -1009,9 +999,8 @@ fn revenant_arm() -> Mesh {
     sculpted(parts)
 }
 
-/// The revenant's sword, gripped at the origin, blade up (+Y): a long pale blade widening a little
-/// toward a clipped point set off toward the front edge, a hooked notch on its back edge near the
-/// guard, a crossguard whose arms droop forward to points, a grip bound in ash and leather, and a
+/// The revenant's sword, gripped at the origin, blade up (+Y): a long, slender pale blade swelling
+/// a little toward a symmetric point, a crossguard whose arms droop forward to points, a grip bound in ash and leather, and a
 /// faceted pommel spike. A line of wisp light runs down its fuller (`sword_glow`).
 fn sword() -> Mesh {
     let blade = faceted(tube(
@@ -1022,8 +1011,7 @@ fn sword() -> Mesh {
         4,
         (true, false),
     ));
-    let hook = sweep(&[Vec3::new(0.0, 0.22, -0.045), Vec3::new(0.0, 0.27, -0.075), Vec3::new(0.0, 0.33, -0.08)], &[0.014, 0.009, 0.0], 8, palette::STEEL);
-    let mut parts = vec![blade, hook, bevel_box(Vec3::new(0.07, 0.075, 0.1), 0.015, palette::ASH).translated_by(Vec3::Y * 0.1)];
+    let mut parts = vec![blade, bevel_box(Vec3::new(0.07, 0.075, 0.1), 0.015, palette::ASH).translated_by(Vec3::Y * 0.1)];
     // The guard's arms, out from the middle and drooping forward to points.
     for side in [1.0, -1.0] {
         let arm: Vec<Vec3> = (0..=4).map(|i| i as f32 / 4.0).map(|t| Vec3::new(0.0, 0.1 - 0.07 * t * t, side * 0.19 * t)).collect();
@@ -1050,9 +1038,9 @@ fn sword() -> Mesh {
 }
 
 /// The sword's blade, as (height, half depth, half width, how far its middle is set toward the
-/// front edge).
+/// front edge): long and slender, swelling a little toward a symmetric point.
 const BLADE: [(f32, f32, f32, f32); 6] =
-    [(0.12, 0.02, 0.048, 0.0), (0.4, 0.019, 0.052, 0.0), (0.95, 0.017, 0.06, 0.004), (1.2, 0.015, 0.058, 0.008), (1.34, 0.01, 0.032, 0.022), (1.46, 0.0, 0.0, 0.04)];
+    [(0.12, 0.018, 0.04, 0.0), (0.45, 0.017, 0.043, 0.0), (1.1, 0.015, 0.046, 0.0), (1.45, 0.013, 0.041, 0.0), (1.63, 0.008, 0.023, 0.0), (1.76, 0.0, 0.0, 0.0)];
 
 /// What glows on the revenant's sword: a line of wisp light down the fuller on both faces, and a
 /// gem on each face of the guard.
@@ -1060,7 +1048,7 @@ fn sword_glow() -> Mesh {
     let mut parts = Vec::new();
     for side in [1.0, -1.0] {
         let points: Vec<Vec3> = (0..=6)
-            .map(|i| 0.22 + 0.9 * i as f32 / 6.0)
+            .map(|i| 0.22 + 1.2 * i as f32 / 6.0)
             .map(|y| {
                 // On the ridge of the blade at this height (between `BLADE`'s sections).
                 let k = BLADE.windows(2).position(|w| y <= w[1].0).unwrap_or(0);
@@ -1280,7 +1268,7 @@ fn ice_staff() -> Mesh {
 /// The javelinist's body, under its moving cloth (`javelinist_wardrobe`): a slim, fitted tunic
 /// from an ashen undertunic showing at the knee up to a high collar, a wide leather belt with a
 /// silver buckle, and a mantle draped over the shoulders, its torn edge hanging longer behind.
-/// Sloping shoulders, no bulk. Quiet details: the coat, the streamers and the spear overhead are
+/// Sloping shoulders, no bulk. Quiet details: the coat and the spear overhead are
 /// the figure.
 fn javelinist_body() -> Mesh {
     const FOLDS: u32 = 9;
@@ -1354,8 +1342,7 @@ fn coat_point(u: f32, v: f32, ragged: bool) -> Vec3 {
 }
 
 /// The javelinist's moving cloth: a long coat skirt open at the front, its torn hem glowing with
-/// spirit light; a tabard hanging from the belt between its edges; and two
-/// long ashen streamers from the back of the collar, their ends burning away into light.
+/// spirit light, and a tabard hanging from the belt between its edges.
 fn javelinist_wardrobe() -> Wardrobe {
     const ROWS: usize = 18;
     const COLS: usize = 64;
@@ -1404,39 +1391,8 @@ fn javelinist_wardrobe() -> Wardrobe {
         Weave { hold: (9.0, 2.0), damping: 5.0, air: 0.3, inertia: 0.3, gravity: 8.0, flutter: 0.4, joined: false, wisps: 0.0 },
     );
 
-    let streamer = |side: f32, length: usize| {
-        let chain: Vec<Vec3> = [(-0.1, 1.5, 0.05), (-0.27, 1.4, 0.07), (-0.262, 1.24, 0.09), (-0.262, 1.02, 0.105), (-0.245, 0.8, 0.12), (-0.23, 0.58, 0.13), (-0.215, 0.36, 0.135)]
-            [..length]
-            .iter()
-            .map(|&(x, y, z)| Vec3::new(x, y, z * side))
-            .collect();
-        let sections: Vec<Section> = chain
-            .iter()
-            .enumerate()
-            .map(|(k, &at)| {
-                let t = k as f32 / (length - 1) as f32;
-                let half = if k + 1 == length { 0.0 } else { 0.05 + 0.025 * t };
-                Section::new(at, Vec2::new(0.0, half), palette::HUNTER_ASH)
-            })
-            .collect();
-        let path = smoothed(&sections, 4);
-        // The strip across each point of its path (across the back), cupped a little.
-        let rows = |from: usize| -> Vec<Vec<Vec3>> {
-            path[from..].iter().map(|s| (0..=4).map(|j| (j as f32 / 4.0 * 2.0 - 1.0) * s.half.y).map(|z| s.at + Vec3::new(-2.0 * z * z, 0.0, z)).collect()).collect()
-        };
-        let cloth_rows = rows(0);
-        let colors: Vec<Color> = (0..cloth_rows.len()).map(|i| if i + 6 < cloth_rows.len() { palette::HUNTER_ASH } else { palette::HUNTER }).collect();
-        let glow = sheet(&rows(path.len() - 5), &[Color::WHITE], 0.016);
-        Drape::new(
-            sheet(&cloth_rows, &colors, 0.008),
-            Some(glow),
-            vec![chain],
-            Weave { hold: (4.0, 1.5), damping: 6.0, air: 0.5, inertia: 0.4, gravity: 5.0, flutter: 1.0, joined: false, wisps: 3.0 },
-        )
-    };
-
     Wardrobe {
-        drapes: vec![coat, tabard, streamer(1.0, 7), streamer(-1.0, 6)],
+        drapes: vec![coat, tabard],
         trim: palette::SOUL,
         body: vec![
             Column { center: Vec2::ZERO, half: Vec2::new(0.165, 0.205), from: 0.3, to: 1.05 },
@@ -1515,54 +1471,6 @@ pub fn fighter_mesh(class_key: &str) -> Mesh {
         "frost_mage" => frost_mage_body(),
         _ => unreachable!("no figure for class {class_key:?} (add it to FIGHTER_LOOKS)"),
     }
-}
-
-/// A flat fan for a melee swing: `reach` long, `arc_degrees` wide, pointing along world +X.
-pub fn swing_mesh(reach: f32, arc_degrees: f32) -> Mesh {
-    let mut b = FlatMesh::default();
-    let half = arc_degrees.to_radians() / 2.0;
-    let steps = 12;
-    let point = |t: f32| Vec3::new(t.cos() * reach, 0.0, -t.sin() * reach);
-    for i in 0..steps {
-        let (a, z) = (-half + 2.0 * half * i as f32 / steps as f32, -half + 2.0 * half * (i + 1) as f32 / steps as f32);
-        b.tri([Vec3::ZERO, point(a), point(z)], Color::WHITE);
-    }
-    b.build()
-}
-
-/// A sword's swoosh: a crescent of light left in the air where a blade swept through a melee
-/// swing's arc, its outer edge at the swing's real `reach`, centered on world +X. It sweeps from
-/// the right (+Z) high to the left (-Z) low, like the revenant's diagonal chop: thick and bright
-/// at its leading end, which comes to a point, thinning and fading away behind, its inner edge
-/// soft (vertex alpha). Both faces, so it shows from any angle.
-pub fn swoosh_mesh(reach: f32, arc_degrees: f32) -> Mesh {
-    const STEPS: usize = 16;
-    let (high, low) = (1.35, 0.55);
-    let half = arc_degrees.to_radians() / 2.0;
-    // `u` runs along the arc from its trailing end (0) to its leading end (1).
-    let at = |u: f32, r: f32| {
-        let t = -half + 2.0 * half * u;
-        Vec3::new(t.cos() * r, high + (low - high) * u, -t.sin() * r)
-    };
-    let inner = |u: f32| reach * (1.0 - 0.42 * u.powf(0.7));
-    let alpha = |u: f32| u.powf(1.6);
-    let mut b = FlatMesh::default();
-    let mut both = |corners: [Vec3; 3], alphas: [f32; 3]| {
-        b.tri_faded(corners, alphas);
-        b.tri_faded([corners[0], corners[2], corners[1]], [alphas[0], alphas[2], alphas[1]]);
-    };
-    const SOFT: f32 = 0.15;
-    for i in 0..STEPS {
-        let (u0, u1) = (i as f32 / STEPS as f32, (i + 1) as f32 / STEPS as f32);
-        let (o0, o1, i0, i1) = (at(u0, reach), at(u1, reach), at(u0, inner(u0)), at(u1, inner(u1)));
-        let (a0, a1) = (alpha(u0), alpha(u1));
-        both([o0, i0, o1], [a0, a0 * SOFT, a1]);
-        both([o1, i0, i1], [a1, a0 * SOFT, a1 * SOFT]);
-    }
-    // The leading point, just past the end of the arc.
-    let tip = at(1.06, (reach + inner(1.0)) / 2.0 + 0.05);
-    both([at(1.0, reach), at(1.0, inner(1.0)), tip], [1.0, SOFT, 0.8]);
-    b.build()
 }
 
 /// A flat strip along world +X from `from` to `to`, `width` wide: the lane a shot will fly down.

@@ -126,6 +126,7 @@ impl Plugin for ServerGamePlugin {
                 use_abilities,
                 move_projectiles,
                 resolve_projectile_hits,
+                restore_dummies,
                 respawn,
                 place_players,
             )
@@ -263,6 +264,41 @@ fn spawn_player(commands: &mut Commands, link: Entity, id: PeerId, class: ClassI
             ControlledBy { owner: link, lifetime: default() },
         ))
         .id()
+}
+
+/// Server-only: a target dummy, for practice: a fighter of `class` standing at a spot, never
+/// moving or attacking, hit like anyone else, and back to full health instead of dying.
+#[derive(Component)]
+pub(crate) struct Dummy;
+
+/// A target dummy of `class` standing `at` (a walkable spot) in `room`, as `id` (none of the
+/// clients'). Replicated straight away: it already stands where it'll stay.
+pub(crate) fn spawn_dummy(commands: &mut Commands, id: PeerId, class: ClassId, room: InRoom, at: Vec2) -> Entity {
+    commands
+        .spawn((
+            Name::from("Dummy"),
+            Dummy,
+            PlayerId(id),
+            (class, Team(arena_shared::rooms::NO_TEAM), room, room.rooms()),
+            Pos(at),
+            Health(class.def().max_hp),
+            (Chilled::default(), Hasted::default(), RecentHits::default()),
+            AttackState::default(),
+            AbilityState::default(),
+            LastSwing::default(),
+            PosHistory::default(),
+            Replicate::to_clients(NetworkTarget::All),
+            InterpolationTarget::to_clients(NetworkTarget::All),
+        ))
+        .id()
+}
+
+/// A dummy that would die is back at full health on the spot (its hits still show).
+fn restore_dummies(mut commands: Commands, mut dummies: Query<(Entity, &ClassId, &mut Health), (With<Dummy>, With<Dead>)>) {
+    for (dummy, class, mut health) in &mut dummies {
+        health.0 = class.def().max_hp;
+        commands.entity(dummy).remove::<Dead>();
+    }
 }
 
 /// Places waiting players one at a time, each away from everyone already placed in their room,

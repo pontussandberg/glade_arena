@@ -1,4 +1,4 @@
-//! Fighters, projectiles, melee swings, dash streaks, nova bursts and windup telegraphs, frost on
+//! Fighters, projectiles, nova bursts, frost on
 //! slowed and frozen fighters, the destination marker and the HUD, plus mouse and keyboard input.
 //! The scene itself is in `arena.rs`, the camera in `camera.rs`, the server browser in
 //! `browser.rs`, a room's lobby in `lobby.rs` and the ESC menu in `esc_menu.rs`.
@@ -21,7 +21,7 @@ use crate::casting::{Aiming, CastMode};
 use crate::rooms::{load_setting, save_setting};
 use crate::feedback::AttackClock;
 use crate::arena::{self, palette, to_gameplay, to_world};
-use crate::rig::{HeldAt, SeenThrows};
+use crate::rig::HeldAt;
 
 pub struct RenderPlugin;
 
@@ -41,6 +41,7 @@ impl Plugin for RenderPlugin {
             crate::pickups::PickupsPlugin,
             crate::stat_frame::StatFramePlugin,
             crate::tooltip::TooltipPlugin,
+            crate::dummies::DummiesPlugin,
         ));
         app.insert_resource(ControlsOpen(load_setting(CONTROLS_KEY).as_deref() == Some("open")));
         app.add_systems(Startup, setup_scene);
@@ -50,8 +51,8 @@ impl Plugin for RenderPlugin {
                 (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
                 (add_visuals, sync_transforms).chain().before(crate::rig::Posing),
                 fly_shots.after(crate::rig::Posing),
-                (show_swings, sweep_swooshes, show_dashes, show_novas, grow_bursts, fade_swings, show_frost),
-                (show_telegraphs, align_to_world).chain().after(crate::rig::Posing),
+                (show_novas, grow_bursts, fade_swings, show_frost),
+                align_to_world.after(crate::rig::Posing),
                 toggle_range_circle,
                 (update_status, update_key_hints, fold_controls),
                 (mark_relations, light_buttons),
@@ -86,13 +87,6 @@ const RUBBER_STIFFNESS: f32 = 14.0;
 const RUBBER_DAMPING: f32 = 0.3;
 const RUBBER_PULSE: f32 = 0.18;
 const RUBBER_RATE: f32 = 3.5;
-/// A sword's swoosh: how long it stays on screen, how far (a fraction of the swing's arc) it
-/// sweeps on through it, and how many steps it fades out in (one shared material each).
-const SWOOSH_SECONDS: f32 = 0.26;
-const SWOOSH_SWEEP: f32 = 0.35;
-const SWOOSH_FADES: usize = 8;
-/// How long a dash streak stays on screen.
-const DASH_SECONDS: f32 = 0.3;
 /// A nova: its shockwave races out to the edge in `NOVA_WAVE_SECONDS`, raising shards as it
 /// passes (each takes `NOVA_GROW_SECONDS` to burst up); the frost on the ground and the shards
 /// stay until `NOVA_SECONDS`, then sink.
@@ -105,7 +99,7 @@ const RUNE_TURN_RATE: f32 = 0.8;
 const RANGE_CIRCLE_WIDTH: f32 = 0.05;
 
 /// Who a fighter is to you (kept up to date on each fighter by `mark_relations`). Only its health
-/// bar and minimap dot show it; its body, shots, swings and telegraph look the same whoever's
+/// bar and minimap dot show it; its body, shots and swings look the same whoever's
 /// they are.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Relation {
@@ -138,16 +132,8 @@ impl Relation {
 #[derive(Resource)]
 pub(crate) struct Visuals {
     fighters: HashMap<ClassId, Handle<Mesh>>,
-    /// The ground a melee swing covers, drawn faintly as its windup telegraph.
-    swing_fans: HashMap<ClassId, Handle<Mesh>>,
     /// A circle at the edge of a projectile class's auto-attack range, shown around you.
     range_circles: HashMap<ClassId, Handle<Mesh>>,
-    /// The swoosh a melee class's swing leaves in the air (`arena::swoosh_mesh`), and its
-    /// material as it fades out, brightest first.
-    swooshes: HashMap<ClassId, Handle<Mesh>>,
-    swoosh_fades: Vec<Handle<StandardMaterial>>,
-    /// The ground a dash covers, for its streak.
-    dash_streaks: HashMap<ClassId, Handle<Mesh>>,
     /// A nova's burst (see `arena::NovaMeshes`).
     novas: HashMap<ClassId, arena::NovaMeshes<Handle<Mesh>>>,
     /// The ice around a frozen (rooted) fighter's feet, and the frost under a slowed one's.
@@ -179,8 +165,6 @@ pub(crate) enum Look {
     Wind,
     /// The white glow on a thrown spear's point.
     Spark,
-    /// A faint marking of where a swing that's winding up will land.
-    Telegraph,
     /// The faint circle at the edge of your shots' range.
     Range,
     /// See-through, glowing ice: novas and frozen fighters, whoever's.
@@ -215,7 +199,6 @@ impl Visuals {
                     Look::Plain => arena::matte(Color::WHITE),
                     Look::Wind => arena::translucent(Color::WHITE, 0.6, 1.5),
                     Look::Spark => arena::glow(Color::WHITE, 5.0),
-                    Look::Telegraph => arena::translucent(palette::SUN, 0.22, 1.2),
                     Look::Range => arena::translucent(Color::WHITE, 0.2, 1.0),
                     Look::Frost => arena::translucent(palette::ICE, 0.45, 1.6),
                     Look::Chill => arena::translucent(palette::FROST_GLOW, 0.75, 2.5),
@@ -225,19 +208,10 @@ impl Visuals {
     }
 }
 
-/// A swoosh, a dash streak or a nova's part; despawned `until` (seconds).
+/// A nova's part; despawned `until` (seconds).
 #[derive(Component)]
 struct SwingFx {
     until: f32,
-}
-
-/// A sword's swoosh, sweeping on through its swing from `started` (seconds), facing `dir` (radians
-/// about Y) at the end, across a swing `arc` radians wide.
-#[derive(Component)]
-struct Swoosh {
-    started: f32,
-    dir: f32,
-    arc: f32,
 }
 
 /// Something that bursts out from nothing: scaled up to `size` over `grow` seconds from `started`
@@ -284,12 +258,8 @@ struct Launch {
     held: Quat,
 }
 
-/// A fighter's windup telegraph (a child entity), shown while it winds up an attack.
-#[derive(Component)]
-struct Telegraph(Entity);
-
 /// A child that keeps this orientation and size in the world, this high above the ground,
-/// whatever its parent does (fighters turn, lean, crouch and are drawn bigger, see `rig.rs`): the range circle and the telegraph
+/// whatever its parent does (fighters turn, lean, crouch and are drawn bigger, see `rig.rs`): the range circle and the frost
 /// stay flat on the ground.
 #[derive(Component)]
 pub(crate) struct WorldAligned(pub Quat, pub f32);
@@ -347,14 +317,6 @@ fn setup_scene(
     ));
     commands.insert_resource(Visuals {
         fighters: ClassId::all().map(|c| (c, meshes.add(arena::fighter_mesh(&c.def().id)))).collect(),
-        swing_fans: ClassId::all()
-            .filter_map(|c| match c.def().attack.kind {
-                AttackKind::Melee { range, arc_degrees } => {
-                    Some((c, meshes.add(arena::swing_mesh(range + PLAYER_RADIUS, arc_degrees))))
-                }
-                AttackKind::Projectile { .. } => None,
-            })
-            .collect(),
         // Where a shot's front edge stops: it starts at the edge of the shooter and flies its
         // range, so a fighter whose body reaches over the circle can be hit.
         range_circles: ClassId::all()
@@ -365,25 +327,6 @@ fn setup_scene(
                     Some((c, meshes.add(circle)))
                 }
                 AttackKind::Melee { .. } => None,
-            })
-            .collect(),
-        swooshes: ClassId::all()
-            .filter_map(|c| match c.def().attack.kind {
-                AttackKind::Melee { range, arc_degrees } => Some((c, meshes.add(arena::swoosh_mesh(range, arc_degrees)))),
-                AttackKind::Projectile { .. } => None,
-            })
-            .collect(),
-        // Bright for the first third, then fading out.
-        swoosh_fades: (0..SWOOSH_FADES)
-            .map(|i| {
-                let left = 1.0 - ((i as f32 / SWOOSH_FADES as f32 - 0.3) / 0.7).max(0.0);
-                materials.add(arena::translucent(palette::SILVER, 0.9 * left, 2.5))
-            })
-            .collect(),
-        dash_streaks: ClassId::all()
-            .filter_map(|c| match c.def().ability.kind {
-                AbilityKind::Dash { distance, .. } => Some((c, meshes.add(arena::lane_mesh(0.0, distance, 0.9)))),
-                AbilityKind::Projectile { .. } | AbilityKind::Nova { .. } => None,
             })
             .collect(),
         novas: ClassId::all()
@@ -480,6 +423,7 @@ fn read_local_input(
         Or<(With<HudButton>, With<AbilityIcon>)>,
     >,
     mut aiming: ResMut<Aiming>,
+    mut placing: ResMut<crate::dummies::Placing>,
     mut held_click: Local<bool>,
     mut last_pos: Local<Option<Vec2>>,
     mut desired: ResMut<DesiredInput>,
@@ -511,9 +455,15 @@ fn read_local_input(
         move_to = None;
     }
     *last_pos = me;
+    // Placing target dummies: a right click stops it (and doesn't walk).
+    let stop_placing = placing.on && !mode.free && mouse.just_pressed(MouseButton::Right);
+    if stop_placing {
+        placing.on = false;
+    }
     // Once per click: holding the button doesn't keep re-targeting. Not with the free camera:
     // there the right button turns the camera, and WASD walks.
     if !mode.free
+        && !stop_placing
         && mouse.just_pressed(MouseButton::Right)
         && let Some(cursor) = cursor
         && let Some(point) = map().walk_target(cursor, 4)
@@ -546,6 +496,9 @@ fn read_local_input(
     // walks as usual; ESC drops it too (`esc_menu`).
     if mouse.just_pressed(MouseButton::Left) {
         if on_control {
+            *held_click = true;
+        } else if placing.on {
+            placing.at = cursor;
             *held_click = true;
         } else if on_icon {
             aiming.0 = ability_ready;
@@ -629,16 +582,6 @@ fn add_visuals(
     for (entity, id, class, pos) in &players {
         let is_me = id.0 == me.0;
         let material = visuals.material(&mut materials, id.0, Look::Body);
-        let telegraph = visuals.swing_fans.get(class).cloned().map(|fan| {
-            commands
-                .spawn((
-                    Mesh3d(fan),
-                    MeshMaterial3d(visuals.material(&mut materials, id.0, Look::Telegraph)),
-                    WorldAligned(Quat::IDENTITY, 0.05),
-                    Visibility::Hidden,
-                ))
-                .id()
-        });
         let prison = commands
             .spawn((
                 Mesh3d(visuals.ice_prison.clone()),
@@ -661,15 +604,10 @@ fn add_visuals(
                 Mesh3d(visuals.fighters[class].clone()),
                 MeshMaterial3d(material),
                 Transform::from_translation(to_world(pos.0, 0.0)),
-                ShownSwing::default(),
-                ShownDash::default(),
                 ShownNova::default(),
                 Frost { prison, rune, shown: (false, false) },
             ))
             .add_children(&[prison, rune]);
-        if let Some(telegraph) = telegraph {
-            commands.entity(entity).insert(Telegraph(telegraph)).add_child(telegraph);
-        }
         if is_me && let Some(circle) = visuals.range_circles.get(class).cloned() {
             commands.entity(entity).with_child((
                 Mesh3d(circle),
@@ -720,100 +658,6 @@ fn add_visuals(
             let wind = shot.commands().spawn((Mesh3d(visuals.wind.clone()), MeshMaterial3d(material), wind)).id();
             shot.add_child(wind).insert(Thrown { wind, launch: None, length: 0.0, stretch: 0.0 });
         }
-    }
-}
-
-/// The tick of the last swing drawn for this player.
-#[derive(Component, Default)]
-struct ShownSwing(u32);
-
-/// A swoosh for each new melee swing, in the air where the blade swept (the same for everyone:
-/// who swung shows in the health bar, not the swing). `LastSwing` is predicted for our own
-/// player (instant) and replicated for others; rollbacks may rewrite it with the same value, so
-/// each swing is drawn once per tick.
-fn show_swings(
-    mut commands: Commands,
-    time: Res<Time>,
-    visuals: Res<Visuals>,
-    mut swings: Query<(&ClassId, &Pos, &LastSwing, &mut ShownSwing), Changed<LastSwing>>,
-) {
-    for (class, pos, swing, mut shown) in &mut swings {
-        if swing.tick <= shown.0 {
-            continue;
-        }
-        shown.0 = swing.tick;
-        let AttackKind::Melee { arc_degrees, .. } = class.def().attack.kind else { continue };
-        let Some(mesh) = visuals.swooshes.get(class).cloned() else { continue };
-        let now = time.elapsed_secs();
-        let swoosh = Swoosh { started: now, dir: swing.dir.to_angle(), arc: arc_degrees.to_radians() };
-        commands.spawn((
-            SwingFx { until: now + SWOOSH_SECONDS },
-            Mesh3d(mesh),
-            MeshMaterial3d(visuals.swoosh_fades[0].clone()),
-            Transform::from_translation(to_world(pos.0, 0.0)).with_rotation(swoosh.turn(0.0)),
-            swoosh,
-        ));
-    }
-}
-
-impl Swoosh {
-    /// Its rotation `t` (0..1) of the way through: sweeping on, quickly at first, to rest where
-    /// the swing was aimed.
-    fn turn(&self, t: f32) -> Quat {
-        let eased = 1.0 - (1.0 - t).powi(3);
-        Quat::from_rotation_y(self.dir - (1.0 - eased) * SWOOSH_SWEEP * self.arc)
-    }
-}
-
-/// Swooshes sweep on, spread out a little and fade.
-fn sweep_swooshes(
-    time: Res<Time>,
-    visuals: Res<Visuals>,
-    mut swooshes: Query<(&Swoosh, &mut Transform, &mut MeshMaterial3d<StandardMaterial>)>,
-) {
-    let now = time.elapsed_secs();
-    for (swoosh, mut transform, mut material) in &mut swooshes {
-        let t = ((now - swoosh.started) / SWOOSH_SECONDS).clamp(0.0, 1.0);
-        let spread = 0.9 + 0.15 * t;
-        transform.rotation = swoosh.turn(t);
-        transform.scale = Vec3::new(spread, 1.0, spread);
-        let fade = &visuals.swoosh_fades[((t * SWOOSH_FADES as f32) as usize).min(SWOOSH_FADES - 1)];
-        if material.0 != *fade {
-            material.0 = fade.clone();
-        }
-    }
-}
-
-/// A brief flat flash on the ground (a swing, a dash streak) pointing along `dir`, gone `until`.
-fn flash(mesh: Handle<Mesh>, material: Handle<StandardMaterial>, at: Vec3, dir: Vec2, until: f32) -> impl Bundle {
-    (
-        SwingFx { until },
-        Mesh3d(mesh),
-        MeshMaterial3d(material),
-        Transform::from_translation(at).with_rotation(Quat::from_rotation_y(dir.to_angle())),
-    )
-}
-
-/// The start tick of the last dash drawn for this player.
-#[derive(Component, Default)]
-struct ShownDash(u32);
-
-/// A fading spectral streak along each new dash (once per dash, though rollbacks may rewrite
-/// `AbilityState`).
-fn show_dashes(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut visuals: ResMut<Visuals>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut dashes: Query<(&PlayerId, &ClassId, &Pos, &AbilityState, &mut ShownDash), Changed<AbilityState>>,
-) {
-    for (id, class, pos, ability, mut shown) in &mut dashes {
-        let Some(dash) = ability.dash.filter(|d| d.started_at > shown.0) else { continue };
-        shown.0 = dash.started_at;
-        let Some(streak) = visuals.dash_streaks.get(class).cloned() else { continue };
-        let material = visuals.material(&mut materials, id.0, Look::Spirit);
-        let until = time.elapsed_secs() + DASH_SECONDS;
-        commands.spawn(flash(streak, material, to_world(pos.0, 0.1), dash.dir, until));
     }
 }
 
@@ -923,24 +767,6 @@ fn fade_swings(mut commands: Commands, time: Res<Time>, swings: Query<(Entity, &
         if time.elapsed_secs() >= fx.until {
             commands.entity(entity).despawn();
         }
-    }
-}
-
-/// Show the telegraph, pointing where the swing is locked to, while a melee fighter winds up (a
-/// shot shows none: you see it fly).
-/// `AttackState` is predicted for us (shown the moment we click) and interpolated for others
-/// (and gone once their spear is seen flying, see `SeenThrows`).
-fn show_telegraphs(
-    players: Query<(&AttackState, Option<&SeenThrows>, &Telegraph), Or<(Changed<AttackState>, Changed<SeenThrows>)>>,
-    mut telegraphs: Query<(&mut WorldAligned, &mut Visibility)>,
-) {
-    for (attack, seen, telegraph) in &players {
-        let Ok((mut aligned, mut visibility)) = telegraphs.get_mut(telegraph.0) else { continue };
-        let windup = SeenThrows::windup(seen, attack);
-        if let Some(windup) = windup {
-            aligned.0 = Quat::from_rotation_y(windup.dir.to_angle());
-        }
-        visibility.set_if_neq(shown(windup.is_some()));
     }
 }
 

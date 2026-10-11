@@ -14,9 +14,11 @@
 //! is drawn, halfway through the cooldown. A thrown Q is a quick flick of the arm through the
 //! same throw.
 //!
-//! The revenant holds its sword low and ready. The windup raises it up and back over the
-//! shoulder, turning away; the strike chops it down through the target, stepping into it. A
-//! dash is a forward lunge with the blade swept back.
+//! The revenant fights like a fencer: its blade held out ahead of it, point low, always toward
+//! where it faces. The windup draws the sword arm back, the weapon shoulder turning away and the
+//! lead hand reaching out at the target, the point coming up level; the strike is a lunge,
+//! the arm driving the point straight out at the target as the lead leg steps long into it and
+//! the body leans in behind it. A dash is a forward lunge with the blade swept back.
 //!
 //! The frost mage carries its staff upright at its side. The windup raises it high toward the
 //! target, the off hand reaching out to gather the cold; the cast thrusts the crystal forward at
@@ -25,7 +27,7 @@
 //!
 //! Transforms are only written when they change, so a fighter standing still costs nothing.
 
-use std::f32::consts::{FRAC_PI_2, PI, TAU};
+use std::f32::consts::{FRAC_PI_2, TAU};
 
 use arena_shared::classes::{AbilityKind, AttackKind};
 use arena_shared::protocol::*;
@@ -43,7 +45,7 @@ pub struct RigPlugin;
 
 impl Plugin for RigPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(crate::cloth::ClothPlugin);
+        app.add_plugins((crate::cloth::ClothPlugin, crate::swish::SwishPlugin));
         app.add_systems(Startup, load_rigs);
         app.add_systems(Update, (add_rigs, see_throws, turn_fighters, pose_rigs).chain().in_set(Posing));
     }
@@ -52,7 +54,7 @@ impl Plugin for RigPlugin {
 /// The spawn ticks of another fighter's latest auto-attack and Q throws, noted as their spears
 /// appear. Spears fly on our own clock (where they really are), but the thrower is drawn a round
 /// trip or so in the past: its body only gets to a throw after the spear is already flying. What
-/// shows a throw (the arm, the hand going empty, the cast bar, the telegraph) goes by this
+/// shows a throw (the arm, the hand going empty, the cast bar) goes by this
 /// instead, so the javelin isn't drawn in the hand and in the air at once.
 #[derive(Component, Default)]
 pub(crate) struct SeenThrows {
@@ -129,10 +131,9 @@ enum Held {
     /// Kept pointing (a little above) the aim, whatever the arm and body do: a javelin ready to
     /// throw.
     OnTarget,
-    /// Fixed in the fist, along the arm and this far (radians) forward of it: a sword.
-    InHand(f32),
     /// Kept standing up, whatever the arm and body do, tipped this far (radians, keyframes like
-    /// the joints') toward the facing: a staff.
+    /// the joints') toward the facing: a staff (or, tipped all the way over, a blade held out
+    /// toward the facing).
     Upright([f32; 4]),
 }
 
@@ -153,15 +154,17 @@ const JAVELINIST: Moves = Moves {
 };
 
 const REVENANT: Moves = Moves {
-    weapon_arm: [0.65, -2.7, 1.0, -1.5],
-    weapon_arm_untwist: 0.0,
-    lead_arm: [-0.2, 0.7, -0.6, -1.1],
-    lead_leg: [0.1, 0.45, 0.6, 0.65],
-    back_leg: [-0.1, -0.4, -0.65, -0.7],
-    twist: [0.0, -0.75, 0.5, 0.0],
-    lean: [0.0, 0.2, -0.4, -0.55],
-    head_dip: [0.0, 0.15, -0.25, 0.0],
-    held: Held::InHand(0.45),
+    weapon_arm: [0.45, -0.85, 1.5, -1.2],
+    weapon_arm_untwist: 0.8,
+    lead_arm: [-0.25, 0.95, -0.75, -1.1],
+    lead_leg: [0.12, 0.25, 0.8, 0.65],
+    back_leg: [-0.1, -0.35, -0.8, -0.7],
+    twist: [0.1, -0.7, 0.55, 0.0],
+    lean: [0.0, 0.15, -0.45, -0.55],
+    head_dip: [0.0, 0.1, -0.2, 0.0],
+    // Point forward and a little down in guard, level drawn back and through the lunge, swept
+    // back and down dashing.
+    held: Held::Upright([2.0, 1.6, 1.55, -2.3]),
     throws: false,
     scale: 1.13,
 };
@@ -205,7 +208,7 @@ const FLICK: (f32, f32) = (1.0, 10.0);
 const SLAM: (f32, f32) = (8.0, 24.0);
 /// How quickly a fighter turns toward where it wants to face, and eases in and out of its walk
 /// (per second, exponential).
-const TURN_RATE: f32 = 28.0;
+const TURN_RATE: f32 = 40.0;
 const WALK_RATE: f32 = 10.0;
 /// How much the head turns and leans with the body (0: it stays square on the aim), so it moves
 /// with the shoulders through a strike instead of hanging still while the body turns under it.
@@ -384,6 +387,7 @@ fn add_rigs(
             crate::cloth::dress(&mut commands, player, rig.legs, rig.head, own, wardrobe);
         }
         commands.entity(player).insert((
+            crate::swish::Blade(rig.held),
             rig,
             Facing { look: Vec2::X, last_pos: pos.0, moved: Vec2::ZERO, turned: 0.0 },
             HeldAt::default(),
@@ -550,7 +554,6 @@ fn pose_rigs(
         let weapon_arm = arm_turn(twist, weapon_arm);
         let held_in = |weapon_arm: Quat, unlean: Quat| match moves.held {
             Held::OnTarget => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-(FRAC_PI_2 - 0.12)),
-            Held::InHand(forward) => Quat::from_rotation_z(PI + forward),
             Held::Upright(tip) => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-pose(tip)),
         };
         let held = held_in(weapon_arm, unlean);

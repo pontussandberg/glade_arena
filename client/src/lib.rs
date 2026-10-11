@@ -29,6 +29,8 @@ pub mod camera;
 #[cfg(feature = "render")]
 pub mod cloth;
 #[cfg(feature = "render")]
+pub mod dummies;
+#[cfg(feature = "render")]
 pub mod casting;
 #[cfg(feature = "render")]
 pub mod esc_menu;
@@ -53,6 +55,8 @@ mod preview;
 pub mod sculpt;
 #[cfg(feature = "render")]
 pub mod stat_frame;
+#[cfg(feature = "render")]
+pub mod swish;
 #[cfg(feature = "render")]
 pub mod tooltip;
 
