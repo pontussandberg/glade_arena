@@ -105,7 +105,13 @@ const STRIDES_PER_METER: f32 = 0.4;
 const LEG_SWING: f32 = 0.6;
 const ARM_SWING: f32 = 0.4;
 const BOB: f32 = 0.025;
+/// A weapon resting its point on the ground (`Moves::rests`): how high its lowest point is kept
+/// (meters), and how far at most the wrist bends to keep it there (radians).
+const REST_HEIGHT: f32 = 0.0;
+const REST_BEND: f32 = 0.6;
 const SWAY: f32 = 0.02;
+/// How far apart (meters) the feet's heights are where the body still stands partly on both.
+const FOOT_BLEND: f32 = 0.03;
 /// The joints' springs: how stiff (natural frequency, rad/s) and how damped (1 = no overshoot).
 /// Firm and nearly critically damped: motion is smoothed, not wobbly, and a strike still lands
 /// on its tick.
@@ -129,6 +135,14 @@ pub(crate) struct Moves {
     back_leg: [f32; 4],
     twist: [f32; 4],
     lean: [f32; 4],
+    /// How it leans standing still while carrying (the carry keyframe is how it leans walking).
+    standing_lean: f32,
+    /// How much further forward its weapon arm hangs standing still while carrying (on top of
+    /// undoing `standing_lean`).
+    standing_arm: f32,
+    /// Its weapon's point rests on the ground while it carries: the wrist bends however far
+    /// keeps it there, whatever the arm's swing and the body's bob (`Held::Gripped` only).
+    rests: bool,
     head_dip: [f32; 4],
     held: Held,
     // (The fourth keyframe of each is the class's Q pose: a dash, or a nova's slam.)
@@ -193,6 +207,9 @@ const JAVELINIST: Moves = Moves {
     // of the head. Released: the shoulder comes round, the javelin in front of the chest.
     twist: [0.0, -0.8, 0.55, 0.0],
     lean: [0.0, 0.28, -0.38, -0.45],
+    standing_lean: 0.0,
+    standing_arm: 0.0,
+    rests: false,
     head_dip: [0.0, 0.2, -0.15, 0.0],
     held: Held::OnTarget,
     throws: true,
@@ -220,21 +237,28 @@ const REVENANT: Moves = Moves {
     windmill: true,
     // The free arm dangles carelessly toward the ground throughout, whatever the body does:
     // against its lean (leaning back, it hangs a little back; bowed into the blow, forward).
-    lead_arm: [0.05, -0.2, 0.55, -0.9],
+    lead_arm: [0.3, 0.13, 0.55, -0.9],
     // Legs hang from the leaning body: bowed into the blow, the lead leg reaches far forward
     // and the back one, straight under the hips, braces back.
     lead_leg: [0.25, 0.25, 1.85, 0.7],
     back_leg: [-0.2, -0.6, -0.45, -0.75],
     // Side on, the weapon shoulder back; wound further round, then turning into the blow.
     twist: [-0.8, -0.5, 0.8, 0.5],
-    lean: [-0.1, 0.2, -0.7, -0.5],
-    head_dip: [0.1, 0.2, -0.45, -0.15],
+    // A careless reaper's hunch: leaning forward always, leading the attack with the body, never
+    // standing up straight (not even with the glaive up overhead), bowing deep into the blow.
+    lean: [-0.35, -0.15, -0.7, -0.5],
+    // Standing still it slouches, easy, rather than hunching as it walks.
+    standing_lean: -0.12,
+    // The weapon arm hanging all but straight down, the wrist bent to keep the point down.
+    standing_arm: 0.45,
+    rests: true,
+    head_dip: [0.25, 0.15, -0.45, -0.15],
     // Dragged: the thumb (and blade) back, the blade trailing low behind. Drawn: straight up
     // over the head, in line with the arm (so the grip turns over on the way up without the
     // blade swinging about). Struck: in one plane over the top, the wrist coming through, the
     // blade flat on the ground ahead. Unwinding: the grip turning back over out to the right
     // as the arm comes round to the drag.
-    held: Held::Gripped { wrist: [0.85, FRAC_PI_2, -0.45, 1.3], roll: [-PI, 0.0, 0.0, 0.0] },
+    held: Held::Gripped { wrist: [1.17, FRAC_PI_2, -0.45, 1.3], roll: [-PI, 0.0, 0.0, 0.0] },
     throws: false,
     scale: 1.13,
     stretch: 0.15,
@@ -267,6 +291,9 @@ const FROST_MAGE: Moves = Moves {
     back_leg: [-0.1, -0.3, -0.5, -0.5],
     twist: [0.0, -0.4, 0.35, 0.15],
     lean: [0.0, 0.12, -0.25, -0.35],
+    standing_lean: 0.0,
+    standing_arm: 0.0,
+    rests: false,
     head_dip: [0.0, 0.1, -0.15, -0.2],
     held: Held::Upright([0.08, -0.25, 1.0, -0.05]),
     throws: false,
@@ -313,7 +340,7 @@ const FOLLOW_THROUGH: (f32, f32) = (1.5, 7.0);
 /// An empowered weapon (`follow_up`): how much bigger it grows, how quickly (per second,
 /// exponential), and how much further its strike smears out, so it reaches its lane's far end
 /// (`FollowUp::reach`).
-pub(crate) const EMPOWERED_BLADE: f32 = 1.4;
+pub(crate) const EMPOWERED_BLADE: f32 = 1.6;
 const EMPOWER_RATE: f32 = 12.0;
 pub(crate) const EMPOWERED_STRETCH: f32 = 0.05;
 /// How much a gripped blade grown to twice its size is tipped up (radians, in proportion).
@@ -518,7 +545,7 @@ impl Phase {
     }
 
     /// How far it's braced in any of them (0: carrying, free to walk).
-    fn braced(&self) -> f32 {
+    pub(crate) fn braced(&self) -> f32 {
         self.draw.max(self.throw).max(self.dashing)
     }
 }
@@ -540,9 +567,14 @@ pub(crate) struct Angles {
 }
 
 /// The angles `moves` pose a rig by at `phase`, its limbs swinging by `step` as it walks (-1 to
-/// 1: where in its stride, and how much it's walking).
-pub(crate) fn targets(moves: &Moves, phase: Phase, step: f32) -> Angles {
+/// 1: where in its stride, and how much it's walking), `walking` of the way into its walk (0 to
+/// 1: carrying, it stands as `Moves::standing_lean` says when still).
+pub(crate) fn targets(moves: &Moves, phase: Phase, step: f32, walking: f32) -> Angles {
     let pose = |keys| phase.pose(keys);
+    // Standing still while carrying: leaning as it stands rather than as it walks, the arms
+    // turned back by as much so they hang (and what they hold lies) just as they did.
+    let still = (1.0 - walking) * (1.0 - phase.braced());
+    let stand = (moves.standing_lean - moves.lean[0]) * still;
     let legs = step * LEG_SWING * (1.0 - phase.braced());
     let (tip, roll) = match moves.held {
         Held::OnTarget => (0.0, 0.0),
@@ -559,9 +591,10 @@ pub(crate) fn targets(moves: &Moves, phase: Phase, step: f32) -> Angles {
     let carry = if moves.windmill && phase.draw == 0.0 { carry + TAU * ((released - carry) / TAU).round() } else { carry };
     Angles {
         twist: pose(moves.twist),
-        lean: pose(moves.lean),
-        weapon_arm: pose([carry, drawn, released, dash]) - step * ARM_SWING * 0.3,
-        lead_arm: pose(moves.lead_arm) + step * ARM_SWING,
+        lean: pose(moves.lean) + stand,
+        // A weapon resting on the ground keeps its arm still as it walks: only the bob moves it.
+        weapon_arm: pose([carry, drawn, released, dash]) - step * ARM_SWING * if moves.rests { 0.0 } else { 0.3 } - stand + moves.standing_arm * still,
+        lead_arm: pose(moves.lead_arm) + step * ARM_SWING - stand,
         back_leg: pose(moves.back_leg) - legs,
         lead_leg: pose(moves.lead_leg) + legs,
         head_dip: pose(moves.head_dip),
@@ -589,9 +622,9 @@ pub(crate) struct Posed {
 /// Puts a rig together from its `angles` (and from `aimed`, the ones its joints are heading
 /// for), facing `look`, `walk` of the way into its walk at `stride` (radians) through its
 /// stride, its weapon stretched by `smear` (`Moves::stretch` already in it) and `blade` times
-/// its size.
+/// its size, `rest` of the way to resting its point on the ground (`Moves::rests`; 1: carrying).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec2, stride: f32, walk: f32, smear: f32, blade: f32) -> Posed {
+pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec2, stride: f32, walk: f32, smear: f32, blade: f32, rest: f32) -> Posed {
     let sway = stride.sin() * SWAY * walk;
     // Leaning along the facing, then twisting: leaning back about the twisted body's own axis
     // would tip it sideways, across the line of the strike.
@@ -605,14 +638,13 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
     // Standing on the lower foot, however the body leans and the legs spread (the legs are
     // straight, as long as the hips are high, and hang from the leaning body).
     let foot = |hip: Vec3, leg: f32| (lean * (hip + leg_turn(leg) * Vec3::NEG_Y * RIG_HIP.y)).y;
-    let lowest = foot(RIG_HIP, angles.back_leg).min(foot(RIG_HIP.with_z(-RIG_HIP.z), angles.lead_leg));
+    let lowest = soft_min(foot(RIG_HIP, angles.back_leg), foot(RIG_HIP.with_z(-RIG_HIP.z), angles.lead_leg));
     let body = Transform {
-        translation: Vec3::Y * (-lowest + (2.0 * stride).cos().abs() * BOB * walk) * moves.scale,
+        translation: Vec3::Y * (-lowest + (2.0 * stride).cos().powi(2) * BOB * walk) * moves.scale,
         rotation: facing_turn * lean,
         scale: Vec3::splat(moves.scale),
     };
     let unlean = lean.inverse();
-    let weapon_arm = arm_turn(angles.twist, angles.weapon_arm);
     // The pose the joints are heading for (not where their springs have got to): the body's
     // lean and the weapon arm, and where the hand is (in the facing's frame, unscaled).
     let (aimed_lean, aimed_arm) = (leaning(aimed.twist, aimed.lean, 0.0), arm_turn(aimed.twist, aimed.weapon_arm));
@@ -620,6 +652,58 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
     // along the ground rather than into it.
     let lift = (blade - 1.0) * BIG_BLADE_LIFT;
     let gripped = |angles: &Angles| Quat::from_rotation_y(angles.roll) * Quat::from_rotation_z(-(FRAC_PI_2 + angles.tip - lift));
+    // Its point resting on the ground, still as it walks: where it rests is where the wrist bent
+    // as far as puts the blade's lowest point (its tip or its edge's corner) on the ground in the
+    // pose the joints are heading for, unbobbed; the shoulder and wrist then hold it there,
+    // whatever the stride, the bob and the sway do to the body (the arm taking up the bob).
+    let rested = if moves.rests && rest > 0.0 && matches!(moves.held, Held::Gripped { .. }) {
+        let point_at = |lean: Quat, height: f32, angles: &Angles, local: Vec3| {
+            Vec3::Y * height + moves.scale * (lean * (RIG_SHOULDER + arm_turn(angles.twist, angles.weapon_arm) * (RIG_HAND + gripped(angles) * local * blade)))
+        };
+        let (tip, corner) = (Vec3::Y * arena::BLADE_LENGTH, arena::glaive_edge(1.0));
+        // Where it rests: the aimed pose, standing as it would without the walk's bob.
+        let aimed_lean = leaning(aimed.twist, aimed.lean, 0.0);
+        let aimed_foot = |hip: Vec3, leg: f32| (aimed_lean * (hip + leg_turn(leg) * Vec3::NEG_Y * RIG_HIP.y)).y;
+        let aimed_height = -soft_min(aimed_foot(RIG_HIP, aimed.back_leg), aimed_foot(RIG_HIP.with_z(-RIG_HIP.z), aimed.lead_leg)) * moves.scale;
+        let lowest = |wrist: f32| {
+            let posed = Angles { tip: wrist, ..*aimed };
+            point_at(aimed_lean, aimed_height, &posed, tip).y.min(point_at(aimed_lean, aimed_height, &posed, corner).y)
+        };
+        let mut wrist = aimed.tip;
+        for _ in 0..5 {
+            let slope = (lowest(wrist + 0.01) - lowest(wrist - 0.01)) / 0.02;
+            if slope.abs() < 1e-3 {
+                break;
+            }
+            wrist -= ((lowest(wrist) - REST_HEIGHT) / slope).clamp(-0.3, 0.3);
+        }
+        let rests_on = Angles { tip: wrist, ..*aimed };
+        let spot = point_at(aimed_lean, aimed_height, &rests_on, tip);
+        // Holding its tip there as posed: the shoulder and wrist turned together (Newton's method, on
+        // the point's place along the facing and its height).
+        let off = |arm: f32, wrist: f32| {
+            let at = point_at(lean, body.translation.y, &Angles { weapon_arm: arm, tip: wrist, ..*angles }, tip) - spot;
+            Vec2::new(at.x, at.y)
+        };
+        let (mut arm, mut wrist) = (angles.weapon_arm, angles.tip + (wrist - aimed.tip));
+        for _ in 0..5 {
+            let miss = off(arm, wrist);
+            let by_arm = (off(arm + 0.01, wrist) - off(arm - 0.01, wrist)) / 0.02;
+            let by_wrist = (off(arm, wrist + 0.01) - off(arm, wrist - 0.01)) / 0.02;
+            let det = by_arm.x * by_wrist.y - by_wrist.x * by_arm.y;
+            if det.abs() < 1e-4 {
+                break;
+            }
+            arm -= ((by_wrist.y * miss.x - by_wrist.x * miss.y) / det).clamp(-0.2, 0.2);
+            wrist -= ((by_arm.x * miss.y - by_arm.y * miss.x) / det).clamp(-0.2, 0.2);
+        }
+        let bend = |to: f32, from: f32| from + (to - from).clamp(-REST_BEND, REST_BEND) * rest;
+        Angles { weapon_arm: bend(arm, angles.weapon_arm), tip: bend(wrist, angles.tip), ..*angles }
+    } else {
+        *angles
+    };
+    let angles = &rested;
+    let weapon_arm = arm_turn(angles.twist, angles.weapon_arm);
     let held_in = |weapon_arm: Quat, unlean: Quat, angles: &Angles| match moves.held {
         Held::OnTarget => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-(FRAC_PI_2 - 0.12)),
         Held::Upright(_) => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-angles.tip),
@@ -644,6 +728,14 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
         },
         held_aimed,
     }
+}
+
+/// The lower of two heights, rounded off where they cross (by about `FOOT_BLEND`): standing on
+/// the lower foot, the body passing smoothly from one to the other as they swap, rather than
+/// jolting.
+fn soft_min(a: f32, b: f32) -> f32 {
+    let m = a.min(b);
+    m - FOOT_BLEND * ((-(a - m) / FOOT_BLEND).exp() + (-(b - m) / FOOT_BLEND).exp()).ln()
 }
 
 /// The attack as the joints' targets see it at `now`: as far ahead of its own clock as the
@@ -960,10 +1052,10 @@ fn pose_rigs(
             && released.is_some_and(|s| s < REARM_TICKS);
 
         // Every angle chases its pose on a spring, and the rig is put together from them.
-        let angles = rig.joints.follow(&targets(moves, phase, step), dt, moves);
-        let aimed = targets(moves, phase, 0.0);
+        let angles = rig.joints.follow(&targets(moves, phase, step, rig.walking), dt, moves);
+        let aimed = targets(moves, phase, 0.0, rig.walking);
         let walk = rig.walking * (1.0 - phase.braced());
-        let posed = assemble(moves, &angles, &aimed, facing.look, stride, walk, stretch * smear, blade);
+        let posed = assemble(moves, &angles, &aimed, facing.look, stride, walk, stretch * smear, blade, 1.0 - phase.braced());
         let placed = Transform { translation: body.translation.with_y(posed.body.translation.y), ..posed.body };
         body.set_if_neq(placed);
         // For a fighter that throws its weapon: where it is in the pose the joints are heading for

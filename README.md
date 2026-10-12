@@ -22,7 +22,7 @@ projectile) and Q ability; all of it lives in `shared/assets/classes.ron`:
 | Class | Role | Auto-attack | Q |
 |---|---|---|---|
 | Jav | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`) | **Spirit Spear**: a fast spectral spear, thrown instantly (no windup, no root) |
-| Revenant | Duelist | A heavy overhead blow of its dark glaive, the blade coming down flat on the ground from 1.6 m to 2.75 m ahead, tearing it open; each hit empowers the glaive (40% bigger) for the next swing if it follows within 3 s: a lane from 2 m to 3.85 m, 0.7 m wide, lost on a miss (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash forward, damaging each enemy you pass through |
+| Revenant | Duelist | A heavy overhead blow of its dark glaive, the blade coming down flat on the ground from 1.6 m to 2.75 m ahead, tearing it open for 3 s (inside the tear the revenant moves 30% faster); each hit empowers the glaive for the next swing if it follows within 3 s: a lane 60% further and wider, from 2 m to 4.4 m, 0.8 m wide (an empowered hit renews it), lost on a miss (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash forward, damaging each enemy you pass through |
 | Frost Mage | Controller | Frostbolts: little damage and shorter range (mid range), but each hit slows (40% for 2 s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5 s (no walking, no dashing) |
 
 Hits can carry **crowd control** (`chill` in `classes.ron`): a slow takes a share off walking

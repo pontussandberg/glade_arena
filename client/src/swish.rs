@@ -117,7 +117,7 @@ const CLOSE_STEPS: usize = 8;
 /// Through a tear's going (from when it starts closing to when it's gone, 0..1): when its cracks
 /// have closed, and when the mark starts fading out.
 const CLOSED_BY: f32 = 0.8;
-const FADES_FROM: f32 = 0.4;
+const FADES_FROM: f32 = 0.75;
 const FLARE_SECONDS: f32 = 0.18;
 const BREATH: (f32, f32) = (0.18, 5.5);
 /// The chunks of earth thrown up: how many per meter of blade, how big (meters, smallest and

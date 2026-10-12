@@ -313,11 +313,11 @@ fn preview_impact() {
     let key = "revenant";
     let class = ClassId::by_key(key).unwrap();
     let moves = moves(key);
-    let landed = targets(moves, Phase { draw: 0.0, throw: 1.0, dashing: 0.0 }, 0.0);
+    let landed = targets(moves, Phase { draw: 0.0, throw: 1.0, dashing: 0.0 }, 0.0, 0.0);
     // Plain, and empowered (`follow_up`): the blade grown, smeared out at its longest.
     for empowered in [false, true] {
     let (smear, blade) = if empowered { (moves.stretch + EMPOWERED_STRETCH, EMPOWERED_BLADE) } else { (0.0, 1.0) };
-    let posed = assemble(moves, &landed, &landed, Vec2::X, 0.0, 0.0, smear, blade);
+    let posed = assemble(moves, &landed, &landed, Vec2::X, 0.0, 0.0, smear, blade, 0.0);
     let (figure, grip, point) = posed_figure(key, &posed, arena::BLADE_LENGTH);
     println!("landed{}: grip {grip:5.2} point {point:5.2}", if empowered { " empowered, smeared" } else { "" });
     // Over the strike's hitbox, its lane, ahead (+X) of where it stands.
@@ -428,17 +428,17 @@ fn preview_attacks() {
             let (shown, shown_released, ahead) = ahead_of_springs(class, moves, attack.winding_up(), released, now);
             let (draw, throw, smear) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
             let phase = Phase { draw, throw, dashing: 0.0 };
-            let angles = joints.follow(&targets(moves, phase, 0.0), dt, moves);
+            let angles = joints.follow(&targets(moves, phase, 0.0, 0.0), dt, moves);
             // The blade's point every frame through the strike, to catch it jumping sideways.
             if std::env::var_os("PREVIEW_TRACE").is_some() && key == "revenant" && now > release - 4.0 && now < release + 3.0 {
-                let posed = assemble(moves, &angles, &targets(moves, phase, 0.0), Vec2::X, 0.0, 0.0, moves.stretch * smear, 1.0);
+                let posed = assemble(moves, &angles, &targets(moves, phase, 0.0, 0.0), Vec2::X, 0.0, 0.0, moves.stretch * smear, 1.0, 1.0 - phase.braced());
                 let (_, _, point) = posed_figure(key, &posed, length);
                 println!("    trace {:6.2}: phase ({draw:.2}, {throw:.3}) point {point:5.2} roll {:.3} wrist {:.3}", now - release, angles.roll, angles.tip);
             }
             if now < moments[next].1 {
                 continue;
             }
-            let posed = assemble(moves, &angles, &targets(moves, phase, 0.0), Vec2::X, 0.0, 0.0, moves.stretch * smear, 1.0);
+            let posed = assemble(moves, &angles, &targets(moves, phase, 0.0, 0.0), Vec2::X, 0.0, 0.0, moves.stretch * smear, 1.0, 1.0 - phase.braced());
             let (mut tris, grip, point) = posed_figure(key, &posed, length);
             println!("  {:>14}: phase ({draw:.2}, {throw:.2}) grip {grip:5.2} point {point:5.2} arm {:.2} lean {:.2} twist {:.2} wrist {:.2} roll {:.2}", moments[next].0, angles.weapon_arm, angles.lean, angles.twist, angles.tip, angles.roll);
             ground(&mut tris);
