@@ -1,8 +1,14 @@
-//! The arena map: a forest clearing on a 1 m tile grid, shared by server and client.
+//! The arena maps, on a 1 m tile grid, shared by server and client. Each room plays on one
+//! (`MapId`), picked by its leader:
 //!
-//! A river runs north-south through the middle, crossed by a stone bridge and two fords. Ruined
-//! walls, boulders and trees give cover. The layout is point-symmetric (x, y) -> (-x, -y), so
-//! both banks are equally good.
+//! - `crossing`: a forest clearing split by a river, crossed by a stone bridge and two fords.
+//! - `keep`: a ruined keep on an island in its moat, marshes around it that slow whoever wades in.
+//! - `gorge`: highlands split by a chasm that shots fly over but no one walks, crossed by a stone
+//!   arch and two rope bridges, and by waygates that jump a fighter to the far side.
+//!
+//! Every layout is point-symmetric, (x, y) -> (-x, -y), so both halves are equally good. Tile
+//! `t` covers [t, t + 1) in meters: the grid of a map of `size` tiles runs from `-size / 2` to
+//! `size / 2`, centered on (0, 0), and where a point is on it doesn't depend on the map.
 //!
 //! Everything here must give identical results on every platform (native server, wasm client),
 //! so both agree on it (the client picks the point a click walks to, `walk_target`, and draws
@@ -16,27 +22,37 @@ use std::rc::Rc;
 use std::sync::LazyLock;
 
 use bevy::math::{IVec2, Vec2};
+use serde::{Deserialize, Serialize};
 
 use crate::protocol::PickupKind;
 
-/// Tiles across and down. Even, so the grid is point-symmetric around (0, 0).
-pub const MAP_TILES: IVec2 = IVec2::new(64, 44);
-pub const MAP_HALF_EXTENTS: Vec2 = Vec2::new(MAP_TILES.x as f32 / 2.0, MAP_TILES.y as f32 / 2.0);
+mod crossing;
+mod gorge;
+mod keep;
 
 /// Player clearance used when checking straight-line movement against walls. Smaller than the
 /// drawn pawn (0.48 m), so a fighter can brush a wall corner slightly; it must stay below 0.5 so
 /// that from any tile center the next path step is always in a clear line.
 const NAV_RADIUS: f32 = 0.3;
 
+/// How fast a fighter walks through marsh, as a share of its speed.
+pub const MARSH_SPEED: f32 = 0.6;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tile {
     Grass,
     /// Dirt road: walkable, visual only.
     Path,
-    /// Shallow crossing through the river.
+    /// Shallow crossing through water.
     Ford,
     Bridge,
+    /// A rope bridge of planks over a chasm.
+    Planks,
+    /// Boggy ground: walkable, but walking through it is slow (`MARSH_SPEED`).
+    Marsh,
     Water,
+    /// A drop no one walks, but shots fly over, like water.
+    Chasm,
     Wall,
     Rock,
     Tree,
@@ -46,35 +62,88 @@ pub enum Tile {
 
 impl Tile {
     pub fn walkable(self) -> bool {
-        matches!(self, Tile::Grass | Tile::Path | Tile::Ford | Tile::Bridge)
+        matches!(self, Tile::Grass | Tile::Path | Tile::Ford | Tile::Bridge | Tile::Planks | Tile::Marsh)
     }
 
-    /// Projectiles fly over water but not through walls, rocks or trees.
+    /// Projectiles fly over water and chasms but not through walls, rocks or trees.
     pub fn blocks_shots(self) -> bool {
         matches!(self, Tile::Wall | Tile::Rock | Tile::Tree | Tile::Forest)
     }
+
+    /// How fast walking on it is, as a share of a fighter's speed.
+    pub fn speed_factor(self) -> f32 {
+        if self == Tile::Marsh { MARSH_SPEED } else { 1.0 }
+    }
 }
 
-/// Spawn points, four per bank, mirrored.
-pub const SPAWN_POINTS: [Vec2; 8] = [
-    Vec2::new(-23.5, -0.5),
-    Vec2::new(-20.5, 7.5),
-    Vec2::new(-20.5, -8.5),
-    Vec2::new(-11.5, -2.5),
-    Vec2::new(23.5, 0.5),
-    Vec2::new(20.5, -7.5),
-    Vec2::new(20.5, 8.5),
-    Vec2::new(11.5, 2.5),
-];
+/// Which map a room plays on.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum MapId {
+    #[default]
+    Crossing,
+    Keep,
+    Gorge,
+}
 
-/// Where the pickups lie (tile centers): a heal and a haste per bank, mirrored. Each bank's heal
-/// is up north by the river, its haste down south between the spawns and the low wall.
-pub const PICKUP_SPOTS: [(Vec2, PickupKind); 4] = [
-    (Vec2::new(-4.5, 10.5), PickupKind::Heal),
-    (Vec2::new(4.5, -10.5), PickupKind::Heal),
-    (Vec2::new(-11.5, -8.5), PickupKind::Haste),
-    (Vec2::new(11.5, 8.5), PickupKind::Haste),
-];
+impl MapId {
+    pub const ALL: [MapId; 3] = [MapId::Crossing, MapId::Keep, MapId::Gorge];
+
+    pub fn map(self) -> &'static Map {
+        static CROSSING: LazyLock<Map> = LazyLock::new(crossing::build);
+        static KEEP: LazyLock<Map> = LazyLock::new(keep::build);
+        static GORGE: LazyLock<Map> = LazyLock::new(gorge::build);
+        match self {
+            MapId::Crossing => &CROSSING,
+            MapId::Keep => &KEEP,
+            MapId::Gorge => &GORGE,
+        }
+    }
+
+    /// The one after it in `ALL`, round to the first.
+    pub fn next(self) -> MapId {
+        let at = MapId::ALL.iter().position(|m| *m == self).expect("every map is in ALL");
+        MapId::ALL[(at + 1) % MapId::ALL.len()]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MapId::Crossing => "River Crossing",
+            MapId::Keep => "Sunken Keep",
+            MapId::Gorge => "Riven Gorge",
+        }
+    }
+
+    /// One line on what's special about it.
+    pub fn blurb(self) -> &'static str {
+        match self {
+            MapId::Crossing => "A river, a bridge and two fords",
+            MapId::Keep => "A moated keep; marshes slow you",
+            MapId::Gorge => "A chasm to shoot across; waygates",
+        }
+    }
+}
+
+pub struct Map {
+    pub id: MapId,
+    /// Tiles across and down. Even, so the grid is point-symmetric around (0, 0).
+    pub size: IVec2,
+    tiles: Vec<Tile>,
+    /// Where fighters (re)spawn, mirrored.
+    pub spawn_points: Vec<Vec2>,
+    /// Where the pickups lie (tile centers), mirrored.
+    pub pickups: Vec<(Vec2, PickupKind)>,
+    /// Waygates: walking onto one end (a tile center) puts a fighter on the other. Each pair is
+    /// its own mirror.
+    pub gates: Vec<[Vec2; 2]>,
+    /// Torch positions (decoration, but part of the layout).
+    pub torches: Vec<Vec2>,
+    /// Meters inside the playable area's edge (negative outside). Continuous, for terrain and
+    /// decoration.
+    edge: fn(Vec2) -> f32,
+    /// What the land is beyond the playable area, for the scene: forest, unless water or a chasm
+    /// runs on out there.
+    beyond: fn(Vec2) -> Tile,
+}
 
 /// Smooth periodic wave in [-1, 1] with period 4 (a sine look-alike from a cubic), using only
 /// basic arithmetic so it is bit-identical on every platform.
@@ -85,138 +154,103 @@ fn wave(t: f32) -> f32 {
     sign * (1.0 - s * s) * (1.0 + 0.5 * (1.0 - s * s)) / 1.5
 }
 
-/// River centerline x for a given y. Odd in y, so the river is point-symmetric.
-pub fn river_x(y: f32) -> f32 {
-    1.8 * wave(y * 0.12)
-}
-
-pub const RIVER_HALF_WIDTH: f32 = 1.9;
-pub const BRIDGE_HALF_WIDTH: f32 = 2.0;
-const FORD_ROWS: [f32; 2] = [12.5, 13.5];
-
-/// Meters inside the clearing's edge (negative outside). Continuous, for terrain and decoration.
-pub fn clearing_margin(p: Vec2) -> f32 {
-    let rho = ((p.x / 27.0) * (p.x / 27.0) + (p.y / 17.5) * (p.y / 17.5)).sqrt();
-    // Even in (x, y): a product of two odd waves, so the edge stays point-symmetric.
-    let wobble = 0.07 * wave(p.x * 0.11) * wave(p.y * 0.17) + 0.04 * wave(p.x * 0.23) * wave(p.y * 0.09);
-    (1.0 + wobble - rho) * 18.0
-}
-
-pub struct Map {
-    tiles: Vec<Tile>,
-    /// Torch positions (decoration, but part of the layout).
-    pub torches: Vec<Vec2>,
-}
-
-static MAP: LazyLock<Map> = LazyLock::new(Map::build);
-
-/// The one arena map.
-pub fn map() -> &'static Map {
-    &MAP
-}
-
-/// Ruins, rocks and groves on the west bank (x < 0), in tile-center coordinates. Each is
-/// mirrored onto the east bank. Walls are (from, to, torch on the `from` end).
-const WEST_WALLS: &[(Vec2, Vec2, bool)] = &[
-    // Ruined keep corner, with a collapsed gap.
-    (Vec2::new(-15.5, 6.5), Vec2::new(-13.5, 6.5), false),
-    (Vec2::new(-9.5, 6.5), Vec2::new(-11.5, 6.5), true),
-    (Vec2::new(-15.5, 1.5), Vec2::new(-15.5, 5.5), true),
-    // Low wall guarding the southern ford.
-    (Vec2::new(-7.5, -8.5), Vec2::new(-7.5, -11.5), true),
-    // Lone pillars.
-    (Vec2::new(-20.5, -3.5), Vec2::new(-20.5, -3.5), false),
-    (Vec2::new(-4.5, 5.5), Vec2::new(-4.5, 5.5), false),
-];
-const WEST_ROCKS: &[Vec2] = &[
-    Vec2::new(-22.5, 3.5),
-    Vec2::new(-21.5, 3.5),
-    Vec2::new(-10.5, -4.5),
-    Vec2::new(-4.5, -15.5),
-    Vec2::new(-13.5, -12.5),
-];
-const WEST_TREES: &[Vec2] = &[
-    Vec2::new(-18.5, -10.5),
-    Vec2::new(-17.5, -11.5),
-    Vec2::new(-24.5, -4.5),
-    Vec2::new(-8.5, 11.5),
-    Vec2::new(-3.5, 14.5),
-    Vec2::new(-12.5, 12.5),
-];
-
 impl Map {
-    fn build() -> Map {
-        let mut map = Map { tiles: Vec::with_capacity((MAP_TILES.x * MAP_TILES.y) as usize), torches: Vec::new() };
-        for j in 0..MAP_TILES.y {
-            for i in 0..MAP_TILES.x {
-                let c = Map::center(IVec2::new(i, j));
-                let in_river = (c.x - river_x(c.y)).abs() < RIVER_HALF_WIDTH;
-                let tile = if clearing_margin(c) < 0.0 {
-                    Tile::Forest
-                } else if in_river && c.y.abs() < BRIDGE_HALF_WIDTH {
-                    Tile::Bridge
-                } else if in_river && FORD_ROWS.iter().any(|r| (c.y.abs() - r).abs() < 0.01) {
-                    Tile::Ford
-                } else if in_river {
-                    Tile::Water
-                } else if c.y.abs() < 1.0 {
-                    Tile::Path
-                } else {
-                    Tile::Grass
-                };
-                map.tiles.push(tile);
-            }
-        }
-        for &(a, b, torch) in WEST_WALLS {
-            let steps = (b - a).abs().max_element() as i32;
-            for s in 0..=steps {
-                let p = a + (b - a) * if steps == 0 { 0.0 } else { s as f32 / steps as f32 };
-                map.set_mirrored(p, Tile::Wall);
-            }
-            if torch {
-                map.torches.extend([a, -a]);
-            }
-        }
-        for &p in WEST_ROCKS {
-            map.set_mirrored(p, Tile::Rock);
-        }
-        for &p in WEST_TREES {
-            map.set_mirrored(p, Tile::Tree);
-        }
-        // Torches at the four bridge corners (the ruins got theirs above).
-        for y in [-BRIDGE_HALF_WIDTH - 0.4, BRIDGE_HALF_WIDTH + 0.4] {
-            for side in [-1.0, 1.0] {
-                map.torches.push(Vec2::new(river_x(y) + side * (RIVER_HALF_WIDTH + 0.3), y));
-            }
+    // Building a layout: it lists one half, and each thing in it is mirrored onto the other.
+
+    /// A map of `size` tiles: grass inside the edge, forest outside.
+    fn blank(id: MapId, size: IVec2, edge: fn(Vec2) -> f32, beyond: fn(Vec2) -> Tile) -> Map {
+        let mut map = Map {
+            id,
+            size,
+            tiles: Vec::with_capacity((size.x * size.y) as usize),
+            spawn_points: Vec::new(),
+            pickups: Vec::new(),
+            gates: Vec::new(),
+            torches: Vec::new(),
+            edge,
+            beyond,
+        };
+        for i in 0..(size.x * size.y) as usize {
+            let c = Map::center(map.tile_at(i));
+            map.tiles.push(if edge(c) < 0.0 { Tile::Forest } else { Tile::Grass });
         }
         map
     }
 
+    /// Repaints every tile inside the edge: `f` gets its center and what it is now.
+    fn paint(&mut self, f: impl Fn(Vec2, Tile) -> Tile) {
+        for i in 0..self.tiles.len() {
+            let c = Map::center(self.tile_at(i));
+            if (self.edge)(c) >= 0.0 {
+                self.tiles[i] = f(c, self.tiles[i]);
+            }
+        }
+    }
+
+    /// Sets the tile `p` is on and its mirror. (`p`'s tile center is what's mirrored: a point on
+    /// a tile's edge, mirrored as it is, could land on the wrong one.)
     fn set_mirrored(&mut self, p: Vec2, tile: Tile) {
+        let p = Map::center(Map::tile_of(p));
+        debug_assert!((self.edge)(p) >= 0.0, "{:?}: {p} is out in the forest", self.id);
         for q in [p, -p] {
-            let t = Map::tile_of(q);
-            if let Some(i) = self.index(t) {
+            if let Some(i) = self.index(Map::tile_of(q)) {
                 self.tiles[i] = tile;
             }
         }
     }
 
+    /// Every tile from `a` to `b` (tile centers, in a straight or diagonal line), mirrored.
+    fn line_mirrored(&mut self, a: Vec2, b: Vec2, tile: Tile) {
+        let steps = (b - a).abs().max_element() as i32;
+        for s in 0..=steps {
+            let p = a + (b - a) * if steps == 0 { 0.0 } else { s as f32 / steps as f32 };
+            self.set_mirrored(p, tile);
+        }
+    }
+
+    /// Walls (from, to, a torch on the `from` end), rocks and trees on one half, mirrored. Returns
+    /// the torches (one half's).
+    fn place_half(&mut self, walls: &[(Vec2, Vec2, bool)], rocks: &[Vec2], trees: &[Vec2]) -> Vec<Vec2> {
+        for &(a, b, _) in walls {
+            self.line_mirrored(a, b, Tile::Wall);
+        }
+        for &p in rocks {
+            self.set_mirrored(p, Tile::Rock);
+        }
+        for &p in trees {
+            self.set_mirrored(p, Tile::Tree);
+        }
+        walls.iter().filter(|(.., torch)| *torch).map(|(a, ..)| *a).collect()
+    }
+
+    /// Spawn points, pickups and torches listed for one half, with their mirrors.
+    fn mirror_spots(&mut self, spawns: &[Vec2], pickups: &[(Vec2, PickupKind)], torches: &[Vec2]) {
+        self.spawn_points.extend(spawns.iter().copied().chain(spawns.iter().map(|p| -*p)));
+        self.pickups.extend(pickups.iter().copied().chain(pickups.iter().map(|(p, k)| (-*p, *k))));
+        self.torches.extend(torches.iter().copied().chain(torches.iter().map(|p| -*p)));
+    }
+
+    pub fn half_extents(&self) -> Vec2 {
+        self.size.as_vec2() / 2.0
+    }
+
     fn index(&self, t: IVec2) -> Option<usize> {
-        (t.x >= 0 && t.y >= 0 && t.x < MAP_TILES.x && t.y < MAP_TILES.y).then(|| (t.y * MAP_TILES.x + t.x) as usize)
+        let u = t + self.size / 2;
+        (u.x >= 0 && u.y >= 0 && u.x < self.size.x && u.y < self.size.y).then(|| (u.y * self.size.x + u.x) as usize)
     }
 
     /// Inverse of `index`.
-    fn tile_at(i: usize) -> IVec2 {
-        IVec2::new(i as i32 % MAP_TILES.x, i as i32 / MAP_TILES.x)
+    fn tile_at(&self, i: usize) -> IVec2 {
+        IVec2::new(i as i32 % self.size.x, i as i32 / self.size.x) - self.size / 2
     }
 
     /// The tile containing a gameplay position.
     pub fn tile_of(p: Vec2) -> IVec2 {
-        (p + MAP_HALF_EXTENTS).floor().as_ivec2()
+        p.floor().as_ivec2()
     }
 
     pub fn center(t: IVec2) -> Vec2 {
-        t.as_vec2() + Vec2::splat(0.5) - MAP_HALF_EXTENTS
+        t.as_vec2() + Vec2::splat(0.5)
     }
 
     /// Outside the grid counts as forest.
@@ -232,8 +266,32 @@ impl Map {
         self.walkable(Map::tile_of(p))
     }
 
+    /// How fast walking at `p` is, as a share of a fighter's speed.
+    pub fn speed_factor_at(&self, p: Vec2) -> f32 {
+        self.get(Map::tile_of(p)).speed_factor()
+    }
+
+    /// Every tile on the grid, row by row from the bottom.
     pub fn tiles(&self) -> impl Iterator<Item = (IVec2, Tile)> + '_ {
-        (0..MAP_TILES.y).flat_map(move |j| (0..MAP_TILES.x).map(move |i| (IVec2::new(i, j), self.get(IVec2::new(i, j)))))
+        (0..self.tiles.len()).map(move |i| (self.tile_at(i), self.tiles[i]))
+    }
+
+    /// Meters inside the playable area's edge (negative outside), for the scene.
+    pub fn edge_margin(&self, p: Vec2) -> f32 {
+        (self.edge)(p)
+    }
+
+    /// What the land at tile `t` looks like, on the grid or off it: the tile itself in the
+    /// playable area, and out in the forest whatever runs on there (water, a chasm) or forest.
+    pub fn scene_tile(&self, t: IVec2) -> Tile {
+        match self.get(t) {
+            // Water and chasms run on out of the clearing; anything else is forest out there.
+            Tile::Forest => match (self.beyond)(Map::center(t)) {
+                land @ (Tile::Water | Tile::Chasm) => land,
+                _ => Tile::Forest,
+            },
+            tile => tile,
+        }
     }
 
     /// True if a body of radius `NAV_RADIUS` can move in a straight line from `a` to `b`.
@@ -290,8 +348,8 @@ impl Map {
         !self.walkable(t) && segment_hits_box(a, b, Map::center(t) - half, Map::center(t) + half)
     }
 
-    /// True if no wall, rock or tree lies on the line from `a` to `b` (water doesn't block).
-    /// Sampled, which is fine for its uses: melee hits on the server, and the bot.
+    /// True if no wall, rock or tree lies on the line from `a` to `b` (water and chasms don't
+    /// block). Sampled, which is fine for its uses: melee hits on the server, and the bot.
     pub fn shot_clear(&self, a: Vec2, b: Vec2) -> bool {
         let steps = ((b - a).length() / 0.25).ceil().max(1.0) as i32;
         (0..=steps).all(|s| !self.get(Map::tile_of(a.lerp(b, s as f32 / steps as f32))).blocks_shots())
@@ -339,12 +397,12 @@ impl Map {
                 let mut at = goal;
                 while at != start {
                     at = came_from[at];
-                    path.push(Map::tile_at(at));
+                    path.push(self.tile_at(at));
                 }
                 path.reverse();
                 return Some(path);
             }
-            let here = Map::tile_at(i);
+            let here = self.tile_at(i);
             for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
                 let next = here + IVec2::new(dx, dy);
                 let diagonal = dx != 0 && dy != 0;
@@ -433,19 +491,22 @@ impl Map {
     }
 }
 
+/// A remembered path (`None`: there's no way).
+type Path = Option<Rc<[IVec2]>>;
+
 impl Map {
     /// `find_path`, remembered. Movement asks for the same (tile, target) pair every tick until
-    /// the player changes tile; the answer only depends on
+    /// the player changes tile; the answer only depends on the map and
     /// those two tiles, so a cache returns exactly what a fresh search would.
-    fn cached_path(&self, from: IVec2, to: IVec2) -> Option<Rc<[IVec2]>> {
+    fn cached_path(&self, from: IVec2, to: IVec2) -> Path {
         thread_local! {
-            static PATHS: RefCell<HashMap<(IVec2, IVec2), Option<Rc<[IVec2]>>>> = RefCell::default();
+            static PATHS: RefCell<HashMap<(MapId, IVec2, IVec2), Path>> = RefCell::default();
         }
         PATHS.with_borrow_mut(|paths| {
             if paths.len() > 512 {
                 paths.clear();
             }
-            paths.entry((from, to)).or_insert_with(|| self.find_path(from, to).map(Rc::from)).clone()
+            paths.entry((self.id, from, to)).or_insert_with(|| self.find_path(from, to).map(Rc::from)).clone()
         })
     }
 }
@@ -479,92 +540,199 @@ fn segment_hits_box(a: Vec2, b: Vec2, min: Vec2, max: Vec2) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn layout_is_point_symmetric() {
-        let m = map();
-        for (t, tile) in m.tiles() {
-            let mirror = MAP_TILES - IVec2::ONE - t;
-            assert_eq!(tile, m.get(mirror), "{t} vs {mirror}");
-        }
+    fn maps() -> impl Iterator<Item = &'static Map> {
+        MapId::ALL.into_iter().map(MapId::map)
     }
 
     #[test]
-    fn spawn_points_are_walkable() {
-        for p in SPAWN_POINTS {
-            assert!(map().walkable_at(p), "spawn point {p} is not walkable");
-        }
-    }
-
-    #[test]
-    fn pickups_lie_mirrored_on_open_ground_away_from_spawns() {
-        let m = map();
-        for (at, kind) in PICKUP_SPOTS {
-            assert_eq!(at, Map::center(Map::tile_of(at)), "{at} isn't a tile center");
-            assert!(m.walkable_at(at), "pickup at {at} isn't walkable");
-            assert!(PICKUP_SPOTS.contains(&(-at, kind)), "pickup at {at} has no mirror");
-            assert!(SPAWN_POINTS.iter().all(|s| s.distance(at) >= 4.0), "pickup at {at} is on a spawn");
-            for spawn in SPAWN_POINTS {
-                assert!(m.find_path(Map::tile_of(spawn), Map::tile_of(at)).is_some(), "{at} unreachable from {spawn}");
+    fn layouts_are_point_symmetric() {
+        for m in maps() {
+            for (t, tile) in m.tiles() {
+                let mirror = -t - IVec2::ONE;
+                assert_eq!(tile, m.get(mirror), "{:?}: {t} vs {mirror}", m.id);
+            }
+            for p in &m.spawn_points {
+                assert!(m.spawn_points.contains(&-*p), "{:?}: spawn point {p} has no mirror", m.id);
+            }
+            for p in &m.torches {
+                assert!(m.torches.contains(&-*p), "{:?}: torch {p} has no mirror", m.id);
             }
         }
     }
 
     #[test]
-    fn banks_connect_over_bridge_and_fords() {
-        let m = map();
-        let west = Map::tile_of(SPAWN_POINTS[0]);
-        let east = Map::tile_of(SPAWN_POINTS[4]);
-        let path = m.find_path(west, east).expect("banks must be connected");
+    fn spawn_points_are_walkable_and_apart() {
+        for m in maps() {
+            assert!(m.spawn_points.len() >= 8, "{:?} has too few spawn points", m.id);
+            for p in &m.spawn_points {
+                assert!(m.walkable_at(*p), "{:?}: spawn point {p} is not walkable", m.id);
+                assert_eq!(m.speed_factor_at(*p), 1.0, "{:?}: spawn point {p} is in a marsh", m.id);
+                let near = m.spawn_points.iter().filter(|q| q.distance(*p) < 3.0).count();
+                assert_eq!(near, 1, "{:?}: spawn point {p} is crowded", m.id);
+            }
+        }
+    }
+
+    /// No walkable pocket anyone could be cut off in (or that a click could aim at in vain):
+    /// every walkable tile is reachable from every spawn point.
+    #[test]
+    fn every_walkable_tile_is_reachable() {
+        for m in maps() {
+            let start = Map::tile_of(m.spawn_points[0]);
+            let mut seen = std::collections::HashSet::from([start]);
+            let mut todo = vec![start];
+            while let Some(t) = todo.pop() {
+                for d in [IVec2::X, -IVec2::X, IVec2::Y, -IVec2::Y] {
+                    if m.walkable(t + d) && seen.insert(t + d) {
+                        todo.push(t + d);
+                    }
+                }
+            }
+            for (t, tile) in m.tiles() {
+                assert!(!tile.walkable() || seen.contains(&t), "{:?}: {t} ({tile:?}) can't be reached", m.id);
+            }
+        }
+    }
+
+    #[test]
+    fn pickups_lie_mirrored_on_open_ground_away_from_spawns() {
+        for m in maps() {
+            assert!(!m.pickups.is_empty());
+            for &(at, kind) in &m.pickups {
+                assert_eq!(at, Map::center(Map::tile_of(at)), "{:?}: {at} isn't a tile center", m.id);
+                assert!(m.walkable_at(at), "{:?}: pickup at {at} isn't walkable", m.id);
+                assert!(m.pickups.contains(&(-at, kind)), "{:?}: pickup at {at} has no mirror", m.id);
+                assert!(m.spawn_points.iter().all(|s| s.distance(at) >= 4.0), "{:?}: pickup at {at} is on a spawn", m.id);
+                // Not where a waygate would whisk its taker away before it's taken.
+                assert!(m.gates.iter().flatten().all(|g| g.distance(at) >= 3.0), "{:?}: pickup at {at} is on a gate", m.id);
+            }
+        }
+    }
+
+    #[test]
+    fn waygates_stand_free_mirrored_and_apart() {
+        for m in maps() {
+            for &[a, b] in &m.gates {
+                assert_eq!(a, -b, "{:?}: gate {a} - {b} isn't its own mirror", m.id);
+                for end in [a, b] {
+                    assert_eq!(end, Map::center(Map::tile_of(end)), "{:?}: gate {end} isn't a tile center", m.id);
+                    // Room to step on and off it from every side.
+                    for d in [IVec2::ZERO, IVec2::X, -IVec2::X, IVec2::Y, -IVec2::Y] {
+                        let t = Map::tile_of(end) + d;
+                        assert!(m.walkable(t), "{:?}: gate {end} is hemmed in at {t}", m.id);
+                    }
+                    assert!(m.spawn_points.iter().all(|s| s.distance(end) >= 4.0), "{:?}: gate {end} is on a spawn", m.id);
+                }
+                let others = m.gates.iter().flatten().filter(|g| **g != a && **g != b);
+                assert!(others.clone().all(|g| g.distance(a) >= 4.0 && g.distance(b) >= 4.0), "{:?}: gates too close", m.id);
+            }
+        }
+    }
+
+    #[test]
+    fn halves_connect() {
+        for m in maps() {
+            let (west, east) = (m.spawn_points[0], -m.spawn_points[0]);
+            assert!(m.find_path(Map::tile_of(west), Map::tile_of(east)).is_some(), "{:?}: halves must be connected", m.id);
+        }
+        let m = MapId::Crossing.map();
+        let path = m.find_path(Map::tile_of(m.spawn_points[0]), Map::tile_of(-m.spawn_points[0])).unwrap();
         assert!(path.iter().any(|t| m.get(*t) == Tile::Bridge), "the short way crosses the bridge");
         assert!(m.tiles().any(|(_, t)| t == Tile::Ford));
         assert!(m.tiles().filter(|(_, t)| *t == Tile::Water).count() > 100);
     }
 
     #[test]
+    fn each_map_has_its_features() {
+        let count = |id: MapId, tile: Tile| id.map().tiles().filter(|(_, t)| *t == tile).count();
+        assert!(count(MapId::Keep, Tile::Marsh) > 60, "the keep has marshes");
+        assert!(count(MapId::Keep, Tile::Water) > 60, "the keep has its moat");
+        assert!(count(MapId::Gorge, Tile::Chasm) > 150, "the gorge has its chasm");
+        assert!(count(MapId::Gorge, Tile::Planks) > 0, "the gorge has rope bridges");
+        assert!(!MapId::Gorge.map().gates.is_empty(), "the gorge has waygates");
+    }
+
+    #[test]
+    fn maps_fit_twice_the_first_at_most() {
+        let area = |id: MapId| id.map().size.x * id.map().size.y;
+        for id in MapId::ALL {
+            let m = id.map();
+            assert!(m.size.x % 2 == 0 && m.size.y % 2 == 0);
+            assert!(area(id) <= 2 * area(MapId::Crossing), "{id:?} is too big");
+            // The edge of the playable area stays on the grid.
+            for (t, tile) in m.tiles() {
+                let on_rim = t.x == -m.size.x / 2 || t.y == -m.size.y / 2 || t.x == m.size.x / 2 - 1 || t.y == m.size.y / 2 - 1;
+                assert!(!on_rim || tile == Tile::Forest, "{id:?}: {t} on the grid's rim isn't forest");
+            }
+        }
+    }
+
+    #[test]
     fn path_never_enters_blocked_tiles_or_cuts_corners() {
-        let m = map();
-        let path = m.find_path(Map::tile_of(SPAWN_POINTS[1]), Map::tile_of(SPAWN_POINTS[5])).unwrap();
-        for w in path.windows(2) {
-            assert!(m.walkable(w[1]));
-            let d = w[1] - w[0];
-            assert!(d.abs().max_element() == 1);
-            if d.x != 0 && d.y != 0 {
-                assert!(m.walkable(w[0] + IVec2::new(d.x, 0)) && m.walkable(w[0] + IVec2::new(0, d.y)));
+        for m in maps() {
+            let path = m.find_path(Map::tile_of(m.spawn_points[1]), Map::tile_of(m.spawn_points[5])).unwrap();
+            for w in path.windows(2) {
+                assert!(m.walkable(w[1]));
+                let d = w[1] - w[0];
+                assert!(d.abs().max_element() == 1);
+                if d.x != 0 && d.y != 0 {
+                    assert!(m.walkable(w[0] + IVec2::new(d.x, 0)) && m.walkable(w[0] + IVec2::new(0, d.y)));
+                }
             }
         }
     }
 
     #[test]
     fn unreachable_targets_have_no_path() {
-        let m = map();
-        let water = m.tiles().find(|(_, t)| *t == Tile::Water).unwrap().0;
-        assert!(m.find_path(Map::tile_of(SPAWN_POINTS[0]), water).is_none());
-        assert!(m.find_path(Map::tile_of(SPAWN_POINTS[0]), IVec2::new(-5, 3)).is_none());
-        assert!(m.nearest_walkable(water, 6).is_some_and(|t| m.walkable(t)));
+        for m in maps() {
+            let from = Map::tile_of(m.spawn_points[0]);
+            let water = m.tiles().find(|(_, t)| matches!(t, Tile::Water | Tile::Chasm)).unwrap().0;
+            assert!(m.find_path(from, water).is_none());
+            assert!(m.find_path(from, IVec2::new(-500, 3)).is_none());
+            assert!(m.nearest_walkable(water, 6).is_some_and(|t| m.walkable(t)));
+        }
+    }
+
+    /// Paths are remembered per map: the same two tiles on another map aren't the same path.
+    #[test]
+    fn remembered_paths_are_per_map() {
+        for m in maps() {
+            let from = m.spawn_points[0];
+            for (t, _) in m.tiles().filter(|(t, _)| m.walkable(*t)).step_by(97) {
+                // Through each map in turn, so another map's paths are remembered first.
+                for other in maps() {
+                    let _ = other.next_waypoint(from, Map::center(t));
+                }
+                let path = m.cached_path(Map::tile_of(from), t).map(|p| p.to_vec());
+                assert_eq!(path, m.find_path(Map::tile_of(from), t), "{:?}: {t}", m.id);
+            }
+        }
     }
 
     /// The pruned scan in `line_walkable` must agree with checking every blocked tile.
     #[test]
     fn line_walkable_matches_brute_force() {
-        let m = map();
-        let half = Vec2::splat(0.5 + NAV_RADIUS);
-        let brute = |a: Vec2, b: Vec2| {
-            m.tiles().all(|(t, tile)| tile.walkable() || !segment_hits_box(a, b, Map::center(t) - half, Map::center(t) + half))
-        };
-        let mut seed = 12345u64;
-        let mut rand = |range: f32| {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            ((seed >> 40) as f32 / (1u64 << 24) as f32 - 0.5) * 2.0 * range
-        };
-        for _ in 0..5000 {
-            let a = Vec2::new(rand(28.0), rand(18.0));
-            // Include axis-aligned segments too.
-            let b = match (rand(2.0).abs() * 2.0) as i32 {
-                0 => Vec2::new(a.x + rand(12.0), a.y),
-                1 => Vec2::new(a.x, a.y + rand(12.0)),
-                _ => a + Vec2::new(rand(12.0), rand(12.0)),
+        for m in maps() {
+            let half = Vec2::splat(0.5 + NAV_RADIUS);
+            let brute = |a: Vec2, b: Vec2| {
+                m.tiles().all(|(t, tile)| tile.walkable() || !segment_hits_box(a, b, Map::center(t) - half, Map::center(t) + half))
             };
-            assert_eq!(m.line_walkable(a, b), brute(a, b), "{a} -> {b}");
+            let mut seed = 12345u64;
+            let mut rand = |range: f32| {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((seed >> 40) as f32 / (1u64 << 24) as f32 - 0.5) * 2.0 * range
+            };
+            let extent = m.half_extents() - Vec2::splat(4.0);
+            for _ in 0..3000 {
+                let a = Vec2::new(rand(extent.x), rand(extent.y));
+                // Include axis-aligned segments too.
+                let b = match (rand(2.0).abs() * 2.0) as i32 {
+                    0 => Vec2::new(a.x + rand(12.0), a.y),
+                    1 => Vec2::new(a.x, a.y + rand(12.0)),
+                    _ => a + Vec2::new(rand(12.0), rand(12.0)),
+                };
+                assert_eq!(m.line_walkable(a, b), brute(a, b), "{:?}: {a} -> {b}", m.id);
+            }
         }
     }
 
@@ -572,40 +740,41 @@ mod tests {
     /// give exactly what a plain search gives: client and server must agree to the bit.
     #[test]
     fn next_waypoint_matches_a_plain_search() {
-        let m = map();
-        let plain = |pos: Vec2, target: Vec2| {
-            let tile = Map::tile_of(target);
-            if !m.walkable(tile) {
-                return None;
-            }
-            let goal = m.standing_point(target);
-            if m.line_walkable(pos, goal) {
-                return Some(goal);
-            }
-            let start = Map::tile_of(pos);
-            let path = m.find_path(start, tile)?;
-            let farthest = path[1..].iter().rev().map(|t| Map::center(*t)).find(|p| m.line_walkable(pos, *p));
-            Some(farthest.unwrap_or(Map::center(start)))
-        };
-        let all: Vec<IVec2> = m.tiles().map(|(t, _)| t).collect();
-        let walkable: Vec<IVec2> = all.iter().copied().filter(|t| m.walkable(*t)).collect();
-        let mut seed = 777u64;
-        let mut pick = |n: usize| {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            (seed >> 33) as usize % n
-        };
-        for _ in 0..2000 {
-            // Anywhere inside a walkable tile, to any tile: mostly walkable ones, sometimes
-            // water, walls or off the map.
-            let offsets = [0, 1, 2, 3].map(|_| pick(1000) as f32 / 1000.0 - 0.5);
-            let pos = Map::center(walkable[pick(walkable.len())]) + Vec2::new(offsets[0], offsets[1]);
-            let to = Vec2::new(offsets[2], offsets[3]);
-            let target = match pick(10) {
-                0 => Map::center(all[pick(all.len())]) + to,
-                1 => Vec2::new(-50.0, 3.0),
-                _ => Map::center(walkable[pick(walkable.len())]) + to,
+        for m in maps() {
+            let plain = |pos: Vec2, target: Vec2| {
+                let tile = Map::tile_of(target);
+                if !m.walkable(tile) {
+                    return None;
+                }
+                let goal = m.standing_point(target);
+                if m.line_walkable(pos, goal) {
+                    return Some(goal);
+                }
+                let start = Map::tile_of(pos);
+                let path = m.find_path(start, tile)?;
+                let farthest = path[1..].iter().rev().map(|t| Map::center(*t)).find(|p| m.line_walkable(pos, *p));
+                Some(farthest.unwrap_or(Map::center(start)))
             };
-            assert_eq!(m.next_waypoint(pos, target), plain(pos, target), "{pos} -> {target}");
+            let all: Vec<IVec2> = m.tiles().map(|(t, _)| t).collect();
+            let walkable: Vec<IVec2> = all.iter().copied().filter(|t| m.walkable(*t)).collect();
+            let mut seed = 777u64;
+            let mut pick = |n: usize| {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (seed >> 33) as usize % n
+            };
+            for _ in 0..1000 {
+                // Anywhere inside a walkable tile, to any tile: mostly walkable ones, sometimes
+                // water, walls or off the map.
+                let offsets = [0, 1, 2, 3].map(|_| pick(1000) as f32 / 1000.0 - 0.5);
+                let pos = Map::center(walkable[pick(walkable.len())]) + Vec2::new(offsets[0], offsets[1]);
+                let to = Vec2::new(offsets[2], offsets[3]);
+                let target = match pick(10) {
+                    0 => Map::center(all[pick(all.len())]) + to,
+                    1 => Vec2::new(-500.0, 3.0),
+                    _ => Map::center(walkable[pick(walkable.len())]) + to,
+                };
+                assert_eq!(m.next_waypoint(pos, target), plain(pos, target), "{:?}: {pos} -> {target}", m.id);
+            }
         }
     }
 
@@ -620,11 +789,11 @@ mod tests {
 
     #[test]
     fn walk_target_keeps_open_points_and_pulls_wall_huggers_in() {
-        let m = map();
+        let m = MapId::Crossing.map();
         let wall = m.tiles().find(|(t, tile)| *tile == Tile::Wall && m.walkable(*t + IVec2::X)).unwrap().0;
         let beside = wall + IVec2::X;
         // Open ground: the very point clicked.
-        let open = Map::center(Map::tile_of(SPAWN_POINTS[0])) + Vec2::new(0.2, -0.3);
+        let open = Map::center(Map::tile_of(m.spawn_points[0])) + Vec2::new(0.2, -0.3);
         assert_eq!(m.walk_target(open, 4), Some(open));
         // Right against the wall: pulled in to where a body fits, still in that tile.
         let hugging = Map::center(beside) - Vec2::new(0.45, 0.0);
@@ -634,5 +803,51 @@ mod tests {
         // In the wall: the nearest walkable tile's center.
         assert!(m.walk_target(Map::center(wall), 4).is_some_and(|p| m.walkable_at(p) && p == Map::center(Map::tile_of(p))));
         assert_eq!(m.walk_target(Vec2::NAN, 4), None);
+    }
+
+    /// Draws every map in text, to look at: `cargo test -p arena-shared draw_maps -- --ignored
+    /// --nocapture`.
+    #[test]
+    #[ignore]
+    fn draw_maps() {
+        for m in maps() {
+            println!("{:?} ({} x {})", m.id, m.size.x, m.size.y);
+            for j in (-m.size.y / 2..m.size.y / 2).rev() {
+                let row: String = (-m.size.x / 2..m.size.x / 2)
+                    .map(|i| {
+                        let t = IVec2::new(i, j);
+                        let c = Map::center(t);
+                        if m.spawn_points.iter().any(|p| Map::tile_of(*p) == t) {
+                            return 'S';
+                        }
+                        if let Some((_, kind)) = m.pickups.iter().find(|(p, _)| Map::tile_of(*p) == t) {
+                            return if *kind == PickupKind::Heal { 'H' } else { 'F' };
+                        }
+                        if m.gates.iter().flatten().any(|g| Map::tile_of(*g) == t) {
+                            return 'O';
+                        }
+                        if m.torches.iter().any(|p| p.distance(c) < 0.6) {
+                            return 'i';
+                        }
+                        match m.get(t) {
+                            Tile::Grass => '.',
+                            Tile::Path => ':',
+                            Tile::Ford => '=',
+                            Tile::Bridge => '#',
+                            Tile::Planks => '%',
+                            Tile::Marsh => ',',
+                            Tile::Water => '~',
+                            Tile::Chasm => ' ',
+                            Tile::Wall => 'W',
+                            Tile::Rock => 'o',
+                            Tile::Tree => 'T',
+                            Tile::Forest => '^',
+                        }
+                    })
+                    .collect();
+                println!("{row}");
+            }
+            println!();
+        }
     }
 }

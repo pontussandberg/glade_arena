@@ -15,15 +15,17 @@
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
+use arena_shared::map::{Map, MapId};
 use arena_shared::protocol::*;
 use arena_shared::rooms::*;
 use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
-use crate::{Patrol, spawn_dummy, spawn_pickups, spawn_player};
+use crate::{NeedsSpawnPoint, Patrol, spawn_dummy, spawn_gates, spawn_pickups, spawn_player};
 
-/// Server-only: the room a fighter, projectile or pickup is in.
+/// Server-only: the room a fighter, projectile, pickup or waygate is in. The map it plays on is
+/// the room's (`Lobby::map`).
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InRoom {
     pub key: RoomKey,
@@ -105,6 +107,7 @@ struct Guest {
 struct Room {
     name: String,
     mode: Mode,
+    map: MapId,
     net: RoomId,
     /// A link in `members`.
     leader: Entity,
@@ -113,7 +116,8 @@ struct Room {
     practice: bool,
     /// Links, in the order they joined.
     members: Vec<Entity>,
-    pickups: Vec<Entity>,
+    /// What lies on its map: its pickups and waygates.
+    things: Vec<Entity>,
     /// Target dummies, in the order they were placed (practice only).
     dummies: Vec<Entity>,
     /// Members need to see it again.
@@ -121,6 +125,11 @@ struct Room {
 }
 
 impl Lobby {
+    /// The map `room` plays on (the default one if it's gone).
+    pub fn map(&self, room: &InRoom) -> &'static Map {
+        self.rooms.get(&room.key).map_or(MapId::default(), |r| r.map).map()
+    }
+
     /// Who's in `room`, and how many on each team.
     fn on_team(&self, room: &Room, team: u8) -> usize {
         room.members.iter().filter(|link| self.guests.get(link).is_some_and(|g| g.team == team)).count()
@@ -132,7 +141,7 @@ impl Lobby {
     }
 
     fn summary(&self, key: RoomKey, room: &Room) -> RoomSummary {
-        RoomSummary { key, name: room.name.clone(), mode: room.mode, players: room.members.len() as u8, started: room.started }
+        RoomSummary { key, name: room.name.clone(), mode: room.mode, map: room.map, players: room.members.len() as u8, started: room.started }
     }
 
     fn view(&self, key: RoomKey, room: &Room) -> RoomView {
@@ -143,7 +152,7 @@ impl Lobby {
             .map(|g| Member { guest_id: g.id, name: g.name.clone(), peer: g.peer, team: g.team, class: g.class, in_arena: g.playing && room.started })
             .collect();
         let leader = self.guests.get(&room.leader).map_or(0, |g| g.id);
-        RoomView { key, name: room.name.clone(), mode: room.mode, started: room.started, practice: room.practice, leader, members }
+        RoomView { key, name: room.name.clone(), mode: room.mode, map: room.map, started: room.started, practice: room.practice, leader, members }
     }
 
     fn list(&self) -> Vec<RoomSummary> {
@@ -157,6 +166,7 @@ struct Ctx<'w, 's> {
     commands: Commands<'w, 's>,
     time: Res<'w, Time<Real>>,
     players: Query<'w, 's, (Entity, &'static ControlledBy), With<PlayerId>>,
+    projectiles: Query<'w, 's, (Entity, &'static InRoom), With<Projectile>>,
     senders: Query<'w, 's, &'static mut MessageSender<LobbyEvent>>,
 }
 
@@ -239,10 +249,10 @@ fn handle_requests(
 fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link: Entity, request: RoomRequest) -> Result<(), &'static str> {
     let room_key = lobby.guests[&link].room;
     match request {
-        RoomRequest::Create { name, mode } => {
+        RoomRequest::Create { name, mode, map } => {
             let name = clean_room_name(&name).ok_or("Give the room a name")?;
             leave(lobby, ctx, link);
-            let key = create(lobby, allocator, ctx, link, name, mode);
+            let key = create(lobby, allocator, ctx, link, name, mode, map);
             join(lobby, ctx, link, key)?;
         }
         RoomRequest::Join(key) => {
@@ -270,7 +280,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             let key = match found {
                 Some(key) => key,
                 None => {
-                    let key = create(lobby, allocator, ctx, link, name, Mode::Ffa);
+                    let key = create(lobby, allocator, ctx, link, name, Mode::Ffa, MapId::default());
                     lobby.rooms.get_mut(&key).expect("just made").started = true;
                     key
                 }
@@ -278,9 +288,9 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             lobby.guests.get_mut(&link).expect("a guest").playing = true;
             join(lobby, ctx, link, key)?;
         }
-        RoomRequest::Practice => {
+        RoomRequest::Practice(map) => {
             leave(lobby, ctx, link);
-            let key = create(lobby, allocator, ctx, link, "Practice".into(), Mode::Ffa);
+            let key = create(lobby, allocator, ctx, link, "Practice".into(), Mode::Ffa, map);
             let room = lobby.rooms.get_mut(&key).expect("just made");
             room.started = true;
             room.practice = true;
@@ -342,6 +352,37 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             room.changed = true;
             lobby.list_changed = true;
         }
+        RoomRequest::SetMap(map) => {
+            let key = room_key.ok_or("You're not in a room")?;
+            let room = lobby.rooms.get_mut(&key).expect("in it");
+            if room.leader != link {
+                return Err("Only the leader can change the map");
+            }
+            if room.started && !room.practice {
+                return Err("The match has started");
+            }
+            if room.map == map {
+                return Ok(());
+            }
+            info!(room = key.0, from = ?room.map, to = ?map, "map changed");
+            room.map = map;
+            room.changed = true;
+            lobby.list_changed = true;
+            // What lay on the old map goes, and the new one's comes. Practice may change it with
+            // everyone in: they start over on the new map (from a spawn point), and shots in the
+            // air are gone with the old one.
+            room.clear_things(&mut ctx.commands);
+            let in_room = room.in_room(key);
+            room.things = spawn_room_things(&mut ctx.commands, in_room, map);
+            for (projectile, _) in ctx.projectiles.iter().filter(|(_, r)| **r == in_room) {
+                ctx.commands.entity(projectile).try_despawn();
+            }
+            for &member in &room.members {
+                if let Some(player) = ctx.player_of(member) {
+                    ctx.commands.entity(player).insert(NeedsSpawnPoint);
+                }
+            }
+        }
         RoomRequest::SetTeam(team) => {
             let key = room_key.ok_or("You're not in a room")?;
             let room = &lobby.rooms[&key];
@@ -370,14 +411,14 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             if room.dummies.len() >= MAX_DUMMIES {
                 return Err("That's enough dummies");
             }
-            if !at.is_finite() || !arena_shared::map::map().walkable_at(at) {
+            if !at.is_finite() || !room.map.map().walkable_at(at) {
                 return Err("A dummy can't stand there");
             }
-            let patrol = if walks { Some(Patrol::through(at).ok_or("No room for a dummy to walk there")?) } else { None };
+            let patrol = if walks { Some(Patrol::through(room.map.map(), at).ok_or("No room for a dummy to walk there")?) } else { None };
             // Each class in turn.
             let class = ClassId::all().nth(room.dummies.len() % ClassId::all().count()).expect("a class");
             lobby.next_dummy += 1;
-            let dummy = spawn_dummy(&mut ctx.commands, PeerId::Local(lobby.next_dummy), class, InRoom { key, net: room.net }, at);
+            let dummy = spawn_dummy(&mut ctx.commands, PeerId::Local(lobby.next_dummy), class, room.in_room(key), at);
             if let Some(patrol) = patrol {
                 ctx.commands.entity(dummy).insert(patrol);
             }
@@ -420,15 +461,36 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
 /// The most target dummies a practice room may have.
 const MAX_DUMMIES: usize = 12;
 
-/// A new room, led by `leader` (who still has to `join` it).
-fn create(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, leader: Entity, name: String, mode: Mode) -> RoomKey {
+/// A new room on `map`, led by `leader` (who still has to `join` it).
+#[allow(clippy::too_many_arguments)]
+fn create(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, leader: Entity, name: String, mode: Mode, map: MapId) -> RoomKey {
     lobby.next_room += 1;
     let key = RoomKey(lobby.next_room);
     let net = lobby.free_net.pop().unwrap_or_else(|| allocator.allocate());
-    let pickups = spawn_pickups(&mut ctx.commands, InRoom { key, net });
+    let things = spawn_room_things(&mut ctx.commands, InRoom { key, net }, map);
     info!(room = key.0, name, ?mode, leader = lobby.guests[&leader].id, "room created");
-    lobby.rooms.insert(key, Room { name, mode, net, leader, started: false, practice: false, members: Vec::new(), pickups, dummies: Vec::new(), changed: true });
+    lobby.rooms.insert(key, Room { name, mode, map, net, leader, started: false, practice: false, members: Vec::new(), things, dummies: Vec::new(), changed: true });
     key
+}
+
+/// What lies on `map` in `room`: its pickups and waygates.
+fn spawn_room_things(commands: &mut Commands, room: InRoom, map: MapId) -> Vec<Entity> {
+    let mut things = spawn_pickups(commands, room, map.map());
+    things.extend(spawn_gates(commands, room, map.map()));
+    things
+}
+
+impl Room {
+    /// Despawns what lies on its map, and its dummies.
+    fn clear_things(&mut self, commands: &mut Commands) {
+        for thing in self.things.drain(..).chain(self.dummies.drain(..)) {
+            commands.entity(thing).try_despawn();
+        }
+    }
+
+    fn in_room(&self, key: RoomKey) -> InRoom {
+        InRoom { key, net: self.net }
+    }
 }
 
 /// Into room `key`, which has room for one more; on the smaller team if there are teams. In a
@@ -466,7 +528,7 @@ fn enter_arena(lobby: &Lobby, ctx: &mut Ctx, link: Entity) {
         return;
     }
     info!(room = key.0, guest = guest.id, class = class.def().name, "entered the arena");
-    let in_room = InRoom { key, net: room.net };
+    let in_room = room.in_room(key);
     spawn_player(&mut ctx.commands, link, guest.peer, class, in_room, Team(guest.team));
 }
 
@@ -489,10 +551,8 @@ fn leave(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity) -> bool {
     info!(room = key.0, guest = id, "left a room");
     match room.members.first() {
         None => {
-            let room = lobby.rooms.remove(&key).expect("there");
-            for thing in room.pickups.into_iter().chain(room.dummies) {
-                ctx.commands.entity(thing).try_despawn();
-            }
+            let mut room = lobby.rooms.remove(&key).expect("there");
+            room.clear_things(&mut ctx.commands);
             lobby.free_net.push(room.net);
             info!(room = key.0, "room closed");
         }

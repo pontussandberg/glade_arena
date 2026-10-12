@@ -9,18 +9,19 @@ use lightyear::prelude::PeerId;
 
 use crate::classes::{AbilityKind, AttackKind, Chill, ClassId, Shot};
 use crate::config::*;
-use crate::map::{Map, SPAWN_POINTS, map};
-use crate::protocol::{AbilityState, AttackState, Chilled, Dash, Hasted, LastSwing, PlayerInput, Projectile, Windup};
+use crate::map::Map;
+use crate::protocol::{AbilityState, AttackState, Chilled, Dash, Hasted, LastSwing, PlayerInput, Projectile, Waygate, Windup};
 
-/// Advance a player one tick: straight the way its keys walk it, or else toward the point it
-/// was told to walk to (point-and-click), pathfinding there. Unreachable or missing targets
-/// mean standing still.
-pub fn step_player(pos: Vec2, input: &PlayerInput, speed: f32) -> Vec2 {
+/// Advance a player one tick on `map`: straight the way its keys walk it, or else toward the
+/// point it was told to walk to (point-and-click), pathfinding there. Unreachable or missing
+/// targets mean standing still. Marsh slows the step by the ground it starts on.
+pub fn step_player(map: &Map, pos: Vec2, input: &PlayerInput, speed: f32) -> Vec2 {
+    let speed = speed * map.speed_factor_at(pos);
     if let Some(dir) = input.walk.try_normalize() {
-        return walk_step(pos, dir * speed * TICK_DT);
+        return walk_step(map, pos, dir * speed * TICK_DT);
     }
     let Some(target) = input.move_to else { return pos };
-    let Some(waypoint) = map().next_waypoint(pos, target) else { return pos };
+    let Some(waypoint) = map.next_waypoint(pos, target) else { return pos };
     let to_waypoint = waypoint - pos;
     let step = speed * TICK_DT;
     if to_waypoint.length() <= step { waypoint } else { pos + to_waypoint.normalize() * step }
@@ -28,11 +29,11 @@ pub fn step_player(pos: Vec2, input: &PlayerInput, speed: f32) -> Vec2 {
 
 /// One step straight by `step`, sliding along whatever blocks it (just its free axis), or
 /// standing if both are blocked.
-fn walk_step(pos: Vec2, step: Vec2) -> Vec2 {
+fn walk_step(map: &Map, pos: Vec2, step: Vec2) -> Vec2 {
     [step, step.with_y(0.0), step.with_x(0.0)]
         .into_iter()
         .map(|s| pos + s)
-        .find(|&next| map().line_walkable(pos, next))
+        .find(|&next| map.line_walkable(pos, next))
         .unwrap_or(pos)
 }
 
@@ -40,9 +41,10 @@ fn walk_step(pos: Vec2, step: Vec2) -> Vec2 {
 /// still while winding up an attack, or walking at its class's speed. A slow or a haste changes
 /// how fast it walks and dashes alike (a dash still goes its full distance, just slower or
 /// faster: each step comes off what's `left` of it here, and `step_ability` ends it once that's
-/// none).
+/// none). Marsh slows walking, not dashing.
 #[allow(clippy::too_many_arguments)]
 pub fn move_player(
+    map: &Map,
     pos: Vec2,
     input: &PlayerInput,
     class: ClassId,
@@ -61,17 +63,23 @@ pub fn move_player(
         // Counted whether or not a wall (or water's edge, anything unwalkable) stops it.
         dash.left -= step;
         let next = pos + dash.dir * step;
-        if map().line_walkable(pos, next) { next } else { pos }
+        if map.line_walkable(pos, next) { next } else { pos }
     } else if attack.windup.is_some() {
         pos
     } else {
-        step_player(pos, input, class.def().move_speed * speed)
+        step_player(map, pos, input, class.def().move_speed * speed)
     }
 }
 
 /// Is a player at `pos` close enough to take the pickup lying at `at`? Only the server decides.
 pub fn touches_pickup(pos: Vec2, at: Vec2) -> bool {
     pos.distance(at) <= PICKUP_RADIUS
+}
+
+/// Which end of `gate` a player at `pos` stands on, if either (open or not). Only the server
+/// decides who goes through.
+pub fn gate_end_at(gate: &Waygate, pos: Vec2) -> Option<usize> {
+    gate.ends.iter().position(|end| pos.distance(*end) <= GATE_RADIUS)
 }
 
 /// How much a heal pickup restores to a player of `max_hp`.
@@ -81,8 +89,8 @@ pub fn heal_amount(max_hp: i32) -> i32 {
 
 /// True once a player stands on the clicked point (pulled in, if it hugs a wall: where the walk
 /// ends, see `Map::next_waypoint`). Exact: `step_player` snaps onto it.
-pub fn arrived(pos: Vec2, target: Vec2) -> bool {
-    pos == target || (target.is_finite() && pos == map().standing_point(target))
+pub fn arrived(map: &Map, pos: Vec2, target: Vec2) -> bool {
+    pos == target || (target.is_finite() && pos == map.standing_point(target))
 }
 
 /// What an auto-attack produces.
@@ -201,14 +209,14 @@ pub fn step_ability(
 
 /// Does a nova from `caster` reach `target`? Its radius out to the target's body, and not
 /// through a wall. Only the server decides this.
-pub fn nova_hits(caster: Vec2, class: ClassId, target: Vec2) -> bool {
+pub fn nova_hits(map: &Map, caster: Vec2, class: ClassId, target: Vec2) -> bool {
     let AbilityKind::Nova { radius, .. } = class.def().ability.kind else { return false };
-    caster.distance(target) <= radius + PLAYER_RADIUS && map().shot_clear(caster, target)
+    caster.distance(target) <= radius + PLAYER_RADIUS && map.shot_clear(caster, target)
 }
 
 /// Does a dash at `dasher` cut `target`? Bodies touching, and not through a wall.
-pub fn dash_hits(dasher: Vec2, target: Vec2) -> bool {
-    dasher.distance(target) <= 2.0 * PLAYER_RADIUS && map().shot_clear(dasher, target)
+pub fn dash_hits(map: &Map, dasher: Vec2, target: Vec2) -> bool {
+    dasher.distance(target) <= 2.0 * PLAYER_RADIUS && map.shot_clear(dasher, target)
 }
 
 /// How a projectile flies, from its shooter's class (only classes that shoot fire them).
@@ -224,10 +232,10 @@ pub fn projectile_pos(projectile: &Projectile, tick: f32) -> Vec2 {
     projectile.origin + projectile.dir * (shot(projectile).speed * TICK_DT * steps)
 }
 
-/// Out of range, or into a wall, rock or tree (water doesn't stop shots).
-pub fn projectile_expired(pos: Vec2, projectile: &Projectile, tick: u32) -> bool {
+/// Out of range, or into a wall, rock or tree (water and chasms don't stop shots).
+pub fn projectile_expired(map: &Map, pos: Vec2, projectile: &Projectile, tick: u32) -> bool {
     tick.saturating_sub(projectile.spawn_tick) >= shot(projectile).lifetime_ticks()
-        || map().get(Map::tile_of(pos)).blocks_shots()
+        || map.get(Map::tile_of(pos)).blocks_shots()
 }
 
 pub fn projectile_hits(projectile_pos: Vec2, projectile: &Projectile, player_pos: Vec2) -> bool {
@@ -237,7 +245,7 @@ pub fn projectile_hits(projectile_pos: Vec2, projectile: &Projectile, player_pos
 /// Does a swing from `attacker` toward `dir` reach `target`? Its lane reaches the target's body
 /// (like a shot as wide as the lane, out to the swing's reach), and not through a wall. Only the
 /// server decides this.
-pub fn melee_hits(attacker: Vec2, dir: Vec2, class: ClassId, target: Vec2) -> bool {
+pub fn melee_hits(map: &Map, attacker: Vec2, dir: Vec2, class: ClassId, target: Vec2) -> bool {
     let kind = &class.def().attack.kind;
     let AttackKind::Melee { width, .. } = *kind else { return false };
     let to_target = target - attacker;
@@ -245,7 +253,7 @@ pub fn melee_hits(attacker: Vec2, dir: Vec2, class: ClassId, target: Vec2) -> bo
     let (along, across) = (to_target.dot(dir), to_target.perp_dot(dir).abs());
     // Overlapping bodies always connect.
     let in_lane = to_target.length() <= PLAYER_RADIUS || ((0.0..=kind.reach()).contains(&along) && across <= width / 2.0 + PLAYER_RADIUS);
-    in_lane && map().shot_clear(attacker, target)
+    in_lane && map.shot_clear(attacker, target)
 }
 
 /// Damage of a projectile hitting at `tick`: the ability's, or the auto-attack's by how far it
@@ -265,11 +273,12 @@ pub fn projectile_chill(projectile: &Projectile) -> Chill {
     if projectile.ability { Chill::default() } else { projectile.class.def().attack.chill }
 }
 
-/// The spawn point farthest from every other player (server-side; the result is replicated).
-pub fn pick_spawn_point(others: impl IntoIterator<Item = Vec2> + Clone) -> Vec2 {
+/// `map`'s spawn point farthest from every other player (server-side; the result is replicated).
+pub fn pick_spawn_point(map: &Map, others: impl IntoIterator<Item = Vec2> + Clone) -> Vec2 {
     let clearance = |p: Vec2| others.clone().into_iter().map(|o| o.distance(p)).fold(f32::MAX, f32::min);
-    SPAWN_POINTS
-        .into_iter()
+    map.spawn_points
+        .iter()
+        .copied()
         .max_by(|a, b| clearance(*a).total_cmp(&clearance(*b)))
         .unwrap()
 }
@@ -277,6 +286,15 @@ pub fn pick_spawn_point(others: impl IntoIterator<Item = Vec2> + Clone) -> Vec2 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tests walk and fight on the first map.
+    fn map() -> &'static Map {
+        crate::map::MapId::Crossing.map()
+    }
+
+    fn spawns() -> &'static [Vec2] {
+        &map().spawn_points
+    }
 
     const SPEED: f32 = 6.0;
 
@@ -308,7 +326,7 @@ mod tests {
     fn walk_point(from: Vec2, to: Vec2, max_ticks: u32) -> (Vec2, u32) {
         let mut p = from;
         for tick in 0..max_ticks {
-            let next = step_player(p, &walk_to_point(to), SPEED);
+            let next = step_player(map(), p, &walk_to_point(to), SPEED);
             assert!(next.distance(p) <= SPEED * TICK_DT + 1e-5, "too fast at tick {tick}");
             assert!(map().walkable_at(next), "walked onto a blocked tile at {next}");
             if next == p {
@@ -321,9 +339,9 @@ mod tests {
 
     #[test]
     fn walks_where_its_keys_point_overriding_a_click_and_slides_along_walls() {
-        let from = SPAWN_POINTS[0];
+        let from = spawns()[0];
         let keys = PlayerInput { walk: Vec2::new(0.0, 2.0), move_to: Some(from + Vec2::new(3.0, 0.0)), ..default() };
-        let next = step_player(from, &keys, SPEED);
+        let next = step_player(map(), from, &keys, SPEED);
         assert!(next.abs_diff_eq(from + Vec2::Y * SPEED * TICK_DT, 1e-5), "walked to {next}");
 
         // Diagonally into blocked ground: never onto it, and still moving along the free axis
@@ -332,7 +350,7 @@ mod tests {
         for dir in [Vec2::new(1.0, 1.0), Vec2::new(-1.0, 1.0), Vec2::new(1.0, -1.0), Vec2::new(-1.0, -1.0)] {
             let keys = PlayerInput { walk: dir, ..default() };
             for _ in 0..2000 {
-                let next = step_player(p, &keys, SPEED);
+                let next = step_player(map(), p, &keys, SPEED);
                 assert!(next.distance(p) <= SPEED * TICK_DT + 1e-5);
                 assert!(map().walkable_at(next), "walked onto a blocked tile at {next}");
                 p = next;
@@ -342,7 +360,7 @@ mod tests {
 
     #[test]
     fn walks_to_the_clicked_tile_at_player_speed() {
-        let from = SPAWN_POINTS[0];
+        let from = spawns()[0];
         let target = Map::tile_of(from) + IVec2::new(0, 3);
         let (end, ticks) = walk(from, target, 500);
         assert_eq!(end, Map::center(target));
@@ -353,35 +371,35 @@ mod tests {
 
     #[test]
     fn walks_to_exactly_the_clicked_point_even_against_a_wall() {
-        let from = SPAWN_POINTS[0];
+        let from = spawns()[0];
         let off_center = from + Vec2::new(0.27, 2.81);
         assert_eq!(walk_point(from, off_center, 500).0, off_center);
         // A click right against a wall is pulled in to where a body fits, and reached.
         let m = map();
         let wall = m.tiles().find(|(t, tile)| *tile == crate::map::Tile::Wall && m.walkable(*t + IVec2::X)).unwrap().0;
         let clicked = m.walk_target(Map::center(wall + IVec2::X) - Vec2::new(0.49, 0.0), 4).unwrap();
-        let (end, ticks) = walk_point(SPAWN_POINTS[3], clicked, TICK_HZ as u32 * 30);
-        assert!(arrived(end, clicked), "stuck at {end} after {ticks} ticks, short of {clicked}");
+        let (end, ticks) = walk_point(spawns()[3], clicked, TICK_HZ as u32 * 30);
+        assert!(arrived(map(), end, clicked), "stuck at {end} after {ticks} ticks, short of {clicked}");
         // A point the client didn't pull in gets pulled in by the sim the same way: never stuck,
         // and arrival is recognized.
         let hugging = Map::center(wall + IVec2::X) - Vec2::new(0.49, 0.0);
-        let end = walk_point(SPAWN_POINTS[3], hugging, TICK_HZ as u32 * 30).0;
-        assert!(end == clicked && arrived(end, hugging));
-        assert_eq!(step_player(from, &walk_to_point(Vec2::NAN), SPEED), from);
+        let end = walk_point(spawns()[3], hugging, TICK_HZ as u32 * 30).0;
+        assert!(end == clicked && arrived(map(), end, hugging));
+        assert_eq!(step_player(map(), from, &walk_to_point(Vec2::NAN), SPEED), from);
     }
 
     #[test]
     fn walks_around_walls_and_across_the_river() {
-        let from = SPAWN_POINTS[1];
-        let target = Map::tile_of(SPAWN_POINTS[5]);
+        let from = spawns()[1];
+        let target = Map::tile_of(spawns()[5]);
         let (end, ticks) = walk(from, target, TICK_HZ as u32 * 30);
         assert_eq!(end, Map::center(target), "stuck after {ticks} ticks");
     }
 
     #[test]
     fn every_spawn_point_reaches_every_other() {
-        for from in SPAWN_POINTS {
-            for to in SPAWN_POINTS {
+        for &from in spawns() {
+            for &to in spawns() {
                 let target = Map::tile_of(to);
                 let (end, ticks) = walk(from, target, TICK_HZ as u32 * 30);
                 assert_eq!(end, Map::center(target), "{from} -> {to}: stuck after {ticks} ticks");
@@ -391,11 +409,11 @@ mod tests {
 
     #[test]
     fn unreachable_or_missing_target_means_standing_still() {
-        let from = SPAWN_POINTS[0];
+        let from = spawns()[0];
         let water = map().tiles().find(|(_, t)| *t == crate::map::Tile::Water).unwrap().0;
-        assert_eq!(step_player(from, &walk_to(water), SPEED), from);
-        assert_eq!(step_player(from, &walk_to(IVec2::new(-50, 3)), SPEED), from);
-        assert_eq!(step_player(from, &PlayerInput::default(), SPEED), from);
+        assert_eq!(step_player(map(), from, &walk_to(water), SPEED), from);
+        assert_eq!(step_player(map(), from, &walk_to(IVec2::new(-50, 3)), SPEED), from);
+        assert_eq!(step_player(map(), from, &PlayerInput::default(), SPEED), from);
     }
 
     /// Runs the attack from `from` to `to` (inclusive) with `input`, returning the ticks at which
@@ -469,13 +487,13 @@ mod tests {
     #[test]
     fn winding_up_roots_you() {
         let class = shooter();
-        let from = SPAWN_POINTS[0];
+        let from = spawns()[0];
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let (_, winding) = attack_ticks(class, &aim(Vec2::X, true), 10, 10);
         assert!(winding.windup.is_some());
         let (idle, warm) = (AbilityState::default(), Chilled::default());
-        assert_eq!(move_player(from, &walk, class, &winding, &mut { idle }, &warm, &default(), 11), from, "moved during the windup");
-        assert_ne!(move_player(from, &walk, class, &AttackState::default(), &mut { idle }, &warm, &default(), 11), from, "rooted without attacking");
+        assert_eq!(move_player(map(), from, &walk, class, &winding, &mut { idle }, &warm, &default(), 11), from, "moved during the windup");
+        assert_ne!(move_player(map(), from, &walk, class, &AttackState::default(), &mut { idle }, &warm, &default(), 11), from, "rooted without attacking");
     }
 
     #[test]
@@ -505,11 +523,11 @@ mod tests {
     fn projectile_expires_at_its_range_and_at_walls() {
         let proj = Projectile { owner: PeerId::Netcode(1), class: shooter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 5, ability: false };
         let lifetime = shooter().def().shot(false).unwrap().lifetime_ticks();
-        assert!(!projectile_expired(Vec2::ZERO, &proj, 5 + lifetime - 1));
-        assert!(projectile_expired(Vec2::ZERO, &proj, 5 + lifetime));
-        assert!(projectile_expired(Vec2::new(100.0, 0.0), &proj, 6), "left the map");
+        assert!(!projectile_expired(map(), Vec2::ZERO, &proj, 5 + lifetime - 1));
+        assert!(projectile_expired(map(), Vec2::ZERO, &proj, 5 + lifetime));
+        assert!(projectile_expired(map(), Vec2::new(100.0, 0.0), &proj, 6), "left the map");
         let wall = map().tiles().find(|(_, t)| *t == crate::map::Tile::Wall).unwrap().0;
-        assert!(projectile_expired(Map::center(wall), &proj, 6), "hit a wall");
+        assert!(projectile_expired(map(), Map::center(wall), &proj, 6), "hit a wall");
     }
 
     /// The first class whose Q is a thrown projectile / a dash.
@@ -560,7 +578,7 @@ mod tests {
         while state.dash.is_some() {
             tick += 1;
             assert!(tick < 1000, "the dash never ended");
-            pos = move_player(pos, &PlayerInput::default(), class, &AttackState::default(), &mut state, chilled, hasted, tick);
+            pos = move_player(map(), pos, &PlayerInput::default(), class, &AttackState::default(), &mut state, chilled, hasted, tick);
             assert!(map().walkable_at(pos), "dashed into a wall at {pos}");
             state = step_ability(tick, PeerId::Netcode(1), class, pos, &PlayerInput::default(), chilled, state).0;
         }
@@ -569,7 +587,7 @@ mod tests {
 
     /// Every way out of every spawn point.
     fn dash_starts() -> impl Iterator<Item = (Vec2, Vec2)> {
-        SPAWN_POINTS.into_iter().flat_map(|from| (0..8).map(move |i| (from, Vec2::from_angle(i as f32 * std::f32::consts::FRAC_PI_4))))
+        spawns().iter().copied().flat_map(|from| (0..8).map(move |i| (from, Vec2::from_angle(i as f32 * std::f32::consts::FRAC_PI_4))))
     }
 
     #[test]
@@ -605,11 +623,11 @@ mod tests {
     #[test]
     fn a_dash_mid_windup_moves_you_and_the_attack_still_goes_off() {
         let class = dasher();
-        let from = SPAWN_POINTS[0];
+        let from = spawns()[0];
         let (_, winding) = attack_ticks(class, &aim(Vec2::X, true), 10, 10);
         let (dashing, _) = step_ability(11, PeerId::Netcode(1), class, from, &press_q(Vec2::Y), &default(), default());
         assert!(dashing.dash.is_some(), "no dash mid-windup");
-        let moved = move_player(from, &PlayerInput::default(), class, &winding, &mut { dashing }, &default(), &default(), 11);
+        let moved = move_player(map(), from, &PlayerInput::default(), class, &winding, &mut { dashing }, &default(), &default(), 11);
         assert_ne!(moved, from, "the dash didn't move you mid-windup");
         let windup = class.def().attack.windup_ticks;
         let (released, _) = (11..=10 + windup).fold((None, winding), |(released, state), tick| {
@@ -638,10 +656,10 @@ mod tests {
         assert_eq!(chilled.speed_factor(101 + chill.slow_ticks), 1.0, "still slowed after it wore off");
 
         // Slowed, a step covers that much less ground.
-        let from = SPAWN_POINTS[0];
+        let from = spawns()[0];
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let (attack, ability) = (AttackState::default(), AbilityState::default());
-        let step = |chilled: &Chilled| move_player(from, &walk, chiller(), &attack, &mut { ability }, chilled, &default(), 101).distance(from);
+        let step = |chilled: &Chilled| move_player(map(), from, &walk, chiller(), &attack, &mut { ability }, chilled, &default(), 101).distance(from);
         assert!((step(&chilled) - step(&Chilled::default()) * (1.0 - chill.slow)).abs() < 1e-5);
 
         // A weaker slow doesn't replace a stronger one; the same one again renews it.
@@ -656,11 +674,11 @@ mod tests {
     fn a_haste_doubles_walking_from_the_tick_after_and_wears_off() {
         let mut hasted = Hasted::default();
         hasted.start(100);
-        let from = SPAWN_POINTS[0];
+        let from = spawns()[0];
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let class = dasher();
         let (attack, idle, warm) = (AttackState::default(), AbilityState::default(), Chilled::default());
-        let step = |tick| move_player(from, &walk, class, &attack, &mut { idle }, &warm, &hasted, tick).distance(from);
+        let step = |tick| move_player(map(), from, &walk, class, &attack, &mut { idle }, &warm, &hasted, tick).distance(from);
         let normal = class.def().move_speed * TICK_DT;
         assert!((step(100) - normal).abs() < 1e-5, "hasted on the tick it was taken");
         assert!((step(101) - normal * HASTE_FACTOR).abs() < 1e-5);
@@ -668,7 +686,7 @@ mod tests {
         assert!((step(101 + HASTE_TICKS) - normal).abs() < 1e-5, "still hasted after it wore off");
         // Dashes are sped up just as much.
         let (dashing, _) = step_ability(101, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &warm, idle);
-        let dash = |hasted: &Hasted| move_player(from, &walk, class, &attack, &mut { dashing }, &warm, hasted, 102).distance(from);
+        let dash = |hasted: &Hasted| move_player(map(), from, &walk, class, &attack, &mut { dashing }, &warm, hasted, 102).distance(from);
         assert!((dash(&hasted) - dash(&default()) * HASTE_FACTOR).abs() < 1e-5);
         assert!(touches_pickup(from, from + Vec2::X * PICKUP_RADIUS));
         assert!(!touches_pickup(from, from + Vec2::X * (PICKUP_RADIUS + 0.01)));
@@ -679,12 +697,12 @@ mod tests {
     fn rooted_means_no_walking_no_dashing_and_a_dash_stops() {
         let mut chilled = Chilled::default();
         chilled.apply(Chill { root_ticks: TICK_HZ as u32, ..default() }, 10);
-        let from = SPAWN_POINTS[0];
+        let from = spawns()[0];
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let class = dasher();
         let (attack, idle) = (AttackState::default(), AbilityState::default());
-        assert_eq!(move_player(from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 11), from, "walked while rooted");
-        assert_ne!(move_player(from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 11 + TICK_HZ as u32), from, "still rooted after it wore off");
+        assert_eq!(move_player(map(), from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 11), from, "walked while rooted");
+        assert_ne!(move_player(map(), from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 11 + TICK_HZ as u32), from, "still rooted after it wore off");
 
         let (state, _) = step_ability(11, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &chilled, idle);
         assert!(state.dash.is_none() && state.ready_at == 0, "dashed (or spent the cooldown) while rooted");
@@ -692,7 +710,7 @@ mod tests {
         // A dash in progress when the root lands goes no further, and ends.
         let (dashing, _) = step_ability(9, PeerId::Netcode(1), class, from, &press_q(Vec2::X), &default(), idle);
         assert!(dashing.dash.is_some());
-        assert_eq!(move_player(from, &walk, class, &attack, &mut { dashing }, &chilled, &default(), 11), from, "dashed on while rooted");
+        assert_eq!(move_player(map(), from, &walk, class, &attack, &mut { dashing }, &chilled, &default(), 11), from, "dashed on while rooted");
         let (stopped, _) = step_ability(11, PeerId::Netcode(1), class, from, &PlayerInput::default(), &chilled, dashing);
         assert!(stopped.dash.is_none(), "the dash should stop");
     }
@@ -709,10 +727,10 @@ mod tests {
         let open = |p: Vec2| dirs.iter().all(|d| map().shot_clear(p, p + *d * (radius + 1.5)));
         let at = map().tiles().map(|(tile, _)| Map::center(tile)).find(|&p| open(p)).unwrap();
         for dir in dirs {
-            assert!(nova_hits(at, class, at + dir * (radius + PLAYER_RADIUS - 0.05)), "inside, toward {dir}");
-            assert!(!nova_hits(at, class, at + dir * (radius + PLAYER_RADIUS + 0.05)), "outside, toward {dir}");
+            assert!(nova_hits(map(), at, class, at + dir * (radius + PLAYER_RADIUS - 0.05)), "inside, toward {dir}");
+            assert!(!nova_hits(map(), at, class, at + dir * (radius + PLAYER_RADIUS + 0.05)), "outside, toward {dir}");
         }
-        assert!(!nova_hits(at, dasher(), at + Vec2::X), "only novas burst");
+        assert!(!nova_hits(map(), at, dasher(), at + Vec2::X), "only novas burst");
     }
 
     #[test]
@@ -726,32 +744,66 @@ mod tests {
     #[test]
     fn melee_hits_its_lane_within_range_only() {
         let class = fighter();
-        let at = SPAWN_POINTS[0];
+        let at = spawns()[0];
         let reach = class.def().attack.kind.reach() - 0.05;
-        assert!(melee_hits(at, Vec2::Y, class, at + Vec2::Y * reach), "straight ahead, at the edge of reach");
-        assert!(!melee_hits(at, Vec2::Y, class, at + Vec2::Y * (reach + 0.2)), "just out of reach");
-        assert!(!melee_hits(at, Vec2::Y, class, at - Vec2::Y * 1.0), "behind");
-        assert!(melee_hits(at, Vec2::Y, class, at - Vec2::Y * 0.3), "bodies overlapping");
+        assert!(melee_hits(map(), at, Vec2::Y, class, at + Vec2::Y * reach), "straight ahead, at the edge of reach");
+        assert!(!melee_hits(map(), at, Vec2::Y, class, at + Vec2::Y * (reach + 0.2)), "just out of reach");
+        assert!(!melee_hits(map(), at, Vec2::Y, class, at - Vec2::Y * 1.0), "behind");
+        assert!(melee_hits(map(), at, Vec2::Y, class, at - Vec2::Y * 0.3), "bodies overlapping");
         let AttackKind::Melee { width, .. } = class.def().attack.kind else { unreachable!() };
         let edge = width / 2.0 + PLAYER_RADIUS;
-        assert!(melee_hits(at, Vec2::Y, class, at + Vec2::new(edge - 0.05, 1.0)), "a body overlapping the lane");
-        assert!(!melee_hits(at, Vec2::Y, class, at + Vec2::new(edge + 0.05, 1.0)), "beside the lane");
-        assert!(!melee_hits(at, Vec2::Y, shooter(), at + Vec2::Y), "projectile classes don't swing");
+        assert!(melee_hits(map(), at, Vec2::Y, class, at + Vec2::new(edge - 0.05, 1.0)), "a body overlapping the lane");
+        assert!(!melee_hits(map(), at, Vec2::Y, class, at + Vec2::new(edge + 0.05, 1.0)), "beside the lane");
+        assert!(!melee_hits(map(), at, Vec2::Y, shooter(), at + Vec2::Y), "projectile classes don't swing");
+    }
+
+    #[test]
+    fn marsh_slows_walking_not_dashing() {
+        use crate::map::{MARSH_SPEED, MapId, Tile};
+        let keep = MapId::Keep.map();
+        // A marsh tile with marsh all around, so a step stays in it.
+        let bog = keep
+            .tiles()
+            .find(|(t, _)| (-1..=1).all(|dy| (-1..=1).all(|dx| keep.get(*t + IVec2::new(dx, dy)) == Tile::Marsh)))
+            .expect("the keep has a marsh")
+            .0;
+        let from = Map::center(bog);
+        let east = PlayerInput { walk: Vec2::X, ..default() };
+        let stepped = step_player(keep, from, &east, SPEED).distance(from);
+        assert!((stepped - SPEED * TICK_DT * MARSH_SPEED).abs() < 1e-5, "stepped {stepped}");
+        let dry = keep.spawn_points[0];
+        assert!((step_player(keep, dry, &east, SPEED).distance(dry) - SPEED * TICK_DT).abs() < 1e-5);
+        // A dash goes at its own pace, marsh or not.
+        let class = dasher();
+        let AbilityKind::Dash { distance, ticks, .. } = class.def().ability.kind else { unreachable!() };
+        let mut dashing = AbilityState { dash: Some(Dash { started_at: 10, dir: Vec2::X, left: distance }), ..default() };
+        let warm = Chilled::default();
+        let moved = move_player(keep, from, &PlayerInput::default(), class, &AttackState::default(), &mut dashing, &warm, &default(), 11);
+        assert!((moved.distance(from) - distance / ticks as f32).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_gate_end_is_under_whoever_stands_on_it() {
+        let gate = Waygate { ends: [Vec2::new(-5.5, 2.5), Vec2::new(5.5, -2.5)], back_at: Some(150) };
+        assert_eq!(gate_end_at(&gate, Vec2::new(-5.5, 2.9)), Some(0));
+        assert_eq!(gate_end_at(&gate, Vec2::new(5.0, -2.5)), Some(1));
+        assert_eq!(gate_end_at(&gate, Vec2::new(-5.5, 3.5)), None, "beside it");
+        assert!(!gate.open_at(149) && gate.open_at(150));
     }
 
     #[test]
     fn spawn_point_avoids_other_players() {
         // Empty arena: any spawn point is fine.
-        assert!(SPAWN_POINTS.contains(&pick_spawn_point([])));
+        assert!(spawns().contains(&pick_spawn_point(map(), [])));
         // Every new player gets a free spot until the spawn points run out.
         let mut taken = Vec::new();
-        for _ in 0..SPAWN_POINTS.len() {
-            let p = pick_spawn_point(taken.clone());
+        for _ in 0..spawns().len() {
+            let p = pick_spawn_point(map(), taken.clone());
             assert!(!taken.contains(&p), "{p} handed out twice");
             taken.push(p);
         }
         // A player standing near a spawn point makes it the least attractive one.
-        let near_first = SPAWN_POINTS[0] + Vec2::new(0.5, 0.0);
-        assert_ne!(pick_spawn_point([near_first]), SPAWN_POINTS[0]);
+        let near_first = spawns()[0] + Vec2::new(0.5, 0.0);
+        assert_ne!(pick_spawn_point(map(), [near_first]), spawns()[0]);
     }
 }

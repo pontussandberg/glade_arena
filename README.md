@@ -4,8 +4,11 @@ Browser PvP arena brawler: top-down 3D presentation on 2D gameplay rules, with o
 server and League-style netcode: clients send commands, nothing is predicted, and other players
 are interpolated.
 
-The fight happens in a forest clearing on a 1 m tile grid: a river through the middle, crossed by
-a stone bridge and two fords, with ruined walls, boulders and trees for cover. Movement is
+The fight happens on one of three maps on a 1 m tile grid, picked by the room's leader (or
+switched in practice): River Crossing, a forest clearing with a river through the middle crossed
+by a stone bridge and two fords; Sunken Keep, a moated keep with marshes that slow you; and Riven
+Gorge, a chasm that shots fly over but no one walks, with rope bridges and waygates that jump you
+to the far side. Ruined walls, boulders and trees give cover. Movement is
 point-and-click like LoL or OSRS: **right click** walks to a tile (pathfinding around obstacles),
 **left click** auto-attacks toward the cursor (a skillshot), **Q** uses your class's ability
 toward the cursor, **S** stops, **A** rings how far your shots fly (until the next key or

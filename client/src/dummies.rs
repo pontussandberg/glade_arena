@@ -1,6 +1,6 @@
 //! The practice tools, LoL-style: a panel in the top right corner while practicing, under a
 //! "Practice" header that folds them away or out (like "Controls", open to begin with).
-//! "No cooldowns" switches our Q's cooldown off and on (lit while off: what the server says, via
+//! "Map" switches practice to the next map, everyone starting over on it. "No cooldowns" switches our Q's cooldown off and on (lit while off: what the server says, via
 //! our `AbilityState`). "Target dummy" places one: a ring under the cursor shows where it would stand
 //! (red where it can't), and the next left click stands it there (the server takes each class in
 //! turn); a right click or ESC cancels. Click it again for another. A hint says so meanwhile.
@@ -9,7 +9,6 @@
 //! the fight's controls and the menu, and takes them: a placing click never also attacks or walks.
 
 use arena_shared::config::PLAYER_RADIUS;
-use arena_shared::map::map;
 use arena_shared::protocol::{AbilityState, RoomRequest};
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
@@ -21,7 +20,7 @@ use crate::Me;
 use crate::arena::{self, palette, to_world};
 use crate::camera::CameraPlaced;
 use crate::render::{GameUi, HudButton, button, button_fill, chevron, chevron_turn, clicked, corner_panel, fold_header, ground_at, shown, ui_text};
-use crate::rooms::{CurrentRoom, Screen, request};
+use crate::rooms::{CurrentMap, CurrentRoom, Screen, request};
 
 pub struct DummiesPlugin;
 
@@ -32,7 +31,7 @@ impl Plugin for DummiesPlugin {
         app.add_systems(
             Update,
             (
-                (show_tools, fold_tools, use_tools, toggle_cooldowns, show_hint).chain(),
+                (show_tools, fold_tools, use_tools, toggle_cooldowns, switch_map, show_hint).chain(),
                 (place_dummy, show_marker).chain().in_set(CameraPlaced).before(crate::PlayerControls).before(crate::esc_menu::MenuKey),
             )
                 .run_if(in_state(Screen::InGame)),
@@ -58,6 +57,14 @@ struct DummyButton(Walks);
 
 #[derive(Component)]
 struct CooldownsButton;
+
+/// Switches practice to the next map: everything starts over on it.
+#[derive(Component)]
+struct MapButton;
+
+/// The map practice is on, shown on its button.
+#[derive(Component)]
+struct MapName;
 
 /// The "No cooldowns" switch's on/off text.
 #[derive(Component)]
@@ -89,6 +96,12 @@ fn show_tools(mut commands: Commands, room: Res<CurrentRoom>, tools: Query<Entit
                         column_gap: px(12.0),
                         ..default()
                     };
+                    tools
+                        .spawn((MapButton, HudButton, button_fill(palette::ui::PANEL), node.clone(), BorderColor::all(palette::ui::MUTED.with_alpha(0.5))))
+                        .with_children(|switch| {
+                            switch.spawn(ui_text("Map", 13.0, palette::ui::TEXT));
+                            switch.spawn((MapName, ui_text("", 13.0, palette::ui::ACCENT)));
+                        });
                     tools
                         .spawn((CooldownsButton, HudButton, button_fill(palette::ui::PANEL), node, BorderColor::all(palette::ui::MUTED.with_alpha(0.5))))
                         .with_children(|switch| {
@@ -186,6 +199,25 @@ fn toggle_cooldowns(
     label_color.set_if_neq(TextColor(color));
 }
 
+/// The map button asks the server for the next map (dummies placed go with the old one, so
+/// placing stops), and shows the one we're on.
+fn switch_map(
+    room: Res<CurrentRoom>,
+    button: Single<Ref<Interaction>, With<MapButton>>,
+    mut name: Single<&mut Text, With<MapName>>,
+    mut placing: ResMut<Placing>,
+    mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
+) {
+    let Some(map) = room.0.as_ref().map(|r| r.map) else { return };
+    if clicked(*button) {
+        request(&mut sender, RoomRequest::SetMap(map.next()));
+        placing.0 = None;
+    }
+    if name.0 != map.label() {
+        name.0 = map.label().to_string();
+    }
+}
+
 /// Where on the ground the cursor points, if it does.
 fn cursor_ground(window: &Window, (camera, transform): (&Camera, &GlobalTransform)) -> Option<Vec2> {
     window.cursor_position().and_then(|c| ground_at(camera, transform, c))
@@ -202,11 +234,12 @@ fn place_dummy(
     camera: Single<(&Camera, &GlobalTransform)>,
     controls: Query<&Interaction, With<HudButton>>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
+    map: Res<CurrentMap>,
 ) {
     let Some(Walks(walks)) = placing.0 else { return };
     let on_control = controls.iter().any(|i| *i != Interaction::None);
     if mouse.just_pressed(MouseButton::Left) && !on_control {
-        if let Some(at) = cursor_ground(&window, *camera).filter(|at| map().walkable_at(*at)) {
+        if let Some(at) = cursor_ground(&window, *camera).filter(|at| map.map().walkable_at(*at)) {
             request(&mut sender, RoomRequest::PlaceDummy { at, walks });
             placing.0 = None;
         }
@@ -248,13 +281,14 @@ fn show_marker(
     window: Single<&Window>,
     camera: Single<(&Camera, &GlobalTransform)>,
     marker: Single<(&Marker, &mut Transform, &mut MeshMaterial3d<StandardMaterial>, &mut Visibility)>,
+    map: Res<CurrentMap>,
 ) {
     let (marker, mut transform, mut material, mut visibility) = marker.into_inner();
     let at = cursor_ground(&window, *camera).filter(|_| placing.0.is_some());
     visibility.set_if_neq(shown(at.is_some()));
     let Some(at) = at else { return };
     transform.translation = to_world(at, 0.04);
-    let wanted = if map().walkable_at(at) { &marker.can } else { &marker.cannot };
+    let wanted = if map.map().walkable_at(at) { &marker.can } else { &marker.cannot };
     if material.0 != *wanted {
         material.0 = wanted.clone();
     }

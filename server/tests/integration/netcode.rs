@@ -13,7 +13,7 @@
 
 use std::time::{Duration, Instant};
 
-use arena_shared::map::{Map, Tile, map};
+use arena_shared::map::{Map, Tile};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use crate::common::*;
@@ -158,7 +158,7 @@ fn players_spawn_apart() {
         std::thread::sleep(Duration::from_millis(3));
     };
     assert!(
-        arena_shared::map::SPAWN_POINTS.contains(&first_seen),
+        map().spawn_points.contains(&first_seen),
         "A first saw itself at {first_seen}, not at a spawn point"
     );
     h.until(Duration::from_secs(15), "both players spawned", |h| {

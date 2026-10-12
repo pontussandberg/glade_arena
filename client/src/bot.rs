@@ -3,10 +3,10 @@
 //! `ARENA_BOT=1` (native client) to have someone to fight when testing alone.
 
 use arena_shared::classes::{AbilityKind, AttackKind};
-use arena_shared::map::map;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 
+use crate::rooms::CurrentMap;
 use crate::{DesiredInput, Me, PlayerControls, SendCommands};
 
 /// How far inside its reach a melee bot starts a swing.
@@ -31,7 +31,9 @@ fn think(
     me: Query<(&PlayerId, &ClassId, &Pos), With<Me>>,
     others: Query<(&PlayerId, &Pos, &Health), Without<Me>>,
     mut desired: ResMut<DesiredInput>,
+    map: Res<CurrentMap>,
 ) {
+    let map = map.map();
     let Ok((my_id, class, me)) = me.single() else { return };
     let Some(target) = others
         .iter()
@@ -55,14 +57,14 @@ fn think(
     };
     let stand_at = target - to_target.normalize_or_zero() * preferred;
     let wanted = ((distance - preferred).abs() > 1.0)
-        .then(|| map().walk_target(stand_at, 3))
+        .then(|| map.walk_target(stand_at, 3))
         .flatten();
     // Keep the current plan unless the goal moved a couple of tiles: fewer fresh path searches.
     let move_to = match (desired.0.move_to, wanted) {
         (Some(current), Some(new)) if (new - current).abs().max_element() < 2.0 => Some(current),
         _ => wanted,
     };
-    let clear = map().shot_clear(me.0, target);
+    let clear = map.shot_clear(me.0, target);
     let fire = distance <= attack_within && clear;
     // Q whenever it would land: a dash to close in from just out of reach, a throw in range, a
     // nova when the target is right on top of us.

@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use arena_client::rooms::{CurrentRoom, Me, Notice, RoomList};
 use arena_server::rooms::AfkTimeout;
+use arena_shared::map::MapId;
 use arena_shared::protocol::*;
 use arena_shared::rooms::*;
 use bevy::prelude::*;
@@ -77,12 +78,12 @@ fn pickups_on_server(server: &mut App) -> usize {
 #[test]
 fn rooms_are_listed_joined_and_closed_with_the_leader_passed_on() {
     let mut g = guests(5870, &["revenant", "javelinist"], |_| {});
-    g.ask(0, RoomRequest::Create { name: "  Friends \n".into(), mode: Mode::Ffa });
+    g.ask(0, RoomRequest::Create { name: "  Friends \n".into(), mode: Mode::Ffa, map: MapId::default() });
     g.until(Duration::from_secs(5), "B sees the room listed", |g| g.rooms_listed(1).len() == 1);
     let listed = g.rooms_listed(1)[0].clone();
     assert_eq!(listed.name, "Friends");
     assert!(!listed.started);
-    assert_eq!(pickups_on_server(&mut g.server), arena_shared::map::PICKUP_SPOTS.len());
+    assert_eq!(pickups_on_server(&mut g.server), map().pickups.len());
 
     g.ask(1, RoomRequest::Join(listed.key));
     g.until(Duration::from_secs(5), "both in the room", |g| g.room(0).is_some_and(|r| r.members.len() == 2));
@@ -120,7 +121,7 @@ fn rooms_are_kept_apart() {
     assert!(sees(&mut g.clients[0], B).is_none(), "A sees B, in another room");
     assert!(sees(&mut g.clients[1], A).is_none(), "B sees A, in another room");
     let pickups_seen = |client: &mut App| client.world_mut().query::<&Pickup>().iter(client.world()).count();
-    assert_eq!(pickups_seen(&mut g.clients[0]), arena_shared::map::PICKUP_SPOTS.len(), "A sees only its room's pickups");
+    assert_eq!(pickups_seen(&mut g.clients[0]), map().pickups.len(), "A sees only its room's pickups");
 
     // Even standing on the same spot, they can't hit each other.
     let spot = Vec2::new(-22.5, -6.5);
@@ -139,7 +140,7 @@ fn rooms_are_kept_apart() {
 #[test]
 fn allies_cant_hurt_each_other() {
     let mut g = guests(5872, &["revenant", "javelinist"], |_| {});
-    g.ask(0, RoomRequest::Create { name: "Teams".into(), mode: Mode::Teams });
+    g.ask(0, RoomRequest::Create { name: "Teams".into(), mode: Mode::Teams, map: MapId::default() });
     g.until(Duration::from_secs(5), "listed", |g| g.rooms_listed(1).len() == 1);
     let key = g.rooms_listed(1)[0].key;
     g.ask(1, RoomRequest::Join(key));
@@ -190,14 +191,14 @@ fn idle_members_are_taken_out() {
 #[test]
 fn practice_is_unlisted_and_fighters_step_out_to_the_lobby() {
     let mut g = guests(5874, &["revenant", "javelinist"], |_| {});
-    g.ask(0, RoomRequest::Practice);
+    g.ask(0, RoomRequest::Practice(MapId::default()));
     g.until(Duration::from_secs(10), "A practicing", |g| player::<Health>(&mut g.server, A).is_some());
     assert!(g.room(0).unwrap().practice);
     g.run(Duration::from_millis(700));
     assert!(g.rooms_listed(1).is_empty(), "practice is listed");
 
     // B starts a lobby; A leaves practice and joins it mid-match, in once they ask.
-    g.ask(1, RoomRequest::Create { name: "Lobby".into(), mode: Mode::Ffa });
+    g.ask(1, RoomRequest::Create { name: "Lobby".into(), mode: Mode::Ffa, map: MapId::default() });
     g.until(Duration::from_secs(5), "B in its lobby", |g| g.room(1).is_some());
     g.ask(1, RoomRequest::Start);
     g.until(Duration::from_secs(10), "B fighting", |g| player::<Health>(&mut g.server, B).is_some());

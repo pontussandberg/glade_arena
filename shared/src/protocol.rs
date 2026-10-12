@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::classes::ClassId;
 use crate::classes::Chill;
+use crate::map::MapId;
 use crate::rooms::{LeaveReason, Mode, NO_TEAM, RoomKey, RoomSummary, RoomView};
 
 /// Marks a player entity and says which client controls it. Projectiles don't carry it (their
@@ -133,6 +134,12 @@ impl Windup {
         let windup = self.ticks(class).max(1) as f32;
         ((now - self.started_at as f32) / windup).clamp(0.0, 1.0)
     }
+}
+
+/// Interpolation for positions: a walk or a dash blends, but a jump (`JUMP`: a respawn, a
+/// waygate) shows at once, rather than the fighter sliding across the map to where it came out.
+fn lerp_or_jump(start: Pos, end: Pos, t: f32) -> Pos {
+    if start.distance(end.0) > crate::config::JUMP { start } else { Pos(start.lerp(end.0, t)) }
 }
 
 /// Interpolation for state that jumps instead of blending: others' attack state and swings
@@ -270,7 +277,7 @@ pub enum PickupKind {
     Haste,
 }
 
-/// A pickup lying at `at` (one of `map::PICKUP_SPOTS`), or, while `back_at` is set, taken (last
+/// A pickup lying at `at` (one of its map's `pickups`), or, while `back_at` is set, taken (last
 /// by `taken_by`) and gone until that tick. Server-authoritative: the server decides who takes
 /// it, clients draw it, its timer, and its taker's burst.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
@@ -279,6 +286,28 @@ pub struct Pickup {
     pub at: Vec2,
     pub back_at: Option<u32>,
     pub taken_by: Option<PeerId>,
+}
+
+/// A pair of waygates (one of its map's `gates`): a fighter stepping onto either end is put on
+/// the other, and both close until `back_at` (the tick they open again; `None`: open, never
+/// used). Server-authoritative, like a pickup: the server decides who goes through; clients draw
+/// the gates, whether they're open, and a flash on both ends when `back_at` changes.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct Waygate {
+    pub ends: [Vec2; 2],
+    pub back_at: Option<u32>,
+}
+
+impl Waygate {
+    /// How many ticks (fractional, for drawing between them) until it opens at `tick`: 0 while
+    /// it's open.
+    pub fn closed_for(&self, tick: f32) -> f32 {
+        self.back_at.map_or(0.0, |back_at| (back_at as f32 - tick).max(0.0))
+    }
+
+    pub fn open_at(&self, tick: u32) -> bool {
+        self.closed_for(tick as f32) == 0.0
+    }
 }
 
 /// The player's most recent melee swing, for drawing it. Server-authoritative and replicated.
@@ -390,13 +419,13 @@ pub struct Hello {
 /// `LobbyEvent::Room`, or `LobbyEvent::Refused` saying why not.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum RoomRequest {
-    /// Make a room and lead it.
-    Create { name: String, mode: Mode },
+    /// Make a room on `map` and lead it.
+    Create { name: String, mode: Mode, map: MapId },
     Join(RoomKey),
     /// Join the room called this, or make it and start it right away: for bots and tests.
     QuickJoin(String),
-    /// A room of our own, never listed, straight into its arena.
-    Practice,
+    /// A room of our own on this map, never listed, straight into its arena.
+    Practice(MapId),
     Leave,
     /// Into the room's arena, once its match is on, as our picked class.
     EnterArena,
@@ -404,6 +433,8 @@ pub enum RoomRequest {
     LeaveArena,
     /// Leader only, before the start.
     SetMode(Mode),
+    /// Leader only, before the start; in practice, any time (everything starts over on it).
+    SetMap(MapId),
     SetTeam(u8),
     /// Leader only.
     Start,
@@ -456,9 +487,10 @@ impl Plugin for ProtocolPlugin {
         app.component::<RecentHits>().replicate();
         app.component::<Hasted>().replicate();
         app.component::<Pickup>().replicate();
+        app.component::<Waygate>().replicate();
         // Others' fighters are interpolated (smooth, a little in the past); our own isn't: it's
         // shown as the server last said it was, for the least delay after a command.
-        app.component::<Pos>().replicate().add_linear_interpolation();
+        app.component::<Pos>().replicate().add_interpolation_with(lerp_or_jump);
         app.component::<AttackState>().replicate().add_interpolation_with(hold);
         app.component::<LastSwing>().replicate().add_interpolation_with(hold);
         app.component::<AbilityState>().replicate().add_interpolation_with(hold);

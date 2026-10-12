@@ -4,7 +4,6 @@
 use std::time::Duration;
 
 use arena_shared::config::{HASTE_TICKS, PICKUP_RESPAWN_TICKS};
-use arena_shared::map::PICKUP_SPOTS;
 use arena_shared::protocol::*;
 use arena_shared::sim;
 use bevy::prelude::*;
@@ -21,7 +20,7 @@ fn pickup(app: &mut App, kind: PickupKind) -> Option<Pickup> {
 }
 
 fn spot(kind: PickupKind) -> Vec2 {
-    PICKUP_SPOTS.into_iter().find(|(at, k)| *k == kind && at.x < 0.0).unwrap().0
+    map().pickups.iter().copied().find(|(at, k)| *k == kind && at.x < 0.0).unwrap().0
 }
 
 fn set_health(server: &mut App, id: u64, hp: i32) {

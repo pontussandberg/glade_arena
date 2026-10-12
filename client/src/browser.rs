@@ -6,6 +6,7 @@
 //! a name (click it to type) and the mode. Before home, while connecting, a plain screen saying
 //! so.
 
+use arena_shared::map::MapId;
 use arena_shared::protocol::RoomRequest;
 use arena_shared::rooms::{Mode, ROOM_NAME_MAX, RoomKey, RoomSummary, first_name};
 use bevy::input::ButtonState;
@@ -17,7 +18,7 @@ use lightyear::prelude::*;
 use crate::arena::palette;
 use crate::lobby::{SidePanel, card, fold_chip, label, pane_header};
 use crate::render::{ButtonFill, button, clicked, key_chip, ui_text};
-use crate::rooms::{Me, RoomList, Screen, request};
+use crate::rooms::{CurrentMap, Me, RoomList, Screen, request};
 use crate::arena::palette::ui::ACCENT;
 
 pub struct BrowserPlugin;
@@ -192,6 +193,7 @@ fn type_name(
     mut typed: MessageReader<KeyboardInput>,
     typing: Res<Typing>,
     mut home: ResMut<Home>,
+    map: Res<CurrentMap>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
     for key in typed.read() {
@@ -203,7 +205,7 @@ fn type_name(
                 home.name.pop();
             }
             // Still typing (so the Enter isn't also taken for practice), until we're in the lobby.
-            Key::Enter => create(&home, &mut sender),
+            Key::Enter => create(&home, map.0, &mut sender),
             _ => {
                 if let Some(text) = &key.text {
                     for c in text.chars().filter(|c| !c.is_control()) {
@@ -217,8 +219,9 @@ fn type_name(
     }
 }
 
-fn create(home: &Home, sender: &mut MessageSender<RoomRequest>) {
-    request(sender, RoomRequest::Create { name: home.name.clone(), mode: home.mode });
+/// A new lobby, on the map picked at home.
+fn create(home: &Home, map: MapId, sender: &mut MessageSender<RoomRequest>) {
+    request(sender, RoomRequest::Create { name: home.name.clone(), mode: home.mode, map });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -229,6 +232,7 @@ fn lobby_buttons(
     modes: Query<(Ref<Interaction>, &ModeButton)>,
     create_button: Query<Ref<Interaction>, With<CreateButton>>,
     mut home: ResMut<Home>,
+    map: Res<CurrentMap>,
     mut open: ResMut<LobbiesOpen>,
     mut flash: ResMut<HeaderFlash>,
     time: Res<Time>,
@@ -255,7 +259,7 @@ fn lobby_buttons(
         }
     }
     if create_button.iter().any(clicked) {
-        create(&home, &mut sender);
+        create(&home, map.0, &mut sender);
     }
 }
 
@@ -300,7 +304,7 @@ fn show_lobbies(
 
         panel.spawn(card()).with_children(|card| {
             card.spawn(ui_text("Create a lobby", 20.0, palette::ui::TEXT));
-            card.spawn(ui_text("Lead it: pick the mode, and start when your friends are in.", 12.0, palette::ui::MUTED));
+            card.spawn(ui_text("Lead it: pick the mode, and start when your friends are in. It plays on the map picked up top.", 12.0, palette::ui::MUTED));
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
             card.spawn(label("Name"));
             card.spawn((
@@ -411,7 +415,7 @@ fn spawn_row(card: &mut ChildSpawnerCommands, room: &RoomSummary) {
             left.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Center, ..default() }).with_children(|line| {
                 let (state, color) = if room.started { ("LIVE", ACCENT) } else { ("WAITING", palette::ui::MUTED) };
                 line.spawn(ui_text(state, 10.0, color));
-                line.spawn(ui_text(format!("{}  ·  {}/{}", room.mode.label(), room.players, room.mode.capacity()), 11.0, palette::ui::MUTED));
+                line.spawn(ui_text(format!("{}  ·  {}  ·  {}/{}", room.mode.label(), room.map.label(), room.players, room.mode.capacity()), 11.0, palette::ui::MUTED));
             });
         });
         if room.full() {

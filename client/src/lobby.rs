@@ -8,8 +8,8 @@
 //!   and its passive and Q ability
 //! - the fighters to pick from in a row of tiles at the bottom (click, or press the number)
 //! - on the right, the side panel: at home, the lobbies to join or create (`browser.rs`, opened
-//!   with "Create / join lobby"); in a room, its name and mode, who's in it (by team), the team
-//!   buttons, and for the leader the mode switch
+//!   with "Create / join lobby"); in a room, its name, mode and map, who's in it (by team), the
+//!   team buttons, and for the leader the mode and map switches
 //! - the way in at the bottom right: at home, practice; in a room, the
 //!   leader's start, or once the match is on, into the arena
 //!
@@ -17,16 +17,20 @@
 //! start (or the way in) takes us in as it.
 //!
 //! The tiles are built from the class file, so a new class shows up without code changes. The
-//! stage is a dark room far off the map, lit for the fighter; while the lobby is open the camera
-//! stays there instead of over the arena. The fighter on it is posed by the same rig as in the
-//! fight (`rig.rs`), so it looks exactly as it will.
+//! stage is a crag at the edge of the forest, high over the arena: behind the fighter lies the
+//! map we'll fight on (our room's, built and lit as in the fight, and built again when the
+//! leader switches it), hazy in the distance. While the lobby is open the camera stays on the
+//! stage instead of over the arena. The fighter on it is posed by the same rig as in the fight
+//! (`rig.rs`), so it looks exactly as it will.
 
 use std::f32::consts::FRAC_PI_2;
 
 use arena_shared::protocol::{AbilityState, AttackState, ClassId, Pos, RoomRequest};
+use arena_shared::map::MapId;
 use arena_shared::rooms::{MAX_PER_TEAM, Member, Mode, NO_TEAM, RoomView, TEAMS};
 use bevy::input::mouse::AccumulatedMouseMotion;
-use bevy::light::NotShadowCaster;
+use bevy::light::{CascadeShadowConfig, NotShadowCaster};
+use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
@@ -37,7 +41,7 @@ use crate::camera::{CameraControl, CameraMoves, Orbit};
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::{self, palette, to_world};
 use crate::render::{GameUi, Visuals, button, button_fill, clicked, key_chip, shown, ui_text};
-use crate::rooms::{CurrentRoom, Me, Notice, Picking, Screen, request};
+use crate::rooms::{CurrentMap, CurrentRoom, Me, Notice, Picking, Screen, request};
 use crate::stat_frame;
 
 pub struct LobbyPlugin;
@@ -58,6 +62,7 @@ impl Plugin for LobbyPlugin {
                 show_status,
                 (turn_stage_camera, place_name_tag).chain().in_set(CameraMoves),
                 liven_stage,
+                raise_crag,
             )
                 .run_if(in_state(Picking)),
         );
@@ -66,15 +71,26 @@ impl Plugin for LobbyPlugin {
     }
 }
 
-/// Where the stage is, on the gameplay plane: far off the map, out of sight of the arena.
-const STAGE: Vec2 = Vec2::new(0.0, -300.0);
+/// Where the stage is, on the gameplay plane: out in the wilds off the map's east side, the
+/// fighter on it with its back to the map's middle (`stage_turn`), so the map lies behind it;
+/// and how high its crag stands, so the camera looking down at the fighter sees the map below
+/// and beyond.
+const STAGE: Vec2 = Vec2::new(48.0 * 0.921, -48.0 * 0.389);
+const STAGE_HEIGHT: f32 = 10.0;
+/// The haze from the stage (where it starts and where it hides everything): looking toward the
+/// map, farther out than in the arena so the map shows through it; turned right away from it,
+/// close in, hiding where the forest ends a little way behind the stage.
+const VISTA_HAZE: (f32, f32) = (50.0, 140.0);
+const AWAY_HAZE: (f32, f32) = (8.0, 24.0);
+/// How far from the camera the sun casts shadows from the stage: over the map below.
+const VISTA_SHADOWS: f32 = 140.0;
 /// The stage camera: how high it looks at the fighter, how far back it stands (along the
 /// ground) and how far above that point it is, which way it looks from (a three-quarter view of
-/// the front), how far and fast it sways on its own, and how fast dragging turns it (radians per
-/// pixel).
+/// the front, from the fighter's facing), how far and fast it sways on its own, and how fast
+/// dragging turns it (radians per pixel).
 const STAGE_AIM_HEIGHT: f32 = 1.2;
-const STAGE_BACK: f32 = 8.36;
-const STAGE_RISE: f32 = 2.4;
+const STAGE_BACK: f32 = 8.0;
+const STAGE_RISE: f32 = 4.6;
 const FRONT: f32 = FRAC_PI_2 - 0.4;
 const SWAY: (f32, f32) = (0.25, 0.35);
 const STAGE_DRAG: f32 = 0.008;
@@ -83,8 +99,8 @@ const STAGE_DRAG: f32 = 0.008;
 const TAG_HEIGHT: f32 = 2.75;
 
 /// Spacing steps (pixels).
-const GAP: f32 = 8.0;
-const MARGIN: f32 = 40.0;
+pub(crate) const GAP: f32 = 8.0;
+pub(crate) const MARGIN: f32 = 40.0;
 /// The side panel's width.
 const SIDE_WIDTH: f32 = 456.0;
 
@@ -94,6 +110,10 @@ struct Lobby {
     selected: ClassId,
     /// The fighter on the stage, and which class it is.
     shown: Option<(Entity, ClassId)>,
+    /// What lifts the fighter up onto the stage and turns it there: it stands at its `Pos` on the
+    /// ground facing +x, as in the fight (the rig keeps its feet there and sets its facing), so
+    /// it goes under this.
+    lift: Entity,
     view: Orbit,
     /// Which way the camera looks from, before its sway; dragging turns it.
     facing: f32,
@@ -147,54 +167,41 @@ fn open_lobby(
     me: Option<Res<Me>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut shadows: Single<&mut CascadeShadowConfig, With<DirectionalLight>>,
 ) {
+    **shadows = arena::sun_shadows(VISTA_SHADOWS);
     // The fighter we last went in as.
     let selected = chosen.0.unwrap_or_else(|| ClassId::all().next().expect("at least one class"));
-    let view = Orbit { yaw: FRONT, pitch: STAGE_RISE.atan2(STAGE_BACK), distance: STAGE_BACK.hypot(STAGE_RISE) };
-    commands.insert_resource(Lobby { selected, shown: None, view, facing: FRONT });
+    let front = FRONT + stage_turn();
+    let view = Orbit { yaw: front, pitch: STAGE_RISE.atan2(STAGE_BACK), distance: STAGE_BACK.hypot(STAGE_RISE) };
+    // The fighter stands at `STAGE` under the lift, facing +x as every fighter starts out: the
+    // lift raises it onto the dais and turns it about where it stands.
+    let turn = Quat::from_rotation_y(stage_turn());
+    let lift = Transform::from_translation(stage_at(arena::DAIS_HEIGHT) - turn * to_world(STAGE, 0.0)).with_rotation(turn);
+    let lift = commands.spawn((LobbyPart, lift, Visibility::default())).id();
+    commands.insert_resource(Lobby { selected, shown: None, lift, view, facing: front });
     spawn_stage(&mut commands, &mut meshes, &mut materials);
     spawn_screen(&mut commands, me.as_ref().map_or("", |me| &me.name));
 }
 
-fn close_lobby(mut commands: Commands, parts: Query<Entity, With<LobbyPart>>) {
+fn close_lobby(
+    mut commands: Commands,
+    parts: Query<Entity, With<LobbyPart>>,
+    mut haze: Single<&mut DistanceFog, With<Camera3d>>,
+    mut shadows: Single<&mut CascadeShadowConfig, With<DirectionalLight>>,
+) {
+    haze.falloff = arena::haze().falloff;
+    **shadows = arena::sun_shadows(arena::SUN_SHADOWS);
     commands.remove_resource::<Lobby>();
     for part in &parts {
         commands.entity(part).despawn();
     }
 }
 
-/// The stage: a low stone dais in a hollow at dusk (a glowing backdrop, a rolling floor, trunks,
-/// stones and grass), a flickering warm key light, a cold rim light and fireflies drifting about.
+/// The stage: a dais on a crag (`raise_crag`), a flickering warm key light, a cold rim light and
+/// fireflies drifting about.
 fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
-    let center = to_world(STAGE, 0.0);
-    // The sun went down behind the fighter (as first seen), a little to one side.
-    let sunset = Quat::from_rotation_y(FRONT + std::f32::consts::PI + 0.35) * Vec3::Z;
-    let ground = center - Vec3::Y * FLOOR_DROP;
-    let sky = StandardMaterial { base_color: Color::WHITE, unlit: true, cull_mode: None, ..default() };
-    commands.spawn((
-        LobbyPart,
-        Mesh3d(meshes.add(arena::hollow_sky_mesh(24.0, sunset))),
-        MeshMaterial3d(materials.add(sky)),
-        Transform::from_translation(center),
-        NotShadowCaster,
-    ));
-    let clouds = StandardMaterial { base_color: Color::WHITE, alpha_mode: AlphaMode::Blend, unlit: true, cull_mode: None, ..default() };
-    commands.spawn((
-        LobbyPart,
-        Mesh3d(meshes.add(arena::sunset_clouds_mesh(22.5, sunset))),
-        MeshMaterial3d(materials.add(clouds)),
-        Transform::from_translation(center),
-        NotShadowCaster,
-    ));
-    commands.spawn((
-        LobbyPart,
-        Mesh3d(meshes.add(Cylinder::new(arena::DAIS_RADIUS, 0.16).mesh().resolution(48).build())),
-        MeshMaterial3d(materials.add(arena::matte(palette::WALL.darker(0.25)))),
-        Transform::from_translation(center - Vec3::Y * 0.08),
-    ));
-    let white = materials.add(arena::matte(Color::WHITE));
-    commands.spawn((LobbyPart, Mesh3d(meshes.add(arena::hollow_floor_mesh(18.0))), MeshMaterial3d(white.clone()), Transform::from_translation(ground)));
-    commands.spawn((LobbyPart, Mesh3d(meshes.add(arena::hollow_props_mesh())), MeshMaterial3d(white), Transform::from_translation(ground)));
+    let center = stage_at(0.0);
     let light = |color: Color, intensity: f32, at: Vec3| {
         (
             LobbyPart,
@@ -210,7 +217,7 @@ fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &m
     for i in 0..MOTES {
         // Spread evenly around the stage (golden angle), at varied distances and heights.
         let a = i as f32 * 2.399;
-        let r = 1.6 + 6.0 * ((i * 37 % MOTES) as f32 / MOTES as f32);
+        let r = 1.6 + 4.0 * ((i * 37 % MOTES) as f32 / MOTES as f32);
         let home = center + Vec3::new(r * a.cos(), 0.3 + 2.6 * ((i * 53 % MOTES) as f32 / MOTES as f32), r * a.sin());
         commands.spawn((
             LobbyPart,
@@ -223,12 +230,44 @@ fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &m
     }
 }
 
-/// How far the floor sits below the dais's base.
-const FLOOR_DROP: f32 = 0.15;
 /// The stage's key light's strength, before it flickers.
 const TORCH_INTENSITY: f32 = 260_000.0;
 /// How many fireflies drift around the stage.
 const MOTES: usize = 48;
+
+/// How far the fighter on the stage is turned from facing +x: straight away from the map's
+/// middle (the origin), its back to it.
+fn stage_turn() -> f32 {
+    STAGE.to_angle()
+}
+
+/// The point `height` over the stage's ground (the crag's top, the dais's base).
+fn stage_at(height: f32) -> Vec3 {
+    to_world(STAGE, STAGE_HEIGHT + height)
+}
+
+/// The crag under the stage.
+#[derive(Component)]
+struct Crag;
+
+/// Raises the crag under the stage in the map's colors: when the lobby opens, and again when
+/// the map changes.
+fn raise_crag(
+    mut commands: Commands,
+    current: Res<CurrentMap>,
+    crag: Query<Entity, With<Crag>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    if !current.is_changed() && !crag.is_empty() {
+        return;
+    }
+    for old in &crag {
+        commands.entity(old).despawn();
+    }
+    let mesh = arena::crag_mesh(arena::Theme::of(current.0), STAGE_HEIGHT);
+    commands.spawn((LobbyPart, Crag, Mesh3d(meshes.add(mesh)), MeshMaterial3d(materials.add(arena::matte(Color::WHITE))), Transform::from_translation(stage_at(0.0))));
+}
 
 /// The stage's warm key light, which flickers like the torches in the arena.
 #[derive(Component)]
@@ -472,6 +511,7 @@ fn show_fighter(mut commands: Commands, mut lobby: ResMut<Lobby>, visuals: Res<V
             Mesh3d(visuals.fighter(selected)),
             MeshMaterial3d(materials.add(arena::matte(Color::WHITE))),
             Transform::from_translation(to_world(STAGE, 0.0)),
+            ChildOf(lobby.lift),
         ))
         .id();
     lobby.shown = Some((fighter, selected));
@@ -531,16 +571,17 @@ fn power(column: &mut ChildSpawnerCommands, badge: &str, color: Color, blurb: st
 
 /// Keeps the camera on the fighter, swaying gently around its front; dragging (left or right
 /// button, anywhere but a button) turns it, and holding either holds the sway, so the camera
-/// stays where it's dragged.
+/// stays where it's dragged. The haze closes in as it turns away from the map.
 fn turn_stage_camera(
     time: Res<Time>,
     mouse: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     buttons: Query<&Interaction>,
     mut lobby: ResMut<Lobby>,
-    mut camera: Single<&mut Transform, With<Camera3d>>,
+    camera: Single<(&mut Transform, &mut DistanceFog), With<Camera3d>>,
     mut swaying_for: Local<f32>,
 ) {
+    let (mut camera, mut haze) = camera.into_inner();
     let on_button = buttons.iter().any(|i| *i != Interaction::None);
     let held = mouse.any_pressed([MouseButton::Left, MouseButton::Right]);
     if held && !on_button {
@@ -551,14 +592,19 @@ fn turn_stage_camera(
     }
     let sway = SWAY.0 * (*swaying_for * SWAY.1).sin();
     lobby.view.yaw = lobby.facing + sway;
-    camera.set_if_neq(lobby.view.transform(to_world(STAGE, STAGE_AIM_HEIGHT)));
+    camera.set_if_neq(lobby.view.transform(stage_at(STAGE_AIM_HEIGHT)));
+    // 0 looking straight at the map (the middle of it is at the origin), 1 straight away from it.
+    let looking = (camera.forward().xz().normalize_or_zero()).dot(-camera.translation.xz().normalize_or_zero());
+    let away = (1.0 - looking) / 2.0;
+    let (start, end) = (VISTA_HAZE.0.lerp(AWAY_HAZE.0, away), VISTA_HAZE.1.lerp(AWAY_HAZE.1, away));
+    haze.falloff = FogFalloff::Linear { start, end };
 }
 
 /// Keeps the name badge's bottom edge at `TAG_HEIGHT` over the stage, on screen. The camera only
 /// turns around the stage's upright, so that stays the same height while it sways or is dragged.
 fn place_name_tag(camera: Single<(&Camera, &Transform), With<Camera3d>>, mut tag: Single<&mut Node, With<NameTag>>) {
     let (camera, transform) = *camera;
-    let (Some(size), Ok(at)) = (camera.logical_viewport_size(), camera.world_to_viewport(&GlobalTransform::from(*transform), to_world(STAGE, TAG_HEIGHT)))
+    let (Some(size), Ok(at)) = (camera.logical_viewport_size(), camera.world_to_viewport(&GlobalTransform::from(*transform), stage_at(TAG_HEIGHT)))
     else {
         return;
     };
@@ -625,8 +671,8 @@ pub(crate) fn label(text: &str) -> impl Bundle {
     ui_text(text.to_uppercase(), 11.0, palette::ui::MUTED)
 }
 
-/// The room column, two cards. The room: name, mode, whether it's on, and for the leader the mode
-/// switch. Who's in it: in free-for-all a list; in teams the two side by side, with the way to
+/// The room column, two cards. The room: name, whether it's on, its mode and map (for the leader,
+/// switches). Who's in it: in free-for-all a list; in teams the two side by side, with the way to
 /// switch sides under ours. Then the way out. Rebuilt when the room changes, or we come to it.
 ///
 /// Names are in one neutral color; ours is in the accent (on a tinted row), as in the badge over the fighter.
@@ -655,22 +701,12 @@ fn show_room(
                 (false, false) => ("Waiting for the leader", palette::ui::MUTED),
             };
             card.spawn(ui_text(line, 12.0, color));
-            if leading && !view.started {
-                card.spawn(Node { height: px(GAP * 0.5), ..default() });
-                card.spawn(label("Mode"));
-                card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
-                    for mode in [Mode::Ffa, Mode::Teams] {
-                        let on = view.mode == mode;
-                        let fill = if on { palette::ui::SELECTED } else { palette::ui::BACKDROP };
-                        let edge = if on { ACCENT } else { palette::ui::MUTED.with_alpha(0.3) };
-                        let text = if on { palette::ui::TEXT } else { palette::ui::MUTED };
-                        let mut switch = row.spawn((RoomButton(RoomRequest::SetMode(mode)), button(mode.label(), 12.0, fill, text, edge)));
-                        switch.entry::<Node>().and_modify(|mut node| node.flex_grow = 1.0);
-                    }
-                });
-            } else {
-                card.spawn(ui_text(view.mode.label(), 13.0, palette::ui::TEXT));
-            }
+            let editing = view.may_edit(my_id);
+            let modes = [Mode::Ffa, Mode::Teams].map(|mode| (mode, mode.label()));
+            setting(card, "Mode", &modes, view.mode, editing, RoomRequest::SetMode);
+            let maps = MapId::ALL.map(|map| (map, map.label()));
+            setting(card, "Map", &maps, view.map, editing, RoomRequest::SetMap);
+            card.spawn(ui_text(view.map.blurb(), 11.0, palette::ui::MUTED));
         });
 
         panel.spawn(card()).with_children(|card| match view.mode {
@@ -685,6 +721,36 @@ fn show_room(
 
         let leave = button("Leave lobby", 12.0, palette::ui::PANEL, palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.3));
         panel.spawn((RoomButton(RoomRequest::Leave), leave));
+    });
+}
+
+/// One of the room's settings under its `title`: for its leader before the start
+/// (`editing`), a row of switches, one per option (`current` lit), each asking for its `pick`;
+/// for everyone else, just what it is.
+fn setting<T: Copy + PartialEq>(
+    card: &mut ChildSpawnerCommands,
+    title: &str,
+    options: &[(T, &str)],
+    current: T,
+    editing: bool,
+    pick: fn(T) -> RoomRequest,
+) {
+    card.spawn(Node { height: px(GAP * 0.5), ..default() });
+    card.spawn(label(title));
+    if !editing {
+        let shown = options.iter().find(|(option, _)| *option == current).map_or("", |(_, name)| name);
+        card.spawn(ui_text(shown, 13.0, palette::ui::TEXT));
+        return;
+    }
+    card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
+        for &(option, name) in options {
+            let on = option == current;
+            let fill = if on { palette::ui::SELECTED } else { palette::ui::BACKDROP };
+            let edge = if on { ACCENT } else { palette::ui::MUTED.with_alpha(0.3) };
+            let text = if on { palette::ui::TEXT } else { palette::ui::MUTED };
+            let mut switch = row.spawn((RoomButton(pick(option)), button(name, 12.0, fill, text, edge)));
+            switch.entry::<Node>().and_modify(|mut node| node.flex_grow = 1.0);
+        }
     });
 }
 
@@ -833,7 +899,7 @@ fn way_in(screen: Screen, view: Option<&RoomView>, me: Option<&Me>) -> WayIn {
     }
 }
 
-/// The button: at home, practice as the selected fighter; in a room, the leader starts
+/// The button: at home, practice as the selected fighter on the picked map; in a room, the leader starts
 /// the match (everyone goes in as what they picked), and once it's on, in we go. We're taken to
 /// the arena when our fighter appears. "Create / join lobby" is there at home only.
 #[allow(clippy::too_many_arguments)]
@@ -842,6 +908,7 @@ fn enter_arena(
     screen: Res<State<Screen>>,
     room: Res<CurrentRoom>,
     me: Option<Res<Me>>,
+    map: Res<CurrentMap>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
     button: Single<(Ref<Interaction>, &mut BackgroundColor), With<EnterButton>>,
     mut label: Single<&mut Text, With<EnterLabel>>,
@@ -873,7 +940,7 @@ fn enter_arena(
     // it's still down and take the click for an attack.
     mouse.reset(MouseButton::Left);
     match way {
-        WayIn::Practice => request(&mut sender, RoomRequest::Practice),
+        WayIn::Practice => request(&mut sender, RoomRequest::Practice(map.0)),
         WayIn::Enter => request(&mut sender, RoomRequest::EnterArena),
         WayIn::Start => request(&mut sender, RoomRequest::Start),
         WayIn::Wait => {}

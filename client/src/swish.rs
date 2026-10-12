@@ -253,7 +253,12 @@ fn trail_blades(
     for (blade, mut trail, visible) in &mut fighters {
         let Ok(held) = blades.get(blade.held) else { continue };
         let trail = &mut *trail;
-        trail.samples.push_back((now, TRAIL_BLADE.map(|up| blade.at(held, up))));
+        let place = TRAIL_BLADE.map(|up| blade.at(held, up));
+        // A jump (through a waygate, or a respawn) leaves no trail across the map behind it.
+        if trail.samples.back().is_some_and(|(_, last)| last[0].distance(place[0]) > arena_shared::config::JUMP) {
+            trail.samples.clear();
+        }
+        trail.samples.push_back((now, place));
         while trail.samples.front().is_some_and(|(at, _)| now - at > TRAIL_LIFE) {
             trail.samples.pop_front();
         }

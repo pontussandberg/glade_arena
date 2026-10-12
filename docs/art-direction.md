@@ -1,7 +1,9 @@
 # Art direction
 
-A low-poly forest clearing at dusk, medieval-fantasy ruins in nature: a river with a stone bridge
-and fords, ruined walls, boulders and torches. Faceted shapes, muted greens and grey stone.
+Low-poly clearings at dusk in a ring of forest, medieval-fantasy ruins in nature: rivers and moats
+with stone bridges and fords, marshes, chasms spanned by stone arches and rope bridges, ruined
+walls, boulders, torches and waygates. Faceted shapes, muted colors. Each map has its own theme
+(below): River Crossing is the green glade at dusk, the others take other palettes and light.
 The fighters are low-poly dark-fantasy figures, each in its own fixed colors (the
 same for every player). Who a fighter is to you shows only in its health bar and minimap dot,
 the only team color (you blue, enemies red, allies green). Its shots and swings look the same
@@ -11,7 +13,24 @@ what blocks movement and shots.
 
 Live reference with a 3D preview (still shows the earlier square arena in afternoon light):
 https://claude.ai/artifact/WgUKXJpxy2GkzWjWRVUfXY
-Code: `client/src/arena.rs` (palette, scene, mesh helpers), used by `client/src/render.rs`.
+Code: `client/src/arena.rs` (palette, map themes, scene, mesh helpers), used by `client/src/render.rs`.
+
+## Map themes
+
+A map's world (ground, foliage, stone, water, the drop into a chasm), its sun, sky fill and haze
+come from its `Theme` (`Theme::of(MapId)`), and so do its wilds (`Wilds`): the land around the
+clearing out to the haze and what grows on it, the map's own trees included. Fighters, shots,
+pickups, torches, waygates and the UI look the same on every map. The palette table below is the
+glade's.
+
+| Map | Theme | Look |
+|---|---|---|
+| River Crossing | Glade | Green forest glade at dusk: moss and pine, grey stone, warm low sun `#FFE2C4`, sea-grey haze `#A9B8B6` |
+| Sunken Keep | Fen | A drowned moor by moonlight: the keep's island in still dark water `#487886` to the haze, broken by low sea-green tussocks `#5A7262`, reed beds, grey dead snags and low dark willows (its trees, `#223738`); damp ground in wandering patches with sedge, moss and bog cotton, a courtyard and roads of worn, mossy flagstones; cool stone, a dim cold moon `#C4D4FF` (2,600 lx) under blue mist `#6A7C8A`, so the torches carry the keep; pale bog cotton for flowers |
+| Riven Gorge | Highlands | Autumn highlands at sunset: a bowl of dry golden grass `#8A8450` climbing in terraces of banded red sandstone `#866E5E`, the gorge cutting through them to plum shadow `#382A34`; rock in many forms (hoodoos, needles, arches, tipped slabs, buttes; on the map, sandstone stacked, split and balanced), scrub, and round broadleaves (its trees) in brown `#785E3E`, rust `#B6784E` and gold; a deep warm sun `#FFCA9C` and dusty amber haze `#B4A08E` |
+
+Every theme stays in the world's calm band (below ~50% saturation). Highlands' warm browns are an
+exception to "no autumn oranges" below, kept dull enough that Enemy red still stands alone.
 
 ## Rules
 
@@ -63,6 +82,9 @@ Code: `client/src/arena.rs` (palette, scene, mesh helpers), used by `client/src/
 | Riverbed | `#3D4A44` | Under the water |
 | Pond | `#4F8682` | River surface, kept quiet |
 | Heather | `#9A86B6` | Flower accents |
+| Marsh | `#5E6645` | Boggy ground, wetter and browner than moss |
+| Abyss | `#3A4250` | The bottom of a chasm, the darkest the world goes |
+| Rope | `#7A6A50` | Rope bridges' rails and hangers |
 | Haze | `#A9B8B6` | Sky, fog, background (dusk) |
 | Ink | `#1E2A23` | HUD text |
 | Bone | `#B9C2C0` | Skull masks, bindings (pale and cold) |
@@ -103,7 +125,8 @@ fighter.
 
 - Sun `#FFE2C4`, ~22° elevation (dusk), from the upper left, shadows on, one cascade.
 - Sky fill `#8FA4C2` as ambient light, kept low so torches matter.
-- Torches: warm point lights (range 12 m, no shadows) that flicker, on the bridge and the ruins.
+- Torches: warm point lights (range 12 m, no shadows) that flicker, on bridges and the ruins.
+- Waygates: a small pale Spirit light (range 5 m) over each open end.
 - Haze `#A9B8B6`: linear fog 40–95 m, same color as the clear color.
 - Everything matte (roughness 0.95, no metal). What glows: projectiles (in their own look, never their owner's color),
   fighters' eyes (Wisp × 6) and abilities (Spirit × 6).
@@ -112,11 +135,15 @@ fighter.
 
 | Asset | Build | Budget |
 |---|---|---|
-| Ground | Flat 1 m tiles, one color per tile (moss toward meadow, path on the road) plus a faint ±3% checker; earthen banks down to the river | ≈ 4k tris |
-| River | Flat water strip following the river's curve, banks and riverbed below | low |
-| Bridge | Paving slabs per tile, parapets with end caps, piers into the river | blocks |
+| Ground | Flat 1 m tiles, one color per tile (moss toward meadow, path on the road, marsh toward bank in a bog) plus a faint ±3% checker; earthen banks down to the water; cliffs down a chasm in bands of topsoil and grey rock darkening to Abyss | ≈ 4k tris |
+| Water | Flat water sheet over every water tile (rivers, moats, pools), running on under the forest's slopes; riverbed below | low |
+| Chasm | No floor of its own: the terrain drops 6 m to an Abyss floor, the cliffs dark in its shadow; it runs on through the forest as a cut | - |
+| Bridge | Tile by tile: paving slabs, a parapet along each side over water or a chasm with a cap stone where it ends; under it a deck down into the water, or over a chasm an arch, deepest where it springs from the rock | blocks |
+| Rope bridge | One plank wide: three planks across the way per tile on two beams, rope rails at hip and knee on both sides, hangers, and a post at each end | blocks |
+| Marsh | Here and there a still puddle (a flat 7-sided disc) and tufts of four reeds, all below the knee | low |
+| Waygate | On each end: six low standing stones around a Spirit rune on the ground and a Spirit crystal floating and turning over it while open; closed, no crystal, the rune dim and filling in from its middle until it opens; going through flashes a narrowing column of Spirit light on both ends | ≈ 200 tris |
 | Ruined wall | Bevelled stone blocks 0.9–1.7 m, some with a smaller, slightly turned block on top; rubble at the foot | blocks |
-| Forest ring | Terrain rising outside the clearing edge, up to about 3.5 m; trees merged into one prop mesh | ≈ 5.5k tris terrain |
+| Forest ring | Terrain on a 2 m grid rising outside the clearing edge, up to about 3.5 m, its vertices jostled; trees merged into one prop mesh | ≈ 6–7k tris terrain |
 | Tree | 5-sided trunk, 2–3 stacked 7-sided cones | ≤ 60 tris |
 | Rock | Unsubdivided icosahedron, stretched unevenly | 20 tris |
 | Fighter | One silhouette per class, readable from above, about 2 m tall, rigged (`arena::fighter_rig`): a body plus separate head, arms, legs, weapon and (optionally) a swinging tail or cape. Jav (lofted, about 16% larger than the base rig): a tall, slim wraith-hunter. A fitted near-black tunic over an ashen undertunic showing at the knee, a wide leather belt with a silver buckle, and a mantle sloping over the shoulders, its torn edge longer behind; moving cloth (`cloth.rs`): a long coat skirt open at the front, its torn hem glowing white, a tabard down the front between its edges, motes rising off its hem; a narrow hood whose crown rises to a low peak hanging over the brow, its opening framed by a turned-back fold dipping to a point over the face, dark inside but for two small white slit eyes; long bell sleeves with torn cuffs hanging longer underneath over dark-gloved hands; baggy trousers into wrapped boots. The spear carried level overhead is the silhouette; a javelin, the brightest thing on it: a long, leaf-shaped silver head, flat-faced with a ridge down its middle and two small barbs swept back from its base, on a ridged socket bound in leather cord, a long dark faceted shaft thickening a little toward the head, a leather-wrapped grip between two silver bands, and a short silver butt spike. Revenant (lofted, about 13% larger than the base rig, its eyes a little below the javelinist's): a fallen paladin, quick and flowing, more long coat than armor. Its head wrapped all over in a faded grey bandana, wound in layered bands, but for a dark slit two small white eyes burn in, tied in a knot behind. A fitted long coat with squared, sloping shoulders, its bodice closed down the front with iron clasps between dark lapels, a sigil brooch of wisp light at the chest, a high collar flaring open at the throat, a wide belt, a single pauldron on the left shoulder, three overlapping plates of blackened steel sloping down it; moving cloth: the coat's two long tails, split up the back and open wide at the front (showing a tattered ash tabard), at the knee in front sweeping down to the ground behind, their torn hems smouldering in wisp light; fitted sleeves coming out from under the coat's shoulders, widening a little to turned-back, tattered cuffs over dark leather gloves, an iron manacle round each wrist trailing a broken chain; dark trousers into tall boots; a long, slender pale sword swelling a little toward a symmetric point, a line of wisp light down the fuller of both faces, a crossguard drooping forward to points with a wisp gem on each face, a grip bound in ash and leather, and a faceted pommel spike. Frost Mage (lofted): a deep navy robe from a frost-blue sash up to a high collar, a heavy rime mantle with glowing ice shards growing out of the shoulders; moving cloth: the robe's skirt flaring to the ground in deepening folds, rimed at the hem, with a frost-blue front panel and band above the hem and a ring of glowing runes just above it, ice motes rising off it, and a long narrow cape from under the mantle, rimed along its hem; a pointed hood, its opening framed by a turned-back fold, empty but for two small white slit eyes, crowned with a ring of ice shards (it reads from above); wide bell sleeves banded in blue and rimed at the cuff; a dark staff bound in blue and shod in a steel spike, two steel crescents crossing at the top like an open cage around a long glowing crystal, a slivered crystal at each crescent tip | not yet measured |
@@ -128,7 +155,7 @@ fighter.
 | Cast bar | Pale sunlit fill in a thin ink frame, hanging under the health bar while winding up | UI |
 | Projectile | Glowing icosahedron sized to the class's projectile radius. The Jav throws the very javelin it carries, unchanged except for a small white glint on its point; its spirit spear is the same javelin glowing Spirit. Both leave the hand where the spear is held at release and ease onto their real path within 0.2 s, trailing one faint white wind streak right behind the spear: a thin straight line (two crossed ribbons) fading out toward the back, which stretches back toward where the spear left the hand (up to 2.4 m) on a loose spring, pulsing as it goes, so it overshoots and snaps back like rubber | bolt 20 tris; wind 24 tris; spear not yet measured |
 | Ability icon | Your own screen only, bottom center: a square Ink tile framed in Spirit (Stone while cooling down), a simple picture of the ability, its key and name; while it cools down a dark clock-wipe sweeps away clockwise from twelve o'clock over the seconds left | UI |
-| Minimap | Bottom right: the tile map drawn in the scene's palette (deep forest darkened), every fighter a dot in its health bar color, and a pale frame around what the camera sees | UI |
+| Minimap | Bottom right: the tile map drawn in the scene's palette (deep forest darkened), as big as fits 384 x 264 px, every fighter a dot in its health bar color, a Spirit ring on each waygate end (dim while closed), and a pale frame around what the camera sees | UI |
 
 - Anything that blocks movement or shots must sit on a blocking tile in `map.rs`; decoration on
   walkable tiles stays below knee height (flowers, rubble, stepping stones).

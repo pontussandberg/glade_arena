@@ -7,9 +7,15 @@ use std::time::{Duration, Instant};
 
 use arena_client::{ClientSettings, DesiredInput, Me, StopWalking, build_headless_client_app};
 use arena_server::{Certificate, ServerSettings, build_server_app};
+use arena_shared::map::{Map, MapId};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use lightyear::prelude::*;
+
+/// The map rooms play on unless their leader picks another: the one these tests play on.
+pub fn map() -> &'static Map {
+    MapId::default().map()
+}
 
 /// A started server. `setup` can add test-only systems or resources before it starts.
 pub fn start_server(port: u16, setup: impl FnOnce(&mut App)) -> App {

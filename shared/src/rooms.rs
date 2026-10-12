@@ -9,6 +9,7 @@ use lightyear::prelude::PeerId;
 use serde::{Deserialize, Serialize};
 
 use crate::classes::ClassId;
+use crate::map::MapId;
 
 /// Names a room for as long as the server runs.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -60,6 +61,7 @@ pub struct RoomSummary {
     pub key: RoomKey,
     pub name: String,
     pub mode: Mode,
+    pub map: MapId,
     pub players: u8,
     pub started: bool,
 }
@@ -76,6 +78,7 @@ pub struct RoomView {
     pub key: RoomKey,
     pub name: String,
     pub mode: Mode,
+    pub map: MapId,
     pub started: bool,
     /// A practice room: ours alone, never listed.
     pub practice: bool,
@@ -88,6 +91,11 @@ pub struct RoomView {
 impl RoomView {
     pub fn member(&self, guest_id: u32) -> Option<&Member> {
         self.members.iter().find(|m| m.guest_id == guest_id)
+    }
+
+    /// Whether this guest may change the room's mode and map: its leader, before the start.
+    pub fn may_edit(&self, guest_id: u32) -> bool {
+        self.leader == guest_id && !self.started
     }
 
     pub fn on_team(&self, team: u8) -> usize {

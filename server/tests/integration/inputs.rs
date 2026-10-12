@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use arena_shared::map::{Map, map};
+use arena_shared::map::Map;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use crate::common::*;
