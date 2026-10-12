@@ -493,7 +493,7 @@ fn use_gates(
 }
 
 /// A fighter touching a pickup that's lying there takes it (the first found, if several), and
-/// it's gone for `PICKUP_RESPAWN_TICKS`. A heal is taken even at full health; what it restores
+/// it's gone for `PICKUP_RESPAWN_TICKS` (`HEAL_RESPAWN_TICKS` for a heal). A heal is taken even at full health; what it restores
 /// goes in `RecentHits` (as a heal), for the client's number. A haste starts next tick.
 fn take_pickups(
     timeline: Res<LocalTimeline>,
@@ -514,17 +514,21 @@ fn take_pickups(
         else {
             continue;
         };
-        match pickup.kind {
+        let respawn = match pickup.kind {
             PickupKind::Heal => {
                 let healed = (health.0 + sim::heal_amount(class.def().max_hp)).min(class.def().max_hp);
                 if healed > health.0 {
                     hits.push(healed - health.0, HitKind::Heal);
                     health.0 = healed;
                 }
+                HEAL_RESPAWN_TICKS
             }
-            PickupKind::Haste => hasted.start(now),
-        }
-        pickup.back_at = Some(now + PICKUP_RESPAWN_TICKS);
+            PickupKind::Haste => {
+                hasted.start(now);
+                PICKUP_RESPAWN_TICKS
+            }
+        };
+        pickup.back_at = Some(now + respawn);
         pickup.taken_by = Some(id.0);
         debug!(player = ?id.0, kind = ?pickup.kind, health = health.0, "took a pickup");
     }

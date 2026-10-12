@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use arena_shared::config::{HASTE_TICKS, PICKUP_RESPAWN_TICKS};
+use arena_shared::config::{HASTE_TICKS, HEAL_RESPAWN_TICKS, PICKUP_RESPAWN_TICKS};
 use arena_shared::protocol::*;
 use arena_shared::sim;
 use bevy::prelude::*;
@@ -42,13 +42,13 @@ fn pickups_heal_and_haste_on_touch_then_are_gone_a_while() {
     let max = class_id("javelinist").def().max_hp;
     d.until(Duration::from_secs(2), "A sees the pickups", |d| pickup(&mut d.a, PickupKind::Heal).is_some_and(|p| p.back_at.is_none()));
 
-    // Hurt, A steps on the heal: healed by half its max, the heal shows as a negative hit, and
+    // Hurt, A steps on the heal: healed by a share of its max, the heal shows as a negative hit, and
     // the heal is gone for its respawn time, on the server and as A sees it.
     let hurt = 20;
     set_health(&mut d.server, A, hurt);
     place(&mut d.server, A, spot(PickupKind::Heal));
     d.until(Duration::from_secs(1), "A takes the heal", |d| pickup(&mut d.server, PickupKind::Heal).unwrap().back_at.is_some());
-    let taken_at = pickup(&mut d.server, PickupKind::Heal).unwrap().back_at.unwrap() - PICKUP_RESPAWN_TICKS;
+    let taken_at = pickup(&mut d.server, PickupKind::Heal).unwrap().back_at.unwrap() - HEAL_RESPAWN_TICKS;
     assert_eq!(server_player(&mut d.server, A).1, hurt + sim::heal_amount(max));
     let mut q = d.server.world_mut().query::<(&PlayerId, &RecentHits)>();
     let last_hit = q.iter(d.server.world()).find(|(p, _)| p.0 == peer(A)).and_then(|(_, hits)| hits.0.last().copied());
@@ -60,7 +60,7 @@ fn pickups_heal_and_haste_on_touch_then_are_gone_a_while() {
     set_health(&mut d.server, A, hurt);
     d.run(Duration::from_millis(300));
     assert_eq!(server_player(&mut d.server, A).1, hurt, "healed by a pickup that's gone");
-    assert!(server_tick(&mut d.server) < taken_at + PICKUP_RESPAWN_TICKS);
+    assert!(server_tick(&mut d.server) < taken_at + HEAL_RESPAWN_TICKS);
 
     // A steps on the haste: hasted from the next tick for its duration.
     place(&mut d.server, A, spot(PickupKind::Haste));

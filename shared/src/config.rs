@@ -31,12 +31,13 @@ pub const GLOBAL_COOLDOWN_TICKS: u32 = TICK_HZ as u32;
 pub const RESPAWN_TICKS: u32 = 3 * TICK_HZ as u32;
 
 // Pickups lying in the arena (spots in `map.rs`), used up the moment a fighter touches one.
-/// How long a taken pickup is gone before it's back (15 s).
+/// How long a taken pickup is gone before it's back (15 s), a heal longer (20 s).
 pub const PICKUP_RESPAWN_TICKS: u32 = 15 * TICK_HZ as u32;
+pub const HEAL_RESPAWN_TICKS: u32 = 20 * TICK_HZ as u32;
 /// How close (center to center) a fighter has to come to take one.
 pub const PICKUP_RADIUS: f32 = 0.9;
 /// A heal restores this share of the fighter's max health.
-pub const HEAL_FRACTION: f32 = 0.5;
+pub const HEAL_FRACTION: f32 = 0.15;
 /// A haste makes its taker walk this many times as fast, for this long (2 s).
 pub const HASTE_FACTOR: f32 = 1.5;
 pub const HASTE_TICKS: u32 = 2 * TICK_HZ as u32;
