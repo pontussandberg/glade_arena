@@ -18,14 +18,16 @@ Code: `client/src/arena.rs` (palette, map themes, scene, mesh helpers), used by 
 ## Map themes
 
 A map's world (ground, foliage, stone, water, the drop into a chasm), its sun, sky fill and haze
-come from its `Theme` (`Theme::of(MapId)`). Fighters, shots, pickups, torches, waygates and the
-UI look the same on every map. The palette table below is the glade's.
+come from its `Theme` (`Theme::of(MapId)`), and so do its wilds (`Wilds`): the land around the
+clearing out to the haze and what grows on it, the map's own trees included. Fighters, shots,
+pickups, torches, waygates and the UI look the same on every map. The palette table below is the
+glade's.
 
 | Map | Theme | Look |
 |---|---|---|
 | River Crossing | Glade | Green forest glade at dusk: moss and pine, grey stone, warm low sun `#FFE2C4`, sea-grey haze `#A9B8B6` |
-| Sunken Keep | Fen | Moonlit fen: sea-green grass `#5A7262`, blue-black firs `#223738`, cool stone, a dim cold moon `#C4D4FF` (2,600 lx) under blue mist `#6A7C8A`, so the torches carry the keep; pale bog cotton for flowers |
-| Riven Gorge | Highlands | Autumn highlands at sunset: dry golden grass `#8A8450`, bracken brown `#785E3E` among olive firs `#3C4532`, red sandstone `#866E5E` falling to plum shadow `#382A34`, a deep warm sun `#FFCA9C` and dusty amber haze `#B4A08E` |
+| Sunken Keep | Fen | A drowned moor by moonlight: the keep's island in still dark water `#487886` to the haze, broken by low sea-green tussocks `#5A7262`, reed beds, grey dead snags and low dark willows (its trees, `#223738`); cool stone, a dim cold moon `#C4D4FF` (2,600 lx) under blue mist `#6A7C8A`, so the torches carry the keep; pale bog cotton for flowers |
+| Riven Gorge | Highlands | Autumn highlands at sunset: a bowl of dry golden grass `#8A8450` climbing in terraces of banded red sandstone `#866E5E`, the gorge cutting through them to plum shadow `#382A34`; rock pillars, boulders, scrub, and round broadleaves (its trees) in brown `#785E3E`, rust `#B6784E` and gold; a deep warm sun `#FFCA9C` and dusty amber haze `#B4A08E` |
 
 Every theme stays in the world's calm band (below ~50% saturation). Highlands' warm browns are an
 exception to "no autumn oranges" below, kept dull enough that Enemy red still stands alone.

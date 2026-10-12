@@ -157,6 +157,22 @@ pub struct Theme {
     pub sky_brightness: f32,
     pub sun: Color,
     pub sun_illuminance: f32,
+    /// What lies around the clearing, and what its trees are.
+    pub wilds: Wilds,
+}
+
+/// The land around a map's clearing out to the haze, and what grows on it (the map's own trees
+/// too).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Wilds {
+    /// Pine forest rolling up into low hills.
+    Forest,
+    /// A flooded moor: still dark water with grassy tussocks breaking it, reed beds, dead snags
+    /// and low willows.
+    Fen,
+    /// Bare highland: dry grass rising in terraces of banded rock, with rock pillars, scrub,
+    /// boulders and a few round autumn trees.
+    Highlands,
 }
 
 impl Theme {
@@ -192,10 +208,12 @@ const GLADE: Theme = Theme {
     sky_brightness: 160.0,
     sun: SUN,
     sun_illuminance: 3_600.0,
+    wilds: Wilds::Forest,
 };
 
-/// Sunken Keep: a fen by moonlight. Sea-green grass and blue-black firs under a cold, dim moon
-/// and blue mist, so the torches on the keep carry the scene; pale bog cotton for flowers.
+/// Sunken Keep: a drowned fen by moonlight. Sea-green tussocks in black water, dead snags and
+/// dark willows under a cold, dim moon and blue mist, so the torches on the keep carry the
+/// scene; pale bog cotton for flowers.
 const FEN: Theme = Theme {
     grass: Color::srgb_u8(0x5A, 0x72, 0x62),
     meadow: Color::srgb_u8(0x6C, 0x80, 0x6E),
@@ -218,11 +236,12 @@ const FEN: Theme = Theme {
     sky_brightness: 210.0,
     sun: Color::srgb_u8(0xC4, 0xD4, 0xFF),
     sun_illuminance: 2_600.0,
+    wilds: Wilds::Fen,
 };
 
-/// Riven Gorge: autumn highlands at sunset. Dry golden grass, rust bracken among dark olive
-/// firs, a gorge of red sandstone falling to plum shadow, under a deep orange sun and dusty
-/// amber haze.
+/// Riven Gorge: autumn highlands at sunset. Dry golden grass rising in terraces of red
+/// sandstone, scrub and round trees in brown and rust, a gorge falling to plum shadow, under a
+/// deep orange sun and dusty amber haze.
 const HIGHLANDS: Theme = Theme {
     grass: Color::srgb_u8(0x8A, 0x84, 0x50),
     meadow: Color::srgb_u8(0xA0, 0x90, 0x5A),
@@ -245,6 +264,7 @@ const HIGHLANDS: Theme = Theme {
     sky_brightness: 150.0,
     sun: Color::srgb_u8(0xFF, 0xCA, 0x9C),
     sun_illuminance: 3_400.0,
+    wilds: Wilds::Highlands,
 };
 
 /// Gameplay (x, y) to world (x, height, -y): the gameplay plane is the ground, +y is "up" on
@@ -1684,7 +1704,11 @@ pub fn tile_color(theme: &Theme, tile: Tile) -> Color {
         Tile::Wall => theme.wall,
         Tile::Rock => theme.slate,
         Tile::Tree => theme.pine,
-        Tile::Forest => theme.pine.mix(&INK, 0.4),
+        Tile::Forest => match theme.wilds {
+            Wilds::Forest => theme.pine.mix(&INK, 0.4),
+            Wilds::Fen => theme.pond.mix(&INK, 0.45),
+            Wilds::Highlands => theme.wall.mix(&INK, 0.35),
+        },
     }
 }
 
@@ -1902,7 +1926,7 @@ fn build_arena(
     let vertex_colored = materials.add(matte(Color::WHITE));
     commands.spawn((ArenaScene, Mesh3d(meshes.add(terrain_mesh(m, &scene, theme, &mut rng))), MeshMaterial3d(vertex_colored.clone())));
     commands.spawn((ArenaScene, Mesh3d(meshes.add(ground_mesh(m, theme, &mut rng))), MeshMaterial3d(vertex_colored.clone())));
-    if let Some(water) = water_mesh(&scene) {
+    if let Some(water) = water_mesh(&scene, theme.wilds == Wilds::Fen) {
         let material = StandardMaterial { perceptual_roughness: 0.35, reflectance: 0.5, ..matte(theme.pond) };
         commands.spawn((ArenaScene, Mesh3d(meshes.add(water)), MeshMaterial3d(materials.add(material))));
     }
@@ -1916,22 +1940,26 @@ fn build_arena(
         let c = Map::center(t);
         match tile {
             Tile::Rock => props.boulder(&mut rng, c),
-            Tile::Tree => props.tree(&mut rng, c, 0.0, 1.25),
+            Tile::Tree => props.map_tree(&mut rng, c),
             Tile::Grass if rng.next() < 0.02 => props.flower(&mut rng, c),
             Tile::Marsh => props.bog(&mut rng, c),
             _ => {}
         }
     }
-    // Forest ring: dense trees outside the clearing, kept out of water and chasms.
+    // The wilds around the clearing, kept out of water and chasms.
     let extent = scene.extent.as_vec2() - Vec2::splat(4.0);
     let open = |p: Vec2| [Vec2::ZERO, Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y].iter().all(|d| scene.get(Map::tile_of(p + *d * 1.5)) == Tile::Forest);
-    for _ in 0..(extent.x * extent.y * 4.0 * 0.035) as usize {
+    let density = match theme.wilds {
+        Wilds::Forest => 0.035,
+        Wilds::Fen => 0.04,
+        Wilds::Highlands => 0.02,
+    };
+    for _ in 0..(extent.x * extent.y * 4.0 * density) as usize {
         let p = Vec2::new(rng.range(-extent.x, extent.x), rng.range(-extent.y, extent.y));
         if m.edge_margin(p) > -1.2 || !open(p) {
             continue;
         }
-        let scale = rng.range(0.9, 1.8);
-        props.tree(&mut rng, p, forest_height(m, p), scale);
+        props.wild(&mut rng, p, wild_height(theme, m, p));
     }
 
     // Torches (posts go into the prop mesh; flames and lights don't).
@@ -1997,6 +2025,10 @@ enum Shape {
     Flower,
     Reed,
     Puddle,
+    /// A faceted ball: canopies, scrub.
+    Ball,
+    /// A thin branch, a meter long.
+    Stick,
 }
 
 /// Builds every static prop into one vertex-colored mesh.
@@ -2008,6 +2040,8 @@ struct Props {
     flower: Mesh,
     reed: Mesh,
     puddle: Mesh,
+    ball: Mesh,
+    stick: Mesh,
     out: Option<Mesh>,
 }
 
@@ -2021,6 +2055,8 @@ impl Props {
             flower: gem_mesh(0.14),
             reed: faceted(Cone::new(0.035, 1.0).mesh().resolution(3).build()),
             puddle: faceted(Cylinder::new(1.0, 0.02).mesh().resolution(7).build()),
+            ball: faceted(Sphere::new(1.0).mesh().ico(0).unwrap()),
+            stick: faceted(Cylinder::new(0.05, 1.0).mesh().resolution(4).build()),
             out: None,
         }
     }
@@ -2033,6 +2069,8 @@ impl Props {
             Shape::Flower => &self.flower,
             Shape::Reed => &self.reed,
             Shape::Puddle => &self.puddle,
+            Shape::Ball => &self.ball,
+            Shape::Stick => &self.stick,
         };
         self.push(base.clone().transformed_by(t), color);
     }
@@ -2241,11 +2279,159 @@ impl Props {
         let p = c + Vec2::new(rng.range(-0.4, 0.4), rng.range(-0.4, 0.4));
         self.add(Shape::Flower, self.theme.bloom, Transform::from_translation(to_world(p, 0.1)));
     }
+
+    /// A map's tree (a `Tile::Tree`), as its wilds grow them.
+    fn map_tree(&mut self, rng: &mut Lcg, c: Vec2) {
+        match self.theme.wilds {
+            Wilds::Forest => self.tree(rng, c, 0.0, 1.25),
+            Wilds::Fen => self.willow(rng, c, 0.0, 1.1),
+            Wilds::Highlands => self.round_tree(rng, c, 0.0, 1.0),
+        }
+    }
+
+    /// Something out in the wilds at `p`, on land `ground` high.
+    fn wild(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+        let pick = rng.next();
+        let s = rng.range(0.9, 1.8);
+        match self.theme.wilds {
+            Wilds::Forest => self.tree(rng, p, ground, s),
+            Wilds::Fen if pick < 0.1 => self.snag(rng, p, ground, s),
+            Wilds::Fen if pick < 0.18 => self.willow(rng, p, ground, s * 0.8),
+            Wilds::Fen => self.reed_bed(rng, p, ground),
+            Wilds::Highlands if pick < 0.2 => self.round_tree(rng, p, ground, s * 0.75),
+            Wilds::Highlands if pick < 0.32 => self.pillar(rng, p, ground),
+            Wilds::Highlands if pick < 0.55 => {
+                let t = Transform::from_translation(to_world(p, ground + 0.2 * s))
+                    .with_rotation(Quat::from_euler(EulerRot::XYZ, rng.range(0.0, 3.0), rng.range(0.0, 3.0), 0.0))
+                    .with_scale(Vec3::new(1.3, 0.9, 1.2) * s);
+                self.add(Shape::Rock, self.theme.slate.mix(&self.theme.wall, rng.next()), t);
+            }
+            Wilds::Highlands => self.shrub(rng, p, ground),
+        }
+    }
+
+    /// A dead tree: a grey, bare trunk with a few crooked branches.
+    fn snag(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
+        let wood = self.theme.bark.mix(&self.theme.slate, 0.5);
+        let tall = 2.0 * s;
+        let lean = Quat::from_euler(EulerRot::XYZ, rng.range(-0.12, 0.12), 0.0, rng.range(-0.12, 0.12));
+        self.add(Shape::Trunk, wood, Transform::from_translation(to_world(p, ground + 0.6 * tall)).with_rotation(lean).with_scale(Vec3::new(0.7 * s, tall, 0.7 * s)));
+        for _ in 0..2 + (rng.next() * 2.0) as usize {
+            let from = to_world(p, ground + tall * rng.range(0.6, 1.1));
+            let out = Quat::from_rotation_y(rng.range(0.0, 6.28)) * Quat::from_rotation_z(rng.range(0.6, 1.1));
+            let long = rng.range(0.7, 1.2) * s;
+            let t = Transform::from_translation(from + out * Vec3::Y * long / 2.0).with_rotation(out).with_scale(Vec3::new(s, long, s));
+            self.add(Shape::Stick, wood, t);
+        }
+    }
+
+    /// A low, wide willow: a short trunk under a heap of dark, drooping foliage.
+    fn willow(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
+        self.add(Shape::Trunk, self.theme.bark, Transform::from_translation(to_world(p, ground + 0.6 * s)).with_scale(Vec3::new(1.2 * s, s, 1.2 * s)));
+        for k in 0..3 {
+            let off = Vec2::from_angle(k as f32 * 2.1 + rng.range(0.0, 1.0)) * 0.5 * s;
+            let t = Transform::from_translation(to_world(p + off, ground + rng.range(1.3, 1.7) * s))
+                .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
+                .with_scale(Vec3::new(1.2, 0.85, 1.2) * s);
+            self.add(Shape::Ball, if k % 2 == 0 { self.theme.pine } else { self.theme.fern }, t);
+        }
+    }
+
+    /// A clump of tall reeds standing in the shallows.
+    fn reed_bed(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+        for _ in 0..3 + (rng.next() * 4.0) as usize {
+            let c = p + Vec2::new(rng.range(-0.9, 0.9), rng.range(-0.9, 0.9));
+            for _ in 0..5 {
+                let at = c + Vec2::new(rng.range(-0.15, 0.15), rng.range(-0.15, 0.15));
+                let h = rng.range(0.9, 1.5);
+                let lean = Quat::from_euler(EulerRot::XYZ, rng.range(-0.2, 0.2), 0.0, rng.range(-0.2, 0.2));
+                let color = [self.theme.fern, self.theme.path.mix(&self.theme.fern, 0.5), self.theme.marsh][(rng.next() * 3.0) as usize % 3];
+                self.add(Shape::Reed, color, Transform::from_translation(to_world(at, ground + h / 2.0)).with_rotation(lean).with_scale(Vec3::new(1.4, h, 1.4)));
+            }
+        }
+    }
+
+    /// A round broadleaf in autumn: a trunk under a few faceted balls of brown, rust and gold.
+    fn round_tree(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
+        self.add(Shape::Trunk, self.theme.bark, Transform::from_translation(to_world(p, ground + 0.9 * s)).with_scale(Vec3::new(0.8 * s, 1.5 * s, 0.8 * s)));
+        let leaves = [self.theme.fern, self.theme.bloom, self.theme.meadow.mix(&self.theme.bloom, 0.35)];
+        for k in 0..3 {
+            let off = Vec2::from_angle(k as f32 * 2.1 + rng.range(0.0, 1.0)) * 0.45 * s;
+            let t = Transform::from_translation(to_world(p + off, ground + rng.range(2.1, 2.7) * s))
+                .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
+                .with_scale(Vec3::splat(rng.range(0.85, 1.1) * s));
+            self.add(Shape::Ball, leaves[(rng.next() * 3.0) as usize % 3], t);
+        }
+    }
+
+    /// A low bush of dry scrub.
+    fn shrub(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+        let s = rng.range(0.35, 0.6);
+        let t = Transform::from_translation(to_world(p, ground + 0.15)).with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0))).with_scale(Vec3::new(s, s * 0.7, s));
+        self.add(Shape::Ball, self.theme.fern.mix(&self.theme.grass, rng.next() * 0.5), t);
+    }
+
+    /// A pillar of weathered rock: boulders stacked and narrowing in bands of color, under a
+    /// wider cap.
+    fn pillar(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+        let bands = [self.theme.wall, self.theme.slate, self.theme.stone];
+        let count = 3 + (rng.next() * 2.0) as usize;
+        for k in 0..count {
+            let w = 1.9 - k as f32 * 0.25;
+            let t = Transform::from_translation(to_world(p, ground + 0.5 + k as f32 * 1.05))
+                .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
+                .with_scale(Vec3::new(w, 1.3, w));
+            self.add(Shape::Rock, bands[k % 3], t);
+        }
+        let cap = Transform::from_translation(to_world(p, ground + 0.6 + count as f32 * 1.05)).with_scale(Vec3::new(2.0, 0.7, 2.0));
+        self.add(Shape::Rock, self.theme.slate.darker(0.1), cap);
+    }
 }
 
-/// Height of the faceted forest floor outside the clearing (0 at its edge), before roughness.
-fn forest_height(m: &Map, p: Vec2) -> f32 {
-    (-m.edge_margin(p) * 0.3).clamp(0.0, 3.0)
+/// Height of the land outside the clearing (0 at its edge), before roughness: the forest rolls
+/// up into low hills, a fen sinks under the water with tussocks breaking it, highlands climb in
+/// terraces.
+fn wild_height(theme: &Theme, m: &Map, p: Vec2) -> f32 {
+    let out = -m.edge_margin(p);
+    match theme.wilds {
+        Wilds::Forest => (out * 0.3).clamp(0.0, 3.0),
+        Wilds::Fen => {
+            // Broad, low tussocks: where slow waves running four ways crest together.
+            let waves = (p.x * 0.31 + 0.7).sin() + (p.y * 0.27 + 1.3).sin() + ((p.x + p.y) * 0.19).sin() + ((p.x - p.y) * 0.23 + 2.0).sin();
+            let hump = (waves / 4.0 - 0.15).clamp(0.0, 0.5) * 2.0;
+            let deep = (out / 3.0).clamp(0.0, 1.0);
+            (-0.7 + hump * 0.95) * deep
+        }
+        Wilds::Highlands => {
+            let rise = (out * 0.32).clamp(0.0, 14.0);
+            let f = (rise / TERRACE).fract();
+            (rise / TERRACE).floor() * TERRACE + TERRACE * ((f - 0.6) / 0.25).clamp(0.0, 1.0)
+        }
+    }
+}
+
+/// How high each of the highlands' terraces climbs.
+const TERRACE: f32 = 3.0;
+
+/// The color of a facet of the wilds `height` high, `flat` (its normal's upward part: 1 flat, 0
+/// sheer), `pick` a random number for variety.
+fn wild_color(theme: &Theme, height: f32, flat: f32, pick: f32) -> Color {
+    match theme.wilds {
+        Wilds::Forest if height > 1.4 => {
+            if pick < 0.5 { theme.fern } else { theme.pine }
+        }
+        Wilds::Forest if pick < 0.15 => theme.path,
+        Wilds::Forest if pick < 0.6 => theme.grass,
+        Wilds::Forest => theme.fern,
+        Wilds::Fen if pick < 0.4 => theme.marsh,
+        Wilds::Fen if pick < 0.8 => theme.grass.mix(&theme.marsh, 0.4),
+        Wilds::Fen => theme.fern,
+        // Sheer faces in bands of rock by height; dry grass on the shelves.
+        Wilds::Highlands if flat < 0.8 => [theme.wall, theme.slate, theme.bank, theme.stone][(height / 1.3).floor().rem_euclid(4.0) as usize],
+        Wilds::Highlands if pick < 0.5 => theme.grass,
+        Wilds::Highlands if pick < 0.8 => theme.meadow,
+        Wilds::Highlands => theme.path,
+    }
 }
 
 /// Meters between the terrain's vertices. Twice a tile: faceted like low-poly land, not like
@@ -2255,8 +2441,8 @@ const TERRAIN_CELL: i32 = 2;
 /// The land under and around the map, on a grid of `TERRAIN_CELL` meters, its vertices on tile
 /// corners: flat just under the ground tiles, down to the riverbed under water and to the floor
 /// under a chasm (a vertex goes down if any tile around it within a cell does, so the whole of
-/// every water or chasm tile is low), and rolling up into the forest outside, its vertices
-/// jostled where there's nothing but forest around them.
+/// every water or chasm tile is low), and out into the wilds around it (`wild_height`), its
+/// vertices jostled where there's nothing but wilds around them.
 fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut Lcg) -> Mesh {
     let cells = scene.extent / TERRAIN_CELL;
     let width = (2 * cells.x + 1) as usize;
@@ -2275,10 +2461,16 @@ fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut Lcg) -> Me
             } else if around.iter().all(|t| *t != Tile::Forest) {
                 -0.05
             } else if around.iter().all(|t| *t == Tile::Forest) && m.edge_margin(p) < -1.0 {
-                p += Vec2::new(rng.range(-0.5, 0.5), rng.range(-0.5, 0.5));
-                forest_height(m, p) + rng.range(-0.3, 0.6)
+                // Forest floor is rough; the fen's tussocks and the highlands' shelves smoother.
+                let (shift, rough) = match theme.wilds {
+                    Wilds::Forest => (0.5, (-0.3, 0.6)),
+                    Wilds::Fen => (0.3, (-0.05, 0.05)),
+                    Wilds::Highlands => (0.3, (-0.15, 0.15)),
+                };
+                p += Vec2::new(rng.range(-shift, shift), rng.range(-shift, shift));
+                wild_height(theme, m, p) + rng.range(rough.0, rough.1)
             } else {
-                forest_height(m, p)
+                wild_height(theme, m, p)
             };
             grid.push(to_world(p, h));
         }
@@ -2290,7 +2482,7 @@ fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut Lcg) -> Me
             let (a, r, u, ru) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
             for tri in [[a, r, u], [r, ru, u]] {
                 let height = (tri[0].y + tri[1].y + tri[2].y) / 3.0;
-                let pick = rng.next();
+                let flat = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize_or_zero().y.abs();
                 let base = if height < -1.2 {
                     // Down a chasm: rock darkening toward the floor.
                     theme.slate.mix(&theme.abyss, ((-height - 1.2) / 3.5).min(1.0))
@@ -2298,14 +2490,8 @@ fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut Lcg) -> Me
                     theme.riverbed
                 } else if height < 0.05 {
                     theme.grass
-                } else if height > 1.4 {
-                    if pick < 0.5 { theme.fern } else { theme.pine }
-                } else if pick < 0.15 {
-                    theme.path
-                } else if pick < 0.6 {
-                    theme.grass
                 } else {
-                    theme.fern
+                    wild_color(theme, height, flat, rng.next())
                 };
                 b.tri(tri, Color::from(base.to_linear() * (1.0 + rng.range(-0.04, 0.04))));
             }
@@ -2365,11 +2551,12 @@ fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
     b.build()
 }
 
-/// The water's surface: over every water tile of the scene (the map's and the forest's beyond
-/// it), and over the forest tiles within a terrain cell of those too, so where the land rises out
-/// of it the water runs in under its slope. `None` if there's no water.
-fn water_mesh(scene: &SceneTiles) -> Option<Mesh> {
-    let covers = |tile: Tile| matches!(tile, Tile::Water | Tile::Ford);
+/// The water's surface: over every water tile of the scene (the map's and the wilds' beyond it),
+/// and over the wilds within a terrain cell of those too, so where the land rises out of it the
+/// water runs in under its slope; over all the wilds if they're `flooded`. `None` if there's no
+/// water.
+fn water_mesh(scene: &SceneTiles, flooded: bool) -> Option<Mesh> {
+    let covers = |tile: Tile| matches!(tile, Tile::Water | Tile::Ford) || (flooded && tile == Tile::Forest);
     let extent = scene.extent;
     let mut b = FlatMesh::default();
     let mut any = false;
