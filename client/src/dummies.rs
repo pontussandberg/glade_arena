@@ -1,7 +1,8 @@
 //! The practice tools, LoL-style: a panel in the top right corner while practicing, under a
 //! "Practice" header that folds them away or out (like "Controls", open to begin with).
 //! "Map" switches practice to the next map, everyone starting over on it. "No cooldowns" switches our Q's cooldown off and on (lit while off: what the server says, via
-//! our `AbilityState`). "Target dummy" places one: a ring under the cursor shows where it would stand
+//! our `AbilityState`). "Hitboxes" shows what hits are judged by, drawn on the ground
+//! (`hitboxes.rs`; ours alone, nothing is sent). "Target dummy" places one: a ring under the cursor shows where it would stand
 //! (red where it can't), and the next left click stands it there (the server takes each class in
 //! turn); a right click or ESC cancels. Click it again for another. A hint says so meanwhile.
 //! "Moving dummy" places one the same way that walks back and forth along a line through the spot
@@ -31,7 +32,7 @@ impl Plugin for DummiesPlugin {
         app.add_systems(
             Update,
             (
-                (show_tools, fold_tools, use_tools, toggle_cooldowns, switch_map, show_hint).chain(),
+                (show_tools, fold_tools, use_tools, toggle_cooldowns, toggle_hitboxes, switch_map, show_hint).chain(),
                 (place_dummy, show_marker).chain().in_set(CameraPlaced).before(crate::PlayerControls).before(crate::esc_menu::MenuKey),
             )
                 .run_if(in_state(Screen::InGame)),
@@ -57,6 +58,13 @@ struct DummyButton(Walks);
 
 #[derive(Component)]
 struct CooldownsButton;
+
+/// The "Hitboxes" switch, and its on/off text.
+#[derive(Component)]
+struct HitboxesButton;
+
+#[derive(Component)]
+struct HitboxesState;
 
 /// Switches practice to the next map: everything starts over on it.
 #[derive(Component)]
@@ -103,13 +111,21 @@ fn show_tools(mut commands: Commands, room: Res<CurrentRoom>, tools: Query<Entit
                             switch.spawn((MapName, ui_text("", 13.0, palette::ui::ACCENT)));
                         });
                     tools
-                        .spawn((CooldownsButton, HudButton, button_fill(palette::ui::PANEL), node, BorderColor::all(palette::ui::MUTED.with_alpha(0.5))))
+                        .spawn((CooldownsButton, HudButton, button_fill(palette::ui::PANEL), node.clone(), BorderColor::all(palette::ui::MUTED.with_alpha(0.5))))
                         .with_children(|switch| {
                             switch.spawn(ui_text("No cooldowns", 13.0, palette::ui::TEXT));
                             // As wide for "ON" as for "OFF", so the panel keeps its width.
                             switch
                                 .spawn(Node { width: px(32.0), justify_content: JustifyContent::FlexEnd, ..default() })
                                 .with_child((CooldownsState, ui_text("OFF", 13.0, palette::ui::MUTED)));
+                        });
+                    tools
+                        .spawn((HitboxesButton, HudButton, button_fill(palette::ui::PANEL), node, BorderColor::all(palette::ui::MUTED.with_alpha(0.5))))
+                        .with_children(|switch| {
+                            switch.spawn(ui_text("Hitboxes", 13.0, palette::ui::TEXT));
+                            switch
+                                .spawn(Node { width: px(32.0), justify_content: JustifyContent::FlexEnd, ..default() })
+                                .with_child((HitboxesState, ui_text("OFF", 13.0, palette::ui::MUTED)));
                         });
                     for (walks, label) in [(false, "Target dummy"), (true, "Moving dummy")] {
                         let look = button(label, 13.0, palette::ui::PANEL, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5));
@@ -191,6 +207,25 @@ fn toggle_cooldowns(
         request(&mut sender, RoomRequest::NoCooldowns(!on));
     }
     let (text, edge, color) = if on { ("ON", palette::ui::ACCENT, palette::ui::ACCENT) } else { ("OFF", palette::ui::MUTED.with_alpha(0.5), palette::ui::MUTED) };
+    border.set_if_neq(BorderColor::all(edge));
+    let (mut label, mut label_color) = state.into_inner();
+    if label.0 != text {
+        label.0 = text.to_string();
+    }
+    label_color.set_if_neq(TextColor(color));
+}
+
+/// The "Hitboxes" switch turns the hitbox view on and off, and shows which.
+fn toggle_hitboxes(
+    mut show: ResMut<crate::hitboxes::ShowHitboxes>,
+    button: Single<(Ref<Interaction>, &mut BorderColor), With<HitboxesButton>>,
+    state: Single<(&mut Text, &mut TextColor), With<HitboxesState>>,
+) {
+    let (interaction, mut border) = button.into_inner();
+    if clicked(interaction) {
+        show.0 = !show.0;
+    }
+    let (text, edge, color) = if show.0 { ("ON", palette::ui::ACCENT, palette::ui::ACCENT) } else { ("OFF", palette::ui::MUTED.with_alpha(0.5), palette::ui::MUTED) };
     border.set_if_neq(BorderColor::all(edge));
     let (mut label, mut label_color) = state.into_inner();
     if label.0 != text {

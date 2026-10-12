@@ -1,5 +1,7 @@
 //! A simple sparring bot: drives `DesiredInput` instead of the mouse. Melee classes chase the
-//! nearest enemy and swing; ranged classes keep their distance and shoot. Turn it on with
+//! nearest enemy and swing; ranged classes keep their distance and shoot. It clicks to attack
+//! whenever it's in range (the server drops clicks until its last attack is done), and stands
+//! still while one winds up, since moving would cancel it. Turn it on with
 //! `ARENA_BOT=1` (native client) to have someone to fight when testing alone.
 
 use arena_shared::classes::{AbilityKind, AttackKind};
@@ -28,13 +30,13 @@ impl Plugin for BotPlugin {
 }
 
 fn think(
-    me: Query<(&PlayerId, &ClassId, &Pos), With<Me>>,
+    me: Query<(&PlayerId, &ClassId, &Pos, &AttackState), With<Me>>,
     others: Query<(&PlayerId, &Pos, &Health), Without<Me>>,
     mut desired: ResMut<DesiredInput>,
     map: Res<CurrentMap>,
 ) {
     let map = map.map();
-    let Ok((my_id, class, me)) = me.single() else { return };
+    let Ok((my_id, class, me, attack)) = me.single() else { return };
     let Some(target) = others
         .iter()
         .filter(|(id, _, health)| id.0 != my_id.0 && health.alive())
@@ -47,12 +49,13 @@ fn think(
     let to_target = target - me.0;
     let distance = to_target.length();
     // Where we want to stand relative to the target, and when to attack. Melee closes right in
-    // and swings well inside reach, since its windup gives the target time to step away; ranged
+    // and swings inside reach, since its windup gives the target time to step away; ranged
     // keeps some distance and shoots from as far as it reaches.
     let kind = &class.def().attack.kind;
     let reach = kind.reach();
     let (preferred, attack_within) = match *kind {
-        AttackKind::Melee { .. } => (0.0, reach - MELEE_LEAD),
+        // Stands where the target is in the middle of its lane.
+        AttackKind::Melee { range, from, .. } => ((from + range) / 2.0, reach - MELEE_LEAD),
         AttackKind::Projectile { .. } => (reach * 0.6, reach),
     };
     let stand_at = target - to_target.normalize_or_zero() * preferred;
@@ -66,6 +69,7 @@ fn think(
     };
     let clear = map.shot_clear(me.0, target);
     let fire = distance <= attack_within && clear;
+    let move_to = move_to.filter(|_| !fire && attack.winding_up().is_none());
     // Q whenever it would land: a dash to close in from just out of reach, a throw in range, a
     // nova when the target is right on top of us.
     let ability = clear

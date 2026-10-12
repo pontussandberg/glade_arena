@@ -480,13 +480,13 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             head: revenant_head(),
             arm: revenant_arm(),
             leg: booted_leg(palette::ROBE, palette::DARK_LEATHER, 0.082, 0.07),
-            held: sword(),
+            held: glaive(),
             eyes: slit_eyes(REVENANT_EYES),
             glow: palette::WISP,
-            held_glow: Some(sword_glow()),
+            held_glow: Some(glaive_glow()),
             body_glow: Some(revenant_glow()),
-            held_aura: Some(blade_aura()),
-            held_glint: Some((glint(), Vec3::Y * BLADE_LENGTH)),
+            held_aura: Some(glaive_aura()),
+            held_glint: Some((glint(), Vec3::new(GLAIVE[GLAIVE.len() - 1].1, BLADE_LENGTH, 0.0))),
             wardrobe: Some(revenant_wardrobe()),
         },
         "frost_mage" => RigMeshes {
@@ -1095,83 +1095,113 @@ fn revenant_arm() -> Mesh {
     sculpted(parts)
 }
 
-/// The revenant's sword, gripped at the origin, blade up (+Y): a long, slender pale blade swelling
-/// a little toward a symmetric point, a crossguard whose arms droop forward to points, a grip bound in ash and leather, and a
-/// faceted pommel spike. A line of wisp light runs down its fuller (`sword_glow`).
-fn sword() -> Mesh {
+/// The revenant's glaive, gripped at the origin, blade up (+Y): a long dark shaft, bound where
+/// the hand holds it, with a spiked butt behind the hand and a steel collar at its head, and a
+/// dark single-edged blade making up the outer half: broad, its edge (+X, leading the blow)
+/// bellied out and sweeping to a point that curves back, a hooked spike on its spine. A thin line
+/// of wisp light runs along the edge (`glaive_glow`).
+fn glaive() -> Mesh {
     let blade = faceted(tube(
-        &smoothed(
-            &BLADE.map(|(y, depth, width, z)| Section::new(Vec3::new(0.0, y, z), Vec2::new(depth, width), palette::STEEL).squared(1.0).exact()),
-            2,
-        ),
+        &smoothed(&GLAIVE.map(|(y, x, depth, width)| Section::new(Vec3::new(x, y, 0.0), Vec2::new(depth, width), palette::BLACK_STEEL).squared(1.0).exact()), 3),
         4,
         (true, false),
     ));
-    let mut parts = vec![blade, bevel_box(Vec3::new(0.07, 0.075, 0.1), 0.015, palette::ASH).translated_by(Vec3::Y * 0.1)];
-    // The guard's arms, out from the middle and drooping forward to points.
-    for side in [1.0, -1.0] {
-        let arm: Vec<Vec3> = (0..=4).map(|i| i as f32 / 4.0).map(|t| Vec3::new(0.0, 0.1 - 0.07 * t * t, side * 0.19 * t)).collect();
-        parts.push(sweep(&arm, &[0.03, 0.027, 0.022, 0.014, 0.0], 10, palette::ASH));
-    }
-    // The grip, bound in bands.
-    for i in 0..6 {
-        let (from, to) = (-0.17 + 0.038 * i as f32, -0.17 + 0.038 * (i + 1) as f32);
-        let (r, color) = if i % 2 == 0 { (0.031, palette::ASH) } else { (0.029, palette::DARK_LEATHER) };
-        parts.push(band(from, to, r, 12, color));
-    }
-    let pommel = faceted(tube(
+    let mut parts = vec![blade];
+    // The shaft, from the butt to the collar.
+    parts.push(faceted(tube(
         &[
-            Section::round(Vec3::Y * -0.17, 0.034, palette::ASH).exact(),
-            Section::round(Vec3::Y * -0.2, 0.045, palette::ASH).exact(),
-            Section::round(Vec3::Y * -0.24, 0.04, palette::ASH).exact(),
-            Section::round(Vec3::Y * -0.3, 0.0, palette::ASH).exact(),
+            Section::round(Vec3::Y * GLAIVE_BUTT, 0.02, palette::HUNTER_DARK).exact(),
+            Section::round(Vec3::Y * (BLADE_START - 0.06), 0.019, palette::HUNTER_DARK).exact(),
+        ],
+        8,
+        (false, false),
+    )));
+    // Bound where the hand holds it.
+    for i in 0..8 {
+        let (from, to) = (-0.16 + 0.04 * i as f32, -0.16 + 0.04 * (i + 1) as f32);
+        let (r, color) = if i % 2 == 0 { (0.026, palette::ASH) } else { (0.024, palette::DARK_LEATHER) };
+        parts.push(band(from, to, r, 10, color));
+    }
+    // The steel collar the blade sits in, flaring up to it.
+    parts.push(faceted(tube(
+        &[
+            Section::round(Vec3::Y * (BLADE_START - 0.12), 0.021, palette::IRON).exact(),
+            Section::round(Vec3::Y * (BLADE_START - 0.07), 0.03, palette::IRON).exact(),
+            Section::round(Vec3::Y * (BLADE_START - 0.03), 0.026, palette::IRON).exact(),
+            Section::new(Vec3::Y * BLADE_START, Vec2::new(0.034, 0.02), palette::IRON).exact(),
         ],
         6,
         (true, false),
-    ));
-    parts.push(pommel);
+    )));
+    // The spiked butt.
+    parts.push(faceted(tube(
+        &[
+            Section::round(Vec3::Y * (GLAIVE_BUTT + 0.02), 0.026, palette::IRON).exact(),
+            Section::round(Vec3::Y * GLAIVE_BUTT, 0.028, palette::IRON).exact(),
+            Section::round(Vec3::Y * (GLAIVE_BUTT - 0.13), 0.0, palette::IRON).exact(),
+        ],
+        4,
+        (true, false),
+    )));
+    // The hooked spike on the spine, near the blade's root, curling up.
+    let hook: Vec<Vec3> = (0..=5).map(|i| i as f32 / 5.0).map(|t| Vec3::new(-0.03 - 0.15 * t, BLADE_START + 0.08 + 0.13 * t * t, 0.0)).collect();
+    parts.push(faceted(sweep(&hook, &[0.016, 0.014, 0.011, 0.008, 0.004, 0.0], 4, palette::BLACK_STEEL)));
     sculpted(parts)
 }
 
-/// The sword's blade, as (height, half depth, half width, how far its middle is set toward the
-/// front edge): long and slender, swelling a little toward a symmetric point.
-const BLADE: [(f32, f32, f32, f32); 6] =
-    [(0.12, 0.018, 0.04, 0.0), (0.45, 0.017, 0.043, 0.0), (1.1, 0.015, 0.046, 0.0), (1.45, 0.013, 0.041, 0.0), (1.63, 0.008, 0.023, 0.0), (1.76, 0.0, 0.0, 0.0)];
+/// Where the glaive's butt ends (below the hand), before its spike.
+const GLAIVE_BUTT: f32 = -0.3;
+/// Where the glaive's blade starts, above the hand.
+pub const BLADE_START: f32 = 0.72;
 
-/// How long the revenant's blade is, from the grip to its point.
-pub const BLADE_LENGTH: f32 = BLADE[BLADE.len() - 1].0;
+/// The glaive's blade, as (height, how far its middle is set toward the edge (+X), half its
+/// breadth (edge to spine), half its thickness): long (about half the whole glaive), broad,
+/// bellied toward the edge, sweeping to a point set back toward the spine.
+const GLAIVE: [(f32, f32, f32, f32); 8] = [
+    (BLADE_START, 0.0, 0.036, 0.017),
+    (0.81, 0.032, 0.072, 0.015),
+    (1.01, 0.062, 0.1, 0.013),
+    (1.26, 0.066, 0.098, 0.012),
+    (1.48, 0.05, 0.078, 0.01),
+    (1.66, 0.02, 0.05, 0.007),
+    (1.78, -0.01, 0.022, 0.004),
+    (1.88, -0.035, 0.0, 0.0),
+];
 
-/// What glows on the revenant's sword: a line of wisp light down the fuller on both faces, and a
-/// gem on each face of the guard.
-fn sword_glow() -> Mesh {
+/// How long the revenant's glaive is, from the grip to its point.
+pub const BLADE_LENGTH: f32 = GLAIVE[GLAIVE.len() - 1].0;
+
+/// What glows on the revenant's glaive: a thin line of wisp light along its edge, on both faces,
+/// from the root of the blade to its point.
+fn glaive_glow() -> Mesh {
     let mut parts = Vec::new();
     for side in [1.0, -1.0] {
-        let points: Vec<Vec3> = (0..=6)
-            .map(|i| 0.22 + 1.2 * i as f32 / 6.0)
+        let points: Vec<Vec3> = (0..=10)
+            .map(|i| GLAIVE[1].0 + (BLADE_LENGTH - 0.03 - GLAIVE[1].0) * i as f32 / 10.0)
             .map(|y| {
-                // On the ridge of the blade at this height (between `BLADE`'s sections).
-                let k = BLADE.windows(2).position(|w| y <= w[1].0).unwrap_or(0);
-                let (a, b) = (BLADE[k], BLADE[k + 1]);
+                // Just in from the edge at this height (between `GLAIVE`'s sections).
+                let k = GLAIVE.windows(2).position(|w| y <= w[1].0).unwrap_or(0);
+                let (a, b) = (GLAIVE[k], GLAIVE[k + 1]);
                 let t = (y - a.0) / (b.0 - a.0);
-                let (depth, z) = (a.1 + (b.1 - a.1) * t, a.3 + (b.3 - a.3) * t);
-                Vec3::new(side * (depth + 0.003), y, z)
+                let (x, depth, width) = (a.1 + (b.1 - a.1) * t, a.2 + (b.2 - a.2) * t, a.3 + (b.3 - a.3) * t);
+                // Two thirds of the way out to the edge, on the face (the faces close in to it).
+                Vec3::new(x + depth * 0.66, y, side * (width * 0.34 + 0.002))
             })
             .collect();
-        parts.push(sweep(&points, &[0.004, 0.0055, 0.0055, 0.0055, 0.0055, 0.005, 0.0], 6, Color::WHITE));
-        let gem = gem_mesh(0.018).scaled_by(Vec3::new(0.6, 1.3, 1.0));
-        parts.push(tinted(gem.translated_by(Vec3::new(side * 0.037, 0.1, 0.0)), Color::WHITE));
+        let radii: Vec<f32> = (0..=10).map(|i| if i == 10 { 0.0 } else { 0.0045 }).collect();
+        parts.push(sweep(&points, &radii, 5, Color::WHITE));
     }
     sculpted(parts)
 }
 
-/// A soft shell of light around the revenant's blade (`BLADE`, padded out), from the guard to a
-/// little past the point.
-fn blade_aura() -> Mesh {
-    let mut sections: Vec<Section> = BLADE[..BLADE.len() - 1]
+/// A soft shell of light around the revenant's glaive's blade (`GLAIVE`, padded out), from its
+/// root to a little past the point.
+fn glaive_aura() -> Mesh {
+    let mut sections: Vec<Section> = GLAIVE[..GLAIVE.len() - 1]
         .iter()
-        .map(|&(y, depth, width, z)| Section::new(Vec3::new(0.0, y, z), Vec2::new(depth + 0.03, width * 2.0), Color::WHITE))
+        .map(|&(y, x, depth, width)| Section::new(Vec3::new(x, y, 0.0), Vec2::new(depth + 0.03, width * 2.5 + 0.02), Color::WHITE))
         .collect();
-    sections.push(Section::new(Vec3::Y * (BLADE_LENGTH + 0.08), Vec2::ZERO, Color::WHITE));
+    sections.push(Section::new(Vec3::new(GLAIVE[GLAIVE.len() - 1].1, BLADE_LENGTH + 0.08, 0.0), Vec2::ZERO, Color::WHITE));
     tube(&smoothed(&sections, 2), 12, (true, false))
 }
 

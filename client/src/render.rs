@@ -45,6 +45,7 @@ impl Plugin for RenderPlugin {
             crate::tooltip::TooltipPlugin,
             crate::dummies::DummiesPlugin,
         ));
+        app.add_plugins(crate::hitboxes::HitboxesPlugin);
         app.add_plugins(crate::waygates::WaygatesPlugin);
         app.insert_resource(ControlsOpen(load_setting(CONTROLS_KEY).as_deref() == Some("open")));
         app.add_systems(Startup, setup_scene);
@@ -507,7 +508,7 @@ fn read_local_input(
         }
     }
     // A left click that casts, aims (on the Q icon) or is for a HUD control doesn't also
-    // attack: no attacking until it's let go. A right click drops the aim (`drops_aim`); ESC
+    // attack. Any other one does: once per click (holding it doesn't attack again). A right click drops the aim (`drops_aim`); ESC
     // does too (`esc_menu`).
     if mouse.just_pressed(MouseButton::Left) {
         if on_control {
@@ -527,7 +528,7 @@ fn read_local_input(
     if !mouse.pressed(MouseButton::Left) {
         *held_click = false;
     }
-    let fire = mouse.pressed(MouseButton::Left) && !aiming.0 && !*held_click;
+    let fire = desired.0.fire || (mouse.just_pressed(MouseButton::Left) && !aiming.0 && !*held_click);
     // With the free camera, WASD walks relative to it, dropping any destination; otherwise S
     // stops: drops the destination (as in LoL).
     let walk = if mode.free {
@@ -543,8 +544,8 @@ fn read_local_input(
         move_to = None;
         stop.0 = true;
     }
-    // `ability` is kept until it's been sent (`send_commands` clears it), so a short tap isn't
-    // missed.
+    // `ability` and `fire` are kept until they've been sent (`send_commands` clears them), so a
+    // short tap isn't missed.
     desired.0 = PlayerInput { move_to, walk, aim, fire, ability };
 }
 

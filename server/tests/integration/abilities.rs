@@ -39,7 +39,7 @@ fn spirit_spear_flies_and_hits() {
     d.until(Duration::from_secs(1), "the spear appears on A", |d| spirit_spears(&mut d.a) > 0);
     println!("spirit spear appeared on A after {:?}", t0.elapsed());
     assert!(t0.elapsed() < COMMAND_SHOWS_WITHIN, "no windup: the spear should be thrown at once");
-    assert!(attack_state(&mut d.a, A).windup.is_none(), "throwing it shouldn't start an attack windup");
+    assert!(attack_state(&mut d.a, A).swing.is_none(), "throwing it shouldn't start an attack");
 
     d.until(Duration::from_secs(2), "the spear hits", |d| server_player(&mut d.server, B).1 == full - damage);
     // One press, one spear: its cooldown holds.

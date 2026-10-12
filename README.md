@@ -22,7 +22,7 @@ projectile) and Q ability; all of it lives in `shared/assets/classes.ron`:
 | Class | Role | Auto-attack | Q |
 |---|---|---|---|
 | Jav | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`) | **Spirit Spear**: a fast spectral spear, thrown instantly (no windup, no root) |
-| Revenant | Duelist | A long thrust down a narrow lane, with a slow windup; each hit gives the next swing +100% attack speed if it follows within 1.5 s, lost on a miss (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash forward, damaging each enemy you pass through |
+| Revenant | Duelist | A heavy overhead blow of its dark glaive, the blade coming down flat on the ground from 1.6 m to 2.5 m ahead, breaking it; each hit empowers the glaive (40% bigger) for the next swing if it follows within 3 s: a lane 1.5 times as far out, long and wide, lost on a miss (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash forward, damaging each enemy you pass through |
 | Frost Mage | Controller | Frostbolts: little damage and shorter range (mid range), but each hit slows (40% for 2 s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5 s (no walking, no dashing) |
 
 Hits can carry **crowd control** (`chill` in `classes.ron`): a slow takes a share off walking
@@ -31,14 +31,22 @@ same way), a root freezes a fighter in place (it can't walk or dash, and a dash 
 progress stops) but it can still attack. Slowed fighters take on a cold blue cast and frost turns
 under their feet; frozen ones stand in ice.
 
-Every attack has a windup (`windup_ticks`): you stand still with your aim locked while a cast
-bar fills under your health bar, then it goes off. The windup is the whole attack: the next
-may start the moment one goes off, so attack speed is just how quick the windup is, and holding
-fire keeps you planted; to kite you have to stop firing. Everyone sees the windup, so attacks can
-be read and dodged. Attacking also cancels your walk: afterwards you stand still until you
-right click again (a click during the windup is kept and walked to once the attack is off);
-so does a dash. A dash may be used mid-windup: it moves you, and the attack still goes off when
-the windup's over, from wherever the dash took you (stab, then dash into place for it to land).
+Auto-attacks work as in League. Each click is one attack (holding the button doesn't attack
+again), and the next may start once its attack timer (`attack_ticks`) has run out; once the attack
+has gone off, the cast bar under your health bar fills until then. A click before then is dropped,
+not queued. The attack goes
+off early in that time, after a short windup (`windup`, a part of the attack per class): the
+spear leaving the hand, the blade reaching its target. You stand still with your aim locked
+during the windup, and an order to move (a right click, S, walking keys) cancels it: no attack,
+and you may attack again at once. After it has gone off, the rest is backswing: move whenever you
+like, cutting the animation short, while the timer runs on. Nothing on screen shows when the
+attack has gone off but your fighter itself, so learning each class's release point is the skill
+check (attack, then step, then attack again). Attack speed (only the Revenant's follow-up for now)
+shortens the timer and the windup alike, and plays the animation faster. Everyone sees the windup in
+the fighter's body, so attacks can be read and dodged. Starting an attack cancels your walk: afterwards you stand
+still until you order a move again; so does a dash. A dash may be used mid-windup: it moves you,
+and the attack still goes off when the windup's over, from wherever the dash took you (stab, then
+dash into place for it to land).
 Abilities have their own cooldown (shown in the HUD). Like everything else they happen on the
 server: your spear flies and your dash moves once the server has your Q, about a round trip
 after you press it.
@@ -120,8 +128,8 @@ cargo never removes outdated ones itself.
 
 # tests (~10s to run, plus the build): sim unit tests, plus real server + headless bot clients
 # over WebTransport (server/tests/integration/):
-#   map/sim       map symmetry, pathfinding, every spawn point reaching every other; windups,
-#                 cooldowns, far_scale, Q throws, dashes (full distance, never into a wall,
+#   map/sim       map symmetry, pathfinding, every spawn point reaching every other; attack
+#                 timers, windups, cancels, dropped clicks, cooldowns, far_scale, Q throws, dashes (full distance, never into a wall,
 #                 not mid-swing), slows, roots (stopping walks and dashes), novas
 #   classes       the class file parses and every class has sane numbers
 #   netcode.rs    a command showing about a round trip later, own view and interpolation
@@ -133,8 +141,9 @@ cargo never removes outdated ones itself.
 #                 through a target once and readying the blade, cutting where it ends but not
 #                 who it leaves behind; frost nova freezing a revenant (no walk, no dash),
 #                 then letting it go; frostbolts slowing
-#   inputs.rs     4 fps client releasing fire; a frozen client's fighter finishing its walk;
-#                 attacking cancels the walk, a click during the windup is kept
+#   inputs.rs     4 fps client firing once per click; a frozen client's fighter finishing its
+#                 walk; attacking cancels the walk, moving cancels the windup but not the
+#                 backswing
 cargo test
 
 # server (run from the repo root; writes client/web/digest.txt for the browser; see Logs below)

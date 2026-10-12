@@ -19,7 +19,6 @@ use crate::camera::CameraPlaced;
 use crate::arena::{palette, to_world};
 use crate::render::{Relation, set_fill, shown, ui_text};
 use crate::render::GameUi;
-use crate::rig::SeenThrows;
 use crate::rooms::Screen;
 
 pub struct FeedbackPlugin;
@@ -281,7 +280,7 @@ fn place_bars(
     time: Res<Time>,
     clock: AttackClock,
     camera: Single<(&Camera, &GlobalTransform)>,
-    players: Query<(&Pos, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Option<&SeenThrows>, Has<Me>)>,
+    players: Query<(&Pos, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Has<Me>)>,
     mut bars: Query<(Entity, &Bars, &mut HealthTrail, &mut Node, &mut UiTransform, &mut Visibility)>,
     mut parts: Query<(&mut Node, &mut Visibility), Without<Bars>>,
     mut colors: Query<&mut BackgroundColor>,
@@ -289,7 +288,7 @@ fn place_bars(
     let (camera, camera_transform) = *camera;
     let now = time.elapsed_secs();
     for (bar, ids, mut trail, mut node, mut transform, mut visibility) in &mut bars {
-        let Ok((pos, class, health, crit_at, attack, seen, is_me)) = players.get(ids.player) else {
+        let Ok((pos, class, health, crit_at, attack, is_me)) = players.get(ids.player) else {
             commands.entity(bar).despawn();
             continue;
         };
@@ -321,12 +320,14 @@ fn place_bars(
         }
         let pop = 1.0 + CRIT_BAR_POP * (1.0 - (now - trail.crit_at) / CRIT_BAR_POP_SECONDS).max(0.0).powi(2);
         transform.set_if_neq(UiTransform { scale: Vec2::splat(pop), ..default() });
-        let windup = SeenThrows::windup(seen, attack);
-        if let Some(windup) = windup {
-            fill_to(ids.cast_fill, windup.progress(clock.now(is_me), *class));
+        // The attack timer, once the attack has gone off (the windup only shows in the fighter,
+        // and a cancelled one shows nothing): filling until the next attack may start.
+        let cooling = attack.swing.filter(|_| attack.released());
+        if let Some(swing) = cooling {
+            fill_to(ids.cast_fill, swing.cooldown_progress(clock.now(is_me), *class));
         }
         if let Ok((_, mut cast_visibility)) = parts.get_mut(ids.cast) {
-            cast_visibility.set_if_neq(shown(windup.is_some()));
+            cast_visibility.set_if_neq(shown(cooling.is_some()));
         }
     }
 }

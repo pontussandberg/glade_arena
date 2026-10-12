@@ -125,7 +125,7 @@ impl Plugin for ServerGamePlugin {
                 restore_dummies,
                 respawn,
                 place_players,
-                release_held_taps,
+                use_up_clicks,
             )
                 .chain(),
         );
@@ -252,7 +252,6 @@ fn spawn_player(commands: &mut Commands, link: Entity, id: PeerId, class: ClassI
             DashHits::default(),
             OnGate::default(),
             PlayerInput::default(),
-            Tap::default(),
             // Replication starts in `place_players`, once it has a real position.
             ControlledBy { owner: link, lifetime: default() },
         ))
@@ -372,47 +371,32 @@ fn place_players(
     }
 }
 
-/// Server-only: an attack press that no tick has seen yet (`pressed`), and its release, held
-/// back (`release`) until one has, so a click shorter than a tick still attacks.
-#[derive(Component, Default)]
-struct Tap {
-    pressed: bool,
-    release: bool,
-}
-
 /// Each client's commands change its own fighter's intent, the moment they arrive. A link only
 /// ever drives the fighter it controls; commands while it has none (still picking a class) are
-/// dropped.
+/// dropped. An order to move cancels an attack still winding up, right away, so the fighter
+/// walks off this very tick.
 fn apply_commands(
     mut links: Query<&mut MessageReceiver<PlayerCommand>, With<ClientOf>>,
-    mut players: Query<(&ControlledBy, &mut PlayerInput, &mut Tap)>,
+    mut players: Query<(&ControlledBy, &mut PlayerInput, &mut AttackState)>,
 ) {
-    for (controlled_by, mut input, mut tap) in &mut players {
+    for (controlled_by, mut input, mut attack) in &mut players {
         let Ok(mut receiver) = links.get_mut(controlled_by.owner) else { continue };
         for command in receiver.receive() {
-            match command {
-                PlayerCommand::Attack { aim, fire: true } => {
-                    tap.pressed = true;
-                    tap.release = false;
-                    PlayerCommand::Attack { aim, fire: true }.apply(&mut input);
-                }
-                PlayerCommand::Attack { aim, fire: false } if tap.pressed => {
-                    tap.release = true;
-                    input.aim = aim;
-                }
-                command => command.apply(&mut input),
+            if command.moves() {
+                attack.set_if_neq(sim::cancel_attack(*attack));
             }
+            command.apply(&mut input);
         }
     }
 }
 
-/// After a tick: an attack press has been seen, so a release held back for it goes through.
-fn release_held_taps(mut players: Query<(&mut PlayerInput, &mut Tap)>) {
-    for (mut input, mut tap) in &mut players {
-        if std::mem::take(&mut tap.release) {
+/// After a tick: an attack click has been seen, used or not (one before the last attack is done
+/// is dropped, not kept for later).
+fn use_up_clicks(mut players: Query<&mut PlayerInput>) {
+    for mut input in &mut players {
+        if input.fire {
             input.fire = false;
         }
-        tap.pressed = false;
     }
 }
 
@@ -642,8 +626,8 @@ fn hit_foes(
 }
 
 /// Auto-attacks, as they go off after their windup: projectiles are spawned; melee swings are
-/// resolved right here. Starting a windup drops the destination: afterwards the fighter stands
-/// still until its player clicks somewhere new.
+/// resolved right here. Starting an attack drops the destination and the walking keys: afterwards
+/// the fighter stands still until its player orders it somewhere new.
 fn attack(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
@@ -657,7 +641,7 @@ fn attack(
     let now = timeline.tick();
     for (id, class, pos, mut input, mut state, mut last_swing, (room, team)) in &mut attackers {
         let side = (*room, *team);
-        // In two halves (`sim::step_attack`): a swing that lands arms a quick windup in between.
+        // In two halves (`sim::step_attack`): a swing that lands arms a quick attack in between.
         let (mut next, released) = sim::release_attack(now.0, id.0, *class, pos.0, *state);
         match released {
             None => {}
@@ -667,18 +651,23 @@ fn attack(
                 let blow = Blow { amount: class.def().attack.damage, chill: class.def().attack.chill, can_crit: true };
                 let with = (id.0, *class, "auto-attack");
                 let landed = hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |_, at| {
-                    sim::melee_hits(lobby.map(room), pos.0, swing.dir, *class, at)
+                    sim::melee_hits(lobby.map(room), pos.0, swing.dir, swing.empowered, *class, at)
                 });
                 if landed > 0
                     && let Some(follow_up) = class.def().attack.follow_up
                 {
                     next.quick_until = Some(now.0 + follow_up.within_ticks);
+                    // The rest of this attack's timer runs at the empowered speed already.
+                    if let Some(swing) = next.swing.as_mut() {
+                        swing.hastened = true;
+                    }
                 }
             }
         }
-        let next = sim::start_attack(now.0, &input, next);
-        if next.windup.is_some_and(|w| w.started_at == now.0) {
+        let next = sim::start_attack(now.0, *class, &input, next);
+        if next.swing.is_some_and(|w| w.started_at == now.0) {
             input.move_to = None;
+            input.walk = Vec2::ZERO;
         }
         // Only on change: AttackState is replicated.
         state.set_if_neq(next);
