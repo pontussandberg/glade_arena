@@ -6,11 +6,12 @@
 //! comes down, the ground tears open all over its hitbox (its melee lane: the rectangle it
 //! hits) onto the spectral realm beneath: the void showing dark through it, cracks edged in ink
 //! with wisp light welling up out of them (flaring as it breaks, then glowing low and breathing),
-//! a burst of spectral mist, wisps seeping up out of the cracks and drifting off, and chunks of
+//! a burst of spectral mist, and chunks of
 //! earth thrown up and tumbling back (see-through and self-lit, so it reads on any ground). The
 //! tear lingers a while, then closes and fades. A blade whose point drags along the ground (a
 //! glaive carried trailing behind) scuffs a faint line in it, fading as it goes, and rasps: now
-//! and then a tiny spark of spectral light skips off where it scrapes. The same whoever swung (who it was shows in the
+//! and then a fine streak of spectral light, or a dark mote of the void, skips off where it
+//! scrapes. The same whoever swung (who it was shows in the
 //! health bar).
 
 use std::collections::VecDeque;
@@ -30,7 +31,7 @@ pub struct SwishPlugin;
 impl Plugin for SwishPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_swish);
-        app.add_systems(Update, (add_trails, drive_marks, drive_impacts, throw_chunks, drift_wisps));
+        app.add_systems(Update, (add_trails, drive_marks, drive_impacts, throw_chunks));
         app.add_systems(PostUpdate, (trail_blades, show_marks, strike_ground, drag_marks).chain().after(TransformSystems::Propagate));
         app.add_systems(Update, (fade_scuffs, fly_sparks));
     }
@@ -45,9 +46,8 @@ pub(crate) struct Blade {
     pub(crate) length: f32,
     pub(crate) shown: u32,
     pub(crate) quickened: bool,
-    /// A heavy strike on its way into the ground: until when (seconds) its point may still
-    /// strike it, if it hasn't.
-    pub(crate) striking: Option<f32>,
+    /// A strike that has just gone off: the ground breaks over its hitbox this frame.
+    pub(crate) striking: bool,
     /// Where on the ground its point last left a scuff, while it's dragging there (`drag_marks`).
     pub(crate) dragged: Option<Vec3>,
     /// The outer corner of its edge, in its own space: a broad blade reaches the ground there
@@ -92,36 +92,34 @@ const MARK_FADES: usize = 8;
 const AIR: Color = palette::SILVER;
 const MARK_ALPHA: f32 = 0.85;
 
-/// A heavy strike's impact: how long after it lands (seconds) its blade may still reach the
-/// ground (cut short by walking off, it may not), how low the point must come (meters), how long
-/// the rift lasts and when it starts fading (seconds), how long the dust takes to burst out, how
-/// far out (meters) past the blade, and how see-through the rift's ink and rim are at most.
-const IMPACT_WITHIN: f32 = 0.45;
-const IMPACT_HEIGHT: f32 = 0.1;
+/// A strike's impact: how long the rift lasts and when it starts fading (seconds), how long the
+/// dust takes to burst out, how far out (meters) past the blade, and how see-through the rift's
+/// ink and rim are at most.
 const RIFT_LIFE: (f32, f32) = (2.2, 3.4);
+/// How far into a tear's life (0..1) it starts to close, when its class says how long it lasts
+/// (`RiftDef`): it's drawn as long as its rift is open.
+const RIFT_CLOSES: f32 = 0.65;
 const DUST_LIFE: f32 = 0.45;
 const DUST_OUT: f32 = 0.9;
 pub(crate) const RIFT_ALPHA: f32 = 0.9;
-pub(crate) const RIM_ALPHA: f32 = 0.8;
-/// The thin glow tracing the tear's ragged edge, so it stands out on any ground: how wide a band
-/// (meters), and how see-through it is at most.
-pub(crate) const HALO_BAND: f32 = 0.05;
-pub(crate) const HALO_ALPHA: f32 = 0.55;
+pub(crate) const RIM_ALPHA: f32 = 1.0;
 /// The spectral light in the cracks: how thick its core is (a fraction of the cracks' ink), how
 /// brightly it glows, how long it flares as the ground breaks (seconds), and how it breathes
 /// after (how much of its brightness, how fast: radians per second). How thick the ink edging
 /// the cracks is.
-pub(crate) const CORE_THICKNESS: f32 = 0.5;
+pub(crate) const CORE_THICKNESS: f32 = 0.6;
 pub(crate) const INK_THICKNESS: f32 = 1.35;
-const CORE_GLOW: f32 = 5.0;
+const CORE_GLOW: f32 = 3.5;
+/// How bright (opaque) the light in the cracks is at most.
+const CORE_ALPHA: f32 = 0.85;
+/// How many steps the cracks close in, each line narrowing onto its own spine as the tear fades.
+const CLOSE_STEPS: usize = 8;
+/// Through a tear's going (from when it starts closing to when it's gone, 0..1): when its cracks
+/// have closed, and when the mark starts fading out.
+const CLOSED_BY: f32 = 0.8;
+const FADES_FROM: f32 = 0.4;
 const FLARE_SECONDS: f32 = 0.18;
 const BREATH: (f32, f32) = (0.18, 5.5);
-/// Wisps seeping up out of the tear: how many per meter of it, how big (meters), how fast they
-/// rise (m/s), and how long each lasts (seconds).
-const WISPS_PER_METER: f32 = 9.0;
-const WISP_SIZE: (f32, f32) = (0.012, 0.03);
-const WISP_RISE: (f32, f32) = (0.5, 1.3);
-const WISP_LIFE: (f32, f32) = (0.7, 1.5);
 /// The chunks of earth thrown up: how many per meter of blade, how big (meters, smallest and
 /// largest), how hard they're thrown (m/s up, and out), and how long they last (seconds).
 const CHUNKS_PER_METER: f32 = 5.0;
@@ -138,11 +136,15 @@ const SCUFF_WIDTH: f32 = 0.035;
 const SCUFF_LIFE: f32 = 1.6;
 const SCUFF_ALPHA: f32 = 0.5;
 /// The rasp of spectral sparks a dragging blade gives off: the odds a scuff throws any (one, now
-/// and then two), how hard (m/s up, and back), how big (meters) and how long they last (seconds).
-const SPARK_ODDS: f32 = 0.45;
+/// and then two), how hard (m/s up, and back), how thin (meters) and how long they are drawn
+/// (times as long as thin), how long they last (seconds), and the odds one is a dark mote of
+/// the void instead of light.
+const SPARK_ODDS: f32 = 0.55;
 const SPARK_THROW: (f32, f32) = (1.6, 0.9);
-const SPARK_SIZE: (f32, f32) = (0.008, 0.016);
+const SPARK_SIZE: (f32, f32) = (0.004, 0.009);
+const SPARK_STRETCH: f32 = 4.5;
 const SPARK_LIFE: f32 = 0.45;
+const SPARK_DARK: f32 = 0.35;
 
 #[derive(Resource)]
 struct SwishAssets {
@@ -158,9 +160,10 @@ struct SwishAssets {
     rift_fades: Vec<Handle<StandardMaterial>>,
     core_fades: Vec<Handle<StandardMaterial>>,
     rim_fades: Vec<Handle<StandardMaterial>>,
-    halo_fades: Vec<Handle<StandardMaterial>>,
     dust_fades: Vec<Handle<StandardMaterial>>,
     wisp_glow: Handle<StandardMaterial>,
+    /// A dark mote of the void, thrown off with the rasp's sparks.
+    void_mote: Handle<StandardMaterial>,
     /// A scuff a dragging point leaves, and its ink fading.
     scuff: Handle<Mesh>,
     scuff_fades: Vec<Handle<StandardMaterial>>,
@@ -177,12 +180,12 @@ fn load_swish(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mate
         chunk: meshes.add(Cuboid::new(1.0, 0.7, 0.85)),
         wisp: meshes.add(Sphere::new(1.0).mesh().ico(1).unwrap()),
         // Layered up from the void: its outline, the cracks' ink, their light, the mist.
-        rim_fades: fades(&mut materials, palette::FROST_DARK, RIM_ALPHA, 0.0),
-        halo_fades: layered(&mut materials, palette::WISP, HALO_ALPHA, 1.0, 1),
+        rim_fades: fades(&mut materials, palette::TATTERS, RIM_ALPHA, 0.0),
         rift_fades: layered(&mut materials, palette::INK, RIFT_ALPHA, 0.0, 2),
-        core_fades: layered(&mut materials, palette::WISP, 1.0, CORE_GLOW, 3),
-        dust_fades: layered(&mut materials, palette::WISP, 0.35, 1.5, 4),
+        core_fades: layered(&mut materials, palette::WISP, CORE_ALPHA, CORE_GLOW, 3),
+        dust_fades: layered(&mut materials, palette::WISP, 0.15, 1.5, 4),
         wisp_glow: materials.add(arena::glow(palette::WISP, CORE_GLOW)),
+        void_mote: materials.add(arena::glow(palette::TATTERS, 0.0)),
         scuff: meshes.add(scuff_mesh()),
         scuff_fades: fades(&mut materials, palette::INK, SCUFF_ALPHA, 0.0),
         chunks: [palette::HUNTER_DARK, palette::ASH].map(|color| materials.add(arena::matte(color))),
@@ -286,8 +289,11 @@ pub(crate) fn rubble_mesh(length: f32, width: f32, seed: u32) -> Mesh {
 
 /// How many points the ragged outline of broken ground has, and how far past it (meters) it
 /// fades out: a crisp edge.
-const RAGGED_POINTS: usize = 28;
-const RAGGED_SOFT: f32 = 0.04;
+const RAGGED_POINTS: usize = 48;
+const RAGGED_SOFT: f32 = 0.012;
+/// The ink bleeding out round it: how far (meters, shortest and longest) and how wide at the edge.
+const BLEED_REACH: (f32, f32) = (0.04, 0.32);
+const BLEED_WIDTH: f32 = 0.035;
 
 /// The `i`th point round the ragged outline of ground broken over a rectangle `length` by
 /// `width` (as `rubble_mesh`), `out` further out. Broken by `seed`.
@@ -296,23 +302,34 @@ fn ragged_edge(length: f32, width: f32, seed: u32, i: usize, out: f32) -> Vec3 {
     // A rounded rectangle's outline, by angle from its middle.
     let (c, s) = (t.cos(), t.sin());
     let r = |half: f32, v: f32| half * v.signum() * v.abs().powf(0.35);
-    let ragged = 0.85 + 0.3 * noise(seed, 500 + (i % RAGGED_POINTS) as u32);
+    // Broken, not worn: every other point a shard sticking out, the rest bitten in.
+    let shard = if i % 2 == 0 { 0.12 + 0.18 * noise(seed, 900 + (i % RAGGED_POINTS) as u32) } else { 0.0 };
+    let ragged = 0.8 + 0.22 * noise(seed, 500 + (i % RAGGED_POINTS) as u32) + shard;
     Vec3::new(length / 2.0 + r(length / 2.0 * ragged + out, c), 0.0, r(width / 2.0 * ragged + out, s))
 }
 
-/// A thin band of light tracing the ragged outline of broken ground (`rubble_mesh`'s, the same
-/// `length`, `width` and `seed`): brightest just past its edge, clear to either side, `band`
-/// wide.
-pub(crate) fn outline_mesh(length: f32, width: f32, seed: u32, band: f32) -> Mesh {
+/// Ink bleeding out round the ragged outline of broken ground (`rubble_mesh`'s, the same
+/// `length`, `width` and `seed`): from each shard and notch a dark tendril seeping out into the
+/// ground, of its own length, solid at the edge and thinning to nothing, some splitting in two.
+pub(crate) fn bleed_mesh(length: f32, width: f32, seed: u32) -> Mesh {
     let mut b = FlatMesh::default();
-    let edge = |i: usize, out: f32| ragged_edge(length, width, seed, i, out);
+    let middle = Vec3::X * length / 2.0;
     for i in 0..RAGGED_POINTS {
-        let j = i + 1;
-        let (inner, middle, outer) = (-band * 0.2, band * 0.1, band);
-        for (from, to, alpha) in [(inner, middle, [0.0, 1.0]), (middle, outer, [1.0, 0.0])] {
-            let (a, z, a_out, z_out) = (edge(i, from), edge(j, from), edge(i, to), edge(j, to));
-            b.tri_faded([a, z, z_out], [alpha[0], alpha[0], alpha[1]]);
-            b.tri_faded([a, z_out, a_out], [alpha[0], alpha[1], alpha[1]]);
+        let r = |k: u32| noise(seed, 3000 + i as u32 * 8 + k);
+        let from = ragged_edge(length, width, seed, i, -0.01);
+        let out = (from - middle).with_y(0.0).normalize_or(Vec3::X);
+        let reach = BLEED_REACH.0 + (BLEED_REACH.1 - BLEED_REACH.0) * r(0) * r(0);
+        let bend = Vec3::new(out.z, 0.0, -out.x) * (r(1) - 0.5) * reach * 0.6;
+        let tendrils = 1 + (r(2) < 0.3) as usize;
+        for t in 0..tendrils {
+            let fork = Vec3::new(out.z, 0.0, -out.x) * (t as f32 - 0.5) * 0.04 * (tendrils - 1) as f32;
+            let to = from + out * reach + bend + fork * 4.0;
+            let side = Vec3::new(out.z, 0.0, -out.x) * BLEED_WIDTH * (0.6 + 0.8 * r(3 + t as u32));
+            let mid = from.lerp(to, 0.5) + bend * 0.3 + fork;
+            b.tri_faded([from - side, mid, from + side], [1.0, 0.75, 1.0]);
+            b.tri_faded([from - side, mid - side * 0.5, mid], [1.0, 0.75, 0.75]);
+            b.tri_faded([from + side, mid, mid + side * 0.5], [1.0, 0.75, 0.75]);
+            b.tri_faded([mid - side * 0.5, to, mid + side * 0.5], [0.75, 0.0, 0.75]);
         }
     }
     b.build()
@@ -397,8 +414,9 @@ fn show_marks(
             continue;
         }
         blade.shown = swing.tick;
-        // Every strike carries on into the ground (`strike_ground`), empowered ones too.
-        blade.striking = Some(now + IMPACT_WITHIN);
+        // The ground breaks over its hitbox at once, as the hit is dealt (`strike_ground`): it
+        // shows where the strike hit, cut short or not.
+        blade.striking = true;
         let Ok(held) = blades.get(blade.held) else { continue };
         let mark = Mark { started: now, from: blade.at(held, MARK_FROM), to: blade.at(held, 1.0) };
         let transform = mark.transform(0.0);
@@ -443,11 +461,15 @@ fn drive_marks(
 struct Impact {
     started: f32,
     rim: Entity,
-    /// The glow outlining it.
-    halo: Entity,
+    /// The ink bleeding out round it.
+    bleed: Entity,
     dust: Entity,
     /// The spectral light in the cracks.
     core: Entity,
+    /// The cracks' ink and light, each thinner by a step, down to nothing: they close in.
+    closing: [Vec<Handle<Mesh>>; 2],
+    /// When (seconds after it opens) it starts closing, and when it's gone.
+    life: (f32, f32),
     length: f32,
     width: f32,
     grown: Vec2,
@@ -462,33 +484,29 @@ struct Chunk {
     size: f32,
 }
 
-/// A heavy strike's blade reaching the ground breaks it all over the strike's hitbox (its lane,
-/// `AttackDef::lane`: longer and wider empowered), from where the striker stands toward the
-/// blow. Too late (cut short), and
-/// it doesn't.
+/// A strike going off breaks the ground all over its hitbox (its lane, `AttackDef::lane`: longer
+/// and wider empowered), from where the striker stands toward the blow, the moment its hit is
+/// dealt: the hit area, shown.
 fn strike_ground(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<SwishAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut fighters: Query<(&mut Blade, &LastSwing, &Pos, &ClassId)>,
-    blades: Query<&GlobalTransform>,
 ) {
     let now = time.elapsed_secs();
     for (mut blade, swing, pos, class) in &mut fighters {
-        let Some(until) = blade.striking else { continue };
-        let Ok(held) = blades.get(blade.held) else { continue };
-        if now > until {
-            blade.striking = None;
+        if !std::mem::take(&mut blade.striking) {
             continue;
         }
-        if blade.lowest(held) > IMPACT_HEIGHT {
-            continue;
-        }
-        blade.striking = None;
         // The plain strike's break, and an empowered one's: the same, grown to its lane.
         let (Some((from, range, width)), Some((near_end, far_end, wide))) = (class.def().attack.lane(false), class.def().attack.lane(swing.empowered)) else { continue };
         let (grown, grown_across) = ((far_end - near_end) / (range - from), wide / width);
+        // Drawn as long as its rift is open, if it tears one.
+        let life = class.def().attack.rift.map_or(RIFT_LIFE, |rift| {
+            let open = rift.ticks as f32 / arena_shared::config::TICK_HZ as f32;
+            (open * RIFT_CLOSES, open)
+        });
         let dir = swing.dir.normalize_or(Vec2::X);
         let (near, far) = (to_world(pos.0 + dir * near_end, 0.03), to_world(pos.0 + dir * far_end, 0.03));
         let length = range - from;
@@ -502,45 +520,26 @@ fn strike_ground(
         let rim = commands
             .spawn((Mesh3d(meshes.add(rubble_mesh(length, width, seed))), MeshMaterial3d(assets.rim_fades[0].clone()), place(near - Vec3::Y * 0.005, Vec3::ZERO), NotShadowCaster, NotShadowReceiver))
             .id();
+        let bleed = commands
+            .spawn((Mesh3d(meshes.add(bleed_mesh(length, width, seed))), MeshMaterial3d(assets.rim_fades[0].clone()), place(near - Vec3::Y * 0.006, Vec3::ZERO), NotShadowCaster, NotShadowReceiver))
+            .id();
         let dust = commands
             .spawn((Mesh3d(assets.dust.clone()), MeshMaterial3d(assets.dust_fades[0].clone()), place((near + far) / 2.0 + Vec3::Y * 0.01, Vec3::ZERO), NotShadowCaster, NotShadowReceiver))
             .id();
-        // The halo: a thin band of light round the void's ragged edge.
-        let halo = commands
-            .spawn((Mesh3d(meshes.add(outline_mesh(length, width, seed, HALO_BAND))), MeshMaterial3d(assets.halo_fades[0].clone()), place(near, Vec3::ZERO), NotShadowCaster, NotShadowReceiver))
-            .id();
+        // The cracks, and each thinner by a step, to close in as the tear fades.
+        let closing = [INK_THICKNESS, CORE_THICKNESS]
+            .map(|thickness| (0..CLOSE_STEPS).map(|i| meshes.add(rift_mesh(length, width, seed, thickness * (1.0 - i as f32 / CLOSE_STEPS as f32)))).collect::<Vec<_>>());
         let core = commands
-            .spawn((Mesh3d(meshes.add(rift_mesh(length, width, seed, CORE_THICKNESS))), MeshMaterial3d(assets.core_fades[0].clone()), place(near + Vec3::Y * 0.004, Vec3::ZERO), NotShadowCaster, NotShadowReceiver))
+            .spawn((Mesh3d(closing[1][0].clone()), MeshMaterial3d(assets.core_fades[0].clone()), place(near + Vec3::Y * 0.004, Vec3::ZERO), NotShadowCaster, NotShadowReceiver))
             .id();
         commands.spawn((
-            Mesh3d(meshes.add(rift_mesh(length, width, seed, INK_THICKNESS))),
+            Mesh3d(closing[0][0].clone()),
             MeshMaterial3d(assets.rift_fades[0].clone()),
             place(near, Vec3::new(1.0, 1.0, 0.0)),
-            Impact { started: now, rim, halo, dust, core, length: length * grown, width: wide, grown: Vec2::new(grown, grown_across) },
+            Impact { started: now, rim, bleed, dust, core, closing, life, length: length * grown, width: wide, grown: Vec2::new(grown, grown_across) },
             NotShadowCaster,
             NotShadowReceiver,
         ));
-        // Wisps seeping up out of the tear, one after another while it's open.
-        let count = (length * grown * WISPS_PER_METER).round() as u32;
-        for i in 0..count {
-            let r = |k: u32| noise(seed, 5000 + i * 8 + k);
-            let at = near.lerp(far, 0.05 + 0.9 * r(0)) + turn * Vec3::Z * (r(1) - 0.5) * wide * 0.6;
-            commands.spawn((
-                Mesh3d(assets.wisp.clone()),
-                MeshMaterial3d(assets.wisp_glow.clone()),
-                Transform::from_translation(at).with_scale(Vec3::ZERO),
-                Wisp {
-                    from: at,
-                    starts: now + r(2) * RIFT_LIFE.0,
-                    life: WISP_LIFE.0 + (WISP_LIFE.1 - WISP_LIFE.0) * r(3),
-                    rise: WISP_RISE.0 + (WISP_RISE.1 - WISP_RISE.0) * r(4),
-                    size: (WISP_SIZE.0 + (WISP_SIZE.1 - WISP_SIZE.0) * r(5)) * grown.sqrt(),
-                    sway: r(6) * TAU,
-                },
-                NotShadowCaster,
-                NotShadowReceiver,
-            ));
-        }
         // Earth thrown up all over it, out to either side.
         let side = turn * Vec3::Z;
         // As many as the plain strike throws, each grown.
@@ -572,15 +571,16 @@ fn drive_impacts(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<SwishAssets>,
-    mut impacts: Query<(Entity, &Impact, &mut Transform, &mut MeshMaterial3d<StandardMaterial>)>,
+    mut impacts: Query<(Entity, &Impact, &mut Transform, &mut Mesh3d, &mut MeshMaterial3d<StandardMaterial>)>,
     mut parts: Query<(&mut Transform, &mut MeshMaterial3d<StandardMaterial>), Without<Impact>>,
+    mut core_meshes: Query<&mut Mesh3d, Without<Impact>>,
 ) {
     let now = time.elapsed_secs();
     let fade = |fades: &[Handle<StandardMaterial>], t: f32| fades[((t * MARK_FADES as f32) as usize).min(MARK_FADES - 1)].clone();
-    for (entity, impact, mut transform, mut material) in &mut impacts {
+    for (entity, impact, mut transform, mut ink_mesh, mut material) in &mut impacts {
         let age = now - impact.started;
-        if age >= RIFT_LIFE.1 {
-            for part in [impact.rim, impact.halo, impact.dust, impact.core, entity] {
+        if age >= impact.life.1 {
+            for part in [impact.rim, impact.bleed, impact.dust, impact.core, entity] {
                 commands.entity(part).despawn();
             }
             continue;
@@ -588,10 +588,24 @@ fn drive_impacts(
         // Splitting open fast, from the middle out, then still.
         let open = 1.0 - (1.0 - (age / 0.07).min(1.0)).powi(3);
         transform.scale = Vec3::new(0.6 + 0.4 * open, 1.0, open) * impact.grown.extend(1.0).xzy();
-        let faded = ((age - RIFT_LIFE.0) / (RIFT_LIFE.1 - RIFT_LIFE.0)).max(0.0);
+        // As it goes: the cracks closing in first, done a little before the end; the mark
+        // fading out later, slow at first and quicker and quicker, gone at the end.
+        let going = ((age - impact.life.0) / (impact.life.1 - impact.life.0)).max(0.0);
+        let closed = (going / CLOSED_BY).min(1.0);
+        let faded = ((going - FADES_FROM) / (1.0 - FADES_FROM)).clamp(0.0, 1.0).powi(2);
         let rift = fade(&assets.rift_fades, faded);
         if material.0 != rift {
             material.0 = rift;
+        }
+        // Closing in as it fades: each crack narrowing onto its own spine.
+        let step = ((closed * CLOSE_STEPS as f32) as usize).min(CLOSE_STEPS - 1);
+        if ink_mesh.0 != impact.closing[0][step] {
+            ink_mesh.0 = impact.closing[0][step].clone();
+        }
+        if let Ok(mut core_mesh) = core_meshes.get_mut(impact.core)
+            && core_mesh.0 != impact.closing[1][step]
+        {
+            core_mesh.0 = impact.closing[1][step].clone();
         }
         // The light in the cracks: flaring wide and full as the ground breaks, then glowing lower,
         // breathing, and closing with the tear as it fades.
@@ -599,17 +613,19 @@ fn drive_impacts(
             let flare = 1.0 - (age / FLARE_SECONDS).min(1.0);
             let breath = 1.0 - BREATH.0 * (0.5 + 0.5 * (age * BREATH.1).sin());
             let bright = (1.0 - faded) * (0.7 * breath + 0.3 * flare).max(flare);
-            core.scale = Vec3::new(0.6 + 0.4 * open, 1.0, open * (1.0 + 1.2 * flare) * (1.0 - 0.6 * faded)) * impact.grown.extend(1.0).xzy();
+            core.scale = Vec3::new(0.6 + 0.4 * open, 1.0, open * (1.0 + 1.2 * flare)) * impact.grown.extend(1.0).xzy();
             let lit = fade(&assets.core_fades, 1.0 - bright);
             if core_material.0 != lit {
                 core_material.0 = lit;
             }
         }
-        if let Ok((mut halo, mut halo_material)) = parts.get_mut(impact.halo) {
-            halo.scale = Vec3::new(0.6 + 0.4 * open, 1.0, open) * impact.grown.extend(1.0).xzy();
-            let lit = fade(&assets.halo_fades, faded);
-            if halo_material.0 != lit {
-                halo_material.0 = lit;
+        // The ink seeps out a little after the ground breaks, then holds and fades with it.
+        if let Ok((mut bleed, mut bleed_material)) = parts.get_mut(impact.bleed) {
+            let seep = 1.0 - (1.0 - (age / 0.35).min(1.0)).powi(2);
+            bleed.scale = Vec3::new(0.6 + 0.4 * open, 1.0, open) * impact.grown.extend(1.0).xzy() * (0.92 + 0.08 * seep);
+            let faded = fade(&assets.rim_fades, faded.max(1.0 - seep));
+            if bleed_material.0 != faded {
+                bleed_material.0 = faded;
             }
         }
         if let Ok((mut rim, mut rim_material)) = parts.get_mut(impact.rim) {
@@ -629,38 +645,6 @@ fn drive_impacts(
                 dust_material.0 = faded;
             }
         }
-    }
-}
-
-/// A wisp of spectral light seeping up out of a tear from `from`, from `starts` (seconds) for
-/// `life`: rising `rise` m/s, swaying, swelling and dwindling away.
-#[derive(Component)]
-struct Wisp {
-    from: Vec3,
-    starts: f32,
-    life: f32,
-    rise: f32,
-    size: f32,
-    sway: f32,
-}
-
-/// Wisps rise out of their tears, sway, swell and dwindle, and are gone.
-fn drift_wisps(mut commands: Commands, time: Res<Time>, mut wisps: Query<(Entity, &Wisp, &mut Transform)>) {
-    let now = time.elapsed_secs();
-    for (entity, wisp, mut transform) in &mut wisps {
-        let age = now - wisp.starts;
-        if age >= wisp.life {
-            commands.entity(entity).despawn();
-            continue;
-        }
-        if age < 0.0 {
-            continue;
-        }
-        let t = age / wisp.life;
-        let sway = Vec3::new((age * 3.0 + wisp.sway).sin(), 0.0, (age * 2.3 + wisp.sway).cos()) * 0.08 * t;
-        transform.translation = wisp.from + Vec3::Y * wisp.rise * age * (1.0 - 0.4 * t) + sway;
-        let size = wisp.size * (t * 6.0).min(1.0) * (1.0 - t).sqrt();
-        transform.scale = Vec3::new(size, size * 2.2, size);
     }
 }
 
@@ -721,14 +705,15 @@ fn drag_marks(mut commands: Commands, time: Res<Time>, assets: Res<SwishAssets>,
             let r = |k: u32| noise(seed, k);
             if r(0) < SPARK_ODDS {
                 let back = -stroke.normalize();
-                for k in 0..1 + (r(1) < 0.35) as u32 {
+                for k in 0..1 + (r(1) < 0.45) as u32 {
                     let side = Vec3::new(back.z, 0.0, -back.x) * (r(2 + k) - 0.5) * 1.6;
                     let velocity = (back * (0.4 + 0.6 * r(4 + k)) + side) * SPARK_THROW.1 + Vec3::Y * SPARK_THROW.0 * (0.6 + 0.6 * r(6 + k));
                     let size = SPARK_SIZE.0 + (SPARK_SIZE.1 - SPARK_SIZE.0) * r(8 + k);
                     let transform = Transform::from_translation(at + Vec3::Y * 0.02).with_scale(Vec3::splat(size));
+                    let material = if r(12 + k) < SPARK_DARK { &assets.void_mote } else { &assets.wisp_glow };
                     commands.spawn((
                         Mesh3d(assets.wisp.clone()),
-                        MeshMaterial3d(assets.wisp_glow.clone()),
+                        MeshMaterial3d(material.clone()),
                         transform,
                         GlobalTransform::from(transform),
                         Spark { started: now, velocity, size, life: SPARK_LIFE * (0.6 + 0.6 * r(10 + k)) },
@@ -763,9 +748,10 @@ fn fly_sparks(mut commands: Commands, time: Res<Time>, mut sparks: Query<(Entity
         spark.velocity.y -= GRAVITY * 0.5 * dt;
         transform.translation += spark.velocity * dt;
         transform.translation.y = transform.translation.y.max(0.01);
-        // Stretched along its flight, winking out at the end.
+        // A thin streak along its flight, winking out at the end.
         let size = spark.size * (1.0 - t * t);
-        transform.scale = Vec3::new(size, size * 2.0, size);
+        transform.rotation = Quat::from_rotation_arc(Vec3::Y, spark.velocity.normalize_or(Vec3::Y));
+        transform.scale = Vec3::new(size, size * SPARK_STRETCH, size);
     }
 }
 

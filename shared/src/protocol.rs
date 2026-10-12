@@ -109,6 +109,12 @@ impl AttackState {
         self.quick_until.is_some_and(|until| now <= until as f32)
     }
 
+    /// Is the next attack (or the one under way) empowered by the `follow_up` at `now` (a
+    /// fractional tick)?
+    pub fn empowered_at(&self, now: f32) -> bool {
+        self.quick_at(now) || self.swing.is_some_and(|swing| swing.quick)
+    }
+
     /// Has the attack in progress gone off yet?
     pub fn released(&self) -> bool {
         self.swing.is_some_and(|swing| self.released_at.is_some_and(|at| at >= swing.started_at))

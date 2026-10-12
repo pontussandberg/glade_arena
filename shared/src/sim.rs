@@ -54,6 +54,23 @@ pub fn move_player(
     hasted: &Hasted,
     tick: u32,
 ) -> Vec2 {
+    move_player_boosted(map, pos, input, class, attack, ability, chilled, hasted, tick, 1.0)
+}
+
+/// `move_player`, its walking (not its dashing) `boost` times as fast: standing in its own rift.
+#[allow(clippy::too_many_arguments)]
+pub fn move_player_boosted(
+    map: &Map,
+    pos: Vec2,
+    input: &PlayerInput,
+    class: ClassId,
+    attack: &AttackState,
+    ability: &mut AbilityState,
+    chilled: &Chilled,
+    hasted: &Hasted,
+    tick: u32,
+    boost: f32,
+) -> Vec2 {
     let speed = chilled.speed_factor(tick) * hasted.speed_factor(tick);
     if chilled.rooted_at(tick) {
         pos
@@ -67,7 +84,40 @@ pub fn move_player(
     } else if attack.winding_up().is_some() {
         pos
     } else {
-        step_player(map, pos, input, class.def().move_speed * speed)
+        step_player(map, pos, input, class.def().move_speed * speed * boost)
+    }
+}
+
+/// Ground a strike tore open (`RiftDef`), hasting `owner` while its body is in it, until `until`
+/// (a tick): its lane (from `from` out to `range` from `origin` along `dir`, `width` wide), and
+/// how much faster it walks there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rift {
+    pub owner: PeerId,
+    pub origin: Vec2,
+    pub dir: Vec2,
+    pub from: f32,
+    pub range: f32,
+    pub width: f32,
+    pub until: u32,
+    pub haste: f32,
+}
+
+impl Rift {
+    /// The rift a swing tears open, if its class's strike tears any: over the swing's lane
+    /// (empowered or not), from where `owner` stood at `pos`.
+    pub fn torn(owner: PeerId, class: ClassId, pos: Vec2, swing: &LastSwing) -> Option<Rift> {
+        let attack = &class.def().attack;
+        let (rift, (from, range, width)) = (attack.rift?, attack.lane(swing.empowered)?);
+        let dir = swing.dir.normalize_or_zero();
+        Some(Rift { owner, origin: pos, dir, from, range, width, until: swing.tick + rift.ticks, haste: rift.haste })
+    }
+
+    /// Is a body at `at` in it (touching it at all) at `tick`?
+    pub fn holds(&self, at: Vec2, tick: u32) -> bool {
+        let to = at - self.origin;
+        let (along, across) = (to.dot(self.dir), to.perp_dot(self.dir).abs());
+        tick < self.until && (self.from - PLAYER_RADIUS..=self.range + PLAYER_RADIUS).contains(&along) && across <= self.width / 2.0 + PLAYER_RADIUS
     }
 }
 
@@ -858,6 +908,26 @@ mod tests {
         assert!(melee_hits(map(), at, Vec2::Y, false, class, at + Vec2::new(edge - 0.05, middle)), "a body overlapping the lane");
         assert!(!melee_hits(map(), at, Vec2::Y, false, class, at + Vec2::new(edge + 0.05, middle)), "beside the lane");
         assert!(!melee_hits(map(), at, Vec2::Y, false, shooter(), at + Vec2::Y), "projectile classes don't swing");
+    }
+
+    #[test]
+    fn a_rift_hastes_its_striker_in_it_until_it_closes() {
+        let Some(class) = ClassId::all().find(|c| c.def().attack.rift.is_some()) else { return };
+        let def = class.def().attack.rift.unwrap();
+        let at = spawns()[0];
+        let swing = LastSwing { tick: 10, dir: Vec2::Y, empowered: false };
+        let rift = Rift::torn(PeerId::Netcode(1), class, at, &swing).unwrap();
+        let (from, range, _) = class.def().attack.lane(false).unwrap();
+        let inside = at + Vec2::Y * (from + range) / 2.0;
+        assert!(rift.holds(inside, 11) && rift.holds(inside, 9 + def.ticks), "not in its own rift");
+        assert!(!rift.holds(inside, 10 + def.ticks), "still open after it closed");
+        assert!(!rift.holds(at - Vec2::Y * 2.0, 11), "behind it");
+        // Walking there is that much faster.
+        let walk = PlayerInput { walk: Vec2::X, ..default() };
+        let (idle, warm) = (AbilityState::default(), Chilled::default());
+        let plain = move_player(map(), at, &walk, class, &AttackState::default(), &mut { idle }, &warm, &default(), 11).distance(at);
+        let boosted = move_player_boosted(map(), at, &walk, class, &AttackState::default(), &mut { idle }, &warm, &default(), 11, 1.0 + def.haste).distance(at);
+        assert!((boosted - plain * (1.0 + def.haste)).abs() < 1e-4, "{boosted} vs {plain}");
     }
 
     #[test]

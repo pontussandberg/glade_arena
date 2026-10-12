@@ -218,9 +218,9 @@ const REVENANT: Moves = Moves {
     // The arm swings in its own plane, whatever the body's twist: a straight blow.
     weapon_arm_untwist: 1.0,
     windmill: true,
-    // The free arm hangs loose at the side throughout, drifting back past the hip as the
-    // glaive goes up, and swung further back as it comes down.
-    lead_arm: [-0.2, -0.45, -0.9, -0.9],
+    // The free arm dangles carelessly toward the ground throughout, whatever the body does:
+    // against its lean (leaning back, it hangs a little back; bowed into the blow, forward).
+    lead_arm: [0.05, -0.2, 0.55, -0.9],
     // Legs hang from the leaning body: bowed into the blow, the lead leg reaches far forward
     // and the back one, straight under the hips, braces back.
     lead_leg: [0.25, 0.25, 1.85, 0.7],
@@ -786,7 +786,7 @@ fn add_rigs(
             crate::cloth::dress(&mut commands, player, rig.legs, own, wardrobe);
         }
         if matches!(rig.moves.held, Held::Gripped { .. }) {
-            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length: arena::BLADE_LENGTH, shown: 0, quickened: false, striking: None, dragged: None, corner: arena::glaive_edge(1.0), rasp: 0 });
+            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length: arena::BLADE_LENGTH, shown: 0, quickened: false, striking: false, dragged: None, corner: arena::glaive_edge(1.0), rasp: 0 });
         }
         commands.entity(player).insert((
             rig,

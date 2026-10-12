@@ -70,6 +70,18 @@ pub struct AttackDef {
     /// A quicker next attack after a hit (none by default).
     #[serde(default)]
     pub follow_up: Option<FollowUp>,
+    /// A melee strike tears the ground open over its lane for a while, hasting its striker
+    /// there (none by default).
+    #[serde(default)]
+    pub rift: Option<RiftDef>,
+}
+
+/// The ground a strike tears open over its lane (`AttackDef::lane`, empowered or not): it lasts
+/// `ticks`, and its striker walks `haste` faster (0.3 = 30%) while its body is in it.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct RiftDef {
+    pub ticks: u32,
+    pub haste: f32,
 }
 
 /// Landing an auto-attack empowers the next one, if started within `within_ticks` of the hit:
@@ -216,6 +228,9 @@ impl ClassDef {
             ("crit_vs_frozen", percent(self.crit.vs_frozen)),
             ("crit_multiplier", percent(CRIT_MULTIPLIER)),
         ];
+        if let Some(rift) = self.attack.rift {
+            all.extend([("rift_time", seconds(rift.ticks)), ("rift_haste", percent(rift.haste))]);
+        }
         if let Some(follow_up) = self.attack.follow_up {
             all.extend([
                 ("follow_up_time", seconds(follow_up.within_ticks)),
@@ -273,6 +288,16 @@ impl AttackDef {
         let AttackKind::Melee { range, width, from } = self.kind else { return None };
         let (reach, near) = self.follow_up.filter(|_| empowered).map_or((1.0, 1.0), |f| (f.reach, f.near.unwrap_or(f.reach)));
         Some((from * near, range * reach, width * reach))
+    }
+
+    /// How far from your center a target's body can reach and still be hit (`AttackKind::edge_reach`),
+    /// `empowered` by the `follow_up` or not: its longer lane's far end. What the range circle and
+    /// the attack range stat show.
+    pub fn edge_reach(&self, empowered: bool) -> f32 {
+        match self.lane(empowered) {
+            Some((_, range, _)) => range,
+            None => self.kind.edge_reach(),
+        }
     }
 
     /// The whole attack at `speed` times the normal attack speed: the attack timer.
@@ -423,6 +448,10 @@ mod tests {
                 }
             }
             chill_is_sane(&c.id, c.attack.chill);
+            if let Some(RiftDef { ticks, haste }) = c.attack.rift {
+                assert!(matches!(c.attack.kind, AttackKind::Melee { .. }), "{}: a rift from a projectile", c.id);
+                assert!((1..=10 * TICK_HZ as u32).contains(&ticks) && (0.0..=2.0).contains(&haste), "{}: rift", c.id);
+            }
             if let Some(FollowUp { within_ticks, attack_speed, reach, near }) = c.attack.follow_up {
                 assert!((1.0..=4.0).contains(&reach) && near.is_none_or(|near| (0.5..=reach).contains(&near)), "{}: follow_up reach", c.id);
                 // Only a swing knows it landed when it goes off (`server::attack`).
@@ -458,7 +487,7 @@ mod tests {
     #[test]
     fn far_scale_scales_with_distance() {
         let kind = |far_scale| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_scale };
-        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None };
+        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None };
         assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(3.0))).damage_at(d)), [10, 20, 30, 30]);
         assert_eq!(attack(kind(None)).damage_at(5.0), 10);
     }

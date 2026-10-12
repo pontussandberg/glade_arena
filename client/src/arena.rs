@@ -938,7 +938,8 @@ fn revenant_wardrobe() -> Wardrobe {
             sheet(&grid(ROWS, COLS, (0.0, 1.0), point), &hemmed(ROWS, 3, palette::ROBE, palette::TATTERS), 0.01),
             Some(sheet(&grid(2, COLS, (0.975, 1.0), point), &[Color::WHITE], 0.02)),
             chains,
-            Weave { hold: (6.0, 1.2), damping: 5.5, air: 0.35, inertia: 0.4, gravity: 6.5, flutter: 0.7, joined: true, wisps: 3.0 },
+            // No motes off its hem: its glaive's rasp is the spectral light it gives off.
+            Weave { hold: (6.0, 1.2), damping: 5.5, air: 0.35, inertia: 0.4, gravity: 6.5, flutter: 0.7, joined: true, wisps: 0.0 },
         )
     };
 

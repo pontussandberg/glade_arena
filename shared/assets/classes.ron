@@ -27,6 +27,9 @@
 //     chill (optional): crowd control each hit applies on top of its damage:
 //       (slow: fraction of speed taken away, slow_ticks: for how long, root_ticks: frozen in
 //       place this long: no walking, no dashing, and a dash in progress stops)
+//     rift (optional, melee only): (ticks, haste) each strike tears the ground open over its
+//       lane (as wide and far as it hit, empowered or not) for `ticks`; its striker walks `haste`
+//       faster (0.3 = 30%) while its body is in it
 //     follow_up (optional, melee only): landing a hit empowers the next attack, if started
 //       within `within_ticks` (and speeds up what's left of the attack that landed it, so the
 //       next comes sooner): `attack_speed` more attack speed (0.6 = 60% more attacks per
@@ -49,7 +52,8 @@
 // Descriptions (the passive's and the ability's) can name this class's numbers in braces, filled
 // in when shown, so the words follow a retune: {far_scale} (the auto-attack's damage after its full
 // range, as a percent of point blank), {attack_slow} / {attack_slow_time} (the auto-attack's slow,
-// as a percent / in seconds), {follow_up_time} / {follow_up_speed} / {follow_up_reach} (the
+// as a percent / in seconds), {rift_time} / {rift_haste} (how long a strike's rift lasts / how
+// much faster its striker walks in it), {follow_up_time} / {follow_up_speed} / {follow_up_reach} (the
 // follow_up's window, in seconds / its attack speed / how much further its lane reaches, as
 // percents), {crit}, {crit_vs_frozen}, {crit_multiplier} (as percentages),
 // {ability_damage}, {ability_reach} (a thrown ability's range, a dash's distance, a nova's
@@ -72,6 +76,8 @@
             windup: 0.35,
             // The glaive comes down flat on the ground, its blade from 1.6 m to 2.75 m ahead.
             kind: Melee(range: 2.75, width: 0.5, from: 1.6),
+            // The ground it hits tears open for a while; inside it the revenant walks faster.
+            rift: Some((ticks: 109, haste: 0.3)),
             // Empowered: from 2 m to 3.85 m, 0.7 m wide.
             follow_up: Some((within_ticks: 96, attack_speed: 0.0, reach: 1.4, near: Some(1.25))),
         ),
@@ -83,7 +89,7 @@
         ),
         passive: Some((
             name: "Follow Through",
-            description: "After landing a hit, your glaive is empowered for {follow_up_time}: your next auto-attack reaches {follow_up_reach} further and wider. Cancelling it doesn't waste it.",
+            description: "Your auto-attacks tear the ground open for {rift_time}: inside the tear you move {rift_haste} faster. After landing a hit, your glaive is empowered for {follow_up_time}: your next auto-attack reaches {follow_up_reach} further and wider. Cancelling it doesn't waste it.",
         )),
         crit: (chance: 0.1),
     ),

@@ -109,6 +109,7 @@ impl Plugin for ServerGamePlugin {
         app.add_plugins((ProtocolPlugin, RoomPlugin, logging::LoggingPlugin, rooms::RoomsPlugin));
         app.insert_resource(ReplicationMetadata::new(SEND_INTERVAL));
         app.add_observer(on_new_link);
+        app.init_resource::<Rifts>();
         // As soon as they're received, before this frame's ticks run.
         app.add_systems(PreUpdate, apply_commands.after(MessageSystems::Receive));
         app.add_systems(
@@ -126,6 +127,7 @@ impl Plugin for ServerGamePlugin {
                 respawn,
                 place_players,
                 use_up_clicks,
+                close_rifts,
             )
                 .chain(),
         );
@@ -404,13 +406,16 @@ fn use_up_clicks(mut players: Query<&mut PlayerInput>) {
 fn move_players(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
-    mut players: Query<(&mut Pos, &ClassId, &mut PlayerInput, &AttackState, &mut AbilityState, &Chilled, &Hasted, &InRoom), InPlay>,
+    rifts: Res<Rifts>,
+    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, &AttackState, &mut AbilityState, &Chilled, &Hasted, &InRoom), InPlay>,
 ) {
     let now = timeline.tick().0;
-    for (mut pos, class, mut input, attack, mut ability, chilled, hasted, room) in &mut players {
+    for (id, mut pos, class, mut input, attack, mut ability, chilled, hasted, room) in &mut players {
         let map = lobby.map(room);
         let mut next = *ability;
-        pos.set_if_neq(Pos(sim::move_player(map, pos.0, &input, *class, attack, &mut next, chilled, hasted, now)));
+        // Hasted in its own rift (the most hasting, if it stands in several).
+        let boost = rifts.0.iter().filter(|(r, rift)| r == room && rift.owner == id.0 && rift.holds(pos.0, now)).fold(1.0f32, |most, (_, rift)| most.max(1.0 + rift.haste));
+        pos.set_if_neq(Pos(sim::move_player_boosted(map, pos.0, &input, *class, attack, &mut next, chilled, hasted, now, boost)));
         ability.set_if_neq(next);
         if input.move_to.is_some_and(|point| sim::arrived(map, pos.0, point)) {
             input.move_to = None;
@@ -637,6 +642,7 @@ fn attack(
         InPlay,
     >,
     mut targets: Targets,
+    mut rifts: ResMut<Rifts>,
 ) {
     let now = timeline.tick();
     for (id, class, pos, mut input, mut state, mut last_swing, (room, team)) in &mut attackers {
@@ -648,6 +654,9 @@ fn attack(
             Some(sim::Attack::Projectile(projectile)) => spawn_projectile(&mut commands, projectile, side),
             Some(sim::Attack::Melee(swing)) => {
                 *last_swing = swing;
+                if let Some(rift) = sim::Rift::torn(id.0, *class, pos.0, &swing) {
+                    rifts.0.push((*room, rift));
+                }
                 let blow = Blow { amount: class.def().attack.damage, chill: class.def().attack.chill, can_crit: true };
                 let with = (id.0, *class, "auto-attack");
                 let landed = hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |_, at| {
@@ -672,6 +681,16 @@ fn attack(
         // Only on change: AttackState is replicated.
         state.set_if_neq(next);
     }
+}
+
+/// Server-only: ground torn open by strikes (`RiftDef`), in their rooms, while they're open.
+#[derive(Resource, Default)]
+struct Rifts(Vec<(InRoom, sim::Rift)>);
+
+/// Rifts close when their time is up.
+fn close_rifts(timeline: Res<LocalTimeline>, mut rifts: ResMut<Rifts>) {
+    let now = timeline.tick().0;
+    rifts.0.retain(|(_, rift)| rift.until > now);
 }
 
 /// Server-only: who the current dash (started at `.0`) has already cut, so each target is cut

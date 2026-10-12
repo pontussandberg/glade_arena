@@ -64,6 +64,7 @@ impl Plugin for RenderPlugin {
                 (show_novas, grow_bursts, end_fleeting, show_frost),
                 align_to_world.after(crate::rig::Posing),
                 toggle_range_circle,
+                fit_range_circle,
                 (update_status, update_key_hints, fold_controls),
                 (mark_relations, light_buttons),
             ),
@@ -143,7 +144,8 @@ impl Relation {
 pub(crate) struct Visuals {
     fighters: HashMap<ClassId, Handle<Mesh>>,
     /// A circle at the edge of a class's auto-attack range, shown around you.
-    range_circles: HashMap<ClassId, Handle<Mesh>>,
+    /// Each class's range circle, plain and empowered (`AttackDef::edge_reach`).
+    range_circles: HashMap<ClassId, [Handle<Mesh>; 2]>,
     /// A nova's burst (see `arena::NovaMeshes`).
     novas: HashMap<ClassId, arena::NovaMeshes<Handle<Mesh>>>,
     /// The ice around a frozen (rooted) fighter's feet, and the frost under a slowed one's.
@@ -331,8 +333,11 @@ fn setup_scene(
         // hit.
         range_circles: ClassId::all()
             .map(|c| {
-                let outer = c.def().attack.kind.edge_reach();
-                (c, meshes.add(Annulus::new(outer - RANGE_CIRCLE_WIDTH, outer).mesh().resolution(96).build()))
+                let mut circle = |empowered| {
+                    let outer = c.def().attack.edge_reach(empowered);
+                    meshes.add(Annulus::new(outer - RANGE_CIRCLE_WIDTH, outer).mesh().resolution(96).build())
+                };
+                (c, [circle(false), circle(true)])
             })
             .collect(),
         novas: ClassId::all()
@@ -549,6 +554,22 @@ fn read_local_input(
     desired.0 = PlayerInput { move_to, walk, aim, fire, ability };
 }
 
+/// The range circle shows how far our attack reaches as it is now: further while our `follow_up`
+/// empowers it.
+fn fit_range_circle(
+    clock: AttackClock,
+    visuals: Res<Visuals>,
+    me: Query<(&ClassId, &AttackState), With<Me>>,
+    mut circle: Query<&mut Mesh3d, With<RangeCircle>>,
+) {
+    let (Ok((class, attack)), Ok(mut mesh)) = (me.single(), circle.single_mut()) else { return };
+    let Some(circles) = visuals.range_circles.get(class) else { return };
+    let fitting = &circles[attack.empowered_at(clock.now(true)) as usize];
+    if mesh.0 != *fitting {
+        mesh.0 = fitting.clone();
+    }
+}
+
 /// A shows the range circle (MOBA camera only: the free camera walks with A); any key or click
 /// after that, A included, hides it.
 fn toggle_range_circle(
@@ -625,7 +646,7 @@ fn add_visuals(
                 Frost { prison, rune, shown: (false, false) },
             ))
             .add_children(&[prison, rune]);
-        if is_me && let Some(circle) = visuals.range_circles.get(class).cloned() {
+        if is_me && let Some([circle, _]) = visuals.range_circles.get(class).cloned() {
             commands.entity(entity).with_child((
                 Mesh3d(circle),
                 MeshMaterial3d(visuals.material(&mut materials, id.0, Look::Range)),
