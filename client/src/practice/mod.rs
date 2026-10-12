@@ -7,6 +7,8 @@
 //!   says, via our `Cooldowns`), "Hitboxes" (`hitboxes`: what hits are judged by, drawn on the
 //!   ground) and "Free camera" (`camera`: a camera to turn around fighters and look at them up
 //!   close).
+//! - "Fake ping" steps through extra latency on what we receive (`FakeLatency`), and back off, to
+//!   feel how the game plays at a higher ping.
 //! - "Target dummy" and "Moving dummy" place one (`dummies`).
 //!
 //! Outside practice every tool is off (`tools_off`).
@@ -20,7 +22,7 @@ use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
-use crate::Me;
+use crate::{FakeLatency, Me};
 use crate::arena::palette;
 use crate::camera::CameraMode;
 use crate::render::{HudButton, button_fill, chevron, chevron_turn, clicked, corner_panel, fold_header, shown, ui_text};
@@ -35,7 +37,7 @@ impl Plugin for PracticePlugin {
         app.add_plugins((dummies::DummiesPlugin, hitboxes::HitboxesPlugin));
         app.add_systems(
             Update,
-            (show_tools, fold_tools, use_switches, switch_map).chain().run_if(in_state(Screen::InGame)),
+            (show_tools, fold_tools, use_switches, step_fake_ping, switch_map).chain().run_if(in_state(Screen::InGame)),
         );
         app.add_systems(Update, tools_off.run_if(not(in_state(Screen::InGame)).or_else(not(practicing))));
         app.add_systems(OnExit(Screen::InGame), close_tools);
@@ -104,6 +106,17 @@ impl Switched<'_, '_> {
     }
 }
 
+/// Steps "Fake ping" to the next of `FAKE_PINGS`.
+#[derive(Component)]
+struct FakePingButton;
+
+/// How much "Fake ping" adds, shown on its button.
+#[derive(Component)]
+struct FakePingState;
+
+/// What "Fake ping" steps through, in ms: off first.
+const FAKE_PINGS: [u64; 3] = [0, 50, 100];
+
 /// Switches practice to the next map: everything starts over on it.
 #[derive(Component)]
 struct MapButton;
@@ -157,6 +170,12 @@ fn show_tools(mut commands: Commands, room: Res<CurrentRoom>, tools: Query<Entit
                         );
                         row(tools, switch, switch.label(), state);
                     }
+                    // As wide as its widest value, so the panel keeps its width.
+                    let state = (
+                        Node { width: px(56.0), justify_content: JustifyContent::FlexEnd, ..default() },
+                        children![(FakePingState, ui_text("OFF", 13.0, palette::ui::MUTED))],
+                    );
+                    row(tools, FakePingButton, "Fake ping", state);
                     dummies::spawn_buttons(tools);
                 })
                 .id();
@@ -175,8 +194,14 @@ fn close_tools(mut commands: Commands, tools: Query<Entity, With<Tools>>) {
 }
 
 /// Outside practice, every tool is off: none of them carries over into a real fight.
-fn tools_off(mut hitboxes: ResMut<ShowHitboxes>, mut camera: ResMut<CameraMode>, mut placing: ResMut<Placing>) {
+fn tools_off(
+    mut hitboxes: ResMut<ShowHitboxes>,
+    mut camera: ResMut<CameraMode>,
+    mut placing: ResMut<Placing>,
+    mut fake_ping: ResMut<FakeLatency>,
+) {
     hitboxes.set_if_neq(ShowHitboxes(false));
+    fake_ping.set_if_neq(FakeLatency::default());
     if camera.free {
         camera.free = false;
     }
@@ -239,6 +264,30 @@ fn use_switches(
         }
         color.set_if_neq(TextColor(tint));
     }
+}
+
+/// A click on "Fake ping" steps it to the next of `FAKE_PINGS` (after the last, off again); it
+/// shows how much it adds.
+fn step_fake_ping(
+    mut fake: ResMut<FakeLatency>,
+    button: Single<(Ref<Interaction>, &mut BorderColor), With<FakePingButton>>,
+    state: Single<(&mut Text, &mut TextColor), With<FakePingState>>,
+) {
+    let (interaction, mut border) = button.into_inner();
+    if clicked(interaction) {
+        let now = fake.0.as_millis() as u64;
+        let next = FAKE_PINGS.iter().position(|&ms| ms == now).map_or(0, |i| (i + 1) % FAKE_PINGS.len());
+        fake.0 = std::time::Duration::from_millis(FAKE_PINGS[next]);
+    }
+    let ms = fake.0.as_millis();
+    let (label, edge, tint) =
+        if ms > 0 { (format!("+{ms} ms"), palette::ui::ACCENT, palette::ui::ACCENT) } else { ("OFF".into(), palette::ui::MUTED.with_alpha(0.5), palette::ui::MUTED) };
+    border.set_if_neq(BorderColor::all(edge));
+    let (mut text, mut color) = state.into_inner();
+    if text.0 != label {
+        text.0 = label;
+    }
+    color.set_if_neq(TextColor(tint));
 }
 
 /// The map button asks the server for the next map (dummies placed go with the old one, so
