@@ -2380,11 +2380,6 @@ impl Props {
         self.add(Shape::Ball, self.theme.fern.mix(&self.theme.grass, rng.next() * 0.5), t);
     }
 
-    /// The bands of color the highlands' rock is laid down in, from `k` up.
-    fn band(&self, k: usize) -> Color {
-        [self.theme.wall, self.theme.slate, self.theme.stone, self.theme.bank][k % 4]
-    }
-
     /// A hoodoo: boulders stacked, narrowing and jostled, in bands of color, under a wider cap.
     fn pillar(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
         let count = 3 + (rng.next() * 3.0) as usize;
@@ -2396,7 +2391,7 @@ impl Props {
             let t = Transform::from_translation(to_world(at, ground + 0.5 + k as f32 * 1.05))
                 .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
                 .with_scale(Vec3::new(w, 1.3, w));
-            self.add(Shape::Rock, self.band(first + k), t);
+            self.add(Shape::Rock, rock_band(self.theme, first + k), t);
         }
         let cap = Transform::from_translation(to_world(at, ground + 0.6 + count as f32 * 1.05))
             .with_rotation(Quat::from_rotation_z(rng.range(-0.15, 0.15)))
@@ -2413,7 +2408,7 @@ impl Props {
             let up = tall * (0.2 + k as f32 * 0.3);
             let w = 1.3 - k as f32 * 0.35;
             let t = Transform::from_translation(to_world(p, ground) + lean * Vec3::Y * up).with_rotation(lean).with_scale(Vec3::new(w, tall * 0.32, w));
-            self.add(Shape::Rock, self.band(first + k), t);
+            self.add(Shape::Rock, rock_band(self.theme, first + k), t);
         }
     }
 
@@ -2427,19 +2422,19 @@ impl Props {
                 let t = Transform::from_translation(to_world(foot, ground + 0.4 + k as f32 * tall / 3.0))
                     .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
                     .with_scale(Vec3::new(1.4 - k as f32 * 0.1, tall / 2.6, 1.4 - k as f32 * 0.1));
-                self.add(Shape::Rock, self.band(k), t);
+                self.add(Shape::Rock, rock_band(self.theme, k), t);
             }
         }
         let turn = Quat::from_rotation_y(-across.to_angle());
         let lintel = Transform::from_translation(to_world(p, ground + tall + 0.5)).with_rotation(turn).with_scale(Vec3::new(span * 2.2, 0.9, 1.3));
-        self.add(Shape::Rock, self.band(3), lintel);
+        self.add(Shape::Rock, rock_band(self.theme, 3), lintel);
     }
 
     /// A slab of rock stood on end, tipped over to one side.
     fn slab(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
         let tilt = Quat::from_euler(EulerRot::YXZ, rng.range(0.0, 3.0), rng.range(-0.35, 0.35), rng.range(-0.2, 0.2));
         let t = Transform::from_translation(to_world(p, ground + 1.3)).with_rotation(tilt).with_scale(Vec3::new(0.7, rng.range(3.5, 4.8), rng.range(2.4, 3.2)));
-        self.add(Shape::Rock, self.band((rng.next() * 4.0) as usize), t);
+        self.add(Shape::Rock, rock_band(self.theme, (rng.next() * 4.0) as usize), t);
     }
 
     /// A squat butte: a wide, flat-topped heap of banded rock with dry grass on top.
@@ -2449,7 +2444,7 @@ impl Props {
             let t = Transform::from_translation(to_world(p, ground + 0.5 + k as f32 * 0.9))
                 .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
                 .with_scale(Vec3::new(w - k as f32 * 0.4, 1.0, w - k as f32 * 0.4));
-            self.add(Shape::Rock, self.band(k), t);
+            self.add(Shape::Rock, rock_band(self.theme, k), t);
         }
         let top = Transform::from_translation(to_world(p, ground + 2.65)).with_scale(Vec3::new(w * 0.5, 0.18, w * 0.5));
         self.add(Shape::Ball, self.theme.meadow, top);
@@ -2462,21 +2457,21 @@ impl Props {
         match (rng.next() * 3.0) as usize {
             // Flat-topped, with a smaller one balanced on it.
             0 => {
-                self.add(Shape::Rock, self.band(0), Transform::from_translation(to_world(c, 0.3)).with_rotation(turn).with_scale(Vec3::new(1.5, 0.9, 1.4)));
-                self.add(Shape::Rock, self.band(2), Transform::from_translation(to_world(c, 0.9)).with_rotation(turn.inverse()).with_scale(Vec3::new(0.8, 0.7, 0.9)));
+                self.add(Shape::Rock, rock_band(self.theme, 0), Transform::from_translation(to_world(c, 0.3)).with_rotation(turn).with_scale(Vec3::new(1.5, 0.9, 1.4)));
+                self.add(Shape::Rock, rock_band(self.theme, 2), Transform::from_translation(to_world(c, 0.9)).with_rotation(turn.inverse()).with_scale(Vec3::new(0.8, 0.7, 0.9)));
             }
             // Split in two, a crack between them.
             1 => {
                 let side = Vec2::from_angle(rng.range(0.0, 3.0)) * 0.28;
                 for (k, s) in [(1, 1.0), (3, -1.0)] {
                     let t = Transform::from_translation(to_world(c + side * s, 0.35)).with_rotation(turn).with_scale(Vec3::new(0.9, 1.3, 1.4));
-                    self.add(Shape::Rock, self.band(k), t);
+                    self.add(Shape::Rock, rock_band(self.theme, k), t);
                 }
             }
             // A stack of two, banded.
             _ => {
-                self.add(Shape::Rock, self.band(1), Transform::from_translation(to_world(c, 0.3)).with_rotation(turn).with_scale(Vec3::new(1.4, 0.9, 1.4)));
-                self.add(Shape::Rock, self.band(0), Transform::from_translation(to_world(c, 0.95)).with_rotation(turn).with_scale(Vec3::new(1.1, 0.8, 1.1)));
+                self.add(Shape::Rock, rock_band(self.theme, 1), Transform::from_translation(to_world(c, 0.3)).with_rotation(turn).with_scale(Vec3::new(1.4, 0.9, 1.4)));
+                self.add(Shape::Rock, rock_band(self.theme, 0), Transform::from_translation(to_world(c, 0.95)).with_rotation(turn).with_scale(Vec3::new(1.1, 0.8, 1.1)));
             }
         }
     }
@@ -2532,8 +2527,7 @@ fn wild_height(theme: &Theme, m: &Map, p: Vec2) -> f32 {
         Wilds::Forest => (out * 0.3).clamp(0.0, 3.0),
         Wilds::Fen => {
             // Broad, low tussocks: where slow waves running four ways crest together.
-            let waves = (p.x * 0.31 + 0.7).sin() + (p.y * 0.27 + 1.3).sin() + ((p.x + p.y) * 0.19).sin() + ((p.x - p.y) * 0.23 + 2.0).sin();
-            let hump = (waves / 4.0 - 0.15).clamp(0.0, 0.5) * 2.0;
+            let hump = (waves(p, [0.31, 0.27, 0.19, 0.23], [0.7, 1.3, 0.0, 2.0]) - 0.15).clamp(0.0, 0.5) * 2.0;
             let deep = (out / 3.0).clamp(0.0, 1.0);
             (-0.7 + hump * 0.95) * deep
         }
@@ -2543,6 +2537,11 @@ fn wild_height(theme: &Theme, m: &Map, p: Vec2) -> f32 {
             (rise / TERRACE).floor() * TERRACE + TERRACE * ((f - 0.6) / 0.25).clamp(0.0, 1.0)
         }
     }
+}
+
+/// The bands of color the highlands' rock is laid down in, from `k` up.
+fn rock_band(theme: &Theme, k: usize) -> Color {
+    [theme.wall, theme.slate, theme.stone, theme.bank][k % 4]
 }
 
 /// How high each of the highlands' terraces climbs.
@@ -2562,7 +2561,7 @@ fn wild_color(theme: &Theme, height: f32, flat: f32, pick: f32) -> Color {
         Wilds::Fen if pick < 0.8 => theme.grass.mix(&theme.marsh, 0.4),
         Wilds::Fen => theme.fern,
         // Sheer faces in bands of rock by height; dry grass on the shelves.
-        Wilds::Highlands if flat < 0.8 => [theme.wall, theme.slate, theme.bank, theme.stone][(height / 1.3).floor().rem_euclid(4.0) as usize],
+        Wilds::Highlands if flat < 0.8 => rock_band(theme, (height / 1.3).floor().max(0.0) as usize),
         Wilds::Highlands if pick < 0.5 => theme.grass,
         Wilds::Highlands if pick < 0.8 => theme.meadow,
         Wilds::Highlands => theme.path,
@@ -2637,8 +2636,14 @@ fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut Lcg) -> Me
 
 /// 0 to 1 over the ground in broad, wandering patches.
 fn patches(p: Vec2) -> f32 {
-    let waves = (p.x * 0.37 + 1.1).sin() + (p.y * 0.41 + 0.4).sin() + ((p.x + p.y) * 0.23).sin() + ((p.x - p.y) * 0.29 + 2.3).sin();
-    (waves / 4.0 + 0.5).clamp(0.0, 1.0)
+    (waves(p, [0.37, 0.41, 0.23, 0.29], [1.1, 0.4, 0.0, 2.3]) / 2.0 + 0.5).clamp(0.0, 1.0)
+}
+
+/// -1 to 1: slow waves running four ways (along x, y and both diagonals, at `freq`, shifted by
+/// `phase`), high where they crest together.
+fn waves(p: Vec2, freq: [f32; 4], phase: [f32; 4]) -> f32 {
+    let along = [p.x, p.y, p.x + p.y, p.x - p.y];
+    (0..4).map(|i| (along[i] * freq[i] + phase[i]).sin()).sum::<f32>() / 4.0
 }
 
 /// The walkable ground of the clearing: one quad per tile, one color per tile (a faint checker
@@ -2698,13 +2703,17 @@ fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
 
 /// The water's surface: over every water tile of the scene (the map's and the wilds' beyond it),
 /// and over the wilds within a terrain cell of those too, so where the land rises out of it the
-/// water runs in under its slope; over all the wilds if they're `flooded`. `None` if there's no
-/// water.
+/// water runs in under its slope; if the wilds are `flooded`, one sheet over the whole scene (the
+/// land rises out of it). `None` if there's no water.
 fn water_mesh(scene: &SceneTiles, flooded: bool) -> Option<Mesh> {
-    let covers = |tile: Tile| matches!(tile, Tile::Water | Tile::Ford) || (flooded && tile == Tile::Forest);
+    let covers = |tile: Tile| matches!(tile, Tile::Water | Tile::Ford);
     let extent = scene.extent;
     let mut b = FlatMesh::default();
-    let mut any = false;
+    if flooded {
+        let (lo, hi) = ((-extent).as_vec2(), extent.as_vec2());
+        b.quad([lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)].map(|p| to_world(p, WATER_LEVEL)), Color::WHITE);
+        return Some(b.build());
+    }
     for y in -extent.y..extent.y {
         for x in -extent.x..extent.x {
             let t = IVec2::new(x, y);
@@ -2713,13 +2722,12 @@ fn water_mesh(scene: &SceneTiles, flooded: bool) -> Option<Mesh> {
             if !(covers(tile) || near()) {
                 continue;
             }
-            any = true;
             let (lo, hi) = (t.as_vec2(), t.as_vec2() + Vec2::ONE);
             let corners = [lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)];
             b.quad(corners.map(|p| to_world(p, WATER_LEVEL)), Color::WHITE);
         }
     }
-    any.then(|| b.build())
+    (!b.positions.is_empty()).then(|| b.build())
 }
 
 #[cfg(test)]

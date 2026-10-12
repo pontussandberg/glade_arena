@@ -93,6 +93,11 @@ impl RoomView {
         self.members.iter().find(|m| m.guest_id == guest_id)
     }
 
+    /// Whether this guest may change the room's mode and map: its leader, before the start.
+    pub fn may_edit(&self, guest_id: u32) -> bool {
+        self.leader == guest_id && !self.started
+    }
+
     pub fn on_team(&self, team: u8) -> usize {
         self.members.iter().filter(|m| m.team == team).count()
     }

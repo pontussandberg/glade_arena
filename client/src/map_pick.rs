@@ -12,6 +12,7 @@ use lightyear::prelude::*;
 
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::palette;
+use crate::lobby::{GAP, MARGIN};
 use crate::render::ui_text;
 use crate::rooms::{CurrentMap, CurrentRoom, Me, Picking, Screen, request};
 
@@ -26,9 +27,6 @@ impl Plugin for MapPickPlugin {
     }
 }
 
-/// Spacing steps (pixels).
-const GAP: f32 = 8.0;
-const MARGIN: f32 = 40.0;
 const TILE_WIDTH: f32 = 128.0;
 
 /// Each time the game loads, a map picked at random to begin with.
@@ -131,12 +129,8 @@ fn pick_map(
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
     let view = room.0.as_ref().filter(|_| *screen.get() == Screen::Room);
-    let locked = match view {
-        None => None,
-        Some(view) if view.started => Some("Match in progress"),
-        Some(view) if me.as_ref().is_none_or(|me| me.guest_id != view.leader) => Some("Set by the leader"),
-        Some(_) => None,
-    };
+    let my_id = me.as_ref().map_or(0, |me| me.guest_id);
+    let locked = view.filter(|view| !view.may_edit(my_id)).map(|view| if view.started { "Match in progress" } else { "Set by the leader" });
     let text = locked.unwrap_or_default().to_string();
     if hint.0 != text {
         hint.0 = text;

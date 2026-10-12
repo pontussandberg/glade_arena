@@ -354,7 +354,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
         }
         RoomRequest::SetMap(map) => {
             let key = room_key.ok_or("You're not in a room")?;
-            let room = &lobby.rooms[&key];
+            let room = lobby.rooms.get_mut(&key).expect("in it");
             if room.leader != link {
                 return Err("Only the leader can change the map");
             }
@@ -364,8 +364,6 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             if room.map == map {
                 return Ok(());
             }
-            let members = room.members.clone();
-            let room = lobby.rooms.get_mut(&key).expect("checked");
             info!(room = key.0, from = ?room.map, to = ?map, "map changed");
             room.map = map;
             room.changed = true;
@@ -373,15 +371,13 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             // What lay on the old map goes, and the new one's comes. Practice may change it with
             // everyone in: they start over on the new map (from a spawn point), and shots in the
             // air are gone with the old one.
-            for thing in room.things.drain(..).chain(room.dummies.drain(..)) {
-                ctx.commands.entity(thing).try_despawn();
-            }
+            room.clear_things(&mut ctx.commands);
             let in_room = room.in_room(key);
             room.things = spawn_room_things(&mut ctx.commands, in_room, map);
             for (projectile, _) in ctx.projectiles.iter().filter(|(_, r)| **r == in_room) {
                 ctx.commands.entity(projectile).try_despawn();
             }
-            for member in members {
+            for &member in &room.members {
                 if let Some(player) = ctx.player_of(member) {
                     ctx.commands.entity(player).insert(NeedsSpawnPoint);
                 }
@@ -485,6 +481,13 @@ fn spawn_room_things(commands: &mut Commands, room: InRoom, map: MapId) -> Vec<E
 }
 
 impl Room {
+    /// Despawns what lies on its map, and its dummies.
+    fn clear_things(&mut self, commands: &mut Commands) {
+        for thing in self.things.drain(..).chain(self.dummies.drain(..)) {
+            commands.entity(thing).try_despawn();
+        }
+    }
+
     fn in_room(&self, key: RoomKey) -> InRoom {
         InRoom { key, net: self.net }
     }
@@ -548,10 +551,8 @@ fn leave(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity) -> bool {
     info!(room = key.0, guest = id, "left a room");
     match room.members.first() {
         None => {
-            let room = lobby.rooms.remove(&key).expect("there");
-            for thing in room.things.into_iter().chain(room.dummies) {
-                ctx.commands.entity(thing).try_despawn();
-            }
+            let mut room = lobby.rooms.remove(&key).expect("there");
+            room.clear_things(&mut ctx.commands);
             lobby.free_net.push(room.net);
             info!(room = key.0, "room closed");
         }

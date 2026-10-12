@@ -99,8 +99,8 @@ const STAGE_DRAG: f32 = 0.008;
 const TAG_HEIGHT: f32 = 2.75;
 
 /// Spacing steps (pixels).
-const GAP: f32 = 8.0;
-const MARGIN: f32 = 40.0;
+pub(crate) const GAP: f32 = 8.0;
+pub(crate) const MARGIN: f32 = 40.0;
 /// The side panel's width.
 const SIDE_WIDTH: f32 = 456.0;
 
@@ -701,7 +701,7 @@ fn show_room(
                 (false, false) => ("Waiting for the leader", palette::ui::MUTED),
             };
             card.spawn(ui_text(line, 12.0, color));
-            let editing = leading && !view.started;
+            let editing = view.may_edit(my_id);
             let modes = [Mode::Ffa, Mode::Teams].map(|mode| (mode, mode.label()));
             setting(card, "Mode", &modes, view.mode, editing, RoomRequest::SetMode);
             let maps = MapId::ALL.map(|map| (map, map.label()));
