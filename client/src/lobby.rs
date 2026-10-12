@@ -71,9 +71,10 @@ impl Plugin for LobbyPlugin {
     }
 }
 
-/// Where the stage is, on the gameplay plane: out in the forest, on the far side of the fighter
-/// from the camera (as first seen), so the map lies behind it; and how high its crag stands,
-/// so the camera looking down at the fighter sees the map below and beyond.
+/// Where the stage is, on the gameplay plane: out in the wilds off the map's east side, the
+/// fighter on it with its back to the map's middle (`stage_turn`), so the map lies behind it;
+/// and how high its crag stands, so the camera looking down at the fighter sees the map below
+/// and beyond.
 const STAGE: Vec2 = Vec2::new(48.0 * 0.921, -48.0 * 0.389);
 const STAGE_HEIGHT: f32 = 10.0;
 /// The haze from the stage (where it starts and where it hides everything): looking toward the
@@ -85,8 +86,8 @@ const AWAY_HAZE: (f32, f32) = (8.0, 24.0);
 const VISTA_SHADOWS: f32 = 140.0;
 /// The stage camera: how high it looks at the fighter, how far back it stands (along the
 /// ground) and how far above that point it is, which way it looks from (a three-quarter view of
-/// the front), how far and fast it sways on its own, and how fast dragging turns it (radians per
-/// pixel).
+/// the front, from the fighter's facing), how far and fast it sways on its own, and how fast
+/// dragging turns it (radians per pixel).
 const STAGE_AIM_HEIGHT: f32 = 1.2;
 const STAGE_BACK: f32 = 8.0;
 const STAGE_RISE: f32 = 4.6;
@@ -109,8 +110,9 @@ struct Lobby {
     selected: ClassId,
     /// The fighter on the stage, and which class it is.
     shown: Option<(Entity, ClassId)>,
-    /// What lifts the fighter up onto the stage: it stands at its `Pos` on the ground, as in the
-    /// fight (the rig keeps its feet there), so it goes under this, `STAGE_HEIGHT` up.
+    /// What lifts the fighter up onto the stage and turns it there: it stands at its `Pos` on the
+    /// ground facing +x, as in the fight (the rig keeps its feet there and sets its facing), so
+    /// it goes under this.
     lift: Entity,
     view: Orbit,
     /// Which way the camera looks from, before its sway; dragging turns it.
@@ -170,9 +172,14 @@ fn open_lobby(
     **shadows = arena::sun_shadows(VISTA_SHADOWS);
     // The fighter we last went in as.
     let selected = chosen.0.unwrap_or_else(|| ClassId::all().next().expect("at least one class"));
-    let view = Orbit { yaw: FRONT, pitch: STAGE_RISE.atan2(STAGE_BACK), distance: STAGE_BACK.hypot(STAGE_RISE) };
-    let lift = commands.spawn((LobbyPart, Transform::from_translation(stage_at(arena::DAIS_HEIGHT) - to_world(STAGE, 0.0)), Visibility::default())).id();
-    commands.insert_resource(Lobby { selected, shown: None, lift, view, facing: FRONT });
+    let front = FRONT + stage_turn();
+    let view = Orbit { yaw: front, pitch: STAGE_RISE.atan2(STAGE_BACK), distance: STAGE_BACK.hypot(STAGE_RISE) };
+    // The fighter stands at `STAGE` under the lift, facing +x as every fighter starts out: the
+    // lift raises it onto the dais and turns it about where it stands.
+    let turn = Quat::from_rotation_y(stage_turn());
+    let lift = Transform::from_translation(stage_at(arena::DAIS_HEIGHT) - turn * to_world(STAGE, 0.0)).with_rotation(turn);
+    let lift = commands.spawn((LobbyPart, lift, Visibility::default())).id();
+    commands.insert_resource(Lobby { selected, shown: None, lift, view, facing: front });
     spawn_stage(&mut commands, &mut meshes, &mut materials);
     spawn_screen(&mut commands, me.as_ref().map_or("", |me| &me.name));
 }
@@ -227,6 +234,12 @@ fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &m
 const TORCH_INTENSITY: f32 = 260_000.0;
 /// How many fireflies drift around the stage.
 const MOTES: usize = 48;
+
+/// How far the fighter on the stage is turned from facing +x: straight away from the map's
+/// middle (the origin), its back to it.
+fn stage_turn() -> f32 {
+    STAGE.to_angle()
+}
 
 /// The point `height` over the stage's ground (the crag's top, the dais's base).
 fn stage_at(height: f32) -> Vec3 {
