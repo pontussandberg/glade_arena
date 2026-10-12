@@ -10,6 +10,7 @@
 //! With `QuickJoin` set (bots, tests, a class on the command line), it joins that room as soon as
 //! it's welcomed, and the class it was given takes it straight into the arena.
 
+use arena_shared::map::{Map, MapId};
 use arena_shared::protocol::*;
 use arena_shared::rooms::*;
 use bevy::prelude::*;
@@ -54,6 +55,17 @@ pub struct RoomList(pub Vec<RoomSummary>);
 #[derive(Resource, Default, Debug)]
 pub struct CurrentRoom(pub Option<RoomView>);
 
+/// The map our room plays on (the last room's, once out of it). Changes only when it does, so
+/// what's built from it is rebuilt only then.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CurrentMap(pub MapId);
+
+impl CurrentMap {
+    pub fn map(&self) -> &'static Map {
+        self.0.map()
+    }
+}
+
 /// Something to tell the player: why a request was refused, or why we were taken out of a room.
 #[derive(Resource, Default, Debug)]
 pub struct Notice(pub Option<String>);
@@ -78,7 +90,8 @@ pub struct RoomsNetPlugin {
 impl Plugin for RoomsNetPlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<Screen>().add_computed_state::<Picking>();
-        app.init_resource::<RoomList>().init_resource::<CurrentRoom>().init_resource::<Notice>().init_resource::<Leaving>();
+        app.init_resource::<RoomList>().init_resource::<CurrentRoom>().init_resource::<CurrentMap>();
+        app.init_resource::<Notice>().init_resource::<Leaving>();
         app.insert_resource(QuickJoin(self.quick_join.clone()));
         app.insert_resource(StoredName(self.guest_name.clone()));
         app.add_systems(Update, (say_hello, read_lobby_events, send_class_choice, enter_game).chain());
@@ -111,6 +124,7 @@ fn read_lobby_events(
     quick_join: Res<QuickJoin>,
     mut list: ResMut<RoomList>,
     mut room: ResMut<CurrentRoom>,
+    mut current_map: ResMut<CurrentMap>,
     mut notice: ResMut<Notice>,
     mut leaving: ResMut<Leaving>,
     screen: Res<State<Screen>>,
@@ -139,6 +153,7 @@ fn read_lobby_events(
                         next.set(Screen::Room);
                     }
                 }
+                current_map.set_if_neq(CurrentMap(view.map));
                 room.0 = Some(view);
             }
             LobbyEvent::Left(reason) => {

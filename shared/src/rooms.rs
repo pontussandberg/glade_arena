@@ -9,6 +9,7 @@ use lightyear::prelude::PeerId;
 use serde::{Deserialize, Serialize};
 
 use crate::classes::ClassId;
+use crate::map::MapId;
 
 /// Names a room for as long as the server runs.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -60,6 +61,7 @@ pub struct RoomSummary {
     pub key: RoomKey,
     pub name: String,
     pub mode: Mode,
+    pub map: MapId,
     pub players: u8,
     pub started: bool,
 }
@@ -76,6 +78,7 @@ pub struct RoomView {
     pub key: RoomKey,
     pub name: String,
     pub mode: Mode,
+    pub map: MapId,
     pub started: bool,
     /// A practice room: ours alone, never listed.
     pub practice: bool,

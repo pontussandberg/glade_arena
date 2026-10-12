@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use arena_shared::classes::{AbilityKind, CRIT_MULTIPLIER, Chill};
 use arena_shared::config::*;
+use arena_shared::map::Map;
 use arena_shared::protocol::*;
 use arena_shared::sim;
 use bevy::prelude::*;
@@ -20,7 +21,7 @@ use lightyear::netcode::NetcodeServer;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
-use crate::rooms::InRoom;
+use crate::rooms::{InRoom, Lobby};
 
 pub mod logging;
 pub mod rooms;
@@ -116,6 +117,7 @@ impl Plugin for ServerGamePlugin {
                 move_players,
                 walk_dummies,
                 take_pickups,
+                use_gates,
                 attack,
                 use_abilities,
                 move_projectiles,
@@ -146,9 +148,10 @@ fn spawn_projectile(commands: &mut Commands, projectile: Projectile, (room, team
     commands.spawn((projectile.bundle(), room, room.rooms(), team, Replicate::to_clients(NetworkTarget::All)));
 }
 
-/// Server-only: this player (new or respawning) still needs a spawn point.
+/// Server-only: this player (new, respawning, or on a map just changed to) still needs a spawn
+/// point.
 #[derive(Component)]
-struct NeedsSpawnPoint;
+pub(crate) struct NeedsSpawnPoint;
 
 /// Server-only: killed; out of the fight until `respawn_at` (its `Health` is 0 meanwhile, which
 /// is what clients see).
@@ -247,6 +250,7 @@ fn spawn_player(commands: &mut Commands, link: Entity, id: PeerId, class: ClassI
             fighter(id, class, room, team, Vec2::ZERO),
             NeedsSpawnPoint,
             DashHits::default(),
+            OnGate::default(),
             PlayerInput::default(),
             Tap::default(),
             // Replication starts in `place_players`, once it has a real position.
@@ -289,10 +293,9 @@ impl Patrol {
     /// How far a walking dummy goes each way from where it was placed, at most.
     const REACH: f32 = 3.0;
 
-    /// The longest clear straight line through `at`, along x or y (`REACH` each way, shortened
-    /// at walls), if it's long enough to be worth walking.
-    pub(crate) fn through(at: Vec2) -> Option<Patrol> {
-        let map = arena_shared::map::map();
+    /// The longest clear straight line through `at` on `map`, along x or y (`REACH` each way,
+    /// shortened at walls), if it's long enough to be worth walking.
+    pub(crate) fn through(map: &Map, at: Vec2) -> Option<Patrol> {
         let end = |dir: Vec2| {
             (1..=(Self::REACH * 4.0) as i32)
                 .map(|step| at + dir * step as f32 * 0.25)
@@ -345,6 +348,7 @@ fn restore_dummies(
 /// so players joining or respawning in the same tick don't land on the same spot.
 fn place_players(
     mut commands: Commands,
+    lobby: Res<Lobby>,
     mut players: Query<(Entity, &PlayerId, &InRoom, &mut Pos, Option<&mut PlayerInput>, Has<NeedsSpawnPoint>, Has<Replicate>)>,
 ) {
     let mut placed: Vec<(InRoom, Vec2)> =
@@ -353,7 +357,7 @@ fn place_players(
         if !waiting {
             continue;
         }
-        pos.0 = sim::pick_spawn_point(placed.iter().filter(|(r, _)| r == room).map(|(_, p)| *p));
+        pos.0 = sim::pick_spawn_point(lobby.map(room), placed.iter().filter(|(r, _)| r == room).map(|(_, p)| *p));
         placed.push((*room, pos.0));
         // Wherever it was walking to before, it doesn't walk there from here.
         if let Some(mut input) = input {
@@ -415,28 +419,77 @@ fn release_held_taps(mut players: Query<(&mut PlayerInput, &mut Tap)>) {
 /// Walking (or dashing). Arriving forgets the destination, so nothing lingers.
 fn move_players(
     timeline: Res<LocalTimeline>,
-    mut players: Query<(&mut Pos, &ClassId, &mut PlayerInput, &AttackState, &mut AbilityState, &Chilled, &Hasted), InPlay>,
+    lobby: Res<Lobby>,
+    mut players: Query<(&mut Pos, &ClassId, &mut PlayerInput, &AttackState, &mut AbilityState, &Chilled, &Hasted, &InRoom), InPlay>,
 ) {
     let now = timeline.tick().0;
-    for (mut pos, class, mut input, attack, mut ability, chilled, hasted) in &mut players {
+    for (mut pos, class, mut input, attack, mut ability, chilled, hasted, room) in &mut players {
+        let map = lobby.map(room);
         let mut next = *ability;
-        pos.set_if_neq(Pos(sim::move_player(pos.0, &input, *class, attack, &mut next, chilled, hasted, now)));
+        pos.set_if_neq(Pos(sim::move_player(map, pos.0, &input, *class, attack, &mut next, chilled, hasted, now)));
         ability.set_if_neq(next);
-        if input.move_to.is_some_and(|point| sim::arrived(pos.0, point)) {
+        if input.move_to.is_some_and(|point| sim::arrived(map, pos.0, point)) {
             input.move_to = None;
         }
     }
 }
 
-/// A room's pickups, lying at their spots for everyone in it to see.
-fn spawn_pickups(commands: &mut Commands, room: InRoom) -> Vec<Entity> {
-    arena_shared::map::PICKUP_SPOTS
-        .into_iter()
-        .map(|(at, kind)| {
+/// A room's pickups, lying at `map`'s spots for everyone in it to see.
+fn spawn_pickups(commands: &mut Commands, room: InRoom, map: &Map) -> Vec<Entity> {
+    map.pickups
+        .iter()
+        .map(|&(at, kind)| {
             let pickup = Pickup { kind, at, back_at: None, taken_by: None };
             commands.spawn((Name::from("Pickup"), pickup, room, room.rooms(), Replicate::to_clients(NetworkTarget::All))).id()
         })
         .collect()
+}
+
+/// A room's waygates, open, on `map`.
+fn spawn_gates(commands: &mut Commands, room: InRoom, map: &Map) -> Vec<Entity> {
+    map.gates
+        .iter()
+        .map(|&ends| {
+            let gate = Waygate { ends, back_at: None };
+            commands.spawn((Name::from("Waygate"), gate, room, room.rooms(), Replicate::to_clients(NetworkTarget::All))).id()
+        })
+        .collect()
+}
+
+/// Server-only: whether a fighter stood on a waygate's end last tick. Only stepping onto one
+/// from off it takes a fighter through, so one that came out of a gate, or stood on an end while
+/// it was closed, has to step off and back on to go.
+#[derive(Component, Default)]
+struct OnGate(bool);
+
+/// A fighter stepping onto an open waygate's end comes out of its other end, standing: its walk
+/// and any dash end there. Both ends close for `GATE_CLOSED_TICKS`. Dummies don't go through.
+fn use_gates(
+    timeline: Res<LocalTimeline>,
+    mut gates: Query<(Entity, &mut Waygate, &InRoom)>,
+    mut players: Query<(&PlayerId, &mut Pos, &mut PlayerInput, &mut AbilityState, &mut OnGate, &InRoom), (InPlay, Without<Dummy>)>,
+) {
+    // No map with gates in play anywhere: nothing to step on.
+    if gates.is_empty() {
+        return;
+    }
+    let now = timeline.tick().0;
+    for (id, mut pos, mut input, mut ability, mut on_gate, room) in &mut players {
+        let under = gates.iter().filter(|(.., r)| *r == room).find_map(|(gate, info, _)| sim::gate_end_at(info, pos.0).map(|end| (gate, end)));
+        let stepped_on = !std::mem::replace(&mut on_gate.0, under.is_some());
+        let Some((gate, end)) = under.filter(|_| stepped_on) else { continue };
+        let Ok((_, mut gate, _)) = gates.get_mut(gate) else { continue };
+        if !gate.open_at(now) {
+            continue;
+        }
+        pos.0 = gate.ends[1 - end];
+        input.move_to = None;
+        if ability.dash.is_some() {
+            ability.dash = None;
+        }
+        gate.back_at = Some(now + GATE_CLOSED_TICKS);
+        debug!(player = ?id.0, from = ?gate.ends[end], "through a waygate");
+    }
 }
 
 /// A fighter touching a pickup that's lying there takes it (the first found, if several), and
@@ -590,6 +643,7 @@ fn hit_foes(
 fn attack(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
+    lobby: Res<Lobby>,
     mut attackers: Query<
         (&PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team)),
         InPlay,
@@ -609,7 +663,7 @@ fn attack(
                 let blow = Blow { amount: class.def().attack.damage, chill: class.def().attack.chill, can_crit: true };
                 let with = (id.0, *class, "auto-attack");
                 let landed = hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |_, at| {
-                    sim::melee_hits(pos.0, swing.dir, *class, at)
+                    sim::melee_hits(lobby.map(room), pos.0, swing.dir, *class, at)
                 });
                 if landed > 0
                     && let Some(follow_up) = class.def().attack.follow_up
@@ -639,6 +693,7 @@ struct DashHits(u32, Vec<PeerId>);
 fn use_abilities(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
+    lobby: Res<Lobby>,
     mut users: Query<
         (
             &PlayerId,
@@ -673,7 +728,7 @@ fn use_abilities(
             let with = (id.0, *class, class.def().ability.name.as_str());
             let blow = Blow { amount: *cut, chill: Chill::default(), can_crit: false };
             hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |target, at| {
-                let fresh = !hits.1.contains(&target) && sim::dash_hits(pos.0, at);
+                let fresh = !hits.1.contains(&target) && sim::dash_hits(lobby.map(room), pos.0, at);
                 if fresh {
                     hits.1.push(target);
                 }
@@ -692,7 +747,7 @@ fn use_abilities(
                 let AbilityKind::Nova { damage, chill, .. } = class.def().ability.kind else { continue };
                 let with = (id.0, *class, class.def().ability.name.as_str());
                 let blow = Blow { amount: damage, chill, can_crit: false };
-                hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |_, at| sim::nova_hits(pos.0, *class, at));
+                hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |_, at| sim::nova_hits(lobby.map(room), pos.0, *class, at));
             }
             None => {}
         }
@@ -702,12 +757,13 @@ fn use_abilities(
 fn move_projectiles(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    mut projectiles: Query<(Entity, &mut Pos, &Projectile)>,
+    lobby: Res<Lobby>,
+    mut projectiles: Query<(Entity, &mut Pos, &Projectile, &InRoom)>,
 ) {
     let tick = timeline.tick().0;
-    for (entity, mut pos, projectile) in &mut projectiles {
+    for (entity, mut pos, projectile, room) in &mut projectiles {
         pos.0 = sim::projectile_pos(projectile, tick as f32);
-        if sim::projectile_expired(pos.0, projectile, tick) {
+        if sim::projectile_expired(lobby.map(room), pos.0, projectile, tick) {
             commands.entity(entity).despawn();
         }
     }

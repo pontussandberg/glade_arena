@@ -7,7 +7,6 @@ use std::fmt::Write;
 
 use arena_shared::classes::AbilityKind;
 use arena_shared::config::*;
-use arena_shared::map::map;
 use arena_shared::protocol::*;
 use arena_shared::sim;
 use bevy::platform::collections::HashMap;
@@ -45,6 +44,7 @@ impl Plugin for RenderPlugin {
             crate::tooltip::TooltipPlugin,
             crate::dummies::DummiesPlugin,
         ));
+        app.add_plugins(crate::waygates::WaygatesPlugin);
         app.insert_resource(ControlsOpen(load_setting(CONTROLS_KEY).as_deref() == Some("open")));
         app.add_systems(Startup, setup_scene);
         // Right after the network's updates are in, before anything this frame reads positions.
@@ -435,7 +435,7 @@ fn read_local_input(
     window: Option<Single<&Window>>,
     camera: Single<(&Camera, &GlobalTransform)>,
     me: Query<(&Pos, &ClassId, &AbilityState), (With<Me>, With<PlayerId>)>,
-    (mode, cast_mode, clock): (Res<CameraMode>, Res<CastMode>, AttackClock),
+    (mode, cast_mode, clock, map): (Res<CameraMode>, Res<CastMode>, AttackClock, Res<crate::rooms::CurrentMap>),
     hud: Query<
         (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Has<AbilityIcon>),
         Or<(With<HudButton>, With<AbilityIcon>)>,
@@ -467,7 +467,7 @@ fn read_local_input(
     // A jump (respawn or server correction) cancels the old destination. (So does attacking:
     // see `cancel_walk_on_attack`.)
     if let (Some(now), Some(before)) = (me, *last_pos)
-        && now.distance(before) > 2.0
+        && now.distance(before) > JUMP
     {
         move_to = None;
     }
@@ -480,13 +480,13 @@ fn read_local_input(
     if right_click
         && !drops_aim
         && let Some(cursor) = cursor
-        && let Some(point) = map().walk_target(cursor, 4)
+        && let Some(point) = map.map().walk_target(cursor, 4)
     {
         move_to = Some(point);
     }
     // Arrived: forget it, so nothing lingers.
     if let (Some(point), Some(me)) = (move_to, me)
-        && sim::arrived(me, point)
+        && sim::arrived(map.map(), me, point)
     {
         move_to = None;
     }
@@ -949,8 +949,6 @@ impl Glide {
     }
 }
 
-/// Further than this between two updates is a jump, not a walk or a dash.
-const GLIDE_MAX: f32 = 2.0;
 
 fn glide_me(mut commands: Commands, clock: AttackClock, mut me: Query<(Entity, &mut Pos, Option<&mut Glide>), With<Me>>) {
     let (Some(latest), now) = (clock.latest_tick(), clock.now(true)) else { return };
@@ -964,7 +962,7 @@ fn glide_me(mut commands: Commands, clock: AttackClock, mut me: Query<(Entity, &
         if pos.0 != glide.drawn {
             let tick = latest as f32;
             let last = glide.samples.back().copied();
-            if pos.0.distance(glide.drawn) > GLIDE_MAX {
+            if pos.0.distance(glide.drawn) > JUMP {
                 glide.samples.clear();
             } else if let Some((last_tick, last_pos)) = last
                 && last_tick < tick - 1.0

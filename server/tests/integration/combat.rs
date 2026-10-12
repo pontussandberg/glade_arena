@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use arena_shared::map::{Map, SPAWN_POINTS, map};
+use arena_shared::map::Map;
 use arena_shared::protocol::*;
 use arena_shared::sim;
 use bevy::prelude::*;
@@ -74,7 +74,7 @@ fn melee_hits_where_the_target_is_now() {
     let a_spot = A_SPOT + Vec2::X * 2.0;
     let mut d = Duel::placed(5895, (A_CLASS, a_spot), (B_CLASS, a_spot + Vec2::X * (reach() - 0.3)));
     let damage = class_id(A_CLASS).def().attack.damage;
-    let hits = |a: Vec2, b: Vec2| sim::melee_hits(a, Vec2::X, class_id(A_CLASS), b);
+    let hits = |a: Vec2, b: Vec2| sim::melee_hits(map(), a, Vec2::X, class_id(A_CLASS), b);
 
     // B standing just inside reach is hit; just outside, it isn't.
     let (_, _, dealt) = swing_judged_on_server(&mut d);
@@ -130,5 +130,5 @@ fn the_dead_sit_out_then_respawn_at_full_health() {
     let (pos, _) = server_player(&mut d.server, B);
     println!("B respawned after {waited:.2}s at {pos}");
     assert!(waited > 2.5, "respawned too early");
-    assert!(SPAWN_POINTS.contains(&pos));
+    assert!(map().spawn_points.contains(&pos));
 }

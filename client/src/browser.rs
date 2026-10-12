@@ -411,7 +411,7 @@ fn spawn_row(card: &mut ChildSpawnerCommands, room: &RoomSummary) {
             left.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Center, ..default() }).with_children(|line| {
                 let (state, color) = if room.started { ("LIVE", ACCENT) } else { ("WAITING", palette::ui::MUTED) };
                 line.spawn(ui_text(state, 10.0, color));
-                line.spawn(ui_text(format!("{}  ·  {}/{}", room.mode.label(), room.players, room.mode.capacity()), 11.0, palette::ui::MUTED));
+                line.spawn(ui_text(format!("{}  ·  {}  ·  {}/{}", room.mode.label(), room.map.label(), room.players, room.mode.capacity()), 11.0, palette::ui::MUTED));
             });
         });
         if room.full() {

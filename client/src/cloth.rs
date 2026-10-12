@@ -303,9 +303,6 @@ const FLOOR: f32 = 0.015;
 const SPIN: f32 = 0.25;
 /// The fastest cloth moves (m/s): whatever happens, it can't be flung away.
 const MAX_SPEED: f32 = 12.0;
-/// A body that moved further than this in a frame was put there (spawned, respawned): its cloth
-/// starts over at rest instead of flying after it.
-const JUMP: f32 = 2.0;
 
 /// How the body moved in a step: `shift`ed, and `turn`ed about where it is now (`pivot`).
 #[derive(Clone, Copy)]
@@ -480,7 +477,9 @@ fn drape(
     for (mut cloth, &now, visible) in &mut fighters {
         let cloth = &mut *cloth;
         let mut was = cloth.was.unwrap_or(now);
-        if was.translation.distance(now.translation) > JUMP {
+        // Put there (spawned, respawned, through a waygate): its cloth starts over at rest
+        // instead of flying after it.
+        if was.translation.distance(now.translation) > arena_shared::config::JUMP {
             was = now;
             for hanging in &mut cloth.hangings {
                 hanging.at.clear();

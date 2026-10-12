@@ -11,13 +11,17 @@ pub const SEND_INTERVAL: Duration = TICK_DURATION;
 
 pub const SERVER_PORT: u16 = 5888;
 /// Includes the class file's hash: clients built with different class numbers can't connect.
-pub const PROTOCOL_ID: u64 = 0xA4E7_0007 ^ crate::classes::classes_hash();
+pub const PROTOCOL_ID: u64 = 0xA4E7_0008 ^ crate::classes::classes_hash();
 /// Netcode key shared by server and client. Fine for local dev; real auth will have the
 /// account service mint connect tokens instead (see README).
 pub const DEV_PRIVATE_KEY: [u8; 32] = [0; 32];
 
 // Gameplay tuning that isn't per class, in world units (1 unit = 1 meter = 1 tile).
 // Per-class numbers are in `assets/classes.ron`; the map is in `map.rs`.
+/// Further than anything moves in a tick (a hasted dash goes about 1.8 m): a fighter that moved
+/// further was put there (spawned, respawned, through a waygate), and is drawn there at once,
+/// never sliding over.
+pub const JUMP: f32 = 2.5;
 /// Body radius used for hits (projectiles and melee reach).
 pub const PLAYER_RADIUS: f32 = 0.5;
 /// The global cooldown (1 s): using an ability on it (`AbilityDef::global_cooldown`, the default)
@@ -36,3 +40,9 @@ pub const HEAL_FRACTION: f32 = 0.5;
 /// A haste makes its taker walk this many times as fast, for this long (2 s).
 pub const HASTE_FACTOR: f32 = 1.5;
 pub const HASTE_TICKS: u32 = 2 * TICK_HZ as u32;
+
+// Waygates (in `map.rs`): stepping onto one end puts a fighter on the other.
+/// How close (center to center) a fighter has to come to an end to go through.
+pub const GATE_RADIUS: f32 = 0.6;
+/// How long both ends stay closed after someone goes through (8 s).
+pub const GATE_CLOSED_TICKS: u32 = 8 * TICK_HZ as u32;

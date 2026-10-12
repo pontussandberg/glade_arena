@@ -1,12 +1,13 @@
-//! The arena's look: a low-poly forest clearing at dusk, with a river, a stone bridge,
-//! ruined walls and torches. See `docs/art-direction.md`. The layout itself comes from the shared
-//! `arena_shared::map`, so what you see is exactly what blocks movement and shots.
+//! The arena's look: low-poly clearings at dusk in a ring of forest, with water, chasms, bridges,
+//! marshes, ruined walls and torches. See `docs/art-direction.md`. The scene is built from our
+//! room's map (`arena_shared::map`), tile by tile, so what you see is exactly what blocks
+//! movement and shots; and built again when the map changes.
 //!
 //! Flat-shaded, untextured, one color per face. The world stays in a calm middle band of
 //! saturation; only fighters, projectiles and torch flames go above it.
 
 use arena_shared::classes::{ClassDef, Shot};
-use arena_shared::map::{MAP_HALF_EXTENTS, Map, RIVER_HALF_WIDTH, Tile, clearing_margin, map, river_x};
+use arena_shared::map::{Map, Tile};
 use bevy::asset::RenderAssetUsages;
 use bevy::color::Mix;
 use bevy::light::CascadeShadowConfigBuilder;
@@ -16,6 +17,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use crate::cloth::{Column, Drape, Wardrobe, Weave};
+use crate::rooms::CurrentMap;
 use crate::sculpt::{Section, bevel_box, grid, hemmed, sheet, smoothed, sweep, tube};
 
 pub mod palette {
@@ -35,6 +37,12 @@ pub mod palette {
     pub const RIVERBED: Color = Color::srgb_u8(0x3D, 0x4A, 0x44);
     pub const POND: Color = Color::srgb_u8(0x4F, 0x86, 0x82);
     pub const HEATHER: Color = Color::srgb_u8(0x9A, 0x86, 0xB6);
+    /// Boggy ground, wetter and browner than moss.
+    pub const MARSH: Color = Color::srgb_u8(0x5E, 0x66, 0x45);
+    /// The bottom of a chasm, the darkest the world goes.
+    pub const ABYSS: Color = Color::srgb_u8(0x3A, 0x42, 0x50);
+    /// Hemp rope on the rope bridges.
+    pub const ROPE: Color = Color::srgb_u8(0x7A, 0x6A, 0x50);
     /// Near-black leathers: trousers and hoods; boots and eye sockets.
     pub const LEATHER: Color = Color::srgb_u8(0x2E, 0x27, 0x24);
     pub const DARK_LEATHER: Color = Color::srgb_u8(0x17, 0x14, 0x14);
@@ -1573,9 +1581,12 @@ pub fn tile_color(tile: Tile) -> Color {
     match tile {
         Tile::Grass => MOSS,
         Tile::Path => PATH,
+        Tile::Marsh => MARSH,
         Tile::Ford => RIVERBED.mix(&POND, 0.6),
         Tile::Bridge => STONE,
+        Tile::Planks => BARK.mix(&PATH, 0.3),
         Tile::Water => POND,
+        Tile::Chasm => ABYSS.mix(&INK, 0.3),
         Tile::Wall => WALL,
         Tile::Rock => SLATE,
         Tile::Tree => PINE,
@@ -1594,13 +1605,16 @@ impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClearColor(HAZE));
         app.insert_resource(GlobalAmbientLight { color: SKY, brightness: 160.0, ..default() });
-        app.add_systems(Startup, build_arena);
-        app.add_systems(Update, flicker_torches);
+        app.add_systems(Startup, spawn_sun);
+        // The scene is built from our room's map, and built again when it changes.
+        app.add_systems(Update, (build_arena.run_if(resource_exists_and_changed::<CurrentMap>), flicker_torches));
     }
 }
 
 const WATER_LEVEL: f32 = -0.3;
 const RIVERBED_LEVEL: f32 = -0.65;
+/// The bottom of a chasm.
+const CHASM_FLOOR: f32 = -6.0;
 
 /// Deterministic, so the arena looks the same for every player and every run.
 struct Lcg(u64);
@@ -1888,14 +1902,8 @@ fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight,
     }
 }
 
-fn build_arena(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let mut rng = Lcg(7);
-    let m = map();
-
+/// The low dusk sun, the same over every map.
+fn spawn_sun(mut commands: Commands) {
     commands.spawn((
         DirectionalLight { color: SUN, illuminance: 3_600.0, shadow_maps_enabled: true, ..default() },
         // Low dusk sun from the upper left, so shadows are long and fall toward the camera's right.
@@ -1903,39 +1911,62 @@ fn build_arena(
         // Enough to cover what the camera sees at full zoom-out; the far forest needs no shadows.
         CascadeShadowConfigBuilder { num_cascades: 1, maximum_distance: 50.0, ..default() }.build(),
     ));
+}
 
+/// Everything built from the map: despawned when it changes, for the new map's.
+#[derive(Component)]
+struct ArenaScene;
+
+fn build_arena(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    current: Res<CurrentMap>,
+    old: Query<Entity, With<ArenaScene>>,
+) {
+    for entity in &old {
+        commands.entity(entity).despawn();
+    }
+    let mut rng = Lcg(7);
+    let m = current.map();
+
+    let scene = SceneTiles::new(m);
     let vertex_colored = materials.add(matte(Color::WHITE));
-    commands.spawn((Mesh3d(meshes.add(terrain_mesh(&mut rng))), MeshMaterial3d(vertex_colored.clone())));
-    commands.spawn((Mesh3d(meshes.add(ground_mesh(&mut rng))), MeshMaterial3d(vertex_colored.clone())));
-    commands.spawn((
-        Mesh3d(meshes.add(water_mesh())),
-        MeshMaterial3d(materials.add(StandardMaterial { perceptual_roughness: 0.35, reflectance: 0.5, ..matte(POND) })),
-    ));
+    commands.spawn((ArenaScene, Mesh3d(meshes.add(terrain_mesh(m, &scene, &mut rng))), MeshMaterial3d(vertex_colored.clone())));
+    commands.spawn((ArenaScene, Mesh3d(meshes.add(ground_mesh(m, &mut rng))), MeshMaterial3d(vertex_colored.clone())));
+    if let Some(water) = water_mesh(&scene) {
+        let material = StandardMaterial { perceptual_roughness: 0.35, reflectance: 0.5, ..matte(POND) };
+        commands.spawn((ArenaScene, Mesh3d(meshes.add(water)), MeshMaterial3d(materials.add(material))));
+    }
 
     let mut props = Props::new();
-    let wall_tops = props.walls(&mut rng);
-    props.bridge(&mut rng);
-    props.fords(&mut rng);
+    let wall_tops = props.walls(m, &mut rng);
+    props.bridges(m, &mut rng);
+    props.rope_bridges(m, &mut rng);
+    props.fords(m, &mut rng);
     for (t, tile) in m.tiles() {
         let c = Map::center(t);
         match tile {
             Tile::Rock => props.boulder(&mut rng, c),
             Tile::Tree => props.tree(&mut rng, c, 0.0, 1.25),
             Tile::Grass if rng.next() < 0.02 => props.flower(&mut rng, c),
+            Tile::Marsh => props.bog(&mut rng, c),
             _ => {}
         }
     }
-    // Forest ring: dense trees outside the clearing, kept out of the river.
-    for _ in 0..320 {
-        let p = Vec2::new(rng.range(-58.0, 58.0), rng.range(-40.0, 40.0));
-        if clearing_margin(p) > -1.2 || (p.x - river_x(p.y)).abs() < RIVER_HALF_WIDTH + 1.5 {
+    // Forest ring: dense trees outside the clearing, kept out of water and chasms.
+    let extent = scene.extent.as_vec2() - Vec2::splat(4.0);
+    let open = |p: Vec2| [Vec2::ZERO, Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y].iter().all(|d| scene.get(Map::tile_of(p + *d * 1.5)) == Tile::Forest);
+    for _ in 0..(extent.x * extent.y * 4.0 * 0.035) as usize {
+        let p = Vec2::new(rng.range(-extent.x, extent.x), rng.range(-extent.y, extent.y));
+        if m.edge_margin(p) > -1.2 || !open(p) {
             continue;
         }
         let scale = rng.range(0.9, 1.8);
-        props.tree(&mut rng, p, ground_height(p), scale);
+        props.tree(&mut rng, p, forest_height(m, p), scale);
     }
 
-    // Torches on the bridge and the ruins (posts go into the prop mesh; flames and lights don't).
+    // Torches (posts go into the prop mesh; flames and lights don't).
     let flame = meshes.add(faceted(Cone::new(0.16, 0.42).mesh().resolution(5).build()));
     let flame_mat = materials.add(glow(TORCH_FLAME, 8.0));
     for (i, &p) in m.torches.iter().enumerate() {
@@ -1944,6 +1975,7 @@ fn build_arena(
         props.block(Vec3::new(0.14, post_height, 0.14), BARK, Transform::from_translation(to_world(p, base + post_height / 2.0)));
         commands
             .spawn((
+                ArenaScene,
                 Torch { phase: i as f32 * 1.7 },
                 PointLight { color: TORCH_LIGHT, intensity: TORCH_INTENSITY, range: 12.0, shadow_maps_enabled: false, ..default() },
                 Transform::from_translation(to_world(p, base + post_height + 0.5)),
@@ -1952,7 +1984,41 @@ fn build_arena(
     }
 
     // All static props as one mesh: ~1,200 trees, stones and wall blocks draw as one object.
-    commands.spawn((Mesh3d(meshes.add(props.into_mesh())), MeshMaterial3d(vertex_colored)));
+    commands.spawn((ArenaScene, Mesh3d(meshes.add(props.into_mesh())), MeshMaterial3d(vertex_colored)));
+}
+
+/// The land of the whole scene (`Map::scene_tile`) out to `extent` tiles each way from the
+/// middle: the map and a ring of forest around it, out to where the haze hides everything.
+/// Worked out once, as building the scene asks for each tile many times over.
+struct SceneTiles {
+    extent: IVec2,
+    tiles: Vec<Tile>,
+}
+
+impl SceneTiles {
+    fn new(m: &Map) -> SceneTiles {
+        let extent = m.size / 2 + IVec2::new(30, 24);
+        let tiles = (-extent.y..extent.y).flat_map(|y| (-extent.x..extent.x).map(move |x| m.scene_tile(IVec2::new(x, y)))).collect();
+        SceneTiles { extent, tiles }
+    }
+
+    /// Forest past the scene's edge.
+    fn get(&self, t: IVec2) -> Tile {
+        let u = t + self.extent;
+        let width = 2 * self.extent.x;
+        if u.x < 0 || u.y < 0 || u.x >= width || u.y >= 2 * self.extent.y {
+            return Tile::Forest;
+        }
+        self.tiles[(u.y * width + u.x) as usize]
+    }
+}
+
+/// The four directions, in tiles.
+const SIDES: [IVec2; 4] = [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y];
+
+/// Water or a chasm: what bridges cross, and banks or cliffs drop into.
+fn is_gap(tile: Tile) -> bool {
+    matches!(tile, Tile::Water | Tile::Ford | Tile::Chasm)
 }
 
 #[derive(Clone, Copy)]
@@ -1961,6 +2027,8 @@ enum Shape {
     Trunk,
     Cone(usize),
     Flower,
+    Reed,
+    Puddle,
 }
 
 /// Builds every static prop into one vertex-colored mesh.
@@ -1969,6 +2037,8 @@ struct Props {
     trunk: Mesh,
     cones: [Mesh; 3],
     flower: Mesh,
+    reed: Mesh,
+    puddle: Mesh,
     out: Option<Mesh>,
 }
 
@@ -1979,6 +2049,8 @@ impl Props {
             trunk: faceted(Cylinder::new(0.22, 1.2).mesh().resolution(5).build()),
             cones: [0, 1, 2].map(|k| faceted(Cone::new(1.5 - k as f32 * 0.35, 1.7).mesh().resolution(7).build())),
             flower: gem_mesh(0.14),
+            reed: faceted(Cone::new(0.035, 1.0).mesh().resolution(3).build()),
+            puddle: faceted(Cylinder::new(1.0, 0.02).mesh().resolution(7).build()),
             out: None,
         }
     }
@@ -1989,6 +2061,8 @@ impl Props {
             Shape::Trunk => &self.trunk,
             Shape::Cone(k) => &self.cones[k],
             Shape::Flower => &self.flower,
+            Shape::Reed => &self.reed,
+            Shape::Puddle => &self.puddle,
         };
         self.push(base.clone().transformed_by(t), color);
     }
@@ -2015,9 +2089,9 @@ impl Props {
 
     /// Ruined walls: stacked stone blocks of uneven height, some with a block on top. Returns the
     /// top height per wall tile, so torches can stand on them.
-    fn walls(&mut self, rng: &mut Lcg) -> HashMap<IVec2, f32> {
+    fn walls(&mut self, m: &Map, rng: &mut Lcg) -> HashMap<IVec2, f32> {
         let mut tops = HashMap::default();
-        for (t, tile) in map().tiles() {
+        for (t, tile) in m.tiles() {
             if tile != Tile::Wall {
                 continue;
             }
@@ -2034,10 +2108,10 @@ impl Props {
                 top += s;
             }
             tops.insert(t, top);
-            // Rubble at the foot, below knee height.
+            // Rubble at the foot, below knee height, on dry ground only.
             for _ in 0..2 {
                 let p = c + Vec2::new(rng.range(-0.9, 0.9), rng.range(-0.9, 0.9));
-                if map().walkable_at(p) {
+                if matches!(m.get(Map::tile_of(p)), Tile::Grass | Tile::Path | Tile::Marsh) {
                     self.add(Shape::Rock, SLATE, Transform::from_translation(to_world(p, 0.05)).with_scale(Vec3::splat(rng.range(0.15, 0.3))));
                 }
             }
@@ -2045,33 +2119,97 @@ impl Props {
         tops
     }
 
-    /// The stone bridge: paving slabs on the bridge tiles, parapets along both sides, and piers
-    /// down into the river.
-    fn bridge(&mut self, rng: &mut Lcg) {
-        let tiles: Vec<Vec2> = map().tiles().filter(|(_, t)| *t == Tile::Bridge).map(|(t, _)| Map::center(t)).collect();
-        for &c in &tiles {
+    /// Stone bridges, tile by tile: paving slabs, a parapet along every side that drops into
+    /// water or a chasm (a cap stone where it ends), and under them a deck down into the water,
+    /// or over a chasm an arch, deepest by the rock it springs from.
+    fn bridges(&mut self, m: &Map, rng: &mut Lcg) {
+        let bridge = |t: IVec2| m.get(t) == Tile::Bridge;
+        for (t, tile) in m.tiles() {
+            if tile != Tile::Bridge {
+                continue;
+            }
+            let c = Map::center(t);
             let color = if rng.next() < 0.5 { STONE } else { SLATE };
             self.block(Vec3::new(0.97, 0.36, 0.97), color, Transform::from_translation(to_world(c, -0.18)));
-        }
-        let span = tiles.iter().map(|c| Rect::from_center_size(*c, Vec2::ONE)).reduce(|a, b| a.union(b)).expect("the map has a bridge");
-        let mid = span.center();
-        for y in [span.min.y - 0.18, span.max.y + 0.18] {
-            // Parapet, with a cap stone on each end.
-            let parapet = Transform::from_translation(to_world(Vec2::new(mid.x, y), 0.25));
-            self.block(Vec3::new(span.width() + 0.8, 0.7, 0.36), WALL.mix(&STONE, 0.12), parapet);
-            for x in [span.min.x - 0.3, span.max.x + 0.3] {
-                self.block(Vec3::new(0.5, 1.1, 0.5), WALL.mix(&STONE, 0.24), Transform::from_translation(to_world(Vec2::new(x, y), 0.45)));
+            // How far to the nearest bank, along the bridge.
+            let to_bank = SIDES
+                .iter()
+                .filter_map(|&d| {
+                    let steps = (1..12).find(|&k| !bridge(t + d * k))?;
+                    m.walkable(t + d * steps).then_some(steps)
+                })
+                .min()
+                .unwrap_or(6);
+            let over_water = SIDES.iter().any(|&d| matches!(m.scene_tile(t + d), Tile::Water | Tile::Ford));
+            let depth = if over_water { -RIVERBED_LEVEL } else { 0.4 + 2.2 / to_bank as f32 };
+            self.block(Vec3::new(1.0, depth, 1.0), WALL, Transform::from_translation(to_world(c, -0.36 - depth / 2.0)));
+            for d in SIDES {
+                if !is_gap(m.scene_tile(t + d)) {
+                    continue;
+                }
+                let along = IVec2::new(-d.y, d.x);
+                let out = d.as_vec2();
+                let size = if d.x == 0 { Vec3::new(1.02, 0.7, 0.36) } else { Vec3::new(0.36, 0.7, 1.02) };
+                self.block(size, WALL.mix(&STONE, 0.12), Transform::from_translation(to_world(c + out * 0.68, 0.25)));
+                for side in [along, -along] {
+                    let runs_on = bridge(t + side) && is_gap(m.scene_tile(t + side + d));
+                    if !runs_on {
+                        let at = c + out * 0.68 + side.as_vec2() * 0.5;
+                        self.block(Vec3::new(0.5, 1.1, 0.5), WALL.mix(&STONE, 0.24), Transform::from_translation(to_world(at, 0.45)));
+                    }
+                }
             }
         }
-        for x in [mid.x - 1.2, mid.x + 1.2] {
-            let pier = Transform::from_translation(to_world(Vec2::new(x, mid.y), (RIVERBED_LEVEL - 0.36) / 2.0));
-            self.block(Vec3::new(0.8, -RIVERBED_LEVEL, span.height()), WALL, pier);
+    }
+
+    /// Rope bridges over a chasm, tile by tile: planks laid across the way over, two beams
+    /// under them, rope rails along the sides, on posts where they meet the rock.
+    fn rope_bridges(&mut self, m: &Map, rng: &mut Lcg) {
+        let planks = |t: IVec2| m.get(t) == Tile::Planks;
+        for (t, tile) in m.tiles() {
+            if tile != Tile::Planks {
+                continue;
+            }
+            let c = Map::center(t);
+            // The way over: the axis whose neighbors aren't the drop.
+            let along_x = m.scene_tile(t + IVec2::X) != Tile::Chasm && m.scene_tile(t - IVec2::X) != Tile::Chasm;
+            let (way, across) = if along_x { (Vec2::X, Vec2::Y) } else { (Vec2::Y, Vec2::X) };
+            // Blocks are laid out along x; this turns one to run along the way over.
+            let turn = if along_x { Quat::IDENTITY } else { Quat::from_rotation_y(std::f32::consts::FRAC_PI_2) };
+            for k in 0..3 {
+                let at = c + way * (k as f32 - 1.0) * 0.32 + across * rng.range(-0.04, 0.04);
+                let color = BARK.mix(&PATH, rng.range(0.0, 0.35));
+                let tilt = Quat::from_rotation_y(rng.range(-0.06, 0.06));
+                self.block(Vec3::new(0.26, 0.07, 1.0), color, Transform::from_translation(to_world(at, -0.04)).with_rotation(turn * tilt));
+            }
+            for side in [-1.0, 1.0] {
+                let at = c + across * side * 0.38;
+                self.block(Vec3::new(1.0, 0.1, 0.1), BARK, Transform::from_translation(to_world(at, -0.14)).with_rotation(turn));
+            }
+            for d in SIDES {
+                if m.scene_tile(t + d) != Tile::Chasm {
+                    continue;
+                }
+                let edge = c + d.as_vec2() * 0.46;
+                for h in [0.45, 0.85] {
+                    self.block(Vec3::new(1.0, 0.05, 0.05), ROPE, Transform::from_translation(to_world(edge, h)).with_rotation(turn));
+                }
+                // A hanger from the top rope down to the planks.
+                self.block(Vec3::new(0.04, 0.85, 0.04), ROPE, Transform::from_translation(to_world(edge, 0.42)));
+                let along = IVec2::new(-d.y, d.x);
+                for side in [along, -along] {
+                    if !planks(t + side) {
+                        let at = edge + side.as_vec2() * 0.5;
+                        self.block(Vec3::new(0.16, 1.15, 0.16), BARK, Transform::from_translation(to_world(at, 0.5)));
+                    }
+                }
+            }
         }
     }
 
     /// Stepping stones across the fords.
-    fn fords(&mut self, rng: &mut Lcg) {
-        for (t, tile) in map().tiles() {
+    fn fords(&mut self, m: &Map, rng: &mut Lcg) {
+        for (t, tile) in m.tiles() {
             if tile != Tile::Ford {
                 continue;
             }
@@ -2082,6 +2220,26 @@ impl Props {
                     .with_scale(Vec3::new(s, 0.3, s))
                     .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)));
                 self.add(Shape::Rock, STONE, stone);
+            }
+        }
+    }
+
+    /// A marsh tile's look: here and there a still puddle, and tufts of reeds, all below the knee.
+    fn bog(&mut self, rng: &mut Lcg, c: Vec2) {
+        if rng.next() < 0.4 {
+            let p = c + Vec2::new(rng.range(-0.25, 0.25), rng.range(-0.25, 0.25));
+            let size = Vec3::new(rng.range(0.25, 0.45), 1.0, rng.range(0.2, 0.35));
+            let t = Transform::from_translation(to_world(p, 0.012)).with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0))).with_scale(size);
+            self.add(Shape::Puddle, POND.mix(&RIVERBED, 0.35), t);
+        }
+        if rng.next() < 0.55 {
+            let p = c + Vec2::new(rng.range(-0.35, 0.35), rng.range(-0.35, 0.35));
+            for _ in 0..4 {
+                let at = p + Vec2::new(rng.range(-0.12, 0.12), rng.range(-0.12, 0.12));
+                let h = rng.range(0.25, 0.48);
+                let lean = Quat::from_euler(EulerRot::XYZ, rng.range(-0.25, 0.25), 0.0, rng.range(-0.25, 0.25));
+                let color = if rng.next() < 0.5 { FERN } else { PATH.mix(&FERN, 0.5) };
+                self.add(Shape::Reed, color, Transform::from_translation(to_world(at, h / 2.0)).with_rotation(lean).with_scale(Vec3::new(1.0, h, 1.0)));
             }
         }
     }
@@ -2110,39 +2268,58 @@ impl Props {
     }
 }
 
-/// Height of the faceted terrain outside the clearing (0-ish inside it).
-fn ground_height(p: Vec2) -> f32 {
-    let margin = clearing_margin(p);
-    if margin >= 0.0 { -0.05 } else { (-margin * 0.3).min(3.0) }
+/// Height of the faceted forest floor outside the clearing (0 at its edge), before roughness.
+fn forest_height(m: &Map, p: Vec2) -> f32 {
+    (-m.edge_margin(p) * 0.3).clamp(0.0, 3.0)
 }
 
-/// The rolling forest ring around the clearing, with the river channel cut through it.
-fn terrain_mesh(rng: &mut Lcg) -> Mesh {
-    const SIZE: Vec2 = Vec2::new(124.0, 88.0);
-    const CELLS: (usize, usize) = (62, 44);
-    let corner = |i: usize, j: usize| Vec2::new(-SIZE.x / 2.0 + SIZE.x * i as f32 / CELLS.0 as f32, -SIZE.y / 2.0 + SIZE.y * j as f32 / CELLS.1 as f32);
-    let mut grid = Vec::with_capacity((CELLS.0 + 1) * (CELLS.1 + 1));
-    for j in 0..=CELLS.1 {
-        for i in 0..=CELLS.0 {
-            let mut p = corner(i, j);
-            let in_channel = (p.x - river_x(p.y)).abs() < RIVER_HALF_WIDTH + 1.2;
-            let rough = clearing_margin(p) < -1.0 && !in_channel;
-            if rough {
+/// Meters between the terrain's vertices. Twice a tile: faceted like low-poly land, not like
+/// the tile grid.
+const TERRAIN_CELL: i32 = 2;
+
+/// The land under and around the map, on a grid of `TERRAIN_CELL` meters, its vertices on tile
+/// corners: flat just under the ground tiles, down to the riverbed under water and to the floor
+/// under a chasm (a vertex goes down if any tile around it within a cell does, so the whole of
+/// every water or chasm tile is low), and rolling up into the forest outside, its vertices
+/// jostled where there's nothing but forest around them.
+fn terrain_mesh(m: &Map, scene: &SceneTiles, rng: &mut Lcg) -> Mesh {
+    let cells = scene.extent / TERRAIN_CELL;
+    let width = (2 * cells.x + 1) as usize;
+    let mut grid = Vec::with_capacity(width * (2 * cells.y + 1) as usize);
+    for y in -cells.y..=cells.y {
+        for x in -cells.x..=cells.x {
+            let v = IVec2::new(x, y) * TERRAIN_CELL;
+            let side = 2 * TERRAIN_CELL;
+            let around: [Tile; (4 * TERRAIN_CELL * TERRAIN_CELL) as usize] =
+                std::array::from_fn(|k| scene.get(v - IVec2::splat(TERRAIN_CELL) + IVec2::new(k as i32 % side, k as i32 / side)));
+            let mut p = v.as_vec2();
+            let h = if around.contains(&Tile::Chasm) {
+                CHASM_FLOOR + rng.range(-0.3, 0.3)
+            } else if around.iter().any(|t| matches!(t, Tile::Water | Tile::Ford)) {
+                RIVERBED_LEVEL
+            } else if around.iter().all(|t| *t != Tile::Forest) {
+                -0.05
+            } else if around.iter().all(|t| *t == Tile::Forest) && m.edge_margin(p) < -1.0 {
                 p += Vec2::new(rng.range(-0.5, 0.5), rng.range(-0.5, 0.5));
-            }
-            let h = if in_channel { RIVERBED_LEVEL } else { ground_height(p) + if rough { rng.range(-0.3, 0.6) } else { 0.0 } };
+                forest_height(m, p) + rng.range(-0.3, 0.6)
+            } else {
+                forest_height(m, p)
+            };
             grid.push(to_world(p, h));
         }
     }
-    let at = |i: usize, j: usize| grid[j * (CELLS.0 + 1) + i];
+    let at = |i: usize, j: usize| grid[j * width + i];
     let mut b = FlatMesh::default();
-    for j in 0..CELLS.1 {
-        for i in 0..CELLS.0 {
+    for j in 0..(2 * cells.y) as usize {
+        for i in 0..width - 1 {
             let (a, r, u, ru) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
             for tri in [[a, r, u], [r, ru, u]] {
                 let height = (tri[0].y + tri[1].y + tri[2].y) / 3.0;
                 let pick = rng.next();
-                let base = if height < -0.3 {
+                let base = if height < -1.2 {
+                    // Down a chasm: rock darkening toward the floor.
+                    SLATE.mix(&ABYSS, ((-height - 1.2) / 3.5).min(1.0))
+                } else if height < -0.3 {
                     RIVERBED
                 } else if height < 0.05 {
                     MOSS
@@ -2163,59 +2340,79 @@ fn terrain_mesh(rng: &mut Lcg) -> Mesh {
 }
 
 /// The walkable ground of the clearing: one quad per tile, one color per tile (a faint checker
-/// keeps the grid readable), plus earthen banks where the ground meets the river.
-fn ground_mesh(rng: &mut Lcg) -> Mesh {
-    let m = map();
+/// keeps the grid readable), plus earthen banks down to the water, and cliffs down a chasm in
+/// bands of rock.
+fn ground_mesh(m: &Map, rng: &mut Lcg) -> Mesh {
     let mut b = FlatMesh::default();
     for (t, tile) in m.tiles() {
-        if matches!(tile, Tile::Water | Tile::Bridge | Tile::Ford | Tile::Forest) {
+        if matches!(tile, Tile::Water | Tile::Bridge | Tile::Planks | Tile::Ford | Tile::Chasm | Tile::Forest) {
             continue;
         }
         let c = Map::center(t);
         let checker = if (t.x + t.y) % 2 == 0 { 1.03 } else { 0.97 };
         let base = match tile {
             Tile::Path => PATH.mix(&MOSS, rng.next() * 0.25),
+            Tile::Marsh => MARSH.mix(&BANK, rng.next() * 0.35),
             _ => MOSS.mix(&MEADOW, rng.next() * 0.25),
         };
         let color = Color::from(base.to_linear() * checker);
         let (lo, hi) = (c - Vec2::splat(0.5), c + Vec2::splat(0.5));
         b.quad([to_world(lo, 0.0), to_world(Vec2::new(hi.x, lo.y), 0.0), to_world(hi, 0.0), to_world(Vec2::new(lo.x, hi.y), 0.0)], color);
-        // Bank faces toward river tiles.
+        // Bank or cliff faces toward the gaps around it.
         for (dir, a, z) in [
             (IVec2::X, Vec2::new(hi.x, lo.y), Vec2::new(hi.x, hi.y)),
             (-IVec2::X, Vec2::new(lo.x, hi.y), Vec2::new(lo.x, lo.y)),
             (IVec2::Y, Vec2::new(hi.x, hi.y), Vec2::new(lo.x, hi.y)),
             (-IVec2::Y, Vec2::new(lo.x, lo.y), Vec2::new(hi.x, lo.y)),
         ] {
-            if matches!(m.get(t + dir), Tile::Water | Tile::Ford) {
-                b.quad([to_world(a, 0.0), to_world(a, RIVERBED_LEVEL), to_world(z, RIVERBED_LEVEL), to_world(z, 0.0)], BANK);
+            match m.scene_tile(t + dir) {
+                Tile::Water | Tile::Ford => {
+                    b.quad([to_world(a, 0.0), to_world(a, RIVERBED_LEVEL), to_world(z, RIVERBED_LEVEL), to_world(z, 0.0)], BANK);
+                }
+                Tile::Chasm => {
+                    // Topsoil, then grey rock in uneven bands, darkening down into the dark.
+                    let bands = [
+                        (0.0, -0.5, BANK),
+                        (-0.5, -1.6, SLATE),
+                        (-1.6, -2.4, WALL),
+                        (-2.4, -4.0, SLATE.mix(&ABYSS, 0.5)),
+                        (-4.0, CHASM_FLOOR - 0.3, ABYSS),
+                    ];
+                    for (top, bottom, color) in bands {
+                        let shade = Color::from(color.to_linear() * (1.0 + rng.range(-0.06, 0.06)));
+                        b.quad([to_world(a, top), to_world(a, bottom), to_world(z, bottom), to_world(z, top)], shade);
+                    }
+                }
+                _ => {}
             }
         }
     }
     b.build()
 }
 
-/// The river surface, following its centerline through the whole map and into the forest.
-fn water_mesh() -> Mesh {
+/// The water's surface: over every water tile of the scene (the map's and the forest's beyond
+/// it), and over the forest tiles within a terrain cell of those too, so where the land rises out
+/// of it the water runs in under its slope. `None` if there's no water.
+fn water_mesh(scene: &SceneTiles) -> Option<Mesh> {
+    let covers = |tile: Tile| matches!(tile, Tile::Water | Tile::Ford);
+    let extent = scene.extent;
     let mut b = FlatMesh::default();
-    let half = RIVER_HALF_WIDTH + 1.2;
-    let extent = MAP_HALF_EXTENTS.y + 22.0;
-    let mut y = -extent;
-    while y < extent {
-        let y2 = y + 1.0;
-        let (x1, x2) = (river_x(y), river_x(y2));
-        b.quad(
-            [
-                to_world(Vec2::new(x1 - half, y), WATER_LEVEL),
-                to_world(Vec2::new(x1 + half, y), WATER_LEVEL),
-                to_world(Vec2::new(x2 + half, y2), WATER_LEVEL),
-                to_world(Vec2::new(x2 - half, y2), WATER_LEVEL),
-            ],
-            Color::WHITE,
-        );
-        y = y2;
+    let mut any = false;
+    for y in -extent.y..extent.y {
+        for x in -extent.x..extent.x {
+            let t = IVec2::new(x, y);
+            let tile = scene.get(t);
+            let near = || tile == Tile::Forest && (-2..=2).any(|dy| (-2..=2).any(|dx| covers(scene.get(t + IVec2::new(dx, dy)))));
+            if !(covers(tile) || near()) {
+                continue;
+            }
+            any = true;
+            let (lo, hi) = (t.as_vec2(), t.as_vec2() + Vec2::ONE);
+            let corners = [lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)];
+            b.quad(corners.map(|p| to_world(p, WATER_LEVEL)), Color::WHITE);
+        }
     }
-    b.build()
+    any.then(|| b.build())
 }
 
 #[cfg(test)]

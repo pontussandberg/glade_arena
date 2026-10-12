@@ -82,7 +82,7 @@ fn rooms_are_listed_joined_and_closed_with_the_leader_passed_on() {
     let listed = g.rooms_listed(1)[0].clone();
     assert_eq!(listed.name, "Friends");
     assert!(!listed.started);
-    assert_eq!(pickups_on_server(&mut g.server), arena_shared::map::PICKUP_SPOTS.len());
+    assert_eq!(pickups_on_server(&mut g.server), map().pickups.len());
 
     g.ask(1, RoomRequest::Join(listed.key));
     g.until(Duration::from_secs(5), "both in the room", |g| g.room(0).is_some_and(|r| r.members.len() == 2));
@@ -120,7 +120,7 @@ fn rooms_are_kept_apart() {
     assert!(sees(&mut g.clients[0], B).is_none(), "A sees B, in another room");
     assert!(sees(&mut g.clients[1], A).is_none(), "B sees A, in another room");
     let pickups_seen = |client: &mut App| client.world_mut().query::<&Pickup>().iter(client.world()).count();
-    assert_eq!(pickups_seen(&mut g.clients[0]), arena_shared::map::PICKUP_SPOTS.len(), "A sees only its room's pickups");
+    assert_eq!(pickups_seen(&mut g.clients[0]), map().pickups.len(), "A sees only its room's pickups");
 
     // Even standing on the same spot, they can't hit each other.
     let spot = Vec2::new(-22.5, -6.5);

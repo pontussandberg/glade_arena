@@ -8,8 +8,8 @@
 //!   and its passive and Q ability
 //! - the fighters to pick from in a row of tiles at the bottom (click, or press the number)
 //! - on the right, the side panel: at home, the lobbies to join or create (`browser.rs`, opened
-//!   with "Create / join lobby"); in a room, its name and mode, who's in it (by team), the team
-//!   buttons, and for the leader the mode switch
+//!   with "Create / join lobby"); in a room, its name, mode and map, who's in it (by team), the
+//!   team buttons, and for the leader the mode and map switches
 //! - the way in at the bottom right: at home, practice; in a room, the
 //!   leader's start, or once the match is on, into the arena
 //!
@@ -24,6 +24,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use arena_shared::protocol::{AbilityState, AttackState, ClassId, Pos, RoomRequest};
+use arena_shared::map::MapId;
 use arena_shared::rooms::{MAX_PER_TEAM, Member, Mode, NO_TEAM, RoomView, TEAMS};
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::light::NotShadowCaster;
@@ -625,8 +626,8 @@ pub(crate) fn label(text: &str) -> impl Bundle {
     ui_text(text.to_uppercase(), 11.0, palette::ui::MUTED)
 }
 
-/// The room column, two cards. The room: name, mode, whether it's on, and for the leader the mode
-/// switch. Who's in it: in free-for-all a list; in teams the two side by side, with the way to
+/// The room column, two cards. The room: name, whether it's on, its mode and map (for the leader,
+/// switches). Who's in it: in free-for-all a list; in teams the two side by side, with the way to
 /// switch sides under ours. Then the way out. Rebuilt when the room changes, or we come to it.
 ///
 /// Names are in one neutral color; ours is in the accent (on a tinted row), as in the badge over the fighter.
@@ -655,22 +656,12 @@ fn show_room(
                 (false, false) => ("Waiting for the leader", palette::ui::MUTED),
             };
             card.spawn(ui_text(line, 12.0, color));
-            if leading && !view.started {
-                card.spawn(Node { height: px(GAP * 0.5), ..default() });
-                card.spawn(label("Mode"));
-                card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
-                    for mode in [Mode::Ffa, Mode::Teams] {
-                        let on = view.mode == mode;
-                        let fill = if on { palette::ui::SELECTED } else { palette::ui::BACKDROP };
-                        let edge = if on { ACCENT } else { palette::ui::MUTED.with_alpha(0.3) };
-                        let text = if on { palette::ui::TEXT } else { palette::ui::MUTED };
-                        let mut switch = row.spawn((RoomButton(RoomRequest::SetMode(mode)), button(mode.label(), 12.0, fill, text, edge)));
-                        switch.entry::<Node>().and_modify(|mut node| node.flex_grow = 1.0);
-                    }
-                });
-            } else {
-                card.spawn(ui_text(view.mode.label(), 13.0, palette::ui::TEXT));
-            }
+            let editing = leading && !view.started;
+            let modes = [Mode::Ffa, Mode::Teams].map(|mode| (mode, mode.label()));
+            setting(card, "Mode", &modes, view.mode, editing, RoomRequest::SetMode);
+            let maps = MapId::ALL.map(|map| (map, map.label()));
+            setting(card, "Map", &maps, view.map, editing, RoomRequest::SetMap);
+            card.spawn(ui_text(view.map.blurb(), 11.0, palette::ui::MUTED));
         });
 
         panel.spawn(card()).with_children(|card| match view.mode {
@@ -685,6 +676,36 @@ fn show_room(
 
         let leave = button("Leave lobby", 12.0, palette::ui::PANEL, palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.3));
         panel.spawn((RoomButton(RoomRequest::Leave), leave));
+    });
+}
+
+/// One of the room's settings under its `title`: for its leader before the start
+/// (`editing`), a row of switches, one per option (`current` lit), each asking for its `pick`;
+/// for everyone else, just what it is.
+fn setting<T: Copy + PartialEq>(
+    card: &mut ChildSpawnerCommands,
+    title: &str,
+    options: &[(T, &str)],
+    current: T,
+    editing: bool,
+    pick: fn(T) -> RoomRequest,
+) {
+    card.spawn(Node { height: px(GAP * 0.5), ..default() });
+    card.spawn(label(title));
+    if !editing {
+        let shown = options.iter().find(|(option, _)| *option == current).map_or("", |(_, name)| name);
+        card.spawn(ui_text(shown, 13.0, palette::ui::TEXT));
+        return;
+    }
+    card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
+        for &(option, name) in options {
+            let on = option == current;
+            let fill = if on { palette::ui::SELECTED } else { palette::ui::BACKDROP };
+            let edge = if on { ACCENT } else { palette::ui::MUTED.with_alpha(0.3) };
+            let text = if on { palette::ui::TEXT } else { palette::ui::MUTED };
+            let mut switch = row.spawn((RoomButton(pick(option)), button(name, 12.0, fill, text, edge)));
+            switch.entry::<Node>().and_modify(|mut node| node.flex_grow = 1.0);
+        }
     });
 }
 
