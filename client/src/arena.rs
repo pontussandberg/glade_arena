@@ -1936,10 +1936,15 @@ fn build_arena(
     props.bridges(m, &mut rng);
     props.rope_bridges(m, &mut rng);
     props.fords(m, &mut rng);
+    if theme.wilds == Wilds::Fen {
+        props.flagstones(m, &mut rng);
+    }
     for (t, tile) in m.tiles() {
         let c = Map::center(t);
         match tile {
+            Tile::Rock if theme.wilds == Wilds::Highlands => props.sandstone(&mut rng, c),
             Tile::Rock => props.boulder(&mut rng, c),
+            Tile::Grass if theme.wilds == Wilds::Fen => props.fen_grass(&mut rng, c),
             Tile::Tree => props.map_tree(&mut rng, c),
             Tile::Grass if rng.next() < 0.02 => props.flower(&mut rng, c),
             Tile::Marsh => props.bog(&mut rng, c),
@@ -2300,6 +2305,10 @@ impl Props {
             Wilds::Fen => self.reed_bed(rng, p, ground),
             Wilds::Highlands if pick < 0.2 => self.round_tree(rng, p, ground, s * 0.75),
             Wilds::Highlands if pick < 0.32 => self.pillar(rng, p, ground),
+            Wilds::Highlands if pick < 0.37 => self.spire(rng, p, ground),
+            Wilds::Highlands if pick < 0.4 => self.arch(rng, p, ground),
+            Wilds::Highlands if pick < 0.44 => self.slab(rng, p, ground),
+            Wilds::Highlands if pick < 0.47 => self.butte(rng, p, ground),
             Wilds::Highlands if pick < 0.55 => {
                 let t = Transform::from_translation(to_world(p, ground + 0.2 * s))
                     .with_rotation(Quat::from_euler(EulerRot::XYZ, rng.range(0.0, 3.0), rng.range(0.0, 3.0), 0.0))
@@ -2371,20 +2380,146 @@ impl Props {
         self.add(Shape::Ball, self.theme.fern.mix(&self.theme.grass, rng.next() * 0.5), t);
     }
 
-    /// A pillar of weathered rock: boulders stacked and narrowing in bands of color, under a
-    /// wider cap.
+    /// The bands of color the highlands' rock is laid down in, from `k` up.
+    fn band(&self, k: usize) -> Color {
+        [self.theme.wall, self.theme.slate, self.theme.stone, self.theme.bank][k % 4]
+    }
+
+    /// A hoodoo: boulders stacked, narrowing and jostled, in bands of color, under a wider cap.
     fn pillar(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
-        let bands = [self.theme.wall, self.theme.slate, self.theme.stone];
-        let count = 3 + (rng.next() * 2.0) as usize;
+        let count = 3 + (rng.next() * 3.0) as usize;
+        let first = (rng.next() * 4.0) as usize;
+        let mut at = p;
         for k in 0..count {
-            let w = 1.9 - k as f32 * 0.25;
-            let t = Transform::from_translation(to_world(p, ground + 0.5 + k as f32 * 1.05))
+            let w = 1.9 - k as f32 * rng.range(0.15, 0.3);
+            at += Vec2::new(rng.range(-0.12, 0.12), rng.range(-0.12, 0.12));
+            let t = Transform::from_translation(to_world(at, ground + 0.5 + k as f32 * 1.05))
                 .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
                 .with_scale(Vec3::new(w, 1.3, w));
-            self.add(Shape::Rock, bands[k % 3], t);
+            self.add(Shape::Rock, self.band(first + k), t);
         }
-        let cap = Transform::from_translation(to_world(p, ground + 0.6 + count as f32 * 1.05)).with_scale(Vec3::new(2.0, 0.7, 2.0));
+        let cap = Transform::from_translation(to_world(at, ground + 0.6 + count as f32 * 1.05))
+            .with_rotation(Quat::from_rotation_z(rng.range(-0.15, 0.15)))
+            .with_scale(Vec3::new(rng.range(1.8, 2.4), 0.7, rng.range(1.8, 2.4)));
         self.add(Shape::Rock, self.theme.slate.darker(0.1), cap);
+    }
+
+    /// A tall, thin needle of rock, leaning a little.
+    fn spire(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+        let tall = rng.range(4.0, 6.5);
+        let lean = Quat::from_euler(EulerRot::XYZ, rng.range(-0.1, 0.1), rng.range(0.0, 3.0), rng.range(-0.1, 0.1));
+        let first = (rng.next() * 4.0) as usize;
+        for k in 0..3 {
+            let up = tall * (0.2 + k as f32 * 0.3);
+            let w = 1.3 - k as f32 * 0.35;
+            let t = Transform::from_translation(to_world(p, ground) + lean * Vec3::Y * up).with_rotation(lean).with_scale(Vec3::new(w, tall * 0.32, w));
+            self.add(Shape::Rock, self.band(first + k), t);
+        }
+    }
+
+    /// A natural arch: two stacks of rock with a long one laid across their tops.
+    fn arch(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+        let across = Vec2::from_angle(rng.range(0.0, 3.14));
+        let (span, tall) = (rng.range(1.8, 2.6), rng.range(2.6, 3.4));
+        for side in [-1.0, 1.0] {
+            let foot = p + across * side * span;
+            for k in 0..3 {
+                let t = Transform::from_translation(to_world(foot, ground + 0.4 + k as f32 * tall / 3.0))
+                    .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
+                    .with_scale(Vec3::new(1.4 - k as f32 * 0.1, tall / 2.6, 1.4 - k as f32 * 0.1));
+                self.add(Shape::Rock, self.band(k), t);
+            }
+        }
+        let turn = Quat::from_rotation_y(-across.to_angle());
+        let lintel = Transform::from_translation(to_world(p, ground + tall + 0.5)).with_rotation(turn).with_scale(Vec3::new(span * 2.2, 0.9, 1.3));
+        self.add(Shape::Rock, self.band(3), lintel);
+    }
+
+    /// A slab of rock stood on end, tipped over to one side.
+    fn slab(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+        let tilt = Quat::from_euler(EulerRot::YXZ, rng.range(0.0, 3.0), rng.range(-0.35, 0.35), rng.range(-0.2, 0.2));
+        let t = Transform::from_translation(to_world(p, ground + 1.3)).with_rotation(tilt).with_scale(Vec3::new(0.7, rng.range(3.5, 4.8), rng.range(2.4, 3.2)));
+        self.add(Shape::Rock, self.band((rng.next() * 4.0) as usize), t);
+    }
+
+    /// A squat butte: a wide, flat-topped heap of banded rock with dry grass on top.
+    fn butte(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+        let w = rng.range(3.5, 5.0);
+        for k in 0..3 {
+            let t = Transform::from_translation(to_world(p, ground + 0.5 + k as f32 * 0.9))
+                .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
+                .with_scale(Vec3::new(w - k as f32 * 0.4, 1.0, w - k as f32 * 0.4));
+            self.add(Shape::Rock, self.band(k), t);
+        }
+        let top = Transform::from_translation(to_world(p, ground + 2.65)).with_scale(Vec3::new(w * 0.5, 0.18, w * 0.5));
+        self.add(Shape::Ball, self.theme.meadow, top);
+    }
+
+    /// A rock on the highlands' fight floor: sandstone in one of a few forms, all about a tile
+    /// across like any rock there.
+    fn sandstone(&mut self, rng: &mut Lcg, c: Vec2) {
+        let turn = Quat::from_rotation_y(rng.range(0.0, 3.0));
+        match (rng.next() * 3.0) as usize {
+            // Flat-topped, with a smaller one balanced on it.
+            0 => {
+                self.add(Shape::Rock, self.band(0), Transform::from_translation(to_world(c, 0.3)).with_rotation(turn).with_scale(Vec3::new(1.5, 0.9, 1.4)));
+                self.add(Shape::Rock, self.band(2), Transform::from_translation(to_world(c, 0.9)).with_rotation(turn.inverse()).with_scale(Vec3::new(0.8, 0.7, 0.9)));
+            }
+            // Split in two, a crack between them.
+            1 => {
+                let side = Vec2::from_angle(rng.range(0.0, 3.0)) * 0.28;
+                for (k, s) in [(1, 1.0), (3, -1.0)] {
+                    let t = Transform::from_translation(to_world(c + side * s, 0.35)).with_rotation(turn).with_scale(Vec3::new(0.9, 1.3, 1.4));
+                    self.add(Shape::Rock, self.band(k), t);
+                }
+            }
+            // A stack of two, banded.
+            _ => {
+                self.add(Shape::Rock, self.band(1), Transform::from_translation(to_world(c, 0.3)).with_rotation(turn).with_scale(Vec3::new(1.4, 0.9, 1.4)));
+                self.add(Shape::Rock, self.band(0), Transform::from_translation(to_world(c, 0.95)).with_rotation(turn).with_scale(Vec3::new(1.1, 0.8, 1.1)));
+            }
+        }
+    }
+
+    /// What grows on the fen's fight floor here and there: tufts of sedge, bog cotton and pads of
+    /// moss, all below the ankle.
+    fn fen_grass(&mut self, rng: &mut Lcg, c: Vec2) {
+        let pick = rng.next();
+        let p = c + Vec2::new(rng.range(-0.3, 0.3), rng.range(-0.3, 0.3));
+        if pick < 0.06 {
+            self.bog_reeds(rng, p, self.theme.fern, self.theme.marsh);
+        } else if pick < 0.1 {
+            self.flower(rng, c);
+        } else if pick < 0.15 {
+            let size = Vec3::new(rng.range(0.3, 0.5), 0.05, rng.range(0.25, 0.4));
+            let t = Transform::from_translation(to_world(p, 0.0)).with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0))).with_scale(size);
+            self.add(Shape::Ball, self.theme.fern.mix(&self.theme.meadow, 0.3), t);
+        }
+    }
+
+    /// Worn paving on the fen's path tiles: each tile two to four slabs, uneven, some sunk or
+    /// gone, moss showing between them.
+    fn flagstones(&mut self, m: &Map, rng: &mut Lcg) {
+        for (t, tile) in m.tiles() {
+            if tile != Tile::Path {
+                continue;
+            }
+            let c = Map::center(t);
+            let split = if rng.next() < 0.5 { Vec2::X } else { Vec2::Y };
+            let pieces = 1 + (rng.next() * 2.0) as usize;
+            for k in 0..pieces {
+                if rng.next() < 0.12 {
+                    continue;
+                }
+                let len = 1.0 / pieces as f32;
+                let along = (k as f32 + 0.5) * len - 0.5;
+                let size = split * (len - 0.07) + split.perp().abs() * 0.92;
+                let color = self.theme.stone.mix(&self.theme.wall, rng.range(0.2, 0.7)).darker(rng.range(0.0, 0.12));
+                let turn = Quat::from_rotation_y(rng.range(-0.04, 0.04));
+                let at = to_world(c + split * along, rng.range(0.005, 0.025));
+                self.block(Vec3::new(size.x, 0.05, size.y), color, Transform::from_translation(at).with_rotation(turn));
+            }
+        }
     }
 }
 
@@ -2500,6 +2635,12 @@ fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut Lcg) -> Me
     b.build()
 }
 
+/// 0 to 1 over the ground in broad, wandering patches.
+fn patches(p: Vec2) -> f32 {
+    let waves = (p.x * 0.37 + 1.1).sin() + (p.y * 0.41 + 0.4).sin() + ((p.x + p.y) * 0.23).sin() + ((p.x - p.y) * 0.29 + 2.3).sin();
+    (waves / 4.0 + 0.5).clamp(0.0, 1.0)
+}
+
 /// The walkable ground of the clearing: one quad per tile, one color per tile (a faint checker
 /// keeps the grid readable), plus earthen banks down to the water, and cliffs down a chasm in
 /// bands of rock.
@@ -2512,8 +2653,12 @@ fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
         let c = Map::center(t);
         let checker = if (t.x + t.y) % 2 == 0 { 1.03 } else { 0.97 };
         let base = match tile {
+            // Paved: the slabs go on top (`Props::flagstones`); this is the moss between them.
+            Tile::Path if theme.wilds == Wilds::Fen => theme.fern.mix(&theme.marsh, rng.next() * 0.4),
             Tile::Path => theme.path.mix(&theme.grass, rng.next() * 0.25),
             Tile::Marsh => theme.marsh.mix(&theme.bank, rng.next() * 0.35),
+            // Damp ground: wet hollows and drier rises wandering across the grass.
+            _ if theme.wilds == Wilds::Fen => theme.meadow.mix(&theme.marsh, patches(c)).mix(&theme.grass, rng.next() * 0.3),
             _ => theme.grass.mix(&theme.meadow, rng.next() * 0.25),
         };
         let color = Color::from(base.to_linear() * checker);

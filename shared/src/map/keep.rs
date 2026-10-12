@@ -1,5 +1,5 @@
 //! Sunken Keep: a ruined keep on an island in the middle of a square moat, its curtain wall
-//! breached, an altar in its courtyard. Each side reaches the island over a causeway or wades a
+//! breached, an altar in its paved courtyard. Each side reaches the island over a causeway or wades a
 //! ford, both near its own end. Out in the four corners, marshes slow whoever wades in, a haste
 //! lying in the deepest of each for those who dare.
 
@@ -137,6 +137,9 @@ pub(super) fn build() -> Map {
             Tile::Wall
         } else if d >= MOAT.1 && causeway && c.x.abs() > 13.0 {
             // The road out to each causeway.
+            Tile::Path
+        } else if c.x.abs().max(c.y.abs()) < CURTAIN {
+            // The courtyard's old paving.
             Tile::Path
         } else if in_marsh(c) {
             Tile::Marsh
