@@ -41,7 +41,7 @@ use crate::camera::{CameraControl, CameraMoves, Orbit};
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::{self, palette, to_world};
 use crate::render::{GameUi, Visuals, button, button_fill, clicked, key_chip, shown, ui_text};
-use crate::rooms::{CurrentMap, CurrentRoom, Me, Notice, Picking, Screen, request, save_map};
+use crate::rooms::{CurrentMap, CurrentRoom, Me, Notice, Picking, Screen, request};
 use crate::stat_frame;
 
 pub struct LobbyPlugin;
@@ -858,10 +858,6 @@ fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, me
 fn room_buttons(buttons: Query<(Ref<Interaction>, &RoomButton)>, mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>) {
     for (interaction, button) in &buttons {
         if clicked(interaction) {
-            // The map picked here is the one we'd pick at home too (`map_pick.rs`).
-            if let RoomRequest::SetMap(map) = button.0 {
-                save_map(map);
-            }
             request(&mut sender, button.0.clone());
         }
     }

@@ -55,8 +55,8 @@ pub struct RoomList(pub Vec<RoomSummary>);
 #[derive(Resource, Default, Debug)]
 pub struct CurrentRoom(pub Option<RoomView>);
 
-/// The map our room plays on; out of a room, the one picked at home (`map_pick.rs`), which
-/// practice and new lobbies play on, and the last room's once out of it. Changes only when it
+/// The map our room plays on; out of a room, the one picked at home (`map_pick.rs`, a random one
+/// to begin with), which practice and new lobbies play on, and the last room's once out of it. Changes only when it
 /// does, so what's built from it is rebuilt only then.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CurrentMap(pub MapId);
@@ -91,7 +91,7 @@ pub struct RoomsNetPlugin {
 impl Plugin for RoomsNetPlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<Screen>().add_computed_state::<Picking>();
-        app.init_resource::<RoomList>().init_resource::<CurrentRoom>().insert_resource(CurrentMap(load_map()));
+        app.init_resource::<RoomList>().init_resource::<CurrentRoom>().init_resource::<CurrentMap>();
         app.init_resource::<Notice>().init_resource::<Leaving>();
         app.insert_resource(QuickJoin(self.quick_join.clone()));
         app.insert_resource(StoredName(self.guest_name.clone()));
@@ -217,17 +217,6 @@ pub fn load_guest_name() -> Option<String> {
 
 fn save_guest_name(name: &str) {
     save_setting(GUEST_NAME_KEY, name);
-}
-
-/// The browser keeps the map last picked (`localStorage`), to pick it again after a reload.
-const MAP_KEY: &str = "arena.map";
-
-fn load_map() -> MapId {
-    load_setting(MAP_KEY).and_then(|name| MapId::ALL.into_iter().find(|map| format!("{map:?}") == name)).unwrap_or_default()
-}
-
-pub fn save_map(map: MapId) {
-    save_setting(MAP_KEY, &format!("{map:?}"));
 }
 
 /// Something the browser keeps for us (`localStorage`) across reloads. Nothing outside a browser.
