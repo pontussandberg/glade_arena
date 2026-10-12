@@ -249,10 +249,10 @@ fn handle_requests(
 fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link: Entity, request: RoomRequest) -> Result<(), &'static str> {
     let room_key = lobby.guests[&link].room;
     match request {
-        RoomRequest::Create { name, mode } => {
+        RoomRequest::Create { name, mode, map } => {
             let name = clean_room_name(&name).ok_or("Give the room a name")?;
             leave(lobby, ctx, link);
-            let key = create(lobby, allocator, ctx, link, name, mode);
+            let key = create(lobby, allocator, ctx, link, name, mode, map);
             join(lobby, ctx, link, key)?;
         }
         RoomRequest::Join(key) => {
@@ -280,7 +280,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             let key = match found {
                 Some(key) => key,
                 None => {
-                    let key = create(lobby, allocator, ctx, link, name, Mode::Ffa);
+                    let key = create(lobby, allocator, ctx, link, name, Mode::Ffa, MapId::default());
                     lobby.rooms.get_mut(&key).expect("just made").started = true;
                     key
                 }
@@ -288,9 +288,9 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             lobby.guests.get_mut(&link).expect("a guest").playing = true;
             join(lobby, ctx, link, key)?;
         }
-        RoomRequest::Practice => {
+        RoomRequest::Practice(map) => {
             leave(lobby, ctx, link);
-            let key = create(lobby, allocator, ctx, link, "Practice".into(), Mode::Ffa);
+            let key = create(lobby, allocator, ctx, link, "Practice".into(), Mode::Ffa, map);
             let room = lobby.rooms.get_mut(&key).expect("just made");
             room.started = true;
             room.practice = true;
@@ -465,12 +465,12 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
 /// The most target dummies a practice room may have.
 const MAX_DUMMIES: usize = 12;
 
-/// A new room, led by `leader` (who still has to `join` it).
-fn create(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, leader: Entity, name: String, mode: Mode) -> RoomKey {
+/// A new room on `map`, led by `leader` (who still has to `join` it).
+#[allow(clippy::too_many_arguments)]
+fn create(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, leader: Entity, name: String, mode: Mode, map: MapId) -> RoomKey {
     lobby.next_room += 1;
     let key = RoomKey(lobby.next_room);
     let net = lobby.free_net.pop().unwrap_or_else(|| allocator.allocate());
-    let map = MapId::default();
     let things = spawn_room_things(&mut ctx.commands, InRoom { key, net }, map);
     info!(room = key.0, name, ?mode, leader = lobby.guests[&leader].id, "room created");
     lobby.rooms.insert(key, Room { name, mode, map, net, leader, started: false, practice: false, members: Vec::new(), things, dummies: Vec::new(), changed: true });

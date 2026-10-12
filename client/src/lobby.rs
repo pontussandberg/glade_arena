@@ -41,7 +41,7 @@ use crate::camera::{CameraControl, CameraMoves, Orbit};
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::{self, palette, to_world};
 use crate::render::{GameUi, Visuals, button, button_fill, clicked, key_chip, shown, ui_text};
-use crate::rooms::{CurrentMap, CurrentRoom, Me, Notice, Picking, Screen, request};
+use crate::rooms::{CurrentMap, CurrentRoom, Me, Notice, Picking, Screen, request, save_map};
 use crate::stat_frame;
 
 pub struct LobbyPlugin;
@@ -858,6 +858,10 @@ fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, me
 fn room_buttons(buttons: Query<(Ref<Interaction>, &RoomButton)>, mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>) {
     for (interaction, button) in &buttons {
         if clicked(interaction) {
+            // The map picked here is the one we'd pick at home too (`map_pick.rs`).
+            if let RoomRequest::SetMap(map) = button.0 {
+                save_map(map);
+            }
             request(&mut sender, button.0.clone());
         }
     }
@@ -899,7 +903,7 @@ fn way_in(screen: Screen, view: Option<&RoomView>, me: Option<&Me>) -> WayIn {
     }
 }
 
-/// The button: at home, practice as the selected fighter; in a room, the leader starts
+/// The button: at home, practice as the selected fighter on the picked map; in a room, the leader starts
 /// the match (everyone goes in as what they picked), and once it's on, in we go. We're taken to
 /// the arena when our fighter appears. "Create / join lobby" is there at home only.
 #[allow(clippy::too_many_arguments)]
@@ -908,6 +912,7 @@ fn enter_arena(
     screen: Res<State<Screen>>,
     room: Res<CurrentRoom>,
     me: Option<Res<Me>>,
+    map: Res<CurrentMap>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
     button: Single<(Ref<Interaction>, &mut BackgroundColor), With<EnterButton>>,
     mut label: Single<&mut Text, With<EnterLabel>>,
@@ -939,7 +944,7 @@ fn enter_arena(
     // it's still down and take the click for an attack.
     mouse.reset(MouseButton::Left);
     match way {
-        WayIn::Practice => request(&mut sender, RoomRequest::Practice),
+        WayIn::Practice => request(&mut sender, RoomRequest::Practice(map.0)),
         WayIn::Enter => request(&mut sender, RoomRequest::EnterArena),
         WayIn::Start => request(&mut sender, RoomRequest::Start),
         WayIn::Wait => {}

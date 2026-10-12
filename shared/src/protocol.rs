@@ -419,13 +419,13 @@ pub struct Hello {
 /// `LobbyEvent::Room`, or `LobbyEvent::Refused` saying why not.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum RoomRequest {
-    /// Make a room and lead it.
-    Create { name: String, mode: Mode },
+    /// Make a room on `map` and lead it.
+    Create { name: String, mode: Mode, map: MapId },
     Join(RoomKey),
     /// Join the room called this, or make it and start it right away: for bots and tests.
     QuickJoin(String),
-    /// A room of our own, never listed, straight into its arena.
-    Practice,
+    /// A room of our own on this map, never listed, straight into its arena.
+    Practice(MapId),
     Leave,
     /// Into the room's arena, once its match is on, as our picked class.
     EnterArena,

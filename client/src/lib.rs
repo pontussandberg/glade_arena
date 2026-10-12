@@ -37,6 +37,9 @@ pub mod feedback;
 pub mod arena;
 #[cfg(feature = "render")]
 pub mod lobby;
+
+#[cfg(feature = "render")]
+pub mod map_pick;
 #[cfg(feature = "render")]
 pub mod minimap;
 #[cfg(feature = "render")]
