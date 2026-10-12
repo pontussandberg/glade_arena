@@ -1,13 +1,14 @@
-//! The arena's look: low-poly clearings at dusk in a ring of forest, with water, chasms, bridges,
-//! marshes, ruined walls and torches. See `docs/art-direction.md`. The scene is built from our
-//! room's map (`arena_shared::map`), tile by tile, so what you see is exactly what blocks
-//! movement and shots; and built again when the map changes.
+//! The arena's look: low-poly clearings in a ring of forest, each map in its own theme
+//! (`Theme`), with water, chasms, bridges, marshes, ruined walls and torches. See
+//! `docs/art-direction.md`. The scene is built from our room's map (`arena_shared::map`), tile
+//! by tile, so what you see is exactly what blocks movement and shots; and built again when the
+//! map changes.
 //!
 //! Flat-shaded, untextured, one color per face. The world stays in a calm middle band of
 //! saturation; only fighters, projectiles and torch flames go above it.
 
 use arena_shared::classes::{ClassDef, Shot};
-use arena_shared::map::{Map, Tile};
+use arena_shared::map::{Map, MapId, Tile};
 use bevy::asset::RenderAssetUsages;
 use bevy::color::Mix;
 use bevy::light::CascadeShadowConfigBuilder;
@@ -152,6 +153,120 @@ pub mod palette {
 }
 
 use palette::*;
+
+/// What a map's world is made of and lit by: the scene's colors, the sun, the sky's fill and the
+/// haze. Fighters, shots, pickups, torches and the UI look the same on every map.
+pub struct Theme {
+    pub grass: Color,
+    pub meadow: Color,
+    pub fern: Color,
+    pub pine: Color,
+    pub slate: Color,
+    pub stone: Color,
+    pub wall: Color,
+    pub bark: Color,
+    pub path: Color,
+    pub bank: Color,
+    pub riverbed: Color,
+    pub pond: Color,
+    pub bloom: Color,
+    pub marsh: Color,
+    pub abyss: Color,
+    pub rope: Color,
+    pub haze: Color,
+    pub sky: Color,
+    pub sky_brightness: f32,
+    pub sun: Color,
+    pub sun_illuminance: f32,
+}
+
+impl Theme {
+    pub fn of(map: MapId) -> &'static Theme {
+        match map {
+            MapId::Crossing => &GLADE,
+            MapId::Keep => &FEN,
+            MapId::Gorge => &HIGHLANDS,
+        }
+    }
+}
+
+/// River Crossing: a green forest glade at dusk, the world's palette above.
+const GLADE: Theme = Theme {
+    grass: MOSS,
+    meadow: MEADOW,
+    fern: FERN,
+    pine: PINE,
+    slate: SLATE,
+    stone: STONE,
+    wall: WALL,
+    bark: BARK,
+    path: PATH,
+    bank: BANK,
+    riverbed: RIVERBED,
+    pond: POND,
+    bloom: HEATHER,
+    marsh: MARSH,
+    abyss: ABYSS,
+    rope: ROPE,
+    haze: HAZE,
+    sky: SKY,
+    sky_brightness: 160.0,
+    sun: SUN,
+    sun_illuminance: 3_600.0,
+};
+
+/// Sunken Keep: a fen by moonlight. Sea-green grass and blue-black firs under a cold, dim moon
+/// and blue mist, so the torches on the keep carry the scene; pale bog cotton for flowers.
+const FEN: Theme = Theme {
+    grass: Color::srgb_u8(0x5A, 0x72, 0x62),
+    meadow: Color::srgb_u8(0x6C, 0x80, 0x6E),
+    fern: Color::srgb_u8(0x3D, 0x5C, 0x54),
+    pine: Color::srgb_u8(0x22, 0x37, 0x38),
+    slate: Color::srgb_u8(0x5C, 0x66, 0x76),
+    stone: Color::srgb_u8(0x7C, 0x84, 0x8F),
+    wall: Color::srgb_u8(0x5A, 0x64, 0x70),
+    bark: Color::srgb_u8(0x48, 0x3F, 0x38),
+    path: Color::srgb_u8(0x78, 0x7A, 0x6E),
+    bank: Color::srgb_u8(0x48, 0x48, 0x40),
+    riverbed: Color::srgb_u8(0x2C, 0x38, 0x3C),
+    pond: Color::srgb_u8(0x48, 0x78, 0x86),
+    bloom: Color::srgb_u8(0xBE, 0xC6, 0xB4),
+    marsh: Color::srgb_u8(0x4C, 0x58, 0x48),
+    abyss: Color::srgb_u8(0x2A, 0x31, 0x3E),
+    rope: Color::srgb_u8(0x68, 0x60, 0x50),
+    haze: Color::srgb_u8(0x6A, 0x7C, 0x8A),
+    sky: Color::srgb_u8(0x6E, 0x88, 0xB4),
+    sky_brightness: 210.0,
+    sun: Color::srgb_u8(0xC4, 0xD4, 0xFF),
+    sun_illuminance: 2_600.0,
+};
+
+/// Riven Gorge: autumn highlands at sunset. Dry golden grass, rust bracken among dark olive
+/// firs, a gorge of red sandstone falling to plum shadow, under a deep orange sun and dusty
+/// amber haze.
+const HIGHLANDS: Theme = Theme {
+    grass: Color::srgb_u8(0x8A, 0x84, 0x50),
+    meadow: Color::srgb_u8(0xA0, 0x90, 0x5A),
+    fern: Color::srgb_u8(0x78, 0x5E, 0x3E),
+    pine: Color::srgb_u8(0x3C, 0x45, 0x32),
+    slate: Color::srgb_u8(0x88, 0x6C, 0x5A),
+    stone: Color::srgb_u8(0xA0, 0x88, 0x70),
+    wall: Color::srgb_u8(0x86, 0x6E, 0x5E),
+    bark: Color::srgb_u8(0x58, 0x40, 0x30),
+    path: Color::srgb_u8(0xA6, 0x8C, 0x68),
+    bank: Color::srgb_u8(0x68, 0x4C, 0x3A),
+    riverbed: Color::srgb_u8(0x48, 0x3E, 0x36),
+    pond: Color::srgb_u8(0x4E, 0x78, 0x78),
+    bloom: Color::srgb_u8(0xB6, 0x78, 0x4E),
+    marsh: Color::srgb_u8(0x68, 0x62, 0x40),
+    abyss: Color::srgb_u8(0x38, 0x2A, 0x34),
+    rope: Color::srgb_u8(0x88, 0x72, 0x50),
+    haze: Color::srgb_u8(0xB4, 0xA0, 0x8E),
+    sky: Color::srgb_u8(0x98, 0x88, 0xB0),
+    sky_brightness: 150.0,
+    sun: Color::srgb_u8(0xFF, 0xCA, 0x9C),
+    sun_illuminance: 3_400.0,
+};
 
 /// Gameplay (x, y) to world (x, height, -y): the gameplay plane is the ground, +y is "up" on
 /// screen. The one place this convention lives.
@@ -1577,24 +1692,25 @@ pub fn gem_mesh(radius: f32) -> Mesh {
 }
 
 /// A tile's color on the minimap: the palette of the scene, flattened.
-pub fn tile_color(tile: Tile) -> Color {
+pub fn tile_color(theme: &Theme, tile: Tile) -> Color {
     match tile {
-        Tile::Grass => MOSS,
-        Tile::Path => PATH,
-        Tile::Marsh => MARSH,
-        Tile::Ford => RIVERBED.mix(&POND, 0.6),
-        Tile::Bridge => STONE,
-        Tile::Planks => BARK.mix(&PATH, 0.3),
-        Tile::Water => POND,
-        Tile::Chasm => ABYSS.mix(&INK, 0.3),
-        Tile::Wall => WALL,
-        Tile::Rock => SLATE,
-        Tile::Tree => PINE,
-        Tile::Forest => PINE.mix(&INK, 0.4),
+        Tile::Grass => theme.grass,
+        Tile::Path => theme.path,
+        Tile::Marsh => theme.marsh,
+        Tile::Ford => theme.riverbed.mix(&theme.pond, 0.6),
+        Tile::Bridge => theme.stone,
+        Tile::Planks => theme.bark.mix(&theme.path, 0.3),
+        Tile::Water => theme.pond,
+        Tile::Chasm => theme.abyss.mix(&INK, 0.3),
+        Tile::Wall => theme.wall,
+        Tile::Rock => theme.slate,
+        Tile::Tree => theme.pine,
+        Tile::Forest => theme.pine.mix(&INK, 0.4),
     }
 }
 
-/// Haze that fades the forest ring into the sky color; goes on the camera.
+/// Haze that fades the forest ring into the sky color; goes on the camera, and takes the map's
+/// color in `light_scene`.
 pub fn haze() -> DistanceFog {
     DistanceFog { color: HAZE, falloff: FogFalloff::Linear { start: 40.0, end: 95.0 }, ..default() }
 }
@@ -1607,7 +1723,7 @@ impl Plugin for ArenaPlugin {
         app.insert_resource(GlobalAmbientLight { color: SKY, brightness: 160.0, ..default() });
         app.add_systems(Startup, spawn_sun);
         // The scene is built from our room's map, and built again when it changes.
-        app.add_systems(Update, (build_arena.run_if(resource_exists_and_changed::<CurrentMap>), flicker_torches));
+        app.add_systems(Update, ((build_arena, light_scene).run_if(resource_exists_and_changed::<CurrentMap>), flicker_torches));
     }
 }
 
@@ -1902,7 +2018,7 @@ fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight,
     }
 }
 
-/// The low dusk sun, the same over every map.
+/// The low sun, from the same side over every map (its color and strength are the map's).
 fn spawn_sun(mut commands: Commands) {
     commands.spawn((
         DirectionalLight { color: SUN, illuminance: 3_600.0, shadow_maps_enabled: true, ..default() },
@@ -1911,6 +2027,28 @@ fn spawn_sun(mut commands: Commands) {
         // Enough to cover what the camera sees at full zoom-out; the far forest needs no shadows.
         CascadeShadowConfigBuilder { num_cascades: 1, maximum_distance: 50.0, ..default() }.build(),
     ));
+}
+
+/// The map's light and air: the sun's color and strength, the sky's fill, and the haze (and the
+/// clear color behind it, the same).
+fn light_scene(
+    current: Res<CurrentMap>,
+    mut clear: ResMut<ClearColor>,
+    mut ambient: ResMut<GlobalAmbientLight>,
+    mut suns: Query<&mut DirectionalLight>,
+    mut fogs: Query<&mut DistanceFog>,
+) {
+    let theme = Theme::of(current.0);
+    clear.0 = theme.haze;
+    ambient.color = theme.sky;
+    ambient.brightness = theme.sky_brightness;
+    for mut sun in &mut suns {
+        sun.color = theme.sun;
+        sun.illuminance = theme.sun_illuminance;
+    }
+    for mut fog in &mut fogs {
+        fog.color = theme.haze;
+    }
 }
 
 /// Everything built from the map: despawned when it changes, for the new map's.
@@ -1929,17 +2067,18 @@ fn build_arena(
     }
     let mut rng = Lcg(7);
     let m = current.map();
+    let theme = Theme::of(current.0);
 
     let scene = SceneTiles::new(m);
     let vertex_colored = materials.add(matte(Color::WHITE));
-    commands.spawn((ArenaScene, Mesh3d(meshes.add(terrain_mesh(m, &scene, &mut rng))), MeshMaterial3d(vertex_colored.clone())));
-    commands.spawn((ArenaScene, Mesh3d(meshes.add(ground_mesh(m, &mut rng))), MeshMaterial3d(vertex_colored.clone())));
+    commands.spawn((ArenaScene, Mesh3d(meshes.add(terrain_mesh(m, &scene, theme, &mut rng))), MeshMaterial3d(vertex_colored.clone())));
+    commands.spawn((ArenaScene, Mesh3d(meshes.add(ground_mesh(m, theme, &mut rng))), MeshMaterial3d(vertex_colored.clone())));
     if let Some(water) = water_mesh(&scene) {
-        let material = StandardMaterial { perceptual_roughness: 0.35, reflectance: 0.5, ..matte(POND) };
+        let material = StandardMaterial { perceptual_roughness: 0.35, reflectance: 0.5, ..matte(theme.pond) };
         commands.spawn((ArenaScene, Mesh3d(meshes.add(water)), MeshMaterial3d(materials.add(material))));
     }
 
-    let mut props = Props::new();
+    let mut props = Props::new(theme);
     let wall_tops = props.walls(m, &mut rng);
     props.bridges(m, &mut rng);
     props.rope_bridges(m, &mut rng);
@@ -1972,7 +2111,7 @@ fn build_arena(
     for (i, &p) in m.torches.iter().enumerate() {
         let base = wall_tops.get(&Map::tile_of(p)).copied().unwrap_or(0.0);
         let post_height = if base > 0.0 { 0.5 } else { 1.5 };
-        props.block(Vec3::new(0.14, post_height, 0.14), BARK, Transform::from_translation(to_world(p, base + post_height / 2.0)));
+        props.block(Vec3::new(0.14, post_height, 0.14), theme.bark, Transform::from_translation(to_world(p, base + post_height / 2.0)));
         commands
             .spawn((
                 ArenaScene,
@@ -2033,6 +2172,7 @@ enum Shape {
 
 /// Builds every static prop into one vertex-colored mesh.
 struct Props {
+    theme: &'static Theme,
     rock: Mesh,
     trunk: Mesh,
     cones: [Mesh; 3],
@@ -2043,8 +2183,9 @@ struct Props {
 }
 
 impl Props {
-    fn new() -> Self {
+    fn new(theme: &'static Theme) -> Self {
         Props {
+            theme,
             rock: faceted(Sphere::new(0.6).mesh().ico(0).unwrap()),
             trunk: faceted(Cylinder::new(0.22, 1.2).mesh().resolution(5).build()),
             cones: [0, 1, 2].map(|k| faceted(Cone::new(1.5 - k as f32 * 0.35, 1.7).mesh().resolution(7).build())),
@@ -2097,7 +2238,7 @@ impl Props {
             }
             let c = Map::center(t);
             let h = rng.range(0.9, 1.7);
-            let color = WALL.mix(&STONE, rng.range(0.0, 0.25));
+            let color = self.theme.wall.mix(&self.theme.stone, rng.range(0.0, 0.25));
             self.block(Vec3::new(1.0, h, 1.0), color, Transform::from_translation(to_world(c, h / 2.0)));
             let mut top = h;
             if rng.next() < 0.45 {
@@ -2112,7 +2253,7 @@ impl Props {
             for _ in 0..2 {
                 let p = c + Vec2::new(rng.range(-0.9, 0.9), rng.range(-0.9, 0.9));
                 if matches!(m.get(Map::tile_of(p)), Tile::Grass | Tile::Path | Tile::Marsh) {
-                    self.add(Shape::Rock, SLATE, Transform::from_translation(to_world(p, 0.05)).with_scale(Vec3::splat(rng.range(0.15, 0.3))));
+                    self.add(Shape::Rock, self.theme.slate, Transform::from_translation(to_world(p, 0.05)).with_scale(Vec3::splat(rng.range(0.15, 0.3))));
                 }
             }
         }
@@ -2129,7 +2270,7 @@ impl Props {
                 continue;
             }
             let c = Map::center(t);
-            let color = if rng.next() < 0.5 { STONE } else { SLATE };
+            let color = if rng.next() < 0.5 { self.theme.stone } else { self.theme.slate };
             self.block(Vec3::new(0.97, 0.36, 0.97), color, Transform::from_translation(to_world(c, -0.18)));
             // How far to the nearest bank, along the bridge.
             let to_bank = SIDES
@@ -2142,7 +2283,7 @@ impl Props {
                 .unwrap_or(6);
             let over_water = SIDES.iter().any(|&d| matches!(m.scene_tile(t + d), Tile::Water | Tile::Ford));
             let depth = if over_water { -RIVERBED_LEVEL } else { 0.4 + 2.2 / to_bank as f32 };
-            self.block(Vec3::new(1.0, depth, 1.0), WALL, Transform::from_translation(to_world(c, -0.36 - depth / 2.0)));
+            self.block(Vec3::new(1.0, depth, 1.0), self.theme.wall, Transform::from_translation(to_world(c, -0.36 - depth / 2.0)));
             for d in SIDES {
                 if !is_gap(m.scene_tile(t + d)) {
                     continue;
@@ -2150,12 +2291,12 @@ impl Props {
                 let along = IVec2::new(-d.y, d.x);
                 let out = d.as_vec2();
                 let size = if d.x == 0 { Vec3::new(1.02, 0.7, 0.36) } else { Vec3::new(0.36, 0.7, 1.02) };
-                self.block(size, WALL.mix(&STONE, 0.12), Transform::from_translation(to_world(c + out * 0.68, 0.25)));
+                self.block(size, self.theme.wall.mix(&self.theme.stone, 0.12), Transform::from_translation(to_world(c + out * 0.68, 0.25)));
                 for side in [along, -along] {
                     let runs_on = bridge(t + side) && is_gap(m.scene_tile(t + side + d));
                     if !runs_on {
                         let at = c + out * 0.68 + side.as_vec2() * 0.5;
-                        self.block(Vec3::new(0.5, 1.1, 0.5), WALL.mix(&STONE, 0.24), Transform::from_translation(to_world(at, 0.45)));
+                        self.block(Vec3::new(0.5, 1.1, 0.5), self.theme.wall.mix(&self.theme.stone, 0.24), Transform::from_translation(to_world(at, 0.45)));
                     }
                 }
             }
@@ -2178,13 +2319,13 @@ impl Props {
             let turn = if along_x { Quat::IDENTITY } else { Quat::from_rotation_y(std::f32::consts::FRAC_PI_2) };
             for k in 0..3 {
                 let at = c + way * (k as f32 - 1.0) * 0.32 + across * rng.range(-0.04, 0.04);
-                let color = BARK.mix(&PATH, rng.range(0.0, 0.35));
+                let color = self.theme.bark.mix(&self.theme.path, rng.range(0.0, 0.35));
                 let tilt = Quat::from_rotation_y(rng.range(-0.06, 0.06));
                 self.block(Vec3::new(0.26, 0.07, 1.0), color, Transform::from_translation(to_world(at, -0.04)).with_rotation(turn * tilt));
             }
             for side in [-1.0, 1.0] {
                 let at = c + across * side * 0.38;
-                self.block(Vec3::new(1.0, 0.1, 0.1), BARK, Transform::from_translation(to_world(at, -0.14)).with_rotation(turn));
+                self.block(Vec3::new(1.0, 0.1, 0.1), self.theme.bark, Transform::from_translation(to_world(at, -0.14)).with_rotation(turn));
             }
             for d in SIDES {
                 if m.scene_tile(t + d) != Tile::Chasm {
@@ -2192,15 +2333,15 @@ impl Props {
                 }
                 let edge = c + d.as_vec2() * 0.46;
                 for h in [0.45, 0.85] {
-                    self.block(Vec3::new(1.0, 0.05, 0.05), ROPE, Transform::from_translation(to_world(edge, h)).with_rotation(turn));
+                    self.block(Vec3::new(1.0, 0.05, 0.05), self.theme.rope, Transform::from_translation(to_world(edge, h)).with_rotation(turn));
                 }
                 // A hanger from the top rope down to the planks.
-                self.block(Vec3::new(0.04, 0.85, 0.04), ROPE, Transform::from_translation(to_world(edge, 0.42)));
+                self.block(Vec3::new(0.04, 0.85, 0.04), self.theme.rope, Transform::from_translation(to_world(edge, 0.42)));
                 let along = IVec2::new(-d.y, d.x);
                 for side in [along, -along] {
                     if !planks(t + side) {
                         let at = edge + side.as_vec2() * 0.5;
-                        self.block(Vec3::new(0.16, 1.15, 0.16), BARK, Transform::from_translation(to_world(at, 0.5)));
+                        self.block(Vec3::new(0.16, 1.15, 0.16), self.theme.bark, Transform::from_translation(to_world(at, 0.5)));
                     }
                 }
             }
@@ -2219,7 +2360,7 @@ impl Props {
                 let stone = Transform::from_translation(to_world(p, -0.12))
                     .with_scale(Vec3::new(s, 0.3, s))
                     .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)));
-                self.add(Shape::Rock, STONE, stone);
+                self.add(Shape::Rock, self.theme.stone, stone);
             }
         }
     }
@@ -2230,7 +2371,7 @@ impl Props {
             let p = c + Vec2::new(rng.range(-0.25, 0.25), rng.range(-0.25, 0.25));
             let size = Vec3::new(rng.range(0.25, 0.45), 1.0, rng.range(0.2, 0.35));
             let t = Transform::from_translation(to_world(p, 0.012)).with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0))).with_scale(size);
-            self.add(Shape::Puddle, POND.mix(&RIVERBED, 0.35), t);
+            self.add(Shape::Puddle, self.theme.pond.mix(&self.theme.riverbed, 0.35), t);
         }
         if rng.next() < 0.55 {
             let p = c + Vec2::new(rng.range(-0.35, 0.35), rng.range(-0.35, 0.35));
@@ -2238,7 +2379,7 @@ impl Props {
                 let at = p + Vec2::new(rng.range(-0.12, 0.12), rng.range(-0.12, 0.12));
                 let h = rng.range(0.25, 0.48);
                 let lean = Quat::from_euler(EulerRot::XYZ, rng.range(-0.25, 0.25), 0.0, rng.range(-0.25, 0.25));
-                let color = if rng.next() < 0.5 { FERN } else { PATH.mix(&FERN, 0.5) };
+                let color = if rng.next() < 0.5 { self.theme.fern } else { self.theme.path.mix(&self.theme.fern, 0.5) };
                 self.add(Shape::Reed, color, Transform::from_translation(to_world(at, h / 2.0)).with_rotation(lean).with_scale(Vec3::new(1.0, h, 1.0)));
             }
         }
@@ -2248,23 +2389,23 @@ impl Props {
         let t = Transform::from_translation(to_world(c, 0.25))
             .with_rotation(Quat::from_euler(EulerRot::XYZ, rng.range(0.0, 3.0), rng.range(0.0, 3.0), 0.0))
             .with_scale(Vec3::new(rng.range(1.2, 1.5), rng.range(0.9, 1.3), rng.range(1.2, 1.5)));
-        self.add(Shape::Rock, SLATE, t);
+        self.add(Shape::Rock, self.theme.slate, t);
     }
 
     fn tree(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
-        self.add(Shape::Trunk, BARK, Transform::from_translation(to_world(p, ground + 0.6 * s)).with_scale(Vec3::splat(s)));
+        self.add(Shape::Trunk, self.theme.bark, Transform::from_translation(to_world(p, ground + 0.6 * s)).with_scale(Vec3::splat(s)));
         let tiers = 2 + (rng.next() * 2.0) as usize;
         for k in 0..tiers {
             let t = Transform::from_translation(to_world(p, ground + (1.5 + k as f32 * 0.85) * s))
                 .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
                 .with_scale(Vec3::splat(s));
-            self.add(Shape::Cone(k), if k % 2 == 0 { FERN } else { PINE }, t);
+            self.add(Shape::Cone(k), if k % 2 == 0 { self.theme.fern } else { self.theme.pine }, t);
         }
     }
 
     fn flower(&mut self, rng: &mut Lcg, c: Vec2) {
         let p = c + Vec2::new(rng.range(-0.4, 0.4), rng.range(-0.4, 0.4));
-        self.add(Shape::Flower, HEATHER, Transform::from_translation(to_world(p, 0.1)));
+        self.add(Shape::Flower, self.theme.bloom, Transform::from_translation(to_world(p, 0.1)));
     }
 }
 
@@ -2282,7 +2423,7 @@ const TERRAIN_CELL: i32 = 2;
 /// under a chasm (a vertex goes down if any tile around it within a cell does, so the whole of
 /// every water or chasm tile is low), and rolling up into the forest outside, its vertices
 /// jostled where there's nothing but forest around them.
-fn terrain_mesh(m: &Map, scene: &SceneTiles, rng: &mut Lcg) -> Mesh {
+fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut Lcg) -> Mesh {
     let cells = scene.extent / TERRAIN_CELL;
     let width = (2 * cells.x + 1) as usize;
     let mut grid = Vec::with_capacity(width * (2 * cells.y + 1) as usize);
@@ -2318,19 +2459,19 @@ fn terrain_mesh(m: &Map, scene: &SceneTiles, rng: &mut Lcg) -> Mesh {
                 let pick = rng.next();
                 let base = if height < -1.2 {
                     // Down a chasm: rock darkening toward the floor.
-                    SLATE.mix(&ABYSS, ((-height - 1.2) / 3.5).min(1.0))
+                    theme.slate.mix(&theme.abyss, ((-height - 1.2) / 3.5).min(1.0))
                 } else if height < -0.3 {
-                    RIVERBED
+                    theme.riverbed
                 } else if height < 0.05 {
-                    MOSS
+                    theme.grass
                 } else if height > 1.4 {
-                    if pick < 0.5 { FERN } else { PINE }
+                    if pick < 0.5 { theme.fern } else { theme.pine }
                 } else if pick < 0.15 {
-                    PATH
+                    theme.path
                 } else if pick < 0.6 {
-                    MOSS
+                    theme.grass
                 } else {
-                    FERN
+                    theme.fern
                 };
                 b.tri(tri, Color::from(base.to_linear() * (1.0 + rng.range(-0.04, 0.04))));
             }
@@ -2342,7 +2483,7 @@ fn terrain_mesh(m: &Map, scene: &SceneTiles, rng: &mut Lcg) -> Mesh {
 /// The walkable ground of the clearing: one quad per tile, one color per tile (a faint checker
 /// keeps the grid readable), plus earthen banks down to the water, and cliffs down a chasm in
 /// bands of rock.
-fn ground_mesh(m: &Map, rng: &mut Lcg) -> Mesh {
+fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
     let mut b = FlatMesh::default();
     for (t, tile) in m.tiles() {
         if matches!(tile, Tile::Water | Tile::Bridge | Tile::Planks | Tile::Ford | Tile::Chasm | Tile::Forest) {
@@ -2351,9 +2492,9 @@ fn ground_mesh(m: &Map, rng: &mut Lcg) -> Mesh {
         let c = Map::center(t);
         let checker = if (t.x + t.y) % 2 == 0 { 1.03 } else { 0.97 };
         let base = match tile {
-            Tile::Path => PATH.mix(&MOSS, rng.next() * 0.25),
-            Tile::Marsh => MARSH.mix(&BANK, rng.next() * 0.35),
-            _ => MOSS.mix(&MEADOW, rng.next() * 0.25),
+            Tile::Path => theme.path.mix(&theme.grass, rng.next() * 0.25),
+            Tile::Marsh => theme.marsh.mix(&theme.bank, rng.next() * 0.35),
+            _ => theme.grass.mix(&theme.meadow, rng.next() * 0.25),
         };
         let color = Color::from(base.to_linear() * checker);
         let (lo, hi) = (c - Vec2::splat(0.5), c + Vec2::splat(0.5));
@@ -2367,16 +2508,16 @@ fn ground_mesh(m: &Map, rng: &mut Lcg) -> Mesh {
         ] {
             match m.scene_tile(t + dir) {
                 Tile::Water | Tile::Ford => {
-                    b.quad([to_world(a, 0.0), to_world(a, RIVERBED_LEVEL), to_world(z, RIVERBED_LEVEL), to_world(z, 0.0)], BANK);
+                    b.quad([to_world(a, 0.0), to_world(a, RIVERBED_LEVEL), to_world(z, RIVERBED_LEVEL), to_world(z, 0.0)], theme.bank);
                 }
                 Tile::Chasm => {
                     // Topsoil, then grey rock in uneven bands, darkening down into the dark.
                     let bands = [
-                        (0.0, -0.5, BANK),
-                        (-0.5, -1.6, SLATE),
-                        (-1.6, -2.4, WALL),
-                        (-2.4, -4.0, SLATE.mix(&ABYSS, 0.5)),
-                        (-4.0, CHASM_FLOOR - 0.3, ABYSS),
+                        (0.0, -0.5, theme.bank),
+                        (-0.5, -1.6, theme.slate),
+                        (-1.6, -2.4, theme.wall),
+                        (-2.4, -4.0, theme.slate.mix(&theme.abyss, 0.5)),
+                        (-4.0, CHASM_FLOOR - 0.3, theme.abyss),
                     ];
                     for (top, bottom, color) in bands {
                         let shade = Color::from(color.to_linear() * (1.0 + rng.range(-0.06, 0.06)));

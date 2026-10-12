@@ -97,7 +97,7 @@ fn picture(map: &Map) -> Image {
         // The map's +y is up; the picture's rows go down.
         let (column, row) = (tile.x - corner.x, map.size.y - 1 - (tile.y - corner.y));
         let at = ((row * map.size.x + column) * 4) as usize;
-        pixels[at..at + 4].copy_from_slice(&arena::tile_color(kind).to_srgba().to_u8_array());
+        pixels[at..at + 4].copy_from_slice(&arena::tile_color(arena::Theme::of(map.id), kind).to_srgba().to_u8_array());
     }
     let mut image = Image::new(
         Extent3d { width: size.x, height: size.y, depth_or_array_layers: 1 },

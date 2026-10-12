@@ -2,7 +2,8 @@
 
 Low-poly clearings at dusk in a ring of forest, medieval-fantasy ruins in nature: rivers and moats
 with stone bridges and fords, marshes, chasms spanned by stone arches and rope bridges, ruined
-walls, boulders, torches and waygates. Faceted shapes, muted greens and grey stone.
+walls, boulders, torches and waygates. Faceted shapes, muted colors. Each map has its own theme
+(below): River Crossing is the green glade at dusk, the others take other palettes and light.
 The fighters are low-poly dark-fantasy figures, each in its own fixed colors (the
 same for every player). Who a fighter is to you shows only in its health bar and minimap dot,
 the only team color (you blue, enemies red, allies green). Its shots and swings look the same
@@ -12,7 +13,22 @@ what blocks movement and shots.
 
 Live reference with a 3D preview (still shows the earlier square arena in afternoon light):
 https://claude.ai/artifact/WgUKXJpxy2GkzWjWRVUfXY
-Code: `client/src/arena.rs` (palette, scene, mesh helpers), used by `client/src/render.rs`.
+Code: `client/src/arena.rs` (palette, map themes, scene, mesh helpers), used by `client/src/render.rs`.
+
+## Map themes
+
+A map's world (ground, foliage, stone, water, the drop into a chasm), its sun, sky fill and haze
+come from its `Theme` (`Theme::of(MapId)`). Fighters, shots, pickups, torches, waygates and the
+UI look the same on every map. The palette table below is the glade's.
+
+| Map | Theme | Look |
+|---|---|---|
+| River Crossing | Glade | Green forest glade at dusk: moss and pine, grey stone, warm low sun `#FFE2C4`, sea-grey haze `#A9B8B6` |
+| Sunken Keep | Fen | Moonlit fen: sea-green grass `#5A7262`, blue-black firs `#223738`, cool stone, a dim cold moon `#C4D4FF` (2,600 lx) under blue mist `#6A7C8A`, so the torches carry the keep; pale bog cotton for flowers |
+| Riven Gorge | Highlands | Autumn highlands at sunset: dry golden grass `#8A8450`, bracken brown `#785E3E` among olive firs `#3C4532`, red sandstone `#866E5E` falling to plum shadow `#382A34`, a deep warm sun `#FFCA9C` and dusty amber haze `#B4A08E` |
+
+Every theme stays in the world's calm band (below ~50% saturation). Highlands' warm browns are an
+exception to "no autumn oranges" below, kept dull enough that Enemy red still stands alone.
 
 ## Rules
 
