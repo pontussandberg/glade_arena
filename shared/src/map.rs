@@ -79,8 +79,9 @@ impl Tile {
 /// Which map a room plays on.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum MapId {
-    #[default]
     Crossing,
+    /// Where every game starts, and the map rooms play on unless their leader picks another.
+    #[default]
     Keep,
     Gorge,
 }

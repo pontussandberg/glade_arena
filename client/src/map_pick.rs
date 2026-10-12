@@ -1,6 +1,6 @@
 //! The map pick, top middle of the character select: a small tile per map, named, the one we're
 //! on lit. At home it picks the map practice and new
-//! lobbies play on (`CurrentMap`, Sunken Keep to begin with), and the stage's view changes with it. In
+//! lobbies play on (`CurrentMap`, the default map to begin with), and the stage's view changes with it. In
 //! a room it shows the room's map, as the room column does: its leader may switch it there or
 //! here until the match starts; everyone else only sees it.
 
