@@ -2327,7 +2327,7 @@ impl Props {
         self.add(Shape::Trunk, wood, Transform::from_translation(to_world(p, ground + 0.6 * tall)).with_rotation(lean).with_scale(Vec3::new(0.7 * s, tall, 0.7 * s)));
         for _ in 0..2 + (rng.next() * 2.0) as usize {
             let from = to_world(p, ground + tall * rng.range(0.6, 1.1));
-            let out = Quat::from_rotation_y(rng.range(0.0, 6.28)) * Quat::from_rotation_z(rng.range(0.6, 1.1));
+            let out = Quat::from_rotation_y(rng.range(0.0, std::f32::consts::TAU)) * Quat::from_rotation_z(rng.range(0.6, 1.1));
             let long = rng.range(0.7, 1.2) * s;
             let t = Transform::from_translation(from + out * Vec3::Y * long / 2.0).with_rotation(out).with_scale(Vec3::new(s, long, s));
             self.add(Shape::Stick, wood, t);
@@ -2419,7 +2419,7 @@ impl Props {
 
     /// A natural arch: two stacks of rock with a long one laid across their tops.
     fn arch(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
-        let across = Vec2::from_angle(rng.range(0.0, 3.14));
+        let across = Vec2::from_angle(rng.range(0.0, std::f32::consts::PI));
         let (span, tall) = (rng.range(1.8, 2.6), rng.range(2.6, 3.4));
         for side in [-1.0, 1.0] {
             let foot = p + across * side * span;

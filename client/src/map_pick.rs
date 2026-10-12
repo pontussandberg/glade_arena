@@ -1,5 +1,5 @@
-//! The map pick, top middle of the character select: a small tile per map (its name over a strip
-//! of its theme's colors), the one we're on lit. At home it picks the map practice and new
+//! The map pick, top middle of the character select: a small tile per map, named, the one we're
+//! on lit. At home it picks the map practice and new
 //! lobbies play on (`CurrentMap`, kept across reloads), and the stage's view changes with it. In
 //! a room it shows the room's map, as the room column does: its leader may switch it there or
 //! here until the match starts; everyone else only sees it.
@@ -11,7 +11,7 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use crate::arena::palette::ui::ACCENT;
-use crate::arena::{Theme, palette};
+use crate::arena::palette;
 use crate::render::ui_text;
 use crate::rooms::{CurrentMap, CurrentRoom, Me, Picking, Screen, request, save_map};
 
@@ -41,7 +41,7 @@ struct MapTile(MapId);
 #[derive(Component)]
 struct TileName(MapId);
 
-/// Under the label: who may switch it, when we can't.
+/// Under the tiles: who may switch it, when we can't.
 #[derive(Component)]
 struct PickHint;
 
@@ -63,15 +63,12 @@ fn spawn_pick(mut commands: Commands) {
             GlobalZIndex(10),
         ))
         .with_children(|pick| {
-            pick.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Center, ..default() }).with_children(|line| {
-                line.spawn(ui_text("MAP", 11.0, palette::ui::MUTED));
-                line.spawn((PickHint, ui_text("", 11.0, palette::ui::MUTED)));
-            });
             pick.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
                 for map in MapId::ALL {
                     spawn_tile(row, map);
                 }
             });
+            pick.spawn((PickHint, ui_text("", 11.0, palette::ui::MUTED)));
         });
 }
 
@@ -81,31 +78,22 @@ fn despawn_pick(mut commands: Commands, pick: Query<Entity, With<MapPick>>) {
     }
 }
 
-/// A map's tile: its name, and under it its world in three colors (sky, grass, stone).
+/// A map's tile: its name.
 fn spawn_tile(row: &mut ChildSpawnerCommands, map: MapId) {
-    let theme = Theme::of(map);
     row.spawn((
         MapTile(map),
         Button,
         Node {
             width: px(TILE_WIDTH),
-            flex_direction: FlexDirection::Column,
-            row_gap: px(GAP * 0.75),
-            padding: UiRect::new(px(GAP), px(GAP), px(GAP * 0.75), px(GAP)),
+            justify_content: JustifyContent::Center,
+            padding: UiRect::axes(px(GAP), px(GAP * 0.75)),
             border: UiRect::all(px(1.0)),
             ..default()
         },
         BorderColor::all(palette::ui::MUTED.with_alpha(0.3)),
         BackgroundColor(palette::ui::PANEL),
     ))
-    .with_children(|tile| {
-        tile.spawn((TileName(map), ui_text(map.label(), 12.0, palette::ui::TEXT)));
-        tile.spawn(Node { height: px(4.0), ..default() }).with_children(|strip| {
-            for color in [theme.sky, theme.grass, theme.stone] {
-                strip.spawn((Node { flex_grow: 1.0, ..default() }, BackgroundColor(color)));
-            }
-        });
-    });
+    .with_child((TileName(map), ui_text(map.label(), 12.0, palette::ui::TEXT)));
 }
 
 /// A click on a tile picks its map, where we may: at home our own pick; in a room, as its leader
@@ -125,11 +113,11 @@ fn pick_map(
     let view = room.0.as_ref().filter(|_| *screen.get() == Screen::Room);
     let locked = match view {
         None => None,
-        Some(view) if view.started => Some("match in progress"),
-        Some(view) if me.as_ref().is_none_or(|me| me.guest_id != view.leader) => Some("set by the leader"),
+        Some(view) if view.started => Some("Match in progress"),
+        Some(view) if me.as_ref().is_none_or(|me| me.guest_id != view.leader) => Some("Set by the leader"),
         Some(_) => None,
     };
-    let text = locked.map_or(String::new(), |why| format!("·  {why}"));
+    let text = locked.unwrap_or_default().to_string();
     if hint.0 != text {
         hint.0 = text;
     }
