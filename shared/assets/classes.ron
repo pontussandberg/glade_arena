@@ -31,8 +31,8 @@
 //       within `within_ticks` (and speeds up what's left of the attack that landed it, so the
 //       next comes sooner): `attack_speed` more attack speed (0.6 = 60% more attacks per
 //       second: its windup and its whole attack divided by 1.6, animated that much faster),
-//       and (optional) its lane `reach` times as far out, as long and as wide (the weapon
-//       grows and smears out to match). Used up as an attack goes off (cancelling one first
+//       and (optional) its lane's far end and width `reach` times as far, its start (optional)
+//       `near` times as far (`reach` unless given) (the weapon grows and smears out to match). Used up as an attack goes off (cancelling one first
 //       leaves it armed): a miss loses it, an empowered one that lands arms the next
 //   ability       the Q ability, aimed at the cursor: name, description, cooldown_ticks, and
 //     kind: Projectile(speed, radius, range, damage)  thrown instantly: no windup, no root
@@ -70,9 +70,10 @@
             damage: 20,
             attack_ticks: 34,
             windup: 0.35,
-            // The glaive comes down flat on the ground, its blade from 1.6 m to 2.5 m ahead.
-            kind: Melee(range: 2.5, width: 0.5, from: 1.6),
-            follow_up: Some((within_ticks: 96, attack_speed: 0.0, reach: 1.5)),
+            // The glaive comes down flat on the ground, its blade from 1.6 m to 2.75 m ahead.
+            kind: Melee(range: 2.75, width: 0.5, from: 1.6),
+            // Empowered: from 2 m to 3.85 m, 0.7 m wide.
+            follow_up: Some((within_ticks: 96, attack_speed: 0.0, reach: 1.4, near: Some(1.25))),
         ),
         ability: (
             name: "Rift Step",

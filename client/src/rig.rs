@@ -5,7 +5,7 @@
 //! Every fighter turns to face where it walks, swings or dashes (`Facing`), acts out its attack
 //! and strikes a pose while dashing; each class has its own `Moves`.
 //!
-//! An attack is timed to the server's: the draw and the strike fill its short windup, and the
+//! An attack is timed to the server's: the draw and the strike fill its windup, and the
 //! strike is `Moves::contact` of the way through as it goes off (the spear leaving the hand, the
 //! blade's tip just reaching the target). The rest of the strike and the follow-through are the
 //! backswing, which walking cuts short (`CUT_RATE`). Nothing on screen says when the attack has
@@ -61,7 +61,7 @@ impl Plugin for RigPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((crate::cloth::ClothPlugin, crate::swish::SwishPlugin));
         app.add_systems(Startup, load_rigs);
-        app.add_systems(Update, (add_rigs, see_throws, turn_fighters, pose_rigs, show_auras).chain().in_set(Posing));
+        app.add_systems(Update, (add_rigs, see_throws, turn_fighters, pose_rigs, show_auras, gleam_blades).chain().in_set(Posing));
     }
 }
 
@@ -155,6 +155,8 @@ pub(crate) struct Moves {
     pub(crate) stiffness: f32,
     /// How damped its joints' springs are (1: none overshoot; `JOINT_DAMPING` for most).
     pub(crate) damping: f32,
+    /// How much the head turns and leans with the body (`HEAD_FOLLOW` for most; 1: wholly).
+    head_follow: f32,
     /// The weapon arm's swing turned about the upright (radians, in the facing's frame; positive
     /// turns it in across the body): a blow in one straight plane, aimed where it lands.
     swing_yaw: f32,
@@ -202,6 +204,7 @@ const JAVELINIST: Moves = Moves {
     follow_through: FOLLOW_THROUGH,
     stiffness: JOINT_STIFFNESS,
     damping: JOINT_DAMPING,
+    head_follow: HEAD_FOLLOW,
     swing_yaw: 0.0,
     contact: 1.0,
 };
@@ -211,38 +214,43 @@ const REVENANT: Moves = Moves {
     // to over the head, then on over the top, down ahead into the ground, and round past the leg
     // back to the drag. The dash (the fourth of each) is a lunge, held all the way through it:
     // the blade driven out ahead, the weapon shoulder leading.
-    weapon_arm: [-0.35, -3.35, -5.88, 1.45],
+    weapon_arm: [-0.35, -3.35, -6.03, 1.45],
     // The arm swings in its own plane, whatever the body's twist: a straight blow.
     weapon_arm_untwist: 1.0,
     windmill: true,
-    lead_arm: [-0.2, 1.4, -0.9, -0.9],
+    // The free arm hangs loose at the side throughout, drifting back past the hip as the
+    // glaive goes up, and swung further back as it comes down.
+    lead_arm: [-0.2, -0.45, -0.9, -0.9],
     // Legs hang from the leaning body: bowed into the blow, the lead leg reaches far forward
     // and the back one, straight under the hips, braces back.
-    lead_leg: [0.25, 0.25, 1.7, 0.7],
-    back_leg: [-0.2, -0.6, -0.9, -0.75],
+    lead_leg: [0.25, 0.25, 1.85, 0.7],
+    back_leg: [-0.2, -0.6, -0.45, -0.75],
     // Side on, the weapon shoulder back; wound further round, then turning into the blow.
     twist: [-0.8, -0.5, 0.8, 0.5],
-    lean: [-0.1, 0.2, -0.4, -0.5],
+    lean: [-0.1, 0.2, -0.7, -0.5],
     head_dip: [0.1, 0.2, -0.45, -0.15],
     // Dragged: the thumb (and blade) back, the blade trailing low behind. Drawn: straight up
     // over the head, in line with the arm (so the grip turns over on the way up without the
     // blade swinging about). Struck: in one plane over the top, the wrist coming through, the
     // blade flat on the ground ahead. Unwinding: the grip turning back over out to the right
     // as the arm comes round to the drag.
-    held: Held::Gripped { wrist: [0.78, FRAC_PI_2, 0.07, 1.3], roll: [-PI, 0.0, 0.0, 0.0] },
+    held: Held::Gripped { wrist: [0.85, FRAC_PI_2, -0.45, 1.3], roll: [-PI, 0.0, 0.0, 0.0] },
     throws: false,
     scale: 1.13,
     stretch: 0.15,
-    // Heaved up overhead, held there a moment, and a heavy blow coming over slow and gathering
-    // speed into the ground; solid, the joints firm.
-    draw_end: 0.5,
-    strike_ticks: 4.5,
+    // Heaved up overhead quickly, held there a good moment, and a heavy blow coming over slow
+    // and gathering speed into the ground; solid, the joints firm.
+    draw_end: 0.35,
+    strike_ticks: 3.0,
     heavy: true,
-    // Planted in the ground a moment, then hauled back round to the drag.
-    follow_through: (5.0, 18.0),
+    // Planted in the ground a good while (unless walking off cuts it short), then hauled back
+    // round to the drag, about as the next attack is ready.
+    follow_through: (9.0, 21.0),
     stiffness: 60.0,
     // Critically damped: firm, nothing overshoots.
     damping: 1.0,
+    // Head and shoulders go into the blow together.
+    head_follow: 0.75,
     // The blow's plane turned in from the weapon shoulder to the middle of its lane, where the
     // blade lands.
     swing_yaw: 0.13,
@@ -270,6 +278,7 @@ const FROST_MAGE: Moves = Moves {
     follow_through: FOLLOW_THROUGH,
     stiffness: JOINT_STIFFNESS,
     damping: JOINT_DAMPING,
+    head_follow: HEAD_FOLLOW,
     swing_yaw: 0.0,
     contact: 0.9,
 };
@@ -332,6 +341,29 @@ const EYE_GLOW: f32 = 6.0;
 /// How see-through a weapon's aura is, and how fast (radians per second) and how much it swells.
 const AURA_ALPHA: f32 = 0.42;
 const AURA_PULSE: (f32, f32) = (9.0, 0.15);
+/// A blade's gleam: how long between gleams (seconds, at least and at most), how long one lasts,
+/// how big it gets (at its least and most, of the glint's size), and how far it turns (radians):
+/// quickest coming in and going out, settling still as it shines its brightest.
+const GLEAM_EVERY: (f32, f32) = (1.6, 2.4);
+const GLEAM_SECONDS: f32 = 0.7;
+const GLEAM_SIZE: (f32, f32) = (0.25, 0.75);
+const GLEAM_SPIN: f32 = 2.4;
+/// Where in a gleam (0..1) it reaches its height and leaves it, and how much it squishes while
+/// it's there (a fraction of its size).
+const GLEAM_HOLD: (f32, f32) = (0.35, 0.65);
+const GLEAM_SQUISH: f32 = 0.3;
+
+/// When a blade gleams next, and the gleam under way: from when, where on the blade (in its own
+/// space), how bright; `seed` picks the next.
+#[derive(Default)]
+struct Gleaming {
+    next: f32,
+    from: f32,
+    at: Vec3,
+    peak: f32,
+    seed: u32,
+}
+
 /// How fast the glint twinkles (radians per second) and spins (radians per second).
 const GLINT_TWINKLE: f32 = 7.0;
 const GLINT_SPIN: f32 = 2.5;
@@ -389,6 +421,9 @@ struct Rig {
     aura: Option<Entity>,
     /// And the glint at its point.
     glint: Option<Entity>,
+    /// A gleam running along a gripped blade's edge now and then (`gleam_blades`), and when.
+    gleam: Option<Entity>,
+    gleaming: Gleaming,
     moves: &'static Moves,
     /// Walk cycles so far, and how much the fighter is walking (0..1, eased).
     stride: f32,
@@ -599,7 +634,7 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
         * Transform::from_translation(RIG_HAND).with_rotation(held_in(aimed_arm, aimed_lean.inverse(), aimed));
     Posed {
         body,
-        head: unlean.slerp(Quat::IDENTITY, HEAD_FOLLOW) * Quat::from_rotation_z(-angles.head_dip),
+        head: unlean.slerp(Quat::IDENTITY, moves.head_follow) * Quat::from_rotation_z(-angles.head_dip),
         arms: [weapon_arm, Quat::from_rotation_z(angles.lead_arm)],
         legs: [leg_turn(angles.back_leg), leg_turn(angles.lead_leg)],
         held: Transform {
@@ -722,6 +757,8 @@ fn add_rigs(
             held: part(&handles.held, own, RIG_HAND),
             aura: handles.held_aura.as_ref().map(|(mesh, material)| part(mesh, material, Vec3::ZERO)),
             glint: handles.held_glint.as_ref().map(|(mesh, material, at)| part(mesh, material, *at)),
+            gleam: handles.held_glint.as_ref().filter(|_| matches!(moves(&class.def().id).held, Held::Gripped { .. })).map(|(mesh, material, _)| part(mesh, material, Vec3::ZERO)),
+            gleaming: Gleaming { seed: player.index().index(), ..default() },
             moves: moves(&class.def().id),
             stride: 0.0,
             walking: 0.0,
@@ -737,7 +774,7 @@ fn add_rigs(
         if let Some(glow) = held_glow {
             commands.entity(rig.held).add_child(glow);
         }
-        for shown_armed in rig.aura.into_iter().chain(rig.glint) {
+        for shown_armed in rig.aura.into_iter().chain(rig.glint).chain(rig.gleam) {
             commands.entity(shown_armed).insert((Visibility::Hidden, NotShadowCaster, NotShadowReceiver));
             commands.entity(rig.held).add_child(shown_armed);
         }
@@ -749,7 +786,7 @@ fn add_rigs(
             crate::cloth::dress(&mut commands, player, rig.legs, own, wardrobe);
         }
         if matches!(rig.moves.held, Held::Gripped { .. }) {
-            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length: arena::BLADE_LENGTH, shown: 0, quickened: false, striking: None });
+            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length: arena::BLADE_LENGTH, shown: 0, quickened: false, striking: None, dragged: None, corner: arena::glaive_edge(1.0), rasp: 0 });
         }
         commands.entity(player).insert((
             rig,
@@ -868,9 +905,12 @@ fn pose_rigs(
         let now = clock.as_ref().map_or(0.0, |clock| clock.now(is_me));
         let present = clock.as_ref().map_or(0.0, |clock| clock.now(true));
         // A throw whose spear we've seen counts from when it really happened, on our own clock.
+        // One the state already shows a moment before our clock gets to it (news from the server
+        // a frame early) has just happened: not yet to come, which would drop the pose back to
+        // carrying for a frame.
         let since_throw = |tick: Option<u32>, seen: Option<u32>| match seen.filter(|&s| tick.is_none_or(|t| t <= s)) {
-            Some(seen) => Some(present - seen as f32).filter(|s| *s >= 0.0),
-            None => tick.map(|t| now - t as f32).filter(|s| *s >= 0.0),
+            Some(seen) => Some((present - seen as f32).max(0.0)),
+            None => tick.map(|t| (now - t as f32).max(0.0)),
         };
         let windup = SeenThrows::windup(seen, attack);
         // The last attack's speed scales its backswing like its windup, and a hit that armed its
@@ -943,6 +983,46 @@ fn pose_rigs(
         if let Ok((mut transform, mut visibility)) = parts.get_mut(rig.held) {
             visibility.set_if_neq(shown(!empty_handed));
             transform.set_if_neq(posed.held);
+        }
+    }
+}
+
+/// Every couple of seconds a gleam catches somewhere along a gripped blade's edge, a star of
+/// light swelling to a random brightness and going out again, each blade on its own time.
+fn gleam_blades(time: Res<Time>, mut rigs: Query<&mut Rig>, mut parts: Query<(&mut Visibility, &mut Transform)>) {
+    let now = time.elapsed_secs();
+    for mut rig in &mut rigs {
+        let Some(gleam) = rig.gleam else { continue };
+        let g = &mut rig.gleaming;
+        let mut random = || {
+            g.seed = g.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (g.seed >> 8) as f32 / (1 << 24) as f32
+        };
+        if g.next == 0.0 {
+            g.next = now + random() * GLEAM_EVERY.1;
+        }
+        if now >= g.next {
+            let (along, peak, wait) = (random(), random(), random());
+            g.from = now;
+            g.at = arena::glaive_edge(0.1 + 0.85 * along);
+            g.peak = GLEAM_SIZE.0 + (GLEAM_SIZE.1 - GLEAM_SIZE.0) * peak;
+            g.next = now + GLEAM_EVERY.0 + (GLEAM_EVERY.1 - GLEAM_EVERY.0) * wait;
+        }
+        let t = (now - g.from) / GLEAM_SECONDS;
+        let Ok((mut visibility, mut transform)) = parts.get_mut(gleam) else { continue };
+        let on = (0.0..1.0).contains(&t);
+        visibility.set_if_neq(shown(on));
+        if on {
+            // Growing steadily, lingering at its height with a squish (squashed flat and wide, and
+            // springing back), shrinking steadily away; turning quickest at either end and settling
+            // still at its height.
+            let (rise, fall) = GLEAM_HOLD;
+            let size = g.peak * (t / rise).min(1.0) * ((1.0 - t) / (1.0 - fall)).min(1.0);
+            let held = ((t - rise) / (fall - rise)).clamp(0.0, 1.0);
+            let squish = GLEAM_SQUISH * (std::f32::consts::PI * held).sin();
+            let turn = GLEAM_SPIN * 4.0 * (t - 0.5).powi(3);
+            let scale = Vec3::new(size * (1.0 + squish), size * (1.0 - squish), size * (1.0 + squish));
+            *transform = Transform::from_translation(g.at).with_rotation(Quat::from_rotation_y(turn)).with_scale(scale);
         }
     }
 }

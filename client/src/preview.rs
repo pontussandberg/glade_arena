@@ -214,11 +214,12 @@ fn preview_fighters() {
         if let Some(glow) = &rig.held_glow {
             triangles(glow, Mat4::IDENTITY, &mut weapon, true);
         }
-        let mut image = vec![[60u8, 70, 80]; 2 * SIZE * SIZE];
-        for (i, from) in [Vec3::X, Vec3::new(0.3, 0.2, 1.0)].into_iter().enumerate() {
-            render(&weapon, from, Vec3::Y * 0.67, 2.6, &mut image, 2 * SIZE, i * SIZE);
+        // Edge on, flat on, and the head up close.
+        let mut image = vec![[60u8, 70, 80]; 3 * SIZE * SIZE];
+        for (i, (from, center, span)) in [(Vec3::X, Vec3::Y * 0.67, 2.6), (Vec3::new(0.3, 0.2, 1.0), Vec3::Y * 0.67, 2.6), (Vec3::Z, Vec3::Y * 1.62, 0.7)].into_iter().enumerate() {
+            render(&weapon, from, center, span, &mut image, 3 * SIZE, i * SIZE);
         }
-        std::fs::write(dir.join(format!("weapon-{class}.png")), png(2 * SIZE, SIZE, &image)).unwrap();
+        std::fs::write(dir.join(format!("weapon-{class}.png")), png(3 * SIZE, SIZE, &image)).unwrap();
 
         let tris = figure(class);
         let width = SIZE * views.len();
@@ -234,7 +235,8 @@ fn preview_fighters() {
 
 
 /// The figure posed as `posed` (facing +X, standing at the origin), its cloth hanging at rest
-/// from the body; and where its weapon's grip and point are.
+/// from the body; and where its weapon's grip and point are (the point as low as any of the
+/// weapon goes).
 fn posed_figure(class: &str, posed: &crate::rig::Posed, length: f32) -> (Vec<Tri>, Vec3, Vec3) {
     let rig = arena::fighter_rig(class);
     let mut tris = Vec::new();
@@ -255,14 +257,17 @@ fn posed_figure(class: &str, posed: &crate::rig::Posed, length: f32) -> (Vec<Tri
     triangles(&rig.leg, on(RIG_HIP, posed.legs[0]), &mut tris, false);
     triangles(&rig.leg, on(mirrored(RIG_HIP), posed.legs[1]), &mut tris, false);
     let held = weapon_arm * place(&posed.held);
+    let before = tris.len();
     triangles(&rig.held, held, &mut tris, false);
+    let lowest = tris[before..].iter().flat_map(|t| t.at).map(|p| p.y).fold(f32::INFINITY, f32::min);
     if let Some(glow) = &rig.held_glow {
         triangles(glow, held, &mut tris, true);
     }
     for drape in rig.wardrobe.iter().flat_map(|wardrobe| &wardrobe.drapes) {
         triangles(&drape.mesh, body, &mut tris, false);
     }
-    (tris, held.transform_point3(Vec3::ZERO), held.transform_point3(Vec3::Y * length))
+    // The point, as low as the weapon goes (y), wherever on it that is.
+    (tris, held.transform_point3(Vec3::ZERO), held.transform_point3(Vec3::Y * length).with_y(lowest))
 }
 
 /// Flat ground around the origin, in half-meter checks, a darker line along +X (the facing).
@@ -302,7 +307,7 @@ fn preview_impact() {
     use crate::rig::{EMPOWERED_BLADE, EMPOWERED_STRETCH, Phase, assemble, moves, targets};
     use crate::arena::palette;
 
-    use crate::swish::{RIFT_ALPHA, RIM_ALPHA, dust_mesh, rift_mesh, rubble_mesh};
+    use crate::swish::{CORE_THICKNESS, HALO_ALPHA, HALO_BAND, INK_THICKNESS, RIFT_ALPHA, RIM_ALPHA, dust_mesh, outline_mesh, rift_mesh, rubble_mesh};
 
     let dir = std::env::var("PREVIEW_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
     let key = "revenant";
@@ -318,22 +323,32 @@ fn preview_impact() {
     // Over the strike's hitbox, its lane, ahead (+X) of where it stands.
     // The plain break, grown to an empowered lane (as `swish::strike_ground` does).
     let ((plain_start, plain, plain_width), (start, range, width)) = (class.def().attack.lane(false).unwrap(), class.def().attack.lane(empowered).unwrap());
-    let grown = (range - start) / (plain - plain_start);
+    let grown = Vec3::new((range - start) / (plain - plain_start), 1.0, width / plain_width);
     let (from, to) = (Vec3::new(start, 0.03, 0.0), Vec3::new(range, 0.03, 0.0));
     let length = plain - plain_start;
     let turn = Quat::IDENTITY;
     let linear = |c: Color| Vec3::from_slice(&c.to_linear().to_f32_array()[..3]);
     let mut effect = Vec::new();
     let at = |p: Vec3, scale: Vec3| Mat4::from_scale_rotation_translation(scale, turn, p);
-    see_through(&rubble_mesh(length, plain_width, 7), at(from - Vec3::Y * 0.005, Vec3::splat(grown)), linear(palette::HAZE), RIM_ALPHA, &mut effect);
-    see_through(&rift_mesh(length, plain_width, 7), at(from, Vec3::splat(grown)), linear(palette::INK), RIFT_ALPHA, &mut effect);
-    see_through(&dust_mesh(), at((from + to) / 2.0, Vec3::new(length * grown + 0.9, 1.0, width + 0.9) * 0.9), linear(palette::HAZE), 0.35, &mut effect);
+    // As it settles (the light past its flare, breathing low), the mist half gone.
+    see_through(&rubble_mesh(length, plain_width, 7), at(from - Vec3::Y * 0.005, grown), linear(palette::FROST_DARK), RIM_ALPHA, &mut effect);
+    see_through(&outline_mesh(length, plain_width, 7, HALO_BAND), at(from, grown), linear(palette::WISP), HALO_ALPHA, &mut effect);
+    see_through(&rift_mesh(length, plain_width, 7, INK_THICKNESS), at(from, grown), linear(palette::INK), RIFT_ALPHA, &mut effect);
+    see_through(&rift_mesh(length, plain_width, 7, CORE_THICKNESS), at(from + Vec3::Y * 0.004, grown), linear(palette::WISP) * 1.4, 0.75, &mut effect);
+    see_through(&dust_mesh(), at((from + to) / 2.0 + Vec3::Y * 0.15, Vec3::new(length * grown.x + 0.9, 1.0, width + 0.9) * 0.9), linear(palette::WISP), 0.18, &mut effect);
+    for i in 0..14 {
+        let t = i as f32 / 13.0;
+        let p = from.lerp(to, 0.05 + 0.9 * t) + Vec3::Z * ((i * 7 % 5) as f32 / 4.0 - 0.5) * width * 0.6 + Vec3::Y * (0.1 + 0.6 * ((i * 3 % 7) as f32 / 6.0));
+        let mut wisp = Vec::new();
+        triangles(&Sphere::new(1.0).mesh().ico(1).unwrap(), Mat4::from_scale_rotation_translation(Vec3::new(0.022, 0.048, 0.022), Quat::IDENTITY, p), &mut wisp, true);
+        effect.extend(wisp.into_iter().map(|t| Tri { color: linear(palette::WISP) * 1.4, ..t }));
+    }
     for i in 0..10 {
         let t = i as f32 / 9.0;
         let p = from.lerp(to, 0.1 + 0.8 * t) + Vec3::Z * if i % 2 == 0 { 0.3 } else { -0.35 } * (0.5 + t) + Vec3::Y * (0.2 + 0.5 * (i % 3) as f32 * 0.4);
         let mut chunk = Vec::new();
-        triangles(&Mesh::from(Cuboid::new(1.0, 0.7, 0.85)), Mat4::from_scale_rotation_translation(Vec3::splat(0.09), Quat::from_rotation_y(i as f32) * Quat::from_rotation_x(i as f32 * 0.7), p), &mut chunk, false);
-        let color = linear(if i % 3 == 0 { palette::ASH } else { palette::BANK });
+        triangles(&Mesh::from(Cuboid::new(1.0, 0.7, 0.85)), Mat4::from_scale_rotation_translation(Vec3::splat(0.06), Quat::from_rotation_y(i as f32) * Quat::from_rotation_x(i as f32 * 0.7), p), &mut chunk, false);
+        let color = linear(if i % 3 == 0 { palette::ASH } else { palette::HUNTER_DARK });
         effect.extend(chunk.into_iter().map(|t| Tri { color, ..t }));
     }
     // The hitbox's outline (what the practice tools draw), to see the blade and the break on it.
@@ -421,6 +436,12 @@ fn preview_attacks() {
             let (draw, throw, smear) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
             let phase = Phase { draw, throw, dashing: 0.0 };
             let angles = joints.follow(&targets(moves, phase, 0.0), dt, moves);
+            // The blade's point every frame through the strike, to catch it jumping sideways.
+            if std::env::var_os("PREVIEW_TRACE").is_some() && key == "revenant" && now > release - 4.0 && now < release + 3.0 {
+                let posed = assemble(moves, &angles, &targets(moves, phase, 0.0), Vec2::X, 0.0, 0.0, moves.stretch * smear, 1.0);
+                let (_, _, point) = posed_figure(key, &posed, length);
+                println!("    trace {:6.2}: phase ({draw:.2}, {throw:.3}) point {point:5.2} roll {:.3} wrist {:.3}", now - release, angles.roll, angles.tip);
+            }
             if now < moments[next].1 {
                 continue;
             }

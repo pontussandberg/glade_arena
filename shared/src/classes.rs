@@ -84,6 +84,10 @@ pub struct FollowUp {
     pub attack_speed: f32,
     #[serde(default = "one")]
     pub reach: f32,
+    /// Where an empowered lane starts, as a multiple of where a plain one does (`reach` unless
+    /// set: the whole lane scaled out).
+    #[serde(default)]
+    pub near: Option<f32>,
 }
 
 fn one() -> f32 {
@@ -262,13 +266,13 @@ impl AttackDef {
         }
     }
 
-    /// A melee attack's lane, `empowered` by its `follow_up` or not (all of it `reach` times as
-    /// far out, long and wide, as the weapon grows): (where it starts, where it ends, how wide it
-    /// is), from the attacker's center. `None` for a ranged attack.
+    /// A melee attack's lane, `empowered` by its `follow_up` or not (its far end and width `reach`
+    /// times as far, its start `near` times, as the weapon grows): (where it starts, where it
+    /// ends, how wide it is), from the attacker's center. `None` for a ranged attack.
     pub fn lane(&self, empowered: bool) -> Option<(f32, f32, f32)> {
         let AttackKind::Melee { range, width, from } = self.kind else { return None };
-        let reach = self.follow_up.filter(|_| empowered).map_or(1.0, |f| f.reach);
-        Some((from * reach, range * reach, width * reach))
+        let (reach, near) = self.follow_up.filter(|_| empowered).map_or((1.0, 1.0), |f| (f.reach, f.near.unwrap_or(f.reach)));
+        Some((from * near, range * reach, width * reach))
     }
 
     /// The whole attack at `speed` times the normal attack speed: the attack timer.
@@ -419,8 +423,8 @@ mod tests {
                 }
             }
             chill_is_sane(&c.id, c.attack.chill);
-            if let Some(FollowUp { within_ticks, attack_speed, reach }) = c.attack.follow_up {
-                assert!((1.0..=4.0).contains(&reach), "{}: follow_up reach", c.id);
+            if let Some(FollowUp { within_ticks, attack_speed, reach, near }) = c.attack.follow_up {
+                assert!((1.0..=4.0).contains(&reach) && near.is_none_or(|near| (0.5..=reach).contains(&near)), "{}: follow_up reach", c.id);
                 // Only a swing knows it landed when it goes off (`server::attack`).
                 assert!(matches!(c.attack.kind, AttackKind::Melee { .. }), "{}: follow_up on a projectile", c.id);
                 assert!((0.0..=3.0).contains(&attack_speed) && within_ticks > 0, "{}: follow_up", c.id);
