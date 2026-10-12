@@ -1,6 +1,6 @@
 //! The map pick, top middle of the character select: a small tile per map, named, the one we're
 //! on lit. At home it picks the map practice and new
-//! lobbies play on (`CurrentMap`, a random one each time the game loads), and the stage's view changes with it. In
+//! lobbies play on (`CurrentMap`, Sunken Keep to begin with), and the stage's view changes with it. In
 //! a room it shows the room's map, as the room column does: its leader may switch it there or
 //! here until the match starts; everyone else only sees it.
 
@@ -20,7 +20,6 @@ pub struct MapPickPlugin;
 
 impl Plugin for MapPickPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, pick_random_map);
         app.add_systems(OnEnter(Picking), spawn_pick);
         app.add_systems(OnExit(Picking), despawn_pick);
         app.add_systems(Update, pick_map.run_if(in_state(Picking)));
@@ -28,25 +27,6 @@ impl Plugin for MapPickPlugin {
 }
 
 const TILE_WIDTH: f32 = 128.0;
-
-/// Each time the game loads, a map picked at random to begin with.
-fn pick_random_map(mut current: ResMut<CurrentMap>) {
-    let at = (random() * MapId::ALL.len() as f64) as usize;
-    current.0 = MapId::ALL[at.min(MapId::ALL.len() - 1)];
-}
-
-/// A number in [0, 1), not the same from one load to the next.
-fn random() -> f64 {
-    #[cfg(target_family = "wasm")]
-    {
-        js_sys::Math::random()
-    }
-    #[cfg(not(target_family = "wasm"))]
-    {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
-        nanos as f64 / 1e9
-    }
-}
 
 /// The whole pick, despawned when the character select closes.
 #[derive(Component)]

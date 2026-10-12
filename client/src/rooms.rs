@@ -55,7 +55,7 @@ pub struct RoomList(pub Vec<RoomSummary>);
 #[derive(Resource, Default, Debug)]
 pub struct CurrentRoom(pub Option<RoomView>);
 
-/// The map our room plays on; out of a room, the one picked at home (`map_pick.rs`, a random one
+/// The map our room plays on; out of a room, the one picked at home (`map_pick.rs`, Sunken Keep
 /// to begin with), which practice and new lobbies play on, and the last room's once out of it. Changes only when it
 /// does, so what's built from it is rebuilt only then.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,7 +91,7 @@ pub struct RoomsNetPlugin {
 impl Plugin for RoomsNetPlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<Screen>().add_computed_state::<Picking>();
-        app.init_resource::<RoomList>().init_resource::<CurrentRoom>().init_resource::<CurrentMap>();
+        app.init_resource::<RoomList>().init_resource::<CurrentRoom>().insert_resource(CurrentMap(MapId::Keep));
         app.init_resource::<Notice>().init_resource::<Leaving>();
         app.insert_resource(QuickJoin(self.quick_join.clone()));
         app.insert_resource(StoredName(self.guest_name.clone()));
