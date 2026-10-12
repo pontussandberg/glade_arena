@@ -321,10 +321,11 @@ fn place_bars(
         let pop = 1.0 + CRIT_BAR_POP * (1.0 - (now - trail.crit_at) / CRIT_BAR_POP_SECONDS).max(0.0).powi(2);
         transform.set_if_neq(UiTransform { scale: Vec2::splat(pop), ..default() });
         // The attack timer, once the attack has gone off (the windup only shows in the fighter,
-        // and a cancelled one shows nothing): filling until the next attack may start.
+        // and a cancelled one shows nothing): full as it goes off, draining from the right until
+        // the next attack may start.
         let cooling = attack.swing.filter(|_| attack.released());
         if let Some(swing) = cooling {
-            fill_to(ids.cast_fill, swing.cooldown_progress(clock.now(is_me), *class));
+            fill_to(ids.cast_fill, 1.0 - swing.cooldown_progress(clock.now(is_me), *class));
         }
         if let Ok((_, mut cast_visibility)) = parts.get_mut(ids.cast) {
             cast_visibility.set_if_neq(shown(cooling.is_some()));

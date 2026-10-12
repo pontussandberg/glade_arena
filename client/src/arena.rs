@@ -440,10 +440,11 @@ pub struct RigMeshes {
     /// glowing, like the eyes: crystals, runes.
     pub held_glow: Option<Mesh>,
     pub body_glow: Option<Mesh>,
-    /// A see-through shell of the same glow around the held weapon, in its space: shown while the
-    /// attack's `follow_up` is armed (`rig::show_auras`).
+    /// What lights up on the held weapon (in its space), glowing like the eyes, while the
+    /// attack's `follow_up` is armed (`rig::show_auras`): cracks of light through a blade.
     pub held_aura: Option<Mesh>,
-    /// A sharp glint of white light shown with the aura, and where it sits (the weapon's point).
+    /// A sharp glint of white light, and where on the weapon it sits: a gripped blade's gleam
+    /// (`rig::gleam_blades`) runs along its edge with it.
     pub held_glint: Option<(Mesh, Vec3)>,
     /// Cloth that moves (see `cloth.rs`), in the fighter's space.
     pub wardrobe: Option<Wardrobe>,
@@ -485,7 +486,7 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             glow: palette::WISP,
             held_glow: Some(glaive_glow()),
             body_glow: Some(revenant_glow()),
-            held_aura: Some(glaive_aura()),
+            held_aura: Some(glaive_cracks()),
             held_glint: Some((glint(), Vec3::new(GLAIVE[GLAIVE.len() - 1].1, BLADE_LENGTH, 0.0))),
             wardrobe: Some(revenant_wardrobe()),
         },
@@ -1218,15 +1219,67 @@ fn glaive_glow() -> Mesh {
     sculpted(parts)
 }
 
-/// A soft shell of light around the revenant's glaive's blade (`GLAIVE`, padded out), from its
-/// root to a little past the point.
-fn glaive_aura() -> Mesh {
-    let mut sections: Vec<Section> = GLAIVE[..GLAIVE.len() - 1]
-        .iter()
-        .map(|&(y, x, depth, width)| Section::new(Vec3::new(x, y, 0.0), Vec2::new(depth + 0.03, width * 2.5 + 0.02), Color::WHITE))
-        .collect();
-    sections.push(Section::new(Vec3::new(GLAIVE[GLAIVE.len() - 1].1, BLADE_LENGTH + 0.08, 0.0), Vec2::ZERO, Color::WHITE));
-    tube(&smoothed(&sections, 2), 12, (true, false))
+/// Cracks of light split through the revenant's glaive's blade, on both its faces (in its
+/// space): from its edge in toward its spine, angular, zigzagging and narrowing as they go, some
+/// forking, like the tear the blade leaves in the ground. Glowing.
+fn glaive_cracks() -> Mesh {
+    let mut b = FlatMesh::default();
+    let r = |k: u32| crate::swish::noise(0x6C61_7665, k);
+    for c in 0..GLAIVE_CRACKS {
+        let r = |k: u32| r(c * 64 + k);
+        // Spread along the blade, a little uneven.
+        let y = BLADE_START + 0.12 + (GLAIVE_TOP - BLADE_START - 0.2) * (c as f32 + 0.25 + 0.5 * r(0)) / GLAIVE_CRACKS as f32;
+        let (edge, spine, _) = blade_at(y);
+        let breadth = edge - spine;
+        // Zigzagging in from the edge: each step turned off straight in, one way then the other.
+        let steps = 3 + (r(1) * 3.0) as u32;
+        let reach = breadth * (0.5 + 0.4 * r(2));
+        let mut points = vec![Vec2::new(edge - 0.003, y)];
+        for k in 0..steps {
+            let side = if k % 2 == 0 { 1.0 } else { -1.0 } * if r(3) < 0.5 { 1.0 } else { -1.0 };
+            let turn = side * (0.25 + 0.4 * r(4 + k));
+            let step = reach / steps as f32 / turn.cos();
+            let last = *points.last().unwrap();
+            points.push(last + Vec2::new(-turn.cos(), turn.sin()) * step);
+        }
+        let wide = |k: f32| CRACK_WIDTH * (1.0 - 0.8 * k / steps as f32);
+        let mut segments: Vec<(Vec2, Vec2, f32, f32)> = points.windows(2).enumerate().map(|(k, w)| (w[0], w[1], wide(k as f32), wide(k as f32 + 1.0))).collect();
+        // A fork off its middle, thinner, turned the other way.
+        if r(20) < 0.7 {
+            let k = steps as usize / 2;
+            let from = points[k];
+            let turn = -(points[k + 1] - from).to_angle().signum() * (0.5 + 0.4 * r(21));
+            let to = from + Vec2::new(-turn.cos(), turn.sin()) * breadth * (0.15 + 0.15 * r(22));
+            segments.push((from, to, wide(k as f32) * 0.6, 0.0));
+        }
+        for (from, to, w0, w1) in segments {
+            let across = (to - from).perp().normalize_or(Vec2::Y);
+            for face in [1.0, -1.0] {
+                // Just off the face, wherever it is along the blade.
+                let on = |p: Vec2| Vec3::new(p.x, p.y, face * (blade_at(p.y).2 + 0.0015));
+                let corners = [on(from - across * w0 / 2.0), on(from + across * w0 / 2.0), on(to + across * w1 / 2.0), on(to - across * w1 / 2.0)];
+                // Seen from either side (whichever way round its corners go).
+                b.quad(corners, Color::WHITE);
+                b.quad([corners[0], corners[3], corners[2], corners[1]], Color::WHITE);
+            }
+        }
+    }
+    b.build()
+}
+
+/// How many cracks split the empowered glaive's blade (`glaive_cracks`), and how wide each is
+/// where it opens at the edge (meters).
+const GLAIVE_CRACKS: u32 = 7;
+const CRACK_WIDTH: f32 = 0.024;
+
+/// The glaive's blade at height `y` (`GLAIVE`, between its sections): where its edge and its
+/// spine are (x) and half its thickness.
+fn blade_at(y: f32) -> (f32, f32, f32) {
+    let k = GLAIVE.windows(2).position(|w| y <= w[1].0).unwrap_or(GLAIVE.len() - 2);
+    let (a, b) = (GLAIVE[k], GLAIVE[k + 1]);
+    let t = ((y - a.0) / (b.0 - a.0)).clamp(0.0, 1.0);
+    let (x, depth, width) = (a.1 + (b.1 - a.1) * t, a.2 + (b.2 - a.2) * t, a.3 + (b.3 - a.3) * t);
+    (x + depth, x - depth, width)
 }
 
 /// A glint: a star of three long, thin crystals crossed through its middle, so it reads as a

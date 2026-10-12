@@ -32,8 +32,8 @@ impl Plugin for SwishPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_swish);
         app.add_systems(Update, (add_trails, drive_marks, drive_impacts, throw_chunks));
-        app.add_systems(PostUpdate, (trail_blades, show_marks, strike_ground, drag_marks).chain().after(TransformSystems::Propagate));
-        app.add_systems(Update, (fade_scuffs, fly_sparks));
+        app.add_systems(PostUpdate, (trail_blades, show_marks, strike_ground, drag_marks, shed_embers).chain().after(TransformSystems::Propagate));
+        app.add_systems(Update, (fade_scuffs, fly_sparks, drift_embers));
     }
 }
 
@@ -55,6 +55,9 @@ pub(crate) struct Blade {
     pub(crate) corner: Vec3,
     /// Counts its scuffs, to pick which throw sparks.
     pub(crate) rasp: u32,
+    /// While it's quickened: when (seconds) it sheds its next ember, and how many it has shed
+    /// (`shed_embers`).
+    pub(crate) embers: (f32, u32),
 }
 
 impl Blade {
@@ -87,6 +90,8 @@ const TRAIL_DIM: f32 = 0.5;
 /// material each).
 const MARK_LIFE: f32 = 0.32;
 const MARK_FROM: f32 = BLADE_FROM;
+/// How high over the ground a mark lies along its strike's lane (meters): over the tear.
+const MARK_HEIGHT: f32 = 0.05;
 const MARK_FADES: usize = 8;
 /// The air's color, and how see-through the mark is at its brightest.
 const AIR: Color = palette::SILVER;
@@ -169,6 +174,8 @@ struct SwishAssets {
     scuff_fades: Vec<Handle<StandardMaterial>>,
     /// Earth and stone, dark enough for any ground.
     chunks: [Handle<StandardMaterial>; 2],
+    /// Embers flaking off a quickened blade.
+    ember_glow: Handle<StandardMaterial>,
 }
 
 fn load_swish(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
@@ -189,6 +196,7 @@ fn load_swish(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mate
         scuff: meshes.add(scuff_mesh()),
         scuff_fades: fades(&mut materials, palette::INK, SCUFF_ALPHA, 0.0),
         chunks: [palette::HUNTER_DARK, palette::ASH].map(|color| materials.add(arena::matte(color))),
+        ember_glow: materials.add(arena::glow(palette::SOUL, EMBER_GLOW)),
     });
 }
 
@@ -206,7 +214,7 @@ fn layered(materials: &mut Assets<StandardMaterial>, color: Color, alpha: f32, g
 }
 
 /// A pseudo-random number in 0..1 from `seed` and `i`: the same impact breaks the same way.
-fn noise(seed: u32, i: u32) -> f32 {
+pub(crate) fn noise(seed: u32, i: u32) -> f32 {
     let mut x = seed.wrapping_mul(0x9E37_79B9) ^ i.wrapping_mul(0x85EB_CA6B);
     x ^= x >> 15;
     x = x.wrapping_mul(0x2C1B_3C6D);
@@ -399,17 +407,19 @@ impl Mark {
     }
 }
 
-/// A mark for each new swing, along the blade where it is as the strike lands (after it's posed
-/// and placed, so it's exactly there). `LastSwing` comes from the server; each is drawn once.
+/// A mark for each new swing, lying on the ground where the blade comes down: along the middle
+/// of the strike's lane (`AttackDef::lane`, longer empowered), wherever the blade itself happens
+/// to be as the hit arrives. Without a lane, along the blade where it is (after it's posed and
+/// placed). `LastSwing` comes from the server; each is drawn once.
 fn show_marks(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<SwishAssets>,
-    mut swings: Query<(&LastSwing, &mut Blade), Changed<LastSwing>>,
+    mut swings: Query<(&LastSwing, &mut Blade, &Pos, &ClassId), Changed<LastSwing>>,
     blades: Query<&GlobalTransform>,
 ) {
     let now = time.elapsed_secs();
-    for (swing, mut blade) in &mut swings {
+    for (swing, mut blade, pos, class) in &mut swings {
         if swing.tick <= blade.shown {
             continue;
         }
@@ -417,8 +427,16 @@ fn show_marks(
         // The ground breaks over its hitbox at once, as the hit is dealt (`strike_ground`): it
         // shows where the strike hit, cut short or not.
         blade.striking = true;
-        let Ok(held) = blades.get(blade.held) else { continue };
-        let mark = Mark { started: now, from: blade.at(held, MARK_FROM), to: blade.at(held, 1.0) };
+        let mark = match class.def().attack.lane(swing.empowered) {
+            Some((near, far, _)) => {
+                let dir = swing.dir.normalize_or(Vec2::X);
+                Mark { started: now, from: to_world(pos.0 + dir * near, MARK_HEIGHT), to: to_world(pos.0 + dir * far, MARK_HEIGHT) }
+            }
+            None => {
+                let Ok(held) = blades.get(blade.held) else { continue };
+                Mark { started: now, from: blade.at(held, MARK_FROM), to: blade.at(held, 1.0) }
+            }
+        };
         let transform = mark.transform(0.0);
         commands.spawn((
             Mesh3d(assets.mark.clone()),
@@ -752,6 +770,81 @@ fn fly_sparks(mut commands: Commands, time: Res<Time>, mut sparks: Query<(Entity
         let size = spark.size * (1.0 - t * t);
         transform.rotation = Quat::from_rotation_arc(Vec3::Y, spark.velocity.normalize_or(Vec3::Y));
         transform.scale = Vec3::new(size, size * SPARK_STRETCH, size);
+    }
+}
+
+/// Embers flaking off a quickened blade's edge (`Blade::quickened`): how many a second, how fast
+/// they rise (m/s, least and most) and drift aside, how long each lasts (seconds, least and
+/// most), how big (meters, least and most), how drawn out along their flight, and how bright.
+const EMBERS_PER_SECOND: f32 = 22.0;
+const EMBER_RISE: (f32, f32) = (0.35, 0.8);
+const EMBER_DRIFT: f32 = 0.25;
+const EMBER_LIFE: (f32, f32) = (0.35, 0.75);
+const EMBER_SIZE: (f32, f32) = (0.018, 0.035);
+const EMBER_STRETCH: f32 = 3.0;
+const EMBER_GLOW: f32 = 7.0;
+
+/// A quickened blade sheds sharp embers off its edge, one after another, from anywhere along it.
+fn shed_embers(
+    mut commands: Commands,
+    time: Res<Time>,
+    assets: Res<SwishAssets>,
+    mut fighters: Query<(&mut Blade, &InheritedVisibility)>,
+    blades: Query<&GlobalTransform>,
+) {
+    let now = time.elapsed_secs();
+    for (mut blade, visible) in &mut fighters {
+        if !blade.quickened || !visible.get() {
+            blade.embers.0 = now;
+            continue;
+        }
+        let Ok(held) = blades.get(blade.held) else { continue };
+        while blade.embers.0 <= now {
+            let shed = blade.embers.1;
+            blade.embers = (blade.embers.0 + 1.0 / EMBERS_PER_SECOND, shed.wrapping_add(1));
+            let r = |k: u32| noise(shed.wrapping_mul(0x51ED_270B) ^ blade.held.index().index(), k);
+            let from = held.transform_point(arena::glaive_edge(0.05 + 0.95 * r(0)));
+            let aside = Vec3::new(r(1) - 0.5, 0.0, r(2) - 0.5) * 2.0 * EMBER_DRIFT;
+            let velocity = Vec3::Y * (EMBER_RISE.0 + (EMBER_RISE.1 - EMBER_RISE.0) * r(3)) + aside;
+            let size = EMBER_SIZE.0 + (EMBER_SIZE.1 - EMBER_SIZE.0) * r(4);
+            let transform = Transform::from_translation(from).with_scale(Vec3::ZERO);
+            commands.spawn((
+                Mesh3d(assets.wisp.clone()),
+                MeshMaterial3d(assets.ember_glow.clone()),
+                transform,
+                GlobalTransform::from(transform),
+                Ember { started: now, velocity, size, life: EMBER_LIFE.0 + (EMBER_LIFE.1 - EMBER_LIFE.0) * r(5) },
+                NotShadowCaster,
+                NotShadowReceiver,
+            ));
+        }
+    }
+}
+
+/// An ember flaking off a quickened blade, from `started`.
+#[derive(Component)]
+struct Ember {
+    started: f32,
+    velocity: Vec3,
+    size: f32,
+    life: f32,
+}
+
+/// Embers rise, slowing, flare and wink out.
+fn drift_embers(mut commands: Commands, time: Res<Time>, mut embers: Query<(Entity, &mut Ember, &mut Transform)>) {
+    let (now, dt) = (time.elapsed_secs(), time.delta_secs().min(0.05));
+    for (entity, mut ember, mut transform) in &mut embers {
+        let t = (now - ember.started) / ember.life;
+        if t >= 1.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        transform.translation += ember.velocity * dt;
+        ember.velocity *= 1.0 - 2.0 * dt;
+        // A sharp sliver along its flight, flaring at once and dwindling to nothing.
+        let size = ember.size * (t / 0.1).min(1.0) * (1.0 - t);
+        transform.rotation = Quat::from_rotation_arc(Vec3::Y, ember.velocity.normalize_or(Vec3::Y));
+        transform.scale = Vec3::new(size, size * EMBER_STRETCH, size);
     }
 }
 

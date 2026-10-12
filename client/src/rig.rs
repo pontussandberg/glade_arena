@@ -2,8 +2,8 @@
 //! eased keyframes in distinct beats (draw, hold, a fast committed strike), a walk with a light
 //! bob and sway, and every joint on a firm, nearly critically damped spring so motion is smoothed
 //! without wobbling (cloth that moves on its own is `cloth.rs`).
-//! Every fighter turns to face where it walks, swings or dashes (`Facing`), acts out its attack
-//! and strikes a pose while dashing; each class has its own `Moves`.
+//! Every fighter turns to face where it walks, swings or dashes (`Facing`) and acts out its
+//! attack; each class has its own `Moves`.
 //!
 //! An attack is timed to the server's: the draw and the strike fill its windup, and the
 //! strike is `Moves::contact` of the way through as it goes off (the spear leaving the hand, the
@@ -28,9 +28,9 @@
 //! (Follow Through): it grows half as big again while that's armed and through the empowered
 //! attack (`EMPOWERED_BLADE`), which is the same blow, faster, smearing out further still to
 //! reach its longer lane (`EMPOWERED_STRETCH`). A strike started before the last one has settled chains onto it: the blade comes
-//! straight back into the draw instead of sinking to the carry in between. A dash is a lunge,
-//! the blade driven out ahead, held all the way through it; a dash taken mid-windup leaves the
-//! windup be, the fighter gliding along in its stance, facing the aim.
+//! straight back into the draw instead of sinking to the carry in between. A dash is no move of
+//! its own: the fighter glides along in its stance, turned to the dash, cutting a backswing
+//! short; taken mid-windup, it doesn't turn at all, facing as it was until its next move.
 //!
 //! The frost mage carries its staff upright at its side. The windup raises it high toward the
 //! target, the off hand reaching out to gather the cold; the cast thrusts the crystal forward at
@@ -143,9 +143,11 @@ pub(crate) struct Moves {
     /// Its weapon's point rests on the ground while it carries: the wrist bends however far
     /// keeps it there, whatever the arm's swing and the body's bob (`Held::Gripped` only).
     rests: bool,
+    /// How long its strides are (1: `LEG_SWING`): shorter, the body dips less with each.
+    stride: f32,
     head_dip: [f32; 4],
     held: Held,
-    // (The fourth keyframe of each is the class's Q pose: a dash, or a nova's slam.)
+    // (The fourth keyframe of each is the class's Q pose: a nova's slam. A dash has none.)
     /// Throws its weapon with the auto-attack: the hand is empty until a new one is drawn.
     throws: bool,
     /// How big the fighter is drawn (1 = the joints in `arena`).
@@ -210,6 +212,7 @@ const JAVELINIST: Moves = Moves {
     standing_lean: 0.0,
     standing_arm: 0.0,
     rests: false,
+    stride: 1.0,
     head_dip: [0.0, 0.2, -0.15, 0.0],
     held: Held::OnTarget,
     throws: true,
@@ -229,8 +232,7 @@ const JAVELINIST: Moves = Moves {
 const REVENANT: Moves = Moves {
     // A windmill: the arm swings back and up behind (the blade lifted off the ground behind it)
     // to over the head, then on over the top, down ahead into the ground, and round past the leg
-    // back to the drag. The dash (the fourth of each) is a lunge, held all the way through it:
-    // the blade driven out ahead, the weapon shoulder leading.
+    // back to the drag. (Its dash has no pose: the fourth of each is unused.)
     weapon_arm: [-0.35, -3.35, -6.03, 1.45],
     // The arm swings in its own plane, whatever the body's twist: a straight blow.
     weapon_arm_untwist: 1.0,
@@ -252,6 +254,8 @@ const REVENANT: Moves = Moves {
     // The weapon arm hanging all but straight down, the wrist bent to keep the point down.
     standing_arm: 0.45,
     rests: true,
+    // Short, heavy steps: the body (and the hand dragging the glaive) hardly dips with each.
+    stride: 0.6,
     head_dip: [0.25, 0.15, -0.45, -0.15],
     // Dragged: the thumb (and blade) back, the blade trailing low behind. Drawn: straight up
     // over the head, in line with the arm (so the grip turns over on the way up without the
@@ -294,6 +298,7 @@ const FROST_MAGE: Moves = Moves {
     standing_lean: 0.0,
     standing_arm: 0.0,
     rests: false,
+    stride: 1.0,
     head_dip: [0.0, 0.1, -0.15, -0.2],
     held: Held::Upright([0.08, -0.25, 1.0, -0.05]),
     throws: false,
@@ -340,7 +345,7 @@ const FOLLOW_THROUGH: (f32, f32) = (1.5, 7.0);
 /// An empowered weapon (`follow_up`): how much bigger it grows, how quickly (per second,
 /// exponential), and how much further its strike smears out, so it reaches its lane's far end
 /// (`FollowUp::reach`).
-pub(crate) const EMPOWERED_BLADE: f32 = 1.6;
+pub(crate) const EMPOWERED_BLADE: f32 = 1.5;
 const EMPOWER_RATE: f32 = 12.0;
 pub(crate) const EMPOWERED_STRETCH: f32 = 0.05;
 /// How much a gripped blade grown to twice its size is tipped up (radians, in proportion).
@@ -365,9 +370,8 @@ const HEAD_FOLLOW: f32 = 0.3;
 /// How brightly the eyes (and other glowing parts) glow.
 const EYE_GLOW: f32 = 6.0;
 
-/// How see-through a weapon's aura is, and how fast (radians per second) and how much it swells.
-const AURA_ALPHA: f32 = 0.42;
-const AURA_PULSE: (f32, f32) = (9.0, 0.15);
+/// How brightly a weapon's aura glows (its cracks of light).
+const AURA_GLOW: f32 = 9.0;
 /// A blade's gleam: how long between gleams (seconds, at least and at most), how long one lasts,
 /// how big it gets (at its least and most, of the glint's size), and how far it turns (radians):
 /// quickest coming in and going out, settling still as it shines its brightest.
@@ -391,9 +395,6 @@ struct Gleaming {
     seed: u32,
 }
 
-/// How fast the glint twinkles (radians per second) and spins (radians per second).
-const GLINT_TWINKLE: f32 = 7.0;
-const GLINT_SPIN: f32 = 2.5;
 
 /// Rig meshes for each class, and its glow (crystals: the same for everyone of a class), and the
 /// cold white everyone's eyes burn with. Every other part is drawn in the fighter's own material
@@ -419,13 +420,16 @@ struct RigHandles {
 }
 
 /// Which way a fighter faces, where it was last frame, and how far it moved and turned
-/// (radians) since.
+/// (radians) since; the last dash it saw start (`Dash::started_at`), and whether it's holding
+/// its look through it (`turn_fighters`): `INFINITY` while dashing, then since when it ended.
 #[derive(Component)]
 struct Facing {
     look: Vec2,
     last_pos: Vec2,
     moved: Vec2,
     turned: f32,
+    dash_seen: Option<u32>,
+    steady: Option<f32>,
 }
 
 /// Where a fighter's held weapon is in the world in the pose it's heading for this frame (its
@@ -446,8 +450,6 @@ struct Rig {
     held: Entity,
     /// The held weapon's aura (`RigMeshes::held_aura`), if it has one.
     aura: Option<Entity>,
-    /// And the glint at its point.
-    glint: Option<Entity>,
     /// A gleam running along a gripped blade's edge now and then (`gleam_blades`), and when.
     gleam: Option<Entity>,
     gleaming: Gleaming,
@@ -575,7 +577,11 @@ pub(crate) fn targets(moves: &Moves, phase: Phase, step: f32, walking: f32) -> A
     // turned back by as much so they hang (and what they hold lies) just as they did.
     let still = (1.0 - walking) * (1.0 - phase.braced());
     let stand = (moves.standing_lean - moves.lean[0]) * still;
-    let legs = step * LEG_SWING * (1.0 - phase.braced());
+    let legs = step * LEG_SWING * moves.stride * (1.0 - phase.braced());
+    // Walking, the legs swing evenly about the middle of their stance, one forward as the other
+    // goes back, rather than from a split stance (out together, then crossing in together).
+    let gait = walking * (1.0 - phase.braced());
+    let middle = (moves.lead_leg[0] + moves.back_leg[0]) / 2.0;
     let (tip, roll) = match moves.held {
         Held::OnTarget => (0.0, 0.0),
         // After a strike that took it right round (over the top), it settles back to the carry
@@ -595,8 +601,8 @@ pub(crate) fn targets(moves: &Moves, phase: Phase, step: f32, walking: f32) -> A
         // A weapon resting on the ground keeps its arm still as it walks: only the bob moves it.
         weapon_arm: pose([carry, drawn, released, dash]) - step * ARM_SWING * if moves.rests { 0.0 } else { 0.3 } - stand + moves.standing_arm * still,
         lead_arm: pose(moves.lead_arm) + step * ARM_SWING - stand,
-        back_leg: pose(moves.back_leg) - legs,
-        lead_leg: pose(moves.lead_leg) + legs,
+        back_leg: pose(moves.back_leg) + (middle - moves.back_leg[0]) * gait - legs,
+        lead_leg: pose(moves.lead_leg) + (middle - moves.lead_leg[0]) * gait + legs,
         head_dip: pose(moves.head_dip),
         tip,
         roll,
@@ -640,7 +646,7 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
     let foot = |hip: Vec3, leg: f32| (lean * (hip + leg_turn(leg) * Vec3::NEG_Y * RIG_HIP.y)).y;
     let lowest = soft_min(foot(RIG_HIP, angles.back_leg), foot(RIG_HIP.with_z(-RIG_HIP.z), angles.lead_leg));
     let body = Transform {
-        translation: Vec3::Y * (-lowest + (2.0 * stride).cos().powi(2) * BOB * walk) * moves.scale,
+        translation: Vec3::Y * (-lowest + stride.cos().powi(2) * BOB * walk) * moves.scale,
         rotation: facing_turn * lean,
         scale: Vec3::splat(moves.scale),
     };
@@ -654,8 +660,8 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
     let gripped = |angles: &Angles| Quat::from_rotation_y(angles.roll) * Quat::from_rotation_z(-(FRAC_PI_2 + angles.tip - lift));
     // Its point resting on the ground, still as it walks: where it rests is where the wrist bent
     // as far as puts the blade's lowest point (its tip or its edge's corner) on the ground in the
-    // pose the joints are heading for, unbobbed; the shoulder and wrist then hold it there,
-    // whatever the stride, the bob and the sway do to the body (the arm taking up the bob).
+    // pose the joints are heading for, unbobbed; the wrist then holds it at that height,
+    // whatever the stride, the bob and the sway do to the body.
     let rested = if moves.rests && rest > 0.0 && matches!(moves.held, Held::Gripped { .. }) {
         let point_at = |lean: Quat, height: f32, angles: &Angles, local: Vec3| {
             Vec3::Y * height + moves.scale * (lean * (RIG_SHOULDER + arm_turn(angles.twist, angles.weapon_arm) * (RIG_HAND + gripped(angles) * local * blade)))
@@ -679,23 +685,16 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
         }
         let rests_on = Angles { tip: wrist, ..*aimed };
         let spot = point_at(aimed_lean, aimed_height, &rests_on, tip);
-        // Holding its tip there as posed: the shoulder and wrist turned together (Newton's method, on
-        // the point's place along the facing and its height).
-        let off = |arm: f32, wrist: f32| {
-            let at = point_at(lean, body.translation.y, &Angles { weapon_arm: arm, tip: wrist, ..*angles }, tip) - spot;
-            Vec2::new(at.x, at.y)
-        };
-        let (mut arm, mut wrist) = (angles.weapon_arm, angles.tip + (wrist - aimed.tip));
+        // Holding its tip at that height as posed: the arm kept still, only the wrist bending
+        // (Newton's method), so the hand rides the body's gentle bob without twitching.
+        let height = |wrist: f32| point_at(lean, body.translation.y, &Angles { tip: wrist, ..*angles }, tip).y - spot.y;
+        let (arm, mut wrist) = (angles.weapon_arm, angles.tip + (wrist - aimed.tip));
         for _ in 0..5 {
-            let miss = off(arm, wrist);
-            let by_arm = (off(arm + 0.01, wrist) - off(arm - 0.01, wrist)) / 0.02;
-            let by_wrist = (off(arm, wrist + 0.01) - off(arm, wrist - 0.01)) / 0.02;
-            let det = by_arm.x * by_wrist.y - by_wrist.x * by_arm.y;
-            if det.abs() < 1e-4 {
+            let slope = (height(wrist + 0.01) - height(wrist - 0.01)) / 0.02;
+            if slope.abs() < 1e-3 {
                 break;
             }
-            arm -= ((by_wrist.y * miss.x - by_wrist.x * miss.y) / det).clamp(-0.2, 0.2);
-            wrist -= ((by_arm.x * miss.y - by_arm.y * miss.x) / det).clamp(-0.2, 0.2);
+            wrist -= (height(wrist) / slope).clamp(-0.2, 0.2);
         }
         let bend = |to: f32, from: f32| from + (to - from).clamp(-REST_BEND, REST_BEND) * rest;
         Angles { weapon_arm: bend(arm, angles.weapon_arm), tip: bend(wrist, angles.tip), ..*angles }
@@ -815,7 +814,7 @@ fn load_rigs(
                 glow: materials.add(arena::glow(rig.glow, EYE_GLOW)),
                 held_glow: rig.held_glow.map(|mesh| meshes.add(mesh)),
                 body_glow: rig.body_glow.map(|mesh| meshes.add(mesh)),
-                held_aura: rig.held_aura.map(|mesh| (meshes.add(mesh), materials.add(arena::translucent(rig.glow, AURA_ALPHA, EYE_GLOW)))),
+                held_aura: rig.held_aura.map(|mesh| (meshes.add(mesh), materials.add(arena::glow(rig.glow, AURA_GLOW)))),
                 held_glint: rig.held_glint.map(|(mesh, at)| (meshes.add(mesh), materials.add(arena::glow(Color::WHITE, EYE_GLOW)), at)),
                 wardrobe: rig.wardrobe.map(|wardrobe| WardrobeAssets::load(wardrobe, &mut meshes, &mut bindposes, &mut materials)),
             };
@@ -848,7 +847,6 @@ fn add_rigs(
             legs: [part(&handles.leg, own, RIG_HIP), part(&handles.leg, own, mirrored(RIG_HIP))],
             held: part(&handles.held, own, RIG_HAND),
             aura: handles.held_aura.as_ref().map(|(mesh, material)| part(mesh, material, Vec3::ZERO)),
-            glint: handles.held_glint.as_ref().map(|(mesh, material, at)| part(mesh, material, *at)),
             gleam: handles.held_glint.as_ref().filter(|_| matches!(moves(&class.def().id).held, Held::Gripped { .. })).map(|(mesh, material, _)| part(mesh, material, Vec3::ZERO)),
             gleaming: Gleaming { seed: player.index().index(), ..default() },
             moves: moves(&class.def().id),
@@ -866,7 +864,7 @@ fn add_rigs(
         if let Some(glow) = held_glow {
             commands.entity(rig.held).add_child(glow);
         }
-        for shown_armed in rig.aura.into_iter().chain(rig.glint).chain(rig.gleam) {
+        for shown_armed in rig.aura.into_iter().chain(rig.gleam) {
             commands.entity(shown_armed).insert((Visibility::Hidden, NotShadowCaster, NotShadowReceiver));
             commands.entity(rig.held).add_child(shown_armed);
         }
@@ -878,11 +876,11 @@ fn add_rigs(
             crate::cloth::dress(&mut commands, player, rig.legs, own, wardrobe);
         }
         if matches!(rig.moves.held, Held::Gripped { .. }) {
-            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length: arena::BLADE_LENGTH, shown: 0, quickened: false, striking: false, dragged: None, corner: arena::glaive_edge(1.0), rasp: 0 });
+            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length: arena::BLADE_LENGTH, shown: 0, quickened: false, striking: false, dragged: None, corner: arena::glaive_edge(1.0), rasp: 0, embers: (0.0, 0) });
         }
         commands.entity(player).insert((
             rig,
-            Facing { look: Vec2::X, last_pos: pos.0, moved: Vec2::ZERO, turned: 0.0 },
+            Facing { look: Vec2::X, last_pos: pos.0, moved: Vec2::ZERO, turned: 0.0, dash_seen: None, steady: None },
             HeldAt::default(),
             SeenThrows::default(),
         ));
@@ -894,16 +892,38 @@ fn rate(time: &Time, per_second: f32) -> f32 {
     1.0 - (-per_second * time.delta_secs()).exp()
 }
 
-/// Turns every fighter toward where it wants to face: its dash, its locked aim while winding up,
+/// Turns every fighter toward where it wants to face: its locked aim while winding up, its dash,
 /// or the way it walks (if it moved this frame). Snaps once there, so it settles.
+///
+/// A dash taken mid-windup doesn't turn it at all: it holds its look through the dash and after,
+/// until its next attack, or until it walks off once the dash is over (`STEADY_SETTLE` after, so
+/// the dash's own last steps don't count). A dash in the backswing cuts it short and turns it
+/// to the dash, like walking off.
 fn turn_fighters(time: Res<Time>, mut fighters: Query<(&mut Facing, &Pos, &AttackState, &AbilityState)>) {
     let turn = rate(&time, TURN_RATE);
+    let now = time.elapsed_secs();
     for (mut facing, pos, attack, ability) in &mut fighters {
         let moved = pos.0 - facing.last_pos;
+        let mut steady = facing.steady;
+        let mut dash_seen = facing.dash_seen;
+        match ability.dash {
+            Some(dash) if dash_seen != Some(dash.started_at) => {
+                dash_seen = Some(dash.started_at);
+                steady = attack.winding_up().is_some().then_some(f32::INFINITY);
+            }
+            Some(_) => {}
+            None if steady == Some(f32::INFINITY) => steady = Some(now),
+            None => {}
+        }
+        // A new attack, or walking off after the dash, lets it turn again.
+        let attacked_since = attack.swing.is_some_and(|swing| dash_seen.is_some_and(|at| swing.started_at > at));
+        let walked_off = steady.is_some_and(|ended| now - ended > STEADY_SETTLE) && moved.length() > 0.01;
+        if attacked_since || walked_off {
+            steady = None;
+        }
         let wants = match (attack.winding_up(), ability.dash) {
             (Some(windup), _) => windup.dir,
-            // Struck mid-dash: still facing the strike.
-            (None, Some(_)) if attack_in_dash(attack, ability) => facing.look,
+            _ if steady.is_some() => facing.look,
             (None, Some(dash)) => dash.dir,
             (None, None) if moved.length() > 0.01 => moved.normalize(),
             (None, None) => facing.look,
@@ -911,18 +931,15 @@ fn turn_fighters(time: Res<Time>, mut fighters: Query<(&mut Facing, &Pos, &Attac
         let look = facing.look.lerp(wants, turn).try_normalize().unwrap_or(wants);
         let look = if look.dot(wants) > 0.9999 { wants } else { look };
         let turned = facing.look.angle_to(look);
-        if facing.look != look || facing.last_pos != pos.0 || facing.moved != moved || facing.turned != turned {
-            *facing = Facing { look, last_pos: pos.0, moved, turned };
+        if facing.look != look || facing.last_pos != pos.0 || facing.moved != moved || facing.turned != turned || facing.steady != steady || facing.dash_seen != dash_seen {
+            *facing = Facing { look, last_pos: pos.0, moved, turned, dash_seen, steady };
         }
     }
 }
 
-/// A dash with an attack in it (dashing mid-windup, or a windup going off mid-dash): it keeps
-/// the attack's look, facing the aim, its pose undisturbed, gliding without a stride. Only a
-/// dash on its own strikes the dash pose.
-fn attack_in_dash(attack: &AttackState, ability: &AbilityState) -> bool {
-    ability.dash.is_some_and(|dash| attack.winding_up().is_some() || attack.released_at.is_some_and(|at| at >= dash.started_at))
-}
+/// How long (seconds) after a dash ends before walking turns a fighter that held its look
+/// through it (`turn_fighters`).
+const STEADY_SETTLE: f32 = 0.15;
 
 /// 0 below `from`, 1 above `to`, smooth in between.
 fn ease(from: f32, to: f32, x: f32) -> f32 {
@@ -979,7 +996,8 @@ fn pose_rigs(
     let dt = time.delta_secs().min(0.1);
     for (mut rig, facing, mut body, mut held_at, class, attack, ability, seen, is_me) in &mut rigs {
         let rig = &mut *rig;
-        let gliding = attack_in_dash(attack, ability);
+        // Dashing, it glides along in its pose without a stride.
+        let gliding = ability.dash.is_some();
         if !gliding {
             rig.stride += facing.moved.length() * STRIDES_PER_METER;
         }
@@ -1020,12 +1038,13 @@ fn pose_rigs(
         let stretch = moves.stretch + if empowering { EMPOWERED_STRETCH } else { 0.0 };
         let (posed_windup, posed_released, ahead) = ahead_of_springs(*class, moves, windup, released, now);
         let (draw, mut throw, mut smear) = strike_phase(*class, moves, attack, posed_windup, posed_released, ahead);
-        // Walking off once the attack has gone off cuts its backswing short, for good: the
-        // follow-through blends out quickly into the walk.
+        // Walking off (or dashing off, after it went off) once the attack has gone off cuts its
+        // backswing short, for good: the follow-through blends out quickly into the walk.
         let cut = match (windup, attack.released_at) {
             (None, Some(at)) if released.is_some() => {
                 let cut = rig.cut.filter(|(of, _)| *of == at).map_or(0.0, |(_, cut)| cut);
-                let cut = if cut > 0.0 || is_walking > 0.0 { cut + (1.0 - cut) * rate(&time, CUT_RATE) } else { 0.0 };
+                let dashed_off = ability.dash.is_some_and(|dash| dash.started_at > at);
+                let cut = if cut > 0.0 || is_walking > 0.0 || dashed_off { cut + (1.0 - cut) * rate(&time, CUT_RATE) } else { 0.0 };
                 rig.cut = Some((at, cut));
                 cut
             }
@@ -1037,10 +1056,10 @@ fn pose_rigs(
         throw *= 1.0 - cut;
         smear *= 1.0 - cut;
         let flicked = since_throw(ability.used_at(*class), seen.and_then(|seen| seen.ability));
-        let mut dashing = if ability.dash.is_some() && !gliding { 1.0 } else { 0.0 };
+        // A dash has no pose of its own; a nova's slam is its Q pose.
+        let mut dashing = 0.0;
         match (&def.ability.kind, flicked) {
             (AbilityKind::Projectile { .. }, Some(since)) => throw = throw.max(1.0 - ease(FLICK.0, FLICK.1, since)),
-            // A nova's slam is its Q pose, like a dash's.
             (AbilityKind::Nova { .. }, Some(since)) => dashing = 1.0 - ease(SLAM.0, SLAM.1, since),
             _ => {}
         }
@@ -1119,19 +1138,15 @@ fn gleam_blades(time: Res<Time>, mut rigs: Query<&mut Rig>, mut parts: Query<(&m
     }
 }
 
-/// A weapon's aura and glint show while the attack's `follow_up` is armed or quickening the
-/// windup in progress: the aura swelling and shrinking a little, the glint spinning and flaring.
+/// A weapon's aura (cracks of light through a blade) shows while the attack's `follow_up` is
+/// armed or quickening the windup in progress, embers flaking off a blade's edge
+/// (`swish::shed_embers`).
 /// A blade's trail brightens with them (`swish::Blade::quickened`).
 fn show_auras(
-    time: Res<Time>,
     clock: Option<AttackClock>,
     mut fighters: Query<(&Rig, &AttackState, Has<Me>, Option<&mut crate::swish::Blade>)>,
-    mut parts: Query<(&mut Visibility, &mut Transform)>,
+    mut parts: Query<&mut Visibility>,
 ) {
-    let t = time.elapsed_secs();
-    let pulse = 1.0 + AURA_PULSE.1 * (t * AURA_PULSE.0).sin();
-    // Mostly small, flaring sharply once a twinkle.
-    let flare = 0.4 + 1.0 * (0.5 + 0.5 * (t * GLINT_TWINKLE).sin()).powi(6);
     for (rig, attack, is_me, blade) in &mut fighters {
         // Hidden without a synced clock (e.g. after a disconnect): no telling when the window ends.
         let on = clock.as_ref().is_some_and(|clock| attack.quick_at(clock.now(is_me)) || attack.swing.is_some_and(|w| w.quick));
@@ -1140,18 +1155,8 @@ fn show_auras(
         {
             blade.quickened = on;
         }
-        if let Some((mut visibility, mut transform)) = rig.aura.and_then(|aura| parts.get_mut(aura).ok()) {
+        if let Some(mut visibility) = rig.aura.and_then(|aura| parts.get_mut(aura).ok()) {
             visibility.set_if_neq(shown(on));
-            if on {
-                transform.scale = Vec3::new(pulse, 1.0, pulse);
-            }
-        }
-        if let Some((mut visibility, mut transform)) = rig.glint.and_then(|glint| parts.get_mut(glint).ok()) {
-            visibility.set_if_neq(shown(on));
-            if on {
-                transform.scale = Vec3::splat(flare);
-                transform.rotation = Quat::from_rotation_y(t * GLINT_SPIN);
-            }
         }
     }
 }
