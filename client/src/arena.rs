@@ -2016,38 +2016,46 @@ fn on_bandana(u: f32, y: f32) -> Vec3 {
     p + Vec3::new(p.x - middle, 0.0, p.z).normalize() * 0.007
 }
 
-/// The bandana over the nose and mouth, in pale, faded cloth gone greyer toward its point, its
-/// top edge rolled, a skull's jaw sewn across it in dark thread: the teeth, closed, the grin
-/// turning up at its corners, and the hollow of a nose above them.
+/// The bandana over the nose and mouth, in pale, dirty cloth going greyer and darker toward its
+/// lower edge, its top edge rolled; the mouth under it sewn shut: one crude seam of dark thread
+/// stretched almost from ear to ear, its corners pulled up into a smile too wide, crossed by
+/// uneven slanting stitches, old dark stains run down from it in drips; over it the nose two
+/// small dark slits.
 fn hunter_bandana() -> Mesh {
     const ROWS: usize = 16;
     const COLS: usize = 40;
-    let cloth = palette::BONE.darker(0.26);
-    let colors = hemmed(ROWS, 4, cloth, cloth.darker(0.1));
+    let cloth = palette::BONE.darker(0.3).mix(&palette::ASH, 0.25);
+    let colors: Vec<Color> = (0..ROWS).map(|i| cloth.darker(0.12 * (i as f32 / (ROWS - 1) as f32).powi(2))).collect();
     let mut parts = vec![sheet(&grid(ROWS, COLS, (0.0, 1.0), |u, v| bandana_point(u * 2.0 - 1.0, v)), &colors, 0.007)];
     // The rolled top edge.
     let hem: Vec<Vec3> = (0..=COLS).map(|i| bandana_point(i as f32 / COLS as f32 * 2.0 - 1.0, 0.0) + Vec3::Y * 0.002).collect();
     parts.push(sweep(&hem, &vec![0.0055; hem.len()], 6, cloth.darker(0.06)));
-    let thread = palette::TATTERS;
-    let stitch = |from: Vec3, to: Vec3| sweep(&[from, to], &[0.0028, 0.0028], 4, thread);
-    // The jaw: two lines of thread, the grin turning up at the corners, closed teeth across them.
-    let (mouth, gap) = (0.112, 0.013);
-    let grin = |u: f32| 0.012 * (u / 0.45).powi(2);
+    let (thread, stain) = (palette::TATTERS.darker(0.2), palette::OXBLOOD);
+    // Uneven, but the same every time: how far through the stitching (0..1) by `i`.
+    let jitter = |i: f32| (i * 12.9898).sin() * 0.5 + 0.5;
+    // The seam: almost ear to ear, its corners pulled up.
+    let mouth = 0.112;
+    let seam = |u: f32| on_bandana(u, mouth + 0.02 * (u / 0.72).powi(2) - 0.002 * (u * 9.0).sin());
+    let line: Vec<Vec3> = (0..=24).map(|i| seam(-0.72 + 1.44 * i as f32 / 24.0)).collect();
+    parts.push(sweep(&line, &[0.0032; 25], 4, thread));
+    // Stitches across it, crude: uneven lengths, slanting this way and that.
+    for i in 0..15 {
+        let u = -0.66 + 1.32 * i as f32 / 14.0 + 0.015 * (jitter(i as f32) - 0.5);
+        let (up, down) = (0.01 + 0.012 * jitter(i as f32 + 3.1), 0.01 + 0.012 * jitter(i as f32 + 7.7));
+        let slant = 0.05 * (jitter(i as f32 + 1.3) - 0.5);
+        let y = |u: f32| mouth + 0.02 * (u / 0.72).powi(2);
+        parts.push(sweep(&[on_bandana(u - slant, y(u) + up), on_bandana(u + slant, y(u) - down)], &[0.0026, 0.0026], 4, thread));
+    }
+    // Old stains run down from it in drips, of different lengths.
+    for (u, length) in [(-0.42, 0.035), (-0.12, 0.06), (0.05, 0.028), (0.3, 0.05), (0.55, 0.03)] {
+        let top = mouth + 0.02 * (u / 0.72f32).powi(2) - 0.004;
+        let drip: Vec<Vec3> = (0..=4).map(|k| on_bandana(u + 0.006 * (k as f32 * 1.7).sin(), top - length * k as f32 / 4.0)).collect();
+        parts.push(sweep(&drip, &[0.007, 0.006, 0.005, 0.004, 0.0], 5, stain));
+    }
+    // The nose: two small dark slits.
     for side in [1.0, -1.0] {
-        let line: Vec<Vec3> = (0..=12).map(|i| -0.45 + 0.9 * i as f32 / 12.0).map(|u| on_bandana(u, mouth + side * gap + grin(u))).collect();
-        parts.push(sweep(&line, &[0.003; 13], 4, thread));
+        parts.push(sweep(&[on_bandana(side * 0.05, mouth + 0.046), on_bandana(side * 0.07, mouth + 0.036)], &[0.004, 0.003], 4, thread));
     }
-    for i in 0..9 {
-        let u = -0.38 + 0.76 * i as f32 / 8.0;
-        let y = mouth + grin(u);
-        parts.push(stitch(on_bandana(u, y + gap + 0.009), on_bandana(u, y - gap - 0.009)));
-    }
-    // The nose: a hollow pointed at the top, two slanting stitches meeting over a short one.
-    let nose = mouth + 0.036;
-    for side in [1.0, -1.0] {
-        parts.push(stitch(on_bandana(0.0, nose + 0.014), on_bandana(side * 0.1, nose - 0.006)));
-    }
-    parts.push(stitch(on_bandana(-0.1, nose - 0.006), on_bandana(0.1, nose - 0.006)));
     sculpted(parts)
 }
 
