@@ -98,8 +98,10 @@ fn rooms_are_listed_joined_and_closed_with_the_leader_passed_on() {
 
     // The leader leaves: B leads, A is back in the browser.
     g.ask(0, RoomRequest::Leave);
-    g.until(Duration::from_secs(5), "B leads", |g| g.room(1).is_some_and(|r| r.leader == b && r.members.len() == 1));
-    assert!(g.room(0).is_none());
+    // (Each hears it in its own time.)
+    g.until(Duration::from_secs(5), "B leads, A out", |g| {
+        g.room(1).is_some_and(|r| r.leader == b && r.members.len() == 1) && g.room(0).is_none()
+    });
 
     // The last one leaves: the room is gone, its pickups too.
     g.ask(1, RoomRequest::Leave);
@@ -123,10 +125,10 @@ fn rooms_are_kept_apart() {
     let pickups_seen = |client: &mut App| client.world_mut().query::<&Pickup>().iter(client.world()).count();
     assert_eq!(pickups_seen(&mut g.clients[0]), map().pickups.len(), "A sees only its room's pickups");
 
-    // Even standing on the same spot, they can't hit each other.
+    // Even standing in reach (a revenant's glaive lands out ahead of it), they can't hit each other.
     let spot = Vec2::new(-22.5, -6.5);
     place(&mut g.server, A, spot);
-    place(&mut g.server, B, spot + Vec2::X);
+    place(&mut g.server, B, spot + Vec2::X * 2.3);
     g.run(Duration::from_millis(300));
     let full = server_player(&mut g.server, B).1;
     edit_input(&mut g.clients[0], |i| {
@@ -159,7 +161,7 @@ fn allies_cant_hurt_each_other() {
 
     let spot = Vec2::new(-22.5, -6.5);
     place(&mut g.server, A, spot);
-    place(&mut g.server, B, spot + Vec2::X);
+    place(&mut g.server, B, spot + Vec2::X * 2.3);
     g.run(Duration::from_millis(300));
     let full = server_player(&mut g.server, B).1;
     edit_input(&mut g.clients[0], |i| {
@@ -169,9 +171,13 @@ fn allies_cant_hurt_each_other() {
     g.run(Duration::from_millis(1500));
     assert_eq!(server_player(&mut g.server, B).1, full, "an ally's swing hurt");
 
-    // On the other side, the same swings land.
+    // On the other side, the same swings land (clicking all along: clicks are dropped until the
+    // last attack is done).
     g.ask(1, RoomRequest::SetTeam(TEAM_B));
-    g.until(Duration::from_secs(3), "B hit once on the other team", |g| server_player(&mut g.server, B).1 < full);
+    g.until(Duration::from_secs(3), "B hit once on the other team", |g| {
+        edit_input(&mut g.clients[0], |i| (i.aim, i.fire) = (Vec2::X, true));
+        server_player(&mut g.server, B).1 < full
+    });
 }
 
 #[test]

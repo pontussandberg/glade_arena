@@ -64,12 +64,16 @@ impl Pair {
         }
     }
 
-    /// A short left click, leaving the destination alone. Returns once the windup has started
-    /// on the client.
+    /// A left click, leaving the destination alone, once the last attack is done (a click
+    /// before then is dropped). Returns once the attack has started on the server.
     fn click_fire(&mut self) {
+        self.until(Duration::from_secs(2), "the last attack is done", |p| p.attack().is_some_and(|a| a.swing.is_none()));
         edit_input(&mut self.client, |i| (i.fire, i.aim) = (true, Vec2::X));
-        self.until(Duration::from_secs(1), "the attack starts", |p| attack_state(&mut p.client, CLIENT).windup.is_some());
-        edit_input(&mut self.client, |i| i.fire = false);
+        self.until(Duration::from_secs(1), "the attack starts", |p| p.attack().is_some_and(|a| a.swing.is_some()));
+    }
+
+    fn attack(&mut self) -> Option<AttackState> {
+        player::<AttackState>(&mut self.server, CLIENT)
     }
 
     fn shots(&self) -> usize {
@@ -82,9 +86,9 @@ impl Pair {
 }
 
 /// Regression: a player once stayed stuck firing forever after letting go, at ~4 fps (found in a
-/// headless browser). Letting go of fire must stop it, however slow the client.
+/// headless browser). A click fires once, however slow the client.
 #[test]
-fn releasing_fire_stops_firing_at_4_fps() {
+fn a_click_fires_once_at_4_fps() {
     let mut p = Pair::new(5898);
     let frame = Some(Duration::from_millis(250));
     // Until we have our player (slow under load at 4 fps), then a little longer to settle.
@@ -95,7 +99,7 @@ fn releasing_fire_stops_firing_at_4_fps() {
     }
     p.run(Duration::from_secs(2), frame);
 
-    // Fire held for two frames, well under the cooldown, so one shot.
+    // One click, so one shot.
     p.input(PlayerInput { aim: Vec2::X, fire: true, ..default() });
     p.run(Duration::from_millis(500), frame);
     p.input(PlayerInput::default());
@@ -103,15 +107,16 @@ fn releasing_fire_stops_firing_at_4_fps() {
     p.run(Duration::from_secs(2), frame);
     let after_release = p.shots();
     p.run(Duration::from_secs(3), frame);
-    println!("shots after release: {after_release}, 3s later: {}", p.shots());
-    assert!(after_release >= 1, "the shot never reached the server");
-    assert_eq!(p.shots(), after_release, "server kept firing after the client released fire");
+    println!("shots after the click: {after_release}, 3s later: {}", p.shots());
+    assert_eq!(after_release, 1, "one click should fire exactly once");
+    assert_eq!(p.shots(), after_release, "server kept firing after the click");
 }
 
-/// Attacking cancels the walk: after the windup you stand still until you click again. A click
-/// made during the windup is kept and walked to once the attack is off.
+/// Attacking cancels the walk: once the attack is off you stand still until you click again. An
+/// order to move during the windup cancels the attack (no shot) and walks at once; one after it
+/// went off walks too, while the attack timer runs on.
 #[test]
-fn attacking_cancels_the_walk_until_the_next_click() {
+fn attacking_cancels_the_walk_and_moving_cancels_the_windup() {
     let mut p = Pair::new(5893);
     p.until(Duration::from_secs(5), "our player is spawned", |p| client_view(&mut p.client, CLIENT).is_some_and(|v| v.2));
 
@@ -120,9 +125,7 @@ fn attacking_cancels_the_walk_until_the_next_click() {
     p.input(PlayerInput { move_to: Some(Map::center(Map::tile_of(-start))), ..default() });
     p.run(Duration::from_millis(300), SMOOTH);
     p.click_fire();
-    p.until(Duration::from_secs(1), "the attack goes off on the server", |p| {
-        player::<AttackState>(&mut p.server, CLIENT).is_some_and(|a| a.windup.is_none())
-    });
+    p.until(Duration::from_secs(1), "the attack goes off on the server", |p| p.attack().is_some_and(|a| a.released()));
     p.run(Duration::from_millis(100), SMOOTH); // let anything in flight land
     let after_attack = p.server_pos();
     p.run(Duration::from_millis(250), SMOOTH);
@@ -130,14 +133,23 @@ fn attacking_cancels_the_walk_until_the_next_click() {
     println!("moved {drift:.2} units in the 0.25 s after attacking");
     assert!(drift < 0.01, "kept walking to the old destination after attacking");
 
-    // A click during the windup is where we go once it's over.
-    let here = p.server_pos();
+    // An order to move during the windup: the attack never goes off, and off we go.
+    let (here, shots) = (p.server_pos(), p.shots());
     let goal = map().nearest_walkable(Map::tile_of(here) + IVec2::new(0, 4), 2).expect("open ground nearby");
     p.click_fire();
     edit_input(&mut p.client, |i| i.move_to = Some(Map::center(goal)));
-    p.until(windup(CLASS) + Duration::from_secs(1), "we walk to the click made during the windup", |p| {
-        here.distance(p.server_pos()) > 2.0
-    });
+    p.until(Duration::from_secs(2), "we walk off mid-windup", |p| here.distance(p.server_pos()) > 2.0);
+    assert_eq!(p.shots(), shots, "the attack went off after an order to move during its windup");
+
+    // One once it has gone off: the shot is out, and its timer runs on as we walk.
+    p.click_fire();
+    p.until(Duration::from_secs(1), "the attack goes off", |p| p.attack().is_some_and(|a| a.released()));
+    let from = p.server_pos();
+    edit_input(&mut p.client, |i| i.move_to = Some(Map::center(Map::tile_of(here))));
+    p.until(Duration::from_secs(1), "we walk off in the backswing", |p| from.distance(p.server_pos()) > 0.3);
+    assert!(p.attack().is_some_and(|a| a.swing.is_some()), "walking off cut the attack timer short");
+    p.run(Duration::from_millis(100), SMOOTH);
+    assert_eq!(p.shots(), shots + 1, "walking off in the backswing lost the shot");
 }
 
 /// A client that freezes mid-walk (frozen tab, hang): its fighter carries on with its last order

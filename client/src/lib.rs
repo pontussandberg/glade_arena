@@ -26,11 +26,11 @@ pub mod camera;
 #[cfg(feature = "render")]
 pub mod cloth;
 #[cfg(feature = "render")]
-pub mod dummies;
-#[cfg(feature = "render")]
 pub mod casting;
 #[cfg(feature = "render")]
 pub mod esc_menu;
+#[cfg(feature = "render")]
+pub mod practice;
 #[cfg(feature = "render")]
 pub mod feedback;
 #[cfg(feature = "render")]
@@ -148,6 +148,7 @@ impl Plugin for ClientNetPlugin {
 
         app.add_observer(mark_controlled_player);
         app.configure_sets(Update, SendCommands.after(PlayerControls));
+        app.init_resource::<WalkWhenOrdered>();
         app.add_systems(Update, (forget_walk_on_attack, send_commands).chain().in_set(SendCommands));
     }
 }
@@ -189,20 +190,19 @@ fn mark_controlled_player(trigger: On<Add, Controlled>, players: Query<(), With<
 struct Sent {
     move_to: Option<Vec2>,
     walk: Vec2,
-    fire: bool,
-    aim: Vec2,
     /// When the attack or walk was last sent (`Time<Real>`), to send changes at most once a tick.
     attack_at: Duration,
     walk_at: Duration,
 }
 
-/// Sends the server what changed in `DesiredInput`: a new destination, a stop, walking keys, the
-/// attack pressed or let go (and, while it's held, the aim), a Q press. Clicks go out right away;
-/// changes that come with every mouse or camera move (aim, walking direction) at most once a
-/// tick. Nothing is sent while we have no fighter.
+/// Sends the server what changed in `DesiredInput`: a new destination, a stop, walking keys, an
+/// attack click, a Q press. Clicks go out right away (attacks at most once a tick); changes that
+/// come with every mouse or camera move (walking direction) at most once a tick. Nothing is sent
+/// while we have no fighter.
 fn send_commands(
     time: Res<Time<Real>>,
     mut desired: ResMut<DesiredInput>,
+    mut walk_when_ordered: ResMut<WalkWhenOrdered>,
     mut stop: ResMut<StopWalking>,
     me: Query<(), With<Me>>,
     mut client: Query<&mut MessageSender<PlayerCommand>, (With<Client>, With<Connected>)>,
@@ -210,7 +210,7 @@ fn send_commands(
 ) {
     let (Ok(mut sender), false) = (client.single_mut(), me.is_empty()) else {
         *sent = Sent::default();
-        desired.0.ability = false;
+        (desired.0.ability, desired.0.fire) = (false, false);
         stop.0 = false;
         return;
     };
@@ -234,29 +234,41 @@ fn send_commands(
         send(PlayerCommand::Walk(input.walk));
         (sent.walk, sent.walk_at) = (input.walk, now);
     }
-    if input.fire != sent.fire || (input.fire && input.aim != sent.aim && due(sent.attack_at)) {
-        send(PlayerCommand::Attack { aim: input.aim, fire: input.fire });
-        (sent.fire, sent.aim, sent.attack_at) = (input.fire, input.aim, now);
+    if input.fire && due(sent.attack_at) {
+        send(PlayerCommand::Attack(input.aim));
+        sent.attack_at = now;
+        desired.0.fire = false;
+        walk_when_ordered.0 = input.move_to;
     }
     if input.ability {
         send(PlayerCommand::Cast(input.aim));
         desired.0.ability = false;
+        walk_when_ordered.0 = input.move_to;
     }
 }
 
+/// Where we were walking to when we last ordered an attack or a Q: what starting one drops.
+#[derive(Resource, Default)]
+struct WalkWhenOrdered(Option<Vec2>);
+
 /// Starting an attack or a dash drops the destination (the server drops it by itself): hide its
-/// marker. Once per attack or dash (by its start tick), as the server's state shows it.
+/// marker. Once per attack or dash (by its start tick), as the server's state shows it, and only
+/// the destination we had when we ordered it: one clicked since (to cancel a windup, say) has
+/// gone to the server after the order, so it stands, and still needs sending if it hasn't been.
 fn forget_walk_on_attack(
     mut desired: ResMut<DesiredInput>,
+    walk_when_ordered: Res<WalkWhenOrdered>,
     me: Query<(&AttackState, &AbilityState), With<Me>>,
     mut forgotten_for: Local<[Option<u32>; 2]>,
 ) {
     let Ok((attack, ability)) = me.single() else { return };
-    let started = [attack.windup.map(|w| w.started_at), ability.dash.map(|d| d.started_at)];
+    let started = [attack.swing.map(|w| w.started_at), ability.dash.map(|d| d.started_at)];
     for (started, forgotten) in started.into_iter().zip(forgotten_for.iter_mut()) {
         if started.is_some() && *forgotten != started {
             *forgotten = started;
-            desired.0.move_to = None;
+            if desired.0.move_to == walk_when_ordered.0 {
+                desired.0.move_to = None;
+            }
         }
     }
 }

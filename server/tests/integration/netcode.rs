@@ -110,7 +110,7 @@ fn commands_round_trip_and_server_authoritative_hits() {
     // The windup shows on A about a round trip after the click, the shot when it's over.
     set_input(&mut h.a, PlayerInput { aim: b_pos - a_pos, fire: true, ..default() });
     let t0 = Instant::now();
-    h.until(Duration::from_secs(1), "A's windup shows on A", |h| attack_state(&mut h.a, A).windup.is_some());
+    h.until(Duration::from_secs(1), "A's windup shows on A", |h| attack_state(&mut h.a, A).swing.is_some());
     println!("A's windup showed after {:?}", t0.elapsed());
     assert!(t0.elapsed() < COMMAND_SHOWS_WITHIN, "the windup took too long to show");
     set_input(&mut h.a, PlayerInput::default());

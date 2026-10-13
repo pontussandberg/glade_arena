@@ -197,9 +197,9 @@ pub fn stop_walking(client: &mut App) {
     client.world_mut().resource_mut::<StopWalking>().0 = true;
 }
 
-/// How long a class's attack winds up.
+/// How long a class's attack winds up (at normal attack speed), until it goes off.
 pub fn windup(class: &str) -> Duration {
-    arena_shared::config::TICK_DURATION * class_id(class).def().attack.windup_ticks
+    arena_shared::config::TICK_DURATION * class_id(class).def().attack.windup_ticks(1.0)
 }
 
 /// Authoritative (position, health) of a player on the server.

@@ -56,9 +56,13 @@ impl Crit {
 pub struct AttackDef {
     /// Damage on hit (for projectiles with `far_scale`: point blank, the lowest).
     pub damage: i32,
-    /// Ticks from starting an attack to it going off, the whole attack: the next may start the
-    /// tick it goes off. You stand still meanwhile, so holding fire keeps you planted.
-    pub windup_ticks: u32,
+    /// The whole attack, in ticks at normal attack speed: from the click to when the next may
+    /// start (the attack timer; the cast bar shows what's left of it once the attack is off).
+    pub attack_ticks: u32,
+    /// How much of the attack (0 to 1) is its windup: from the click to the attack going off
+    /// (the spear leaving the hand, the blade reaching the target). You stand still meanwhile,
+    /// and moving cancels it. The rest is the backswing: walk away whenever you like.
+    pub windup: f32,
     pub kind: AttackKind,
     /// Crowd control each hit applies (none by default).
     #[serde(default)]
@@ -66,17 +70,40 @@ pub struct AttackDef {
     /// A quicker next attack after a hit (none by default).
     #[serde(default)]
     pub follow_up: Option<FollowUp>,
+    /// A melee strike tears the ground open over its lane for a while, hasting its striker
+    /// there (none by default).
+    #[serde(default)]
+    pub rift: Option<RiftDef>,
 }
 
-/// Landing an auto-attack gives the next one, if started within `within_ticks` of the hit,
-/// `attack_speed` more attack speed (0.6 = 60% more attacks per second: the windup divided by
-/// 1.6). Only that one attack: a miss loses it, a quick one that lands arms the next.
+/// The ground a strike tears open over its lane (`AttackDef::lane`, empowered or not): it lasts
+/// `ticks`, and its striker walks `haste` faster (0.3 = 30%) while its body is in it.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct RiftDef {
+    pub ticks: u32,
+    pub haste: f32,
+}
+
+/// Landing an auto-attack empowers the next one, if started within `within_ticks` of the hit:
+/// `attack_speed` more attack speed (0.6 = 60% more attacks per second: its windup and its whole
+/// attack divided by 1.6), and its lane `reach` times as far out, as long and as wide. Used up
+/// as an attack goes off (a cancelled one leaves it armed). Only that one attack: a miss loses it, a quick one that lands arms the next.
 /// Armed by the server, which alone knows a hit landed. Melee only: projectile hits resolve
 /// apart from the shooter's attack state.
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FollowUp {
     pub within_ticks: u32,
     pub attack_speed: f32,
+    #[serde(default = "one")]
+    pub reach: f32,
+    /// Where an empowered lane starts, as a multiple of where a plain one does (`reach` unless
+    /// set: the whole lane scaled out).
+    #[serde(default)]
+    pub near: Option<f32>,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 /// Crowd control a hit applies on top of its damage: a slow (`slow` is the fraction of speed
@@ -100,9 +127,14 @@ impl Chill {
 
 #[derive(Deserialize, Debug, Clone)]
 pub enum AttackKind {
-    /// A thrust: hits everyone whose body a straight lane `width` wide, out from the attacker
-    /// toward the aim, reaches.
-    Melee { range: f32, width: f32 },
+    /// A blow: hits everyone whose body a straight lane `width` wide toward the aim reaches,
+    /// from `from` (0 by default: from the attacker) out to `range` from the attacker's center.
+    Melee {
+        range: f32,
+        width: f32,
+        #[serde(default)]
+        from: f32,
+    },
     /// Flies straight until it hits someone, a blocking tile, or runs out of range. With
     /// `far_scale`, damage scales linearly from the attack's `damage` (point blank) to `far_scale`
     /// times it (after flying the full range).
@@ -145,9 +177,17 @@ pub struct PassiveDef {
 pub enum AbilityKind {
     /// Thrown instantly toward the aim (no windup, no root), fixed damage.
     Projectile { speed: f32, radius: f32, range: f32, damage: i32 },
-    /// A dash `distance` toward the aim, through fighters, cutting each one crossed for
-    /// `damage`; stops at walls. Takes `ticks` at normal speed (longer slowed, shorter hasted).
-    Dash { distance: f32, ticks: u32, damage: i32 },
+    /// A dash toward the aim, through fighters, cutting each one crossed for `damage`; stops at
+    /// walls. As far as the cursor (`AbilityKind::dash_length`), at least `min_distance` (if
+    /// given; without it, always all the way) and at most `distance`. Covers `distance` in
+    /// `ticks` at normal speed (longer slowed, shorter hasted), so a shorter one is over sooner.
+    Dash {
+        distance: f32,
+        #[serde(default)]
+        min_distance: Option<f32>,
+        ticks: u32,
+        damage: i32,
+    },
     /// A burst around the user, at once: everyone within `radius` (center to body, not behind a
     /// wall) takes `damage` and `chill`.
     Nova {
@@ -196,8 +236,15 @@ impl ClassDef {
             ("crit_vs_frozen", percent(self.crit.vs_frozen)),
             ("crit_multiplier", percent(CRIT_MULTIPLIER)),
         ];
+        if let Some(rift) = self.attack.rift {
+            all.extend([("rift_time", seconds(rift.ticks)), ("rift_haste", percent(rift.haste))]);
+        }
         if let Some(follow_up) = self.attack.follow_up {
-            all.extend([("follow_up_time", seconds(follow_up.within_ticks)), ("follow_up_speed", percent(follow_up.attack_speed))]);
+            all.extend([
+                ("follow_up_time", seconds(follow_up.within_ticks)),
+                ("follow_up_speed", percent(follow_up.attack_speed)),
+                ("follow_up_reach", percent(follow_up.reach - 1.0)),
+            ]);
         }
         let reach = match self.ability.kind {
             AbilityKind::Projectile { range, .. } => range,
@@ -219,6 +266,17 @@ pub fn seconds(ticks: u32) -> String {
 }
 
 impl AbilityKind {
+    /// How far a dash aimed `aim` (from the dasher to the cursor) goes: as far as the cursor,
+    /// within its `min_distance` and `distance`, or all the way without a `min_distance`. 0 for
+    /// anything but a dash.
+    pub fn dash_length(&self, aim: Vec2) -> f32 {
+        match *self {
+            AbilityKind::Dash { distance, min_distance: Some(min), .. } => aim.length().clamp(min, distance),
+            AbilityKind::Dash { distance, .. } => distance,
+            _ => 0.0,
+        }
+    }
+
     /// What it deals to each fighter it hits.
     pub fn damage(&self) -> i32 {
         match *self {
@@ -234,9 +292,50 @@ impl AbilityKind {
 }
 
 impl AttackDef {
-    /// The windup of an attack quickened by `follow_up` (the plain windup without one).
-    pub fn quick_windup_ticks(&self) -> u32 {
-        self.follow_up.map_or(self.windup_ticks, |f| (self.windup_ticks as f32 / (1.0 + f.attack_speed)).round() as u32)
+    /// How many times the normal attack speed an attack has: quickened by `follow_up` or not.
+    pub fn speed(&self, quick: bool) -> f32 {
+        match self.follow_up {
+            Some(follow_up) if quick => 1.0 + follow_up.attack_speed,
+            _ => 1.0,
+        }
+    }
+
+    /// A melee attack's lane, `empowered` by its `follow_up` or not (its far end and width `reach`
+    /// times as far, its start `near` times, as the weapon grows): (where it starts, where it
+    /// ends, how wide it is), from the attacker's center. `None` for a ranged attack.
+    pub fn lane(&self, empowered: bool) -> Option<(f32, f32, f32)> {
+        let AttackKind::Melee { range, width, from } = self.kind else { return None };
+        let (reach, near) = self.follow_up.filter(|_| empowered).map_or((1.0, 1.0), |f| (f.reach, f.near.unwrap_or(f.reach)));
+        Some((from * near, range * reach, width * reach))
+    }
+
+    /// How near and how far ahead of your center a target's center can be along a melee attack's
+    /// lane, `empowered` or not, with its body still touching the lane (`sim::melee_hits`). A
+    /// lane that starts further out than a body's radius has a dead zone in front of you, where
+    /// nothing is hit. `None` for a ranged attack.
+    pub fn hit_span(&self, empowered: bool) -> Option<(f32, f32)> {
+        let (from, range, _) = self.lane(empowered)?;
+        Some((if from > 0.0 { from - PLAYER_RADIUS } else { 0.0 }, range + PLAYER_RADIUS))
+    }
+
+    /// How far from your center a target's body can reach and still be hit (`AttackKind::edge_reach`),
+    /// `empowered` by the `follow_up` or not: its longer lane's far end. What the range circle and
+    /// the attack range stat show.
+    pub fn edge_reach(&self, empowered: bool) -> f32 {
+        match self.lane(empowered) {
+            Some((_, range, _)) => range,
+            None => self.kind.edge_reach(),
+        }
+    }
+
+    /// The whole attack at `speed` times the normal attack speed: the attack timer.
+    pub fn period_ticks(&self, speed: f32) -> u32 {
+        ((self.attack_ticks as f32 / speed).round() as u32).max(self.windup_ticks(speed) + 1)
+    }
+
+    /// Its windup at `speed` times the normal attack speed: until it goes off.
+    pub fn windup_ticks(&self, speed: f32) -> u32 {
+        ((self.attack_ticks as f32 * self.windup / speed).round() as u32).max(1)
     }
 
     /// Damage after the full range as a multiple of point blank (1 without `far_scale`).
@@ -344,10 +443,12 @@ mod tests {
             assert!(all[..i].iter().all(|o| o.id != c.id), "duplicate class id {}", c.id);
             assert!((1..=1000).contains(&c.max_hp), "{}: max_hp", c.id);
             assert!((1.0..=12.0).contains(&c.move_speed), "{}: move_speed", c.id);
-            assert!(c.attack.damage > 0 && c.attack.windup_ticks > 0, "{}: attack", c.id);
+            assert!(c.attack.damage > 0 && c.attack.attack_ticks > 1, "{}: attack", c.id);
+            assert!(c.attack.windup > 0.0 && c.attack.windup < 1.0, "{}: windup must be a part of the attack", c.id);
             match c.attack.kind {
-                AttackKind::Melee { range, width } => {
+                AttackKind::Melee { range, width, from } => {
                     assert!((0.5..=4.0).contains(&range) && (0.05..=3.0).contains(&width), "{}: melee", c.id);
+                    assert!((0.0..range).contains(&from), "{}: melee lane starts past its end", c.id);
                 }
                 AttackKind::Projectile { speed, radius, range, far_scale } => {
                     assert!(far_scale.is_none_or(|scale| (1.0..=5.0).contains(&scale)), "{}: far_scale", c.id);
@@ -364,8 +465,9 @@ mod tests {
                     assert!(damage > 0 && (2.0..=60.0).contains(&speed) && (0.05..=1.0).contains(&radius), "{}: Q", c.id);
                     assert!((1.0..=30.0).contains(&range), "{}: Q range", c.id);
                 }
-                AbilityKind::Dash { distance, ticks, damage, .. } => {
+                AbilityKind::Dash { distance, min_distance, ticks, damage } => {
                     assert!(damage >= 0 && (0.5..=15.0).contains(&distance) && (1..=TICK_HZ as u32).contains(&ticks), "{}: dash", c.id);
+                    assert!(min_distance.is_none_or(|min| min > 0.0 && min <= distance), "{}: dash min_distance", c.id);
                     assert!(ticks < c.ability.cooldown_ticks, "{}: dash longer than its cooldown", c.id);
                 }
                 AbilityKind::Nova { radius, damage, chill } => {
@@ -375,7 +477,12 @@ mod tests {
                 }
             }
             chill_is_sane(&c.id, c.attack.chill);
-            if let Some(FollowUp { within_ticks, attack_speed }) = c.attack.follow_up {
+            if let Some(RiftDef { ticks, haste }) = c.attack.rift {
+                assert!(matches!(c.attack.kind, AttackKind::Melee { .. }), "{}: a rift from a projectile", c.id);
+                assert!((1..=10 * TICK_HZ as u32).contains(&ticks) && (0.0..=2.0).contains(&haste), "{}: rift", c.id);
+            }
+            if let Some(FollowUp { within_ticks, attack_speed, reach, near }) = c.attack.follow_up {
+                assert!((1.0..=4.0).contains(&reach) && near.is_none_or(|near| (0.5..=reach).contains(&near)), "{}: follow_up reach", c.id);
                 // Only a swing knows it landed when it goes off (`server::attack`).
                 assert!(matches!(c.attack.kind, AttackKind::Melee { .. }), "{}: follow_up on a projectile", c.id);
                 assert!((0.0..=3.0).contains(&attack_speed) && within_ticks > 0, "{}: follow_up", c.id);
@@ -409,7 +516,7 @@ mod tests {
     #[test]
     fn far_scale_scales_with_distance() {
         let kind = |far_scale| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_scale };
-        let attack = |kind| AttackDef { damage: 10, windup_ticks: 10, kind, chill: Chill::default(), follow_up: None };
+        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None };
         assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(3.0))).damage_at(d)), [10, 20, 30, 30]);
         assert_eq!(attack(kind(None)).damage_at(5.0), 10);
     }

@@ -10,7 +10,7 @@ use lightyear::prelude::PeerId;
 use crate::classes::{AbilityKind, AttackKind, Chill, ClassId, Shot};
 use crate::config::*;
 use crate::map::Map;
-use crate::protocol::{AbilityState, AttackState, Chilled, Dash, Hasted, LastSwing, PlayerInput, Projectile, Waygate, Windup};
+use crate::protocol::{AbilityState, AttackState, Chilled, Dash, Hasted, LastSwing, PlayerInput, Projectile, Swing, Waygate};
 
 /// Advance a player one tick on `map`: straight the way its keys walk it, or else toward the
 /// point it was told to walk to (point-and-click), pathfinding there. Unreachable or missing
@@ -54,6 +54,23 @@ pub fn move_player(
     hasted: &Hasted,
     tick: u32,
 ) -> Vec2 {
+    move_player_boosted(map, pos, input, class, attack, ability, chilled, hasted, tick, 1.0)
+}
+
+/// `move_player`, its walking (not its dashing) `boost` times as fast: standing in its own rift.
+#[allow(clippy::too_many_arguments)]
+pub fn move_player_boosted(
+    map: &Map,
+    pos: Vec2,
+    input: &PlayerInput,
+    class: ClassId,
+    attack: &AttackState,
+    ability: &mut AbilityState,
+    chilled: &Chilled,
+    hasted: &Hasted,
+    tick: u32,
+    boost: f32,
+) -> Vec2 {
     let speed = chilled.speed_factor(tick) * hasted.speed_factor(tick);
     if chilled.rooted_at(tick) {
         pos
@@ -64,10 +81,43 @@ pub fn move_player(
         dash.left -= step;
         let next = pos + dash.dir * step;
         if map.line_walkable(pos, next) { next } else { pos }
-    } else if attack.windup.is_some() {
+    } else if attack.winding_up().is_some() {
         pos
     } else {
-        step_player(map, pos, input, class.def().move_speed * speed)
+        step_player(map, pos, input, class.def().move_speed * speed * boost)
+    }
+}
+
+/// Ground a strike tore open (`RiftDef`), hasting `owner` while its body is in it, until `until`
+/// (a tick): its lane (from `from` out to `range` from `origin` along `dir`, `width` wide), and
+/// how much faster it walks there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rift {
+    pub owner: PeerId,
+    pub origin: Vec2,
+    pub dir: Vec2,
+    pub from: f32,
+    pub range: f32,
+    pub width: f32,
+    pub until: u32,
+    pub haste: f32,
+}
+
+impl Rift {
+    /// The rift a swing tears open, if its class's strike tears any: over the swing's lane
+    /// (empowered or not), from where `owner` stood at `pos`.
+    pub fn torn(owner: PeerId, class: ClassId, pos: Vec2, swing: &LastSwing) -> Option<Rift> {
+        let attack = &class.def().attack;
+        let (rift, (from, range, width)) = (attack.rift?, attack.lane(swing.empowered)?);
+        let dir = swing.dir.normalize_or_zero();
+        Some(Rift { owner, origin: pos, dir, from, range, width, until: swing.tick + rift.ticks, haste: rift.haste })
+    }
+
+    /// Is a body at `at` in it (touching it at all) at `tick`?
+    pub fn holds(&self, at: Vec2, tick: u32) -> bool {
+        let to = at - self.origin;
+        let (along, across) = (to.dot(self.dir), to.perp_dot(self.dir).abs());
+        tick < self.until && (self.from - PLAYER_RADIUS..=self.range + PLAYER_RADIUS).contains(&along) && across <= self.width / 2.0 + PLAYER_RADIUS
     }
 }
 
@@ -101,12 +151,12 @@ pub enum Attack {
     Melee(LastSwing),
 }
 
-/// One tick of the auto-attack. Holding fire with no windup in progress starts one: the aim
-/// locks. When the windup is over the attack goes off (returned here)
-/// from wherever the player stands then (winding up roots it, but a dash mid-windup still moves
-/// it). Released before a new one may start, so holding fire winds the next one up on the very
-/// tick the last goes off: rooted throughout, one attack per windup. A windup started while `quick_until` is armed is quick (`follow_up`); starting
-/// one disarms it either way.
+/// One tick of the auto-attack. A click (`input.fire`) with no attack in progress, or once the
+/// last one is done (`Swing::ready_at`), starts one: the aim locks. Any other click is dropped,
+/// not queued. When its windup is over the attack goes off (returned here) from wherever the
+/// player stands then (winding up roots it, but a dash mid-windup still moves it); after that
+/// it may walk away while the attack timer runs out. An attack started while `quick_until` is
+/// armed is quick (`follow_up`), and uses it up as it goes off: cancelled first, the next is.
 pub fn step_attack(
     tick: u32,
     owner: PeerId,
@@ -116,36 +166,49 @@ pub fn step_attack(
     state: AttackState,
 ) -> (AttackState, Option<Attack>) {
     let (state, released) = release_attack(tick, owner, class, pos, state);
-    (start_attack(tick, input, state), released)
+    (start_attack(tick, class, input, state), released)
 }
 
-/// `step_attack`'s first half: the windup going off, if it's over. The server resolves the swing
-/// (and arms `quick_until` if it landed) before the second half, `start_attack`, so a windup
-/// started on the same tick is quickened by it.
+/// `step_attack`'s first half: the windup going off, if it's over, and the attack done, if its
+/// timer has run out. The server resolves the swing (and arms `quick_until` if it landed) before
+/// the second half, `start_attack`, so an attack started on the same tick is quickened by it.
 pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, mut state: AttackState) -> (AttackState, Option<Attack>) {
     let mut released = None;
-    if let Some(Windup { dir, .. }) = state.windup.filter(|windup| tick >= windup.releases_at(class)) {
-        state.windup = None;
+    if let Some(Swing { dir, quick, .. }) = state.winding_up().filter(|swing| tick >= swing.releases_at(&class.def().attack)) {
         state.released_at = Some(tick);
+        // An attack going off uses up the `follow_up` (one cancelled first doesn't).
+        state.quick_until = None;
         released = Some(match class.def().attack.kind {
             AttackKind::Projectile { radius, .. } => {
                 let origin = shot_spawn(pos, dir, radius);
                 Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: false })
             }
-            AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir }),
+            AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir, empowered: quick }),
         });
+    }
+    if state.released() && state.swing.is_some_and(|swing| tick >= swing.ready_at(&class.def().attack)) {
+        state.swing = None;
     }
     (state, released)
 }
 
-/// `step_attack`'s second half: a new windup starting, if fire is held and none is in progress.
-pub fn start_attack(tick: u32, input: &PlayerInput, mut state: AttackState) -> AttackState {
-    if state.windup.is_none()
+/// `step_attack`'s second half: a new attack starting, if clicked for and none is in progress.
+pub fn start_attack(tick: u32, class: ClassId, input: &PlayerInput, mut state: AttackState) -> AttackState {
+    let ready = state.swing.is_none_or(|swing| tick >= swing.ready_at(&class.def().attack));
+    if ready
         && input.fire
         && let Some(dir) = input.aim.try_normalize()
     {
-        state.windup = Some(Windup { started_at: tick, dir, quick: state.quick_at(tick as f32) });
-        state.quick_until = None;
+        state.swing = Some(Swing { started_at: tick, dir, quick: state.quick_at(tick as f32), hastened: false });
+    }
+    state
+}
+
+/// An order to move cancels an attack still winding up: it never goes off, and the next may
+/// start at once. One that has gone off is left be (its timer runs on).
+pub fn cancel_attack(mut state: AttackState) -> AttackState {
+    if state.winding_up().is_some() {
+        state.swing = None;
     }
     state
 }
@@ -193,8 +256,8 @@ pub fn step_ability(
         }
         // Mid-windup too: the windup goes on, and the attack still goes off when it's over, from
         // wherever the dash took you (still aimed where it was locked).
-        AbilityKind::Dash { distance, .. } if !rooted => {
-            state.dash = Some(Dash { started_at: tick, dir, left: distance });
+        AbilityKind::Dash { .. } if !rooted => {
+            state.dash = Some(Dash { started_at: tick, dir, left: ability.kind.dash_length(input.aim) });
             None
         }
         AbilityKind::Dash { .. } => return (state, None),
@@ -242,17 +305,19 @@ pub fn projectile_hits(projectile_pos: Vec2, projectile: &Projectile, player_pos
     projectile_pos.distance(player_pos) <= PLAYER_RADIUS + shot(projectile).radius
 }
 
-/// Does a swing from `attacker` toward `dir` reach `target`? Its lane reaches the target's body
-/// (like a shot as wide as the lane, out to the swing's reach), and not through a wall. Only the
-/// server decides this.
-pub fn melee_hits(map: &Map, attacker: Vec2, dir: Vec2, class: ClassId, target: Vec2) -> bool {
-    let kind = &class.def().attack.kind;
-    let AttackKind::Melee { width, .. } = *kind else { return false };
+/// Does a swing from `attacker` toward `dir` (`empowered` by its `follow_up` or not) reach
+/// `target`? Its lane (`AttackDef::lane`) reaches the target's body, and not through a wall.
+/// Only the server decides this.
+pub fn melee_hits(map: &Map, attacker: Vec2, dir: Vec2, empowered: bool, class: ClassId, target: Vec2) -> bool {
+    let attack = &class.def().attack;
+    let (Some((from, _, width)), Some((nearest, farthest))) = (attack.lane(empowered), attack.hit_span(empowered)) else { return false };
     let to_target = target - attacker;
     let dir = dir.normalize_or_zero();
     let (along, across) = (to_target.dot(dir), to_target.perp_dot(dir).abs());
-    // Overlapping bodies always connect.
-    let in_lane = to_target.length() <= PLAYER_RADIUS || ((0.0..=kind.reach()).contains(&along) && across <= width / 2.0 + PLAYER_RADIUS);
+    // A lane from the attacker: overlapping bodies always connect. One further out: a body
+    // touching its near end does.
+    let overlapping = from <= 0.0 && to_target.length() <= PLAYER_RADIUS;
+    let in_lane = overlapping || ((nearest..=farthest).contains(&along) && across <= width / 2.0 + PLAYER_RADIUS);
     in_lane && map.shot_clear(attacker, target)
 }
 
@@ -286,6 +351,8 @@ pub fn pick_spawn_point(map: &Map, others: impl IntoIterator<Item = Vec2> + Clon
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::classes::{AttackDef, FollowUp};
+    use crate::protocol::PlayerCommand;
 
     /// The tests walk and fight on the first map.
     fn map() -> &'static Map {
@@ -416,13 +483,20 @@ mod tests {
         assert_eq!(step_player(map(), from, &PlayerInput::default(), SPEED), from);
     }
 
-    /// Runs the attack from `from` to `to` (inclusive) with `input`, returning the ticks at which
-    /// attacks went off and the final state.
-    fn attack_ticks(class: ClassId, input: &PlayerInput, from: u32, to: u32) -> (Vec<u32>, AttackState) {
+    /// The whole attack and its windup at normal attack speed.
+    fn timers(class: ClassId) -> (u32, u32) {
+        let attack = &class.def().attack;
+        (attack.period_ticks(1.0), attack.windup_ticks(1.0))
+    }
+
+    /// Runs the attack from `from` to `to` (inclusive), clicking toward +X on each tick in
+    /// `clicks`, returning the ticks at which attacks went off and the final state.
+    fn attack_ticks(class: ClassId, clicks: &[u32], from: u32, to: u32) -> (Vec<u32>, AttackState) {
         let mut state = AttackState::default();
         let mut released = Vec::new();
         for tick in from..=to {
-            let (next, attack) = step_attack(tick, PeerId::Netcode(1), class, Vec2::ZERO, input, state);
+            let input = aim(Vec2::X, clicks.contains(&tick));
+            let (next, attack) = step_attack(tick, PeerId::Netcode(1), class, Vec2::ZERO, &input, state);
             state = next;
             if attack.is_some() {
                 released.push(tick);
@@ -432,75 +506,156 @@ mod tests {
     }
 
     #[test]
-    fn attacks_go_off_once_per_windup() {
+    fn an_attack_goes_off_after_its_windup_and_is_done_after_its_timer() {
         for class in ClassId::all() {
-            let windup = class.def().attack.windup_ticks;
-            let (released, state) = attack_ticks(class, &aim(Vec2::X, true), 10, 10 + 3 * windup);
-            let expected = vec![10 + windup, 10 + 2 * windup, 10 + 3 * windup];
-            assert_eq!(released, expected, "{}", class.def().id);
-            assert_eq!(state.released_at, released.last().copied(), "{}: last release", class.def().id);
+            let (period, windup) = timers(class);
+            assert!(windup < period, "{}", class.def().id);
+            let (released, state) = attack_ticks(class, &[10], 10, 10 + period);
+            assert_eq!(released, vec![10 + windup], "{}", class.def().id);
+            assert_eq!(state.released_at, Some(10 + windup), "{}: last release", class.def().id);
+            assert_eq!(state.swing, None, "{}: still attacking after its timer", class.def().id);
         }
     }
 
     #[test]
-    fn holding_fire_keeps_you_rooted() {
+    fn clicks_before_the_timer_is_up_are_dropped() {
         for class in ClassId::all() {
-            let mut state = AttackState::default();
-            for tick in 10..10 + 3 * class.def().attack.windup_ticks {
-                state = step_attack(tick, PeerId::Netcode(1), class, Vec2::ZERO, &aim(Vec2::X, true), state).0;
-                assert!(state.windup.is_some(), "{}: free to walk at tick {tick} while holding fire", class.def().id);
-            }
+            let (period, windup) = timers(class);
+            // Clicking every tick: one attack per timer.
+            let every_tick: Vec<u32> = (10..10 + 3 * period).collect();
+            let (released, _) = attack_ticks(class, &every_tick, 10, 10 + 3 * period);
+            assert_eq!(released, vec![10 + windup, 10 + period + windup, 10 + 2 * period + windup], "{}", class.def().id);
+            // A click a tick before it's up does nothing, even once it is: it isn't queued.
+            let (released, state) = attack_ticks(class, &[10, 9 + period], 10, 10 + 2 * period);
+            assert_eq!(released, vec![10 + windup], "{}: a click during the timer was kept", class.def().id);
+            assert_eq!(state.swing, None);
         }
     }
 
+    /// `class`'s attack, its `follow_up` quickening it a lot (no class's has to). The quickening
+    /// is tested on this, so it stays tested whatever the classes are tuned to.
+    fn quickened(class: ClassId) -> AttackDef {
+        let mut attack = class.def().attack.clone();
+        attack.follow_up = attack.follow_up.map(|f| FollowUp { attack_speed: 1.0, ..f });
+        attack
+    }
+
     #[test]
-    fn an_armed_follow_up_winds_up_quick_once_and_only_in_time() {
+    fn an_armed_follow_up_quickens_the_whole_attack_once_and_only_in_time() {
         let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some()) else { return };
-        let attack = &class.def().attack;
-        let quick = attack.quick_windup_ticks();
-        assert!(quick < attack.windup_ticks, "{}: follow_up doesn't quicken", class.def().id);
+        let attack = quickened(class);
+        let (period, windup) = (attack.period_ticks(1.0), attack.windup_ticks(1.0));
+        let speed = attack.speed(true);
+        assert!(attack.windup_ticks(speed) < windup && attack.period_ticks(speed) < period, "follow_up doesn't quicken");
         let fire = aim(Vec2::X, true);
         let start = |at: u32, quick_until| {
             let state = AttackState { quick_until: Some(quick_until), ..default() };
             step_attack(at, PeerId::Netcode(1), class, Vec2::ZERO, &fire, state).0
         };
-        let armed = start(10, 10);
-        assert_eq!(armed.windup.map(|w| w.releases_at(class)), Some(10 + quick));
-        assert_eq!(armed.quick_until, None, "the quick windup should use it up");
-        let late = start(11, 10);
-        assert_eq!(late.windup.map(|w| w.releases_at(class)), Some(11 + attack.windup_ticks), "quick after the window");
-        assert_eq!(late.quick_until, None);
+        let quick = start(10, 10).swing.unwrap();
+        assert!(quick.quick, "not quick while armed");
+        assert_eq!((quick.releases_at(&attack), quick.ready_at(&attack)), (10 + attack.windup_ticks(speed), 10 + attack.period_ticks(speed)));
+        let late = start(11, 10).swing.unwrap();
+        assert!(!late.quick, "quick after the window");
+        assert_eq!(late.releases_at(&attack), 11 + windup);
     }
 
     #[test]
-    fn a_tap_still_completes_the_attack() {
-        let class = shooter();
-        let windup = class.def().attack.windup_ticks;
-        let (started, _) = step_attack(10, PeerId::Netcode(1), class, Vec2::ZERO, &aim(Vec2::X, true), AttackState::default());
-        let (released, _) = (11..=10 + windup).fold((None, started), |(released, state), tick| {
-            let (next, attack) = step_attack(tick, PeerId::Netcode(1), class, Vec2::ZERO, &PlayerInput::default(), state);
-            (released.or(attack.map(|_| tick)), next)
-        });
-        assert_eq!(released, Some(10 + windup), "letting go of fire mid-windup shouldn't cancel it");
+    fn the_follow_up_lasts_until_an_attack_goes_off_not_a_cancelled_one() {
+        let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some()) else { return };
+        let fire = aim(Vec2::X, true);
+        let armed = AttackState { quick_until: Some(100), ..default() };
+        let winding = step_attack(10, PeerId::Netcode(1), class, Vec2::ZERO, &fire, armed).0;
+        assert!(winding.swing.is_some_and(|s| s.quick), "not empowered while armed");
+        // Cancelled: still armed, and the next attack is empowered.
+        let cancelled = cancel_attack(winding);
+        assert_eq!(cancelled.quick_until, Some(100), "cancelling used the follow_up up");
+        let again = step_attack(12, PeerId::Netcode(1), class, Vec2::ZERO, &fire, cancelled).0;
+        assert!(again.swing.is_some_and(|s| s.quick), "the attack after a cancelled one wasn't empowered");
+        // Gone off: used up.
+        let windup = again.swing.unwrap().windup_ticks(&class.def().attack);
+        let (gone, released) = step_attack(12 + windup, PeerId::Netcode(1), class, Vec2::ZERO, &PlayerInput::default(), again);
+        assert!(released.is_some());
+        assert_eq!(gone.quick_until, None, "an empowered attack that went off kept the follow_up");
     }
 
     #[test]
-    fn winding_up_roots_you() {
+    fn a_hit_that_arms_the_follow_up_shortens_what_is_left_of_its_attack() {
+        let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some()) else { return };
+        let attack = quickened(class);
+        let (period, windup) = (attack.period_ticks(1.0), attack.windup_ticks(1.0));
+        let mut swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false };
+        assert_eq!(swing.ready_at(&attack), 10 + period);
+        // As the server does when the swing lands.
+        swing.hastened = true;
+        let backswing = (period - windup) as f32 / attack.speed(true);
+        assert_eq!(swing.ready_at(&attack), 10 + windup + backswing.round() as u32);
+        assert!(swing.ready_at(&attack) < 10 + period, "a hastened backswing wasn't any shorter");
+    }
+
+    #[test]
+    fn a_click_shorter_than_the_windup_still_attacks() {
         let class = shooter();
-        let from = spawns()[0];
-        let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
-        let (_, winding) = attack_ticks(class, &aim(Vec2::X, true), 10, 10);
-        assert!(winding.windup.is_some());
-        let (idle, warm) = (AbilityState::default(), Chilled::default());
-        assert_eq!(move_player(map(), from, &walk, class, &winding, &mut { idle }, &warm, &default(), 11), from, "moved during the windup");
-        assert_ne!(move_player(map(), from, &walk, class, &AttackState::default(), &mut { idle }, &warm, &default(), 11), from, "rooted without attacking");
+        let (_, windup) = timers(class);
+        let (released, _) = attack_ticks(class, &[10], 10, 10 + windup);
+        assert_eq!(released, vec![10 + windup]);
+    }
+
+    #[test]
+    fn only_the_windup_roots_you() {
+        for class in ClassId::all() {
+            let from = spawns()[0];
+            let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
+            let (_, windup) = timers(class);
+            let (idle, warm) = (AbilityState::default(), Chilled::default());
+            let moves = |state: &AttackState| move_player(map(), from, &walk, class, state, &mut { idle }, &warm, &default(), 11) != from;
+            let (_, winding) = attack_ticks(class, &[10], 10, 9 + windup);
+            assert!(winding.winding_up().is_some() && !moves(&winding), "{}: moved during the windup", class.def().id);
+            let (_, backswing) = attack_ticks(class, &[10], 10, 10 + windup);
+            assert!(backswing.swing.is_some() && backswing.winding_up().is_none(), "{}: no backswing", class.def().id);
+            assert!(moves(&backswing), "{}: rooted after the attack went off", class.def().id);
+            assert!(moves(&AttackState::default()), "rooted without attacking");
+        }
+    }
+
+    #[test]
+    fn moving_cancels_the_windup_but_not_the_backswing() {
+        for class in ClassId::all() {
+            let (period, windup) = timers(class);
+            // Mid-windup: it never goes off, and the next attack may start at once.
+            let (_, winding) = attack_ticks(class, &[10], 10, 9 + windup);
+            let cancelled = cancel_attack(winding);
+            assert_eq!(cancelled.swing, None, "{}", class.def().id);
+            let (_, released) = step_attack(10 + windup, PeerId::Netcode(1), class, Vec2::ZERO, &PlayerInput::default(), cancelled);
+            assert!(released.is_none(), "{}: a cancelled attack went off", class.def().id);
+            let restarted = start_attack(10 + windup, class, &aim(Vec2::X, true), cancelled);
+            assert_eq!(restarted.swing.map(|s| s.started_at), Some(10 + windup), "{}: no attack after cancelling", class.def().id);
+            // After it went off: the timer runs on.
+            let (_, backswing) = attack_ticks(class, &[10], 10, 10 + windup);
+            assert_eq!(cancel_attack(backswing), backswing, "{}: moving cut the attack timer short", class.def().id);
+            let early = start_attack(9 + period, class, &aim(Vec2::X, true), backswing);
+            assert_eq!(early.swing, backswing.swing, "{}: attacked again before the timer was up", class.def().id);
+        }
+    }
+
+    #[test]
+    fn an_order_to_move_drops_an_unseen_click() {
+        let mut input = PlayerInput::default();
+        PlayerCommand::Attack(Vec2::X).apply(&mut input);
+        assert!(input.fire);
+        PlayerCommand::Walk(Vec2::ZERO).apply(&mut input);
+        assert!(input.fire, "letting go of the walking keys isn't an order to move");
+        PlayerCommand::MoveTo(Vec2::ONE).apply(&mut input);
+        assert!(!input.fire);
+        PlayerCommand::Attack(Vec2::X).apply(&mut input);
+        assert!(input.fire && input.move_to.is_some(), "only an attack that starts drops the walk (the server does)");
     }
 
     #[test]
     fn attack_without_aim_does_nothing() {
         let fire = aim(Vec2::ZERO, true);
         let (state, attack) = step_attack(0, PeerId::Netcode(1), shooter(), Vec2::ZERO, &fire, AttackState::default());
-        assert!(attack.is_none() && state.windup.is_none());
+        assert!(attack.is_none() && state.swing.is_none());
     }
 
     #[test]
@@ -508,7 +663,7 @@ mod tests {
         let shooter_pos = Vec2::new(-3.0, 0.0);
         let target = Vec2::new(3.0, 0.0);
         let input = aim(target - shooter_pos, true);
-        let windup = shooter().def().attack.windup_ticks;
+        let (_, windup) = timers(shooter());
         let (state, _) = step_attack(0, PeerId::Netcode(1), shooter(), shooter_pos, &input, AttackState::default());
         let Some(Attack::Projectile(proj)) = step_attack(windup, PeerId::Netcode(1), shooter(), shooter_pos, &input, state).1
         else {
@@ -538,8 +693,23 @@ mod tests {
         ClassId::all().find(|c| matches!(c.def().ability.kind, AbilityKind::Dash { .. })).unwrap()
     }
 
+    /// Q pressed toward `aim`, the cursor far off along it (a dash goes its full distance).
     fn press_q(aim: Vec2) -> PlayerInput {
-        PlayerInput { aim, ability: true, ..default() }
+        PlayerInput { aim: aim * 100.0, ability: true, ..default() }
+    }
+
+    #[test]
+    fn a_dash_goes_as_far_as_the_cursor_within_its_least_and_most() {
+        let class = dasher();
+        let AbilityKind::Dash { distance, min_distance: Some(min), .. } = class.def().ability.kind else { panic!("the dash has no least distance") };
+        let dash_to = |cursor: f32| {
+            let input = PlayerInput { aim: Vec2::X * cursor, ability: true, ..default() };
+            step_ability(10, PeerId::Netcode(1), class, Vec2::ZERO, &input, &default(), default()).0.dash.unwrap().left
+        };
+        let between = (min + distance) / 2.0;
+        assert!((dash_to(between) - between).abs() < 1e-4, "not as far as the cursor");
+        assert!((dash_to(min * 0.2) - min).abs() < 1e-4, "shorter than its least");
+        assert!((dash_to(distance * 3.0) - distance).abs() < 1e-4, "further than its most");
     }
 
     #[test]
@@ -624,12 +794,12 @@ mod tests {
     fn a_dash_mid_windup_moves_you_and_the_attack_still_goes_off() {
         let class = dasher();
         let from = spawns()[0];
-        let (_, winding) = attack_ticks(class, &aim(Vec2::X, true), 10, 10);
+        let (_, winding) = attack_ticks(class, &[10], 10, 10);
         let (dashing, _) = step_ability(11, PeerId::Netcode(1), class, from, &press_q(Vec2::Y), &default(), default());
         assert!(dashing.dash.is_some(), "no dash mid-windup");
         let moved = move_player(map(), from, &PlayerInput::default(), class, &winding, &mut { dashing }, &default(), &default(), 11);
         assert_ne!(moved, from, "the dash didn't move you mid-windup");
-        let windup = class.def().attack.windup_ticks;
+        let (_, windup) = timers(class);
         let (released, _) = (11..=10 + windup).fold((None, winding), |(released, state), tick| {
             let (next, attack) = step_attack(tick, PeerId::Netcode(1), class, moved, &PlayerInput::default(), state);
             (released.or(attack.map(|_| tick)), next)
@@ -690,7 +860,8 @@ mod tests {
         assert!((dash(&hasted) - dash(&default()) * HASTE_FACTOR).abs() < 1e-5);
         assert!(touches_pickup(from, from + Vec2::X * PICKUP_RADIUS));
         assert!(!touches_pickup(from, from + Vec2::X * (PICKUP_RADIUS + 0.01)));
-        assert_eq!(heal_amount(95), 48);
+        // 15% of 95, rounded up.
+        assert_eq!(heal_amount(95), 15);
     }
 
     #[test]
@@ -746,15 +917,56 @@ mod tests {
         let class = fighter();
         let at = spawns()[0];
         let reach = class.def().attack.kind.reach() - 0.05;
-        assert!(melee_hits(map(), at, Vec2::Y, class, at + Vec2::Y * reach), "straight ahead, at the edge of reach");
-        assert!(!melee_hits(map(), at, Vec2::Y, class, at + Vec2::Y * (reach + 0.2)), "just out of reach");
-        assert!(!melee_hits(map(), at, Vec2::Y, class, at - Vec2::Y * 1.0), "behind");
-        assert!(melee_hits(map(), at, Vec2::Y, class, at - Vec2::Y * 0.3), "bodies overlapping");
-        let AttackKind::Melee { width, .. } = class.def().attack.kind else { unreachable!() };
+        assert!(melee_hits(map(), at, Vec2::Y, false, class, at + Vec2::Y * reach), "straight ahead, at the edge of reach");
+        assert!(!melee_hits(map(), at, Vec2::Y, false, class, at + Vec2::Y * (reach + 0.2)), "just out of reach");
+        assert!(!melee_hits(map(), at, Vec2::Y, false, class, at - Vec2::Y * 1.0), "behind");
+        let AttackKind::Melee { width, from, .. } = class.def().attack.kind else { unreachable!() };
+        // Bodies overlapping connect when the lane starts at the attacker; one starting further
+        // out misses what's closer than that.
+        assert_eq!(melee_hits(map(), at, Vec2::Y, false, class, at - Vec2::Y * 0.3), from == 0.0, "bodies overlapping");
+        if from > 0.0 {
+            assert!(melee_hits(map(), at, Vec2::Y, false, class, at + Vec2::Y * (from - PLAYER_RADIUS + 0.05)), "touching the lane's near end");
+            assert!(!melee_hits(map(), at, Vec2::Y, false, class, at + Vec2::Y * (from - PLAYER_RADIUS - 0.05)), "short of the lane");
+        }
         let edge = width / 2.0 + PLAYER_RADIUS;
-        assert!(melee_hits(map(), at, Vec2::Y, class, at + Vec2::new(edge - 0.05, 1.0)), "a body overlapping the lane");
-        assert!(!melee_hits(map(), at, Vec2::Y, class, at + Vec2::new(edge + 0.05, 1.0)), "beside the lane");
-        assert!(!melee_hits(map(), at, Vec2::Y, shooter(), at + Vec2::Y), "projectile classes don't swing");
+        let middle = from.max(1.0);
+        assert!(melee_hits(map(), at, Vec2::Y, false, class, at + Vec2::new(edge - 0.05, middle)), "a body overlapping the lane");
+        assert!(!melee_hits(map(), at, Vec2::Y, false, class, at + Vec2::new(edge + 0.05, middle)), "beside the lane");
+        assert!(!melee_hits(map(), at, Vec2::Y, false, shooter(), at + Vec2::Y), "projectile classes don't swing");
+    }
+
+    #[test]
+    fn a_rift_hastes_its_striker_in_it_until_it_closes() {
+        let Some(class) = ClassId::all().find(|c| c.def().attack.rift.is_some()) else { return };
+        let def = class.def().attack.rift.unwrap();
+        let at = spawns()[0];
+        let swing = LastSwing { tick: 10, dir: Vec2::Y, empowered: false };
+        let rift = Rift::torn(PeerId::Netcode(1), class, at, &swing).unwrap();
+        let (from, range, _) = class.def().attack.lane(false).unwrap();
+        let inside = at + Vec2::Y * (from + range) / 2.0;
+        assert!(rift.holds(inside, 11) && rift.holds(inside, 9 + def.ticks), "not in its own rift");
+        assert!(!rift.holds(inside, 10 + def.ticks), "still open after it closed");
+        assert!(!rift.holds(at - Vec2::Y * 2.0, 11), "behind it");
+        // Walking there is that much faster.
+        let walk = PlayerInput { walk: Vec2::X, ..default() };
+        let (idle, warm) = (AbilityState::default(), Chilled::default());
+        let plain = move_player(map(), at, &walk, class, &AttackState::default(), &mut { idle }, &warm, &default(), 11).distance(at);
+        let boosted = move_player_boosted(map(), at, &walk, class, &AttackState::default(), &mut { idle }, &warm, &default(), 11, 1.0 + def.haste).distance(at);
+        assert!((boosted - plain * (1.0 + def.haste)).abs() < 1e-4, "{boosted} vs {plain}");
+    }
+
+    #[test]
+    fn an_empowered_swing_reaches_further_and_wider() {
+        let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some_and(|f| f.reach > 1.0)) else { return };
+        let at = spawns()[0];
+        let ((_, range, width), (near, far, wide)) = (class.def().attack.lane(false).unwrap(), class.def().attack.lane(true).unwrap());
+        assert!(far > range && wide > width);
+        let beyond = at + Vec2::Y * (range + PLAYER_RADIUS + 0.2);
+        let aside = at + Vec2::new(width / 2.0 + PLAYER_RADIUS + (wide - width) / 4.0, (near + far) / 2.0);
+        for target in [beyond, aside] {
+            assert!(!melee_hits(map(), at, Vec2::Y, false, class, target), "a plain swing reached {target}");
+            assert!(melee_hits(map(), at, Vec2::Y, true, class, target), "an empowered swing missed {target}");
+        }
     }
 
     #[test]
