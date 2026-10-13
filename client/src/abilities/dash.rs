@@ -15,7 +15,7 @@ pub(super) fn indicator(_: &DashDef) -> Indicator {
 }
 
 /// How far the lane reaches aimed `aim`: as far as the dash would go, and the dasher's body
-/// beyond.
+/// beyond (to the cursor, within the dash's least and most).
 pub(super) fn length(dash: &DashDef, aim: Vec2) -> f32 {
     dash.length(aim) + PLAYER_RADIUS
 }

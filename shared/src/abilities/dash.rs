@@ -1,7 +1,8 @@
 //! A dash toward the aim, through fighters, cutting each one crossed for `damage`; it stops at
-//! walls. As far as the cursor (`DashDef::length`), at least `min_distance` (if given; without
-//! it, always all the way) and at most `distance`. Covers `distance` in `ticks` at normal speed
-//! (longer slowed, shorter hasted), so a shorter one is over sooner.
+//! walls. Until the dasher's body reaches the cursor (`DashDef::length`), at least
+//! `min_distance` (if given; without it, always all the way) and at most `distance`. Covers
+//! `distance` in `ticks` at normal speed (longer slowed, shorter hasted), so a shorter one is
+//! over sooner.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -20,11 +21,12 @@ pub struct DashDef {
 }
 
 impl DashDef {
-    /// How far a dash aimed `aim` (from the dasher to the cursor) goes: as far as the cursor,
-    /// within its `min_distance` and `distance`, or all the way without a `min_distance`.
+    /// How far a dash aimed `aim` (from the dasher to the cursor) goes: until the front of the
+    /// dasher's body reaches the cursor (where its aim indicator, the ground its body sweeps,
+    /// ends), within its `min_distance` and `distance`; or all the way without a `min_distance`.
     pub fn length(&self, aim: Vec2) -> f32 {
         match self.min_distance {
-            Some(min) => aim.length().clamp(min, self.distance),
+            Some(min) => (aim.length() - PLAYER_RADIUS).clamp(min, self.distance),
             None => self.distance,
         }
     }
