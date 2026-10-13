@@ -41,7 +41,8 @@
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
-use arena_shared::classes::{AbilityKind, AttackKind};
+use arena_shared::abilities::{AbilityKind, MAX_ABILITIES};
+use arena_shared::classes::AttackKind;
 use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
@@ -73,7 +74,8 @@ impl Plugin for RigPlugin {
 #[derive(Component, Default)]
 pub(crate) struct SeenThrows {
     attack: Option<u32>,
-    ability: Option<u32>,
+    /// Each ability's, by slot.
+    abilities: [Option<u32>; MAX_ABILITIES],
 }
 
 impl SeenThrows {
@@ -90,7 +92,13 @@ fn see_throws(
 ) {
     for shot in &shots {
         let Some((_, mut seen)) = throwers.iter_mut().find(|(id, _)| id.0 == shot.owner) else { continue };
-        let latest = if shot.ability { &mut seen.ability } else { &mut seen.attack };
+        let latest = match shot.ability {
+            Some(slot) => {
+                let Some(latest) = seen.abilities.get_mut(slot.0 as usize) else { continue };
+                latest
+            }
+            None => &mut seen.attack,
+        };
         *latest = (*latest).max(Some(shot.spawn_tick));
     }
 }
@@ -900,14 +908,14 @@ fn rate(time: &Time, per_second: f32) -> f32 {
 /// until its next attack, or until it walks off once the dash is over (`STEADY_SETTLE` after, so
 /// the dash's own last steps don't count). A dash in the backswing cuts it short and turns it
 /// to the dash, like walking off.
-fn turn_fighters(time: Res<Time>, mut fighters: Query<(&mut Facing, &Pos, &AttackState, &AbilityState)>) {
+fn turn_fighters(time: Res<Time>, mut fighters: Query<(&mut Facing, &Pos, &AttackState, &Dashing)>) {
     let turn = rate(&time, TURN_RATE);
     let now = time.elapsed_secs();
-    for (mut facing, pos, attack, ability) in &mut fighters {
+    for (mut facing, pos, attack, dashing) in &mut fighters {
         let moved = pos.0 - facing.last_pos;
         let mut steady = facing.steady;
         let mut dash_seen = facing.dash_seen;
-        match ability.dash {
+        match dashing.0 {
             Some(dash) if dash_seen != Some(dash.started_at) => {
                 dash_seen = Some(dash.started_at);
                 steady = attack.winding_up().is_some().then_some(f32::INFINITY);
@@ -922,7 +930,7 @@ fn turn_fighters(time: Res<Time>, mut fighters: Query<(&mut Facing, &Pos, &Attac
         if attacked_since || walked_off {
             steady = None;
         }
-        let wants = match (attack.winding_up(), ability.dash) {
+        let wants = match (attack.winding_up(), dashing.0) {
             (Some(windup), _) => windup.dir,
             _ if steady.is_some() => facing.look,
             (None, Some(dash)) => dash.dir,
@@ -987,7 +995,7 @@ fn pose_rigs(
         &mut HeldAt,
         &ClassId,
         &AttackState,
-        &AbilityState,
+        (&Cooldowns, &Dashing),
         Option<&SeenThrows>,
         Has<Me>,
     )>,
@@ -995,10 +1003,10 @@ fn pose_rigs(
 ) {
     let ease_walk = rate(&time, WALK_RATE);
     let dt = time.delta_secs().min(0.1);
-    for (mut rig, facing, mut body, mut held_at, class, attack, ability, seen, is_me) in &mut rigs {
+    for (mut rig, facing, mut body, mut held_at, class, attack, (cooldowns, dashing), seen, is_me) in &mut rigs {
         let rig = &mut *rig;
         // Dashing, it glides along in its pose without a stride.
-        let gliding = ability.dash.is_some();
+        let gliding = dashing.0.is_some();
         if !gliding {
             rig.stride += facing.moved.length() * STRIDES_PER_METER;
         }
@@ -1044,7 +1052,7 @@ fn pose_rigs(
         let cut = match (windup, attack.released_at) {
             (None, Some(at)) if released.is_some() => {
                 let cut = rig.cut.filter(|(of, _)| *of == at).map_or(0.0, |(_, cut)| cut);
-                let dashed_off = ability.dash.is_some_and(|dash| dash.started_at > at);
+                let dashed_off = dashing.0.is_some_and(|dash| dash.started_at > at);
                 let cut = if cut > 0.0 || is_walking > 0.0 || dashed_off { cut + (1.0 - cut) * rate(&time, CUT_RATE) } else { 0.0 };
                 rig.cut = Some((at, cut));
                 cut
@@ -1056,13 +1064,15 @@ fn pose_rigs(
         };
         throw *= 1.0 - cut;
         smear *= 1.0 - cut;
-        let flicked = since_throw(ability.used_at(*class), seen.and_then(|seen| seen.ability));
-        // A dash has no pose of its own; a nova's slam is its Q pose.
+        // A dash has no pose of its own; a nova's slam is the ability pose.
         let mut dashing = 0.0;
-        match (&def.ability.kind, flicked) {
-            (AbilityKind::Projectile { .. }, Some(since)) => throw = throw.max(1.0 - ease(FLICK.0, FLICK.1, since)),
-            (AbilityKind::Nova { .. }, Some(since)) => dashing = 1.0 - ease(SLAM.0, SLAM.1, since),
-            _ => {}
+        for (slot, ability) in def.abilities() {
+            let thrown = seen.and_then(|seen| seen.abilities.get(slot.0 as usize).copied().flatten());
+            match (&ability.kind, since_throw(cooldowns.used_at(slot), thrown)) {
+                (AbilityKind::Projectile(_), Some(since)) => throw = throw.max(1.0 - ease(FLICK.0, FLICK.1, since)),
+                (AbilityKind::Nova(_), Some(since)) => dashing = f32::max(dashing, 1.0 - ease(SLAM.0, SLAM.1, since)),
+                _ => {}
+            }
         }
         let phase = Phase { draw, throw, dashing };
         // A thrown weapon: the hand is empty for a moment after a throw, until a new one is

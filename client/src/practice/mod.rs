@@ -4,7 +4,7 @@
 //!
 //! - "Map" switches practice to the next map, everyone starting over on it.
 //! - Switches (`Switch`), lit while on: "No cooldowns" (our Q's cooldown off: what the server
-//!   says, via our `AbilityState`), "Hitboxes" (`hitboxes`: what hits are judged by, drawn on the
+//!   says, via our `Cooldowns`), "Hitboxes" (`hitboxes`: what hits are judged by, drawn on the
 //!   ground) and "Free camera" (`camera`: a camera to turn around fighters and look at them up
 //!   close).
 //! - "Target dummy" and "Moving dummy" place one (`dummies`).
@@ -14,7 +14,7 @@
 mod dummies;
 pub mod hitboxes;
 
-use arena_shared::protocol::{AbilityState, RoomRequest};
+use arena_shared::protocol::{Cooldowns, RoomRequest};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
@@ -77,7 +77,7 @@ struct SwitchState(Switch);
 /// What the switches switch.
 #[derive(SystemParam)]
 struct Switched<'w, 's> {
-    me: Query<'w, 's, &'static AbilityState, With<Me>>,
+    me: Query<'w, 's, &'static Cooldowns, With<Me>>,
     hitboxes: ResMut<'w, ShowHitboxes>,
     camera: ResMut<'w, CameraMode>,
     sender: Single<'w, 's, &'static mut MessageSender<RoomRequest>, With<Client>>,
@@ -86,7 +86,7 @@ struct Switched<'w, 's> {
 impl Switched<'_, '_> {
     fn on(&self, switch: Switch) -> bool {
         match switch {
-            Switch::NoCooldowns => self.me.iter().next().is_some_and(|ability| ability.free),
+            Switch::NoCooldowns => self.me.iter().next().is_some_and(|cooldowns| cooldowns.free),
             Switch::Hitboxes => self.hitboxes.0,
             Switch::FreeCamera => self.camera.free,
         }

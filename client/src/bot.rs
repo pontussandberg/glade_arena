@@ -4,9 +4,11 @@
 //! still while one winds up, since moving would cancel it. Turn it on with
 //! `ARENA_BOT=1` (native client) to have someone to fight when testing alone.
 
-use arena_shared::classes::AbilityKind;
+use arena_shared::abilities::AbilityKind;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
+use lightyear::prelude::client::RemoteTimeline;
+use lightyear::prelude::*;
 
 use crate::rooms::CurrentMap;
 use crate::{DesiredInput, Me, PlayerControls, SendCommands};
@@ -30,13 +32,16 @@ impl Plugin for BotPlugin {
 }
 
 fn think(
-    me: Query<(&PlayerId, &ClassId, &Pos, &AttackState), With<Me>>,
+    me: Query<(&PlayerId, &ClassId, &Pos, &AttackState, &Cooldowns), With<Me>>,
+    server: Query<&RemoteTimeline, With<Client>>,
     others: Query<(&PlayerId, &Pos, &Health), Without<Me>>,
     mut desired: ResMut<DesiredInput>,
     map: Res<CurrentMap>,
 ) {
     let map = map.map();
-    let Ok((my_id, class, me, attack)) = me.single() else { return };
+    let Ok((my_id, class, me, attack, cooldowns)) = me.single() else { return };
+    // The server tick our news is from: an ability whose cooldowns were over by then is ready.
+    let latest = server.single().ok().and_then(|timeline| timeline.last_received_tick()).map_or(0, |tick| tick.0);
     let Some(target) = others
         .iter()
         .filter(|(id, _, health)| id.0 != my_id.0 && health.alive())
@@ -75,13 +80,23 @@ fn think(
     let clear = map.shot_clear(me.0, target);
     let fire = in_reach && clear;
     let move_to = move_to.filter(|_| !fire && attack.winding_up().is_none());
-    // Q whenever it would land: a dash to close in from just out of reach, a throw in range, a
-    // nova when the target is right on top of us.
-    let ability = clear
-        && match class.def().ability.kind {
-            AbilityKind::Dash { distance: dash, .. } => distance > attack_within && distance < dash * 0.9,
-            AbilityKind::Projectile { range, .. } => distance < range * 0.9,
-            AbilityKind::Nova { radius, .. } => distance < radius * 0.8,
-        };
-    desired.0 = PlayerInput { move_to, aim: to_target, fire, ability, ..default() };
+    // The first ready ability that would land: a dash to close in from just out of reach, a
+    // throw in range, a nova when the target is right on top of us.
+    let cast = class
+        .def()
+        .abilities()
+        .find(|&(slot, ability)| {
+            clear
+                && cooldowns.usable_at(slot, ability) <= latest
+                && match ability.kind {
+                    AbilityKind::Dash(dash) => distance > attack_within && distance < dash.distance * 0.9,
+                    AbilityKind::Projectile(throw) => distance < throw.range * 0.9,
+                    AbilityKind::Nova(nova) => distance < nova.radius * 0.8,
+                }
+        })
+        .map(|(slot, _)| slot);
+    desired.0 = PlayerInput { move_to, aim: to_target, fire, ..default() };
+    if let Some(slot) = cast {
+        desired.0.order_cast(slot, to_target);
+    }
 }

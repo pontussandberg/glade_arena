@@ -1,14 +1,11 @@
-//! Quick cast and normal cast, LoL-style. Quick cast sends Q off toward the cursor the moment
-//! it's pressed; normal cast first shows where it will go (the aim indicator, on the ground at
-//! your feet) and casts it on the next left click (a right click drops it, without walking).
-//! The quick cast switch, in the key hints, picks which one plain Q is; Shift+Q is always the
-//! other. Clicking the Q icon is always a normal cast. The choice is kept in the browser (`localStorage`). The keys
-//! themselves are read in `render::read_local_input`.
+//! Quick cast and normal cast, LoL-style, for every ability (Q, W, E, R). Quick cast sends an
+//! ability off toward the cursor the moment its key is pressed; normal cast first shows where it
+//! will go (its aim indicator, on the ground at your feet) and casts it on the next left click (a
+//! right click drops it, without walking). The quick cast switch, in the key hints, picks which
+//! one a plain key is; with Shift it's always the other. Clicking an ability's icon is always a
+//! normal cast. The choice is kept in the browser (`localStorage`). The keys themselves are read
+//! in `render::read_local_input`.
 
-use std::f32::consts::FRAC_PI_2;
-
-use arena_shared::classes::AbilityKind;
-use arena_shared::config::PLAYER_RADIUS;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 
@@ -34,23 +31,44 @@ impl Plugin for CastingPlugin {
     }
 }
 
-/// Whether plain Q is a quick cast (on by default). Shift+Q is then a normal cast, and the other
-/// way round when it's off.
+/// Whether a plain ability key is a quick cast (on by default). With Shift it's then a normal
+/// cast, and the other way round when it's off.
 #[derive(Resource, Clone, Copy)]
 pub(crate) struct CastMode {
     pub quick: bool,
 }
 
 impl CastMode {
-    /// Whether a Q press (with Shift held or not) casts right away.
+    /// Whether an ability's key pressed (with Shift held or not) casts right away.
     pub(crate) fn casts_now(self, shift: bool) -> bool {
         self.quick != shift
     }
 }
 
-/// A normal cast waiting for its left click: the aim indicator is up.
+/// The ability a normal cast is waiting to cast with a left click, if any: its aim indicator is
+/// up.
 #[derive(Resource, Default)]
-pub(crate) struct Aiming(pub bool);
+pub(crate) struct Aiming(pub Option<AbilitySlot>);
+
+/// The key each ability slot is on, and how players read it. As many as a class may have
+/// abilities (`MAX_ABILITIES`, checked as the class files load).
+const ABILITY_KEYS: [(KeyCode, &str); MAX_ABILITIES] =
+    [(KeyCode::KeyQ, "Q"), (KeyCode::KeyW, "W"), (KeyCode::KeyE, "E"), (KeyCode::KeyR, "R")];
+
+/// The key the ability in `slot` is on.
+pub(crate) fn ability_key(slot: AbilitySlot) -> KeyCode {
+    ABILITY_KEYS[slot.0 as usize].0
+}
+
+/// The key the ability in `slot` is on, as players read it.
+pub(crate) fn key_label(slot: AbilitySlot) -> &'static str {
+    ABILITY_KEYS[slot.0 as usize].1
+}
+
+/// Whether the ability in `slot` can be cast with its key: with the free camera, W walks.
+pub(crate) fn key_casts(slot: AbilitySlot, free_camera: bool) -> bool {
+    !(free_camera && ability_key(slot) == KeyCode::KeyW)
+}
 
 /// The quick cast switch and its label, the last row of the key hints
 /// (`render::update_key_hints`): clicking either turns it on or off.
@@ -106,7 +124,7 @@ pub(crate) fn spawn_toggle_row(grid: &mut ChildSpawnerCommands, quick: bool) {
     ));
 }
 
-/// What quick cast does, under the switch: Q with it on, and off.
+/// What quick cast does, under the switch: an ability's key with it on, and off.
 fn toggle_tip() -> impl Bundle {
     let line = |state: &'static str, color: Color, what: &'static str| {
         (
@@ -121,8 +139,8 @@ fn toggle_tip() -> impl Bundle {
         tip(Side::Below, -1.0, TIP_WIDTH),
         children![
             tip_title("Quick cast"),
-            line("On", palette::SPIRIT, "Q casts instantly"),
-            line("Off", palette::ui::MUTED, "Q aims first, click to cast"),
+            line("On", palette::SPIRIT, "An ability's key casts it instantly"),
+            line("Off", palette::ui::MUTED, "It aims first, click to cast"),
         ],
     )
 }
@@ -135,22 +153,20 @@ fn flip_toggle(toggles: Query<Ref<Interaction>, With<QuickCastToggle>>, mut mode
     }
 }
 
-/// Where your Q will go, on the ground, while a normal cast waits for its click.
+/// Where one of our abilities will go, on the ground, while a normal cast of it waits for its
+/// click.
 #[derive(Component)]
 struct AimIndicator {
-    /// Whether it turns toward the cursor (a thrown ability or a dash; a nova is all around).
+    slot: AbilitySlot,
+    /// Whether it turns toward the cursor (`abilities::Indicator::aimed`).
     aimed: bool,
-    /// A dash's: reaching as far as the dash would go (`AbilityKind::dash_length`), a unit-long
-    /// mesh stretched to it.
-    dash: bool,
 }
 
-/// How high above the ground the indicator lies.
+/// How high above the ground the indicators lie.
 const INDICATOR_HEIGHT: f32 = 0.06;
 
-/// Builds the indicator once our own player exists, for its class's ability: the lane a thrown
-/// ability flies down to the edge of its range, the lane a dash crosses, or the ground a nova
-/// covers. All flat, pointing along world +X.
+/// Builds the indicators once our own player exists, one for each of its class's abilities
+/// (`abilities::indicator`).
 fn spawn_indicator(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -159,50 +175,47 @@ fn spawn_indicator(
     indicators: Query<Entity, With<AimIndicator>>,
 ) {
     let Ok(class) = me.single() else { return };
-    // A new fighter (back from the lobby): its own ability's indicator.
+    // A new fighter (back from the lobby): its own abilities' indicators.
     for old in &indicators {
         commands.entity(old).despawn();
     }
-    let (mesh, aimed) = match class.def().ability.kind {
-        AbilityKind::Projectile { radius, range, .. } => {
-            (arena::lane_mesh(PLAYER_RADIUS, PLAYER_RADIUS + 2.0 * radius + range, (2.0 * radius).max(0.4)), true)
-        }
-        AbilityKind::Dash { .. } => (arena::lane_mesh(0.0, 1.0, 2.0 * PLAYER_RADIUS), true),
-        AbilityKind::Nova { radius, .. } => (
-            Circle::new(radius).mesh().resolution(64).build().rotated_by(Quat::from_rotation_x(-FRAC_PI_2)),
-            false,
-        ),
-    };
-    commands.spawn((
-        AimIndicator { aimed, dash: matches!(class.def().ability.kind, AbilityKind::Dash { .. }) },
-        Mesh3d(meshes.add(mesh)),
-        MeshMaterial3d(materials.add(arena::translucent(palette::SPIRIT, 0.25, 1.5))),
-        Transform::default(),
-        Visibility::Hidden,
-    ));
+    let material = materials.add(arena::translucent(palette::SPIRIT, 0.25, 1.5));
+    for (slot, ability) in class.def().abilities() {
+        let crate::abilities::Indicator { mesh, aimed } = crate::abilities::indicator(&ability.kind);
+        commands.spawn((
+            AimIndicator { slot, aimed },
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(material.clone()),
+            Transform::default(),
+            Visibility::Hidden,
+        ));
+    }
 }
 
-/// Shows the indicator at our feet while aiming, turned toward the cursor. Dropped (aiming
-/// ends) once we're dead.
+/// Shows the indicator of the ability being aimed at our feet, turned toward the cursor. Dropped
+/// (aiming ends) once we're dead.
 fn show_indicator(
     mut aiming: ResMut<Aiming>,
     desired: Res<DesiredInput>,
     me: Query<(&Transform, &Health, &ClassId), (With<Me>, With<PlayerId>, Without<AimIndicator>)>,
-    indicator: Single<(&AimIndicator, &mut Transform, &mut Visibility)>,
+    mut indicators: Query<(&AimIndicator, &mut Transform, &mut Visibility)>,
 ) {
-    let (indicator, mut transform, mut visibility) = indicator.into_inner();
     let me = me.single().ok().filter(|(_, health, _)| health.alive());
-    if me.is_none() && aiming.0 {
-        aiming.0 = false;
+    if me.is_none() && aiming.0.is_some() {
+        aiming.0 = None;
     }
-    visibility.set_if_neq(shown(aiming.0));
-    let Some((at, _, class)) = me.filter(|_| aiming.0) else { return };
-    let turn = if indicator.aimed { desired.0.aim.to_angle() } else { 0.0 };
-    let length = if indicator.dash { class.def().ability.kind.dash_length(desired.0.aim) + PLAYER_RADIUS } else { 1.0 };
-    let wanted = Transform::from_xyz(at.translation.x, INDICATOR_HEIGHT, at.translation.z)
-        .with_rotation(Quat::from_rotation_y(turn))
-        .with_scale(Vec3::new(length, 1.0, 1.0));
-    transform.set_if_neq(wanted);
+    for (indicator, mut transform, mut visibility) in &mut indicators {
+        let showing = aiming.0 == Some(indicator.slot);
+        visibility.set_if_neq(shown(showing));
+        let Some((at, _, class)) = me.filter(|_| showing) else { continue };
+        let Some(ability) = class.def().ability(indicator.slot) else { continue };
+        let turn = if indicator.aimed { desired.0.aim.to_angle() } else { 0.0 };
+        let length = crate::abilities::indicator_length(&ability.kind, desired.0.aim);
+        let wanted = Transform::from_xyz(at.translation.x, INDICATOR_HEIGHT, at.translation.z)
+            .with_rotation(Quat::from_rotation_y(turn))
+            .with_scale(Vec3::new(length, 1.0, 1.0));
+        transform.set_if_neq(wanted);
+    }
 }
 
 /// The browser keeps the choice, "on" or "off".

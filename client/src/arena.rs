@@ -318,7 +318,7 @@ fn merge_into(all: &mut Mesh, part: &Mesh) {
     all.merge(&part).expect("merged meshes share attributes");
 }
 
-/// Class ids that have their own figure in `fighter_mesh`. Every class in `classes.ron` needs
+/// Class ids that have their own figure in `fighter_mesh`. Every class in `assets/classes/` needs
 /// one (and its parts in `fighter_rig` and its moves in `rig.rs`): the client won't start
 /// without them, and a test checks every class has one.
 pub const FIGHTER_LOOKS: [&str; 3] = ["javelinist", "revenant", "frost_mage"];
@@ -2855,7 +2855,7 @@ mod tests {
     fn shot_looks_are_projectile_classes() {
         for key in SHOT_LOOKS {
             let class = ClassId::by_key(key).unwrap_or_else(|| panic!("{key:?} in SHOT_LOOKS isn't a class"));
-            let shoots = class.def().shot(false).or(class.def().shot(true)).is_some();
+            let shoots = class.def().shot(None).is_some() || class.def().abilities().any(|(slot, _)| class.def().shot(Some(slot)).is_some());
             assert!(shoots, "{key:?} in SHOT_LOOKS doesn't shoot");
         }
     }

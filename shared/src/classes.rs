@@ -1,6 +1,7 @@
-//! Playable classes, loaded from `assets/classes.ron`.
+//! Playable classes, loaded from `assets/classes/`: one file per class, and `common.ron` for
+//! what they all share (see the README there).
 //!
-//! Gameplay code never names a class: it reads a `ClassDef` (HP, speed, auto-attack, Q ability)
+//! Gameplay code never names a class: it reads a `ClassDef` (HP, speed, auto-attack, abilities)
 //! through the player's `ClassId`. Retuning a class is a data change; a new class also needs its
 //! look in the client (`arena.rs` figure and parts, `rig.rs` moves).
 
@@ -9,10 +10,44 @@ use std::sync::LazyLock;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+pub use crate::abilities::{AbilityDef, AbilityKind, AbilitySlot};
+use crate::abilities::MAX_ABILITIES;
 use crate::config::{PLAYER_RADIUS, TICK_HZ};
 
-/// The class file, compiled into both server and client so they can't disagree.
-pub const CLASSES_RON: &str = include_str!("../assets/classes.ron");
+/// The class files, compiled into both server and client so they can't disagree. Their order is
+/// the classes' order everywhere: the class picker and its number keys, the default pick, and the
+/// order target dummies come in.
+const CLASS_FILES: [&str; 3] = [
+    include_str!("../assets/classes/revenant.ron"),
+    include_str!("../assets/classes/javelinist.ron"),
+    include_str!("../assets/classes/frost_mage.ron"),
+];
+
+/// What every class shares.
+const COMMON_FILE: &str = include_str!("../assets/classes/common.ron");
+
+/// The values every class shares (`assets/classes/common.ron`).
+#[derive(Deserialize, Debug, Clone)]
+pub struct Common {
+    /// How long using an ability on the global cooldown (`AbilityDef::global_cooldown`) keeps
+    /// every ability on it from being used again, whatever their own cooldowns.
+    pub global_cooldown_ticks: u32,
+    /// How many times its damage a critical hit deals.
+    pub crit_multiplier: f32,
+}
+
+impl Common {
+    /// Whether its numbers make sense, and if not, what's wrong.
+    fn check(&self) -> Result<(), String> {
+        if !(1.0..=5.0).contains(&self.crit_multiplier) {
+            return Err(format!("crit_multiplier {} isn't between 1 and 5", self.crit_multiplier));
+        }
+        if self.global_cooldown_ticks > 3 * TICK_HZ as u32 {
+            return Err(format!("global_cooldown_ticks {} is over 3 s", self.global_cooldown_ticks));
+        }
+        Ok(())
+    }
+}
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct ClassDef {
@@ -24,7 +59,8 @@ pub struct ClassDef {
     pub max_hp: i32,
     pub move_speed: f32,
     pub attack: AttackDef,
-    pub ability: AbilityDef,
+    /// On Q, W, E and R, in that order (`AbilitySlot`).
+    pub abilities: Vec<AbilityDef>,
     /// What the class always has going for it, nothing to press (none by default).
     #[serde(default)]
     pub passive: Option<PassiveDef>,
@@ -33,11 +69,8 @@ pub struct ClassDef {
     pub crit: Crit,
 }
 
-/// How much a critical hit multiplies its damage.
-pub const CRIT_MULTIPLIER: f32 = 2.0;
-
-/// The odds that an auto-attack hit this class deals is critical (a Q never is), for
-/// `CRIT_MULTIPLIER` times its damage: `chance` normally, `vs_frozen` against a frozen (rooted) target.
+/// The odds that an auto-attack hit this class deals is critical (an ability's never is), for
+/// `Common::crit_multiplier` times its damage: `chance` normally, `vs_frozen` against a frozen (rooted) target.
 #[derive(Deserialize, Debug, Clone, Copy, Default, PartialEq)]
 #[serde(default)]
 pub struct Crit {
@@ -147,23 +180,6 @@ pub enum AttackKind {
     },
 }
 
-/// The Q ability.
-#[derive(Deserialize, Debug, Clone)]
-pub struct AbilityDef {
-    pub name: String,
-    pub description: String,
-    pub cooldown_ticks: u32,
-    pub kind: AbilityKind,
-    /// Whether it starts and waits for the global cooldown (`GLOBAL_COOLDOWN_TICKS`): yes unless
-    /// it opts out.
-    #[serde(default = "yes")]
-    pub global_cooldown: bool,
-}
-
-fn yes() -> bool {
-    true
-}
-
 /// A passive, as players read it. Only words: its effect is in the numbers it describes (e.g.
 /// the attack's `far_scale`, the class's `crit`), which its description names by placeholder
 /// (`ClassDef::describe`).
@@ -171,31 +187,6 @@ fn yes() -> bool {
 pub struct PassiveDef {
     pub name: String,
     pub description: String,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub enum AbilityKind {
-    /// Thrown instantly toward the aim (no windup, no root), fixed damage.
-    Projectile { speed: f32, radius: f32, range: f32, damage: i32 },
-    /// A dash toward the aim, through fighters, cutting each one crossed for `damage`; stops at
-    /// walls. As far as the cursor (`AbilityKind::dash_length`), at least `min_distance` (if
-    /// given; without it, always all the way) and at most `distance`. Covers `distance` in
-    /// `ticks` at normal speed (longer slowed, shorter hasted), so a shorter one is over sooner.
-    Dash {
-        distance: f32,
-        #[serde(default)]
-        min_distance: Option<f32>,
-        ticks: u32,
-        damage: i32,
-    },
-    /// A burst around the user, at once: everyone within `radius` (center to body, not behind a
-    /// wall) takes `damage` and `chill`.
-    Nova {
-        radius: f32,
-        damage: i32,
-        #[serde(default)]
-        chill: Chill,
-    },
 }
 
 /// How a projectile flies: the auto-attack's or the ability's.
@@ -207,6 +198,12 @@ pub struct Shot {
 }
 
 impl Shot {
+    /// How far from its shooter's center a target's body can reach and still be hit: its front
+    /// edge starts at the edge of the shooter and flies its range.
+    pub fn edge_reach(&self) -> f32 {
+        PLAYER_RADIUS + 2.0 * self.radius + self.range
+    }
+
     /// How many ticks it flies before it's out of range.
     pub fn lifetime_ticks(&self) -> u32 {
         (self.range / self.speed * TICK_HZ as f32).ceil() as u32
@@ -214,16 +211,35 @@ impl Shot {
 }
 
 impl ClassDef {
-    /// The projectile this class fires with its auto-attack, or (`ability`) with its Q.
-    pub fn shot(&self, ability: bool) -> Option<Shot> {
-        if ability { self.ability.kind.shot() } else { self.attack.kind.shot() }
+    /// The ability in `slot`, if the class has one there.
+    pub fn ability(&self, slot: AbilitySlot) -> Option<&AbilityDef> {
+        self.abilities.get(slot.0 as usize)
     }
 
-    /// A description from the class file (a passive's or the Q's) with its `{placeholders}`
-    /// filled in from this class's numbers, so the words can't drift from them. The list is in
-    /// `classes.ron`.
+    /// Every ability the class has, with its slot.
+    pub fn abilities(&self) -> impl Iterator<Item = (AbilitySlot, &AbilityDef)> {
+        self.abilities.iter().enumerate().map(|(i, ability)| (AbilitySlot(i as u8), ability))
+    }
+
+    /// The projectile this class fires with its auto-attack (`None`), or with the ability in a
+    /// slot.
+    pub fn shot(&self, ability: Option<AbilitySlot>) -> Option<Shot> {
+        match ability {
+            Some(slot) => self.ability(slot)?.kind.shot(),
+            None => self.attack.kind.shot(),
+        }
+    }
+
+    /// A description from the class file (the passive's) with its `{placeholders}` filled in
+    /// from this class's numbers, so the words can't drift from them. The list is in the class
+    /// files' README.
     pub fn describe(&self, text: &str) -> String {
-        self.placeholders().into_iter().fold(text.to_string(), |text, (key, value)| text.replace(&format!("{{{key}}}"), &value))
+        fill(text, self.placeholders())
+    }
+
+    /// An ability's description, filled in like `describe`, with its own numbers too.
+    pub fn describe_ability(&self, ability: &AbilityDef) -> String {
+        fill(&ability.description, self.placeholders().into_iter().chain(ability.kind.placeholders()))
     }
 
     fn placeholders(&self) -> Vec<(&'static str, String)> {
@@ -234,7 +250,7 @@ impl ClassDef {
             ("attack_slow_time", seconds(self.attack.chill.slow_ticks)),
             ("crit", percent(self.crit.chance)),
             ("crit_vs_frozen", percent(self.crit.vs_frozen)),
-            ("crit_multiplier", percent(CRIT_MULTIPLIER)),
+            ("crit_multiplier", percent(common().crit_multiplier)),
         ];
         if let Some(rift) = self.attack.rift {
             all.extend([("rift_time", seconds(rift.ticks)), ("rift_haste", percent(rift.haste))]);
@@ -246,49 +262,19 @@ impl ClassDef {
                 ("follow_up_reach", percent(follow_up.reach - 1.0)),
             ]);
         }
-        let reach = match self.ability.kind {
-            AbilityKind::Projectile { range, .. } => range,
-            AbilityKind::Dash { distance, .. } => distance,
-            AbilityKind::Nova { radius, chill, .. } => {
-                all.push(("ability_root", seconds(chill.root_ticks)));
-                radius
-            }
-        };
-        all.extend([("ability_damage", self.ability.kind.damage().to_string()), ("ability_reach", format!("{reach} m"))]);
         all
     }
+}
+
+/// `text` with each `{key}` replaced by its value.
+fn fill(text: &str, placeholders: impl IntoIterator<Item = (&'static str, String)>) -> String {
+    placeholders.into_iter().fold(text.to_string(), |text, (key, value)| text.replace(&format!("{{{key}}}"), &value))
 }
 
 /// Ticks as players read them: "6 s", "2.5 s".
 pub fn seconds(ticks: u32) -> String {
     let seconds = ticks as f32 / TICK_HZ as f32;
     if seconds.fract() == 0.0 { format!("{seconds} s") } else { format!("{seconds:.1} s") }
-}
-
-impl AbilityKind {
-    /// How far a dash aimed `aim` (from the dasher to the cursor) goes: as far as the cursor,
-    /// within its `min_distance` and `distance`, or all the way without a `min_distance`. 0 for
-    /// anything but a dash.
-    pub fn dash_length(&self, aim: Vec2) -> f32 {
-        match *self {
-            AbilityKind::Dash { distance, min_distance: Some(min), .. } => aim.length().clamp(min, distance),
-            AbilityKind::Dash { distance, .. } => distance,
-            _ => 0.0,
-        }
-    }
-
-    /// What it deals to each fighter it hits.
-    pub fn damage(&self) -> i32 {
-        match *self {
-            AbilityKind::Projectile { damage, .. } | AbilityKind::Dash { damage, .. } | AbilityKind::Nova { damage, .. } => damage,
-        }
-    }
-
-    /// How a thrown ability flies (`None` for a dash or a nova).
-    pub fn shot(&self) -> Option<Shot> {
-        let AbilityKind::Projectile { speed, radius, range, .. } = *self else { return None };
-        Some(Shot { speed, radius, range })
-    }
 }
 
 impl AttackDef {
@@ -370,7 +356,7 @@ impl AttackKind {
     pub fn edge_reach(&self) -> f32 {
         match *self {
             AttackKind::Melee { range, .. } => range,
-            AttackKind::Projectile { radius, range, .. } => PLAYER_RADIUS + 2.0 * radius + range,
+            AttackKind::Projectile { speed, radius, range, .. } => Shot { speed, radius, range }.edge_reach(),
         }
     }
 
@@ -404,16 +390,43 @@ impl ClassId {
     }
 }
 
-static CLASSES: LazyLock<Vec<ClassDef>> =
-    LazyLock::new(|| ron::from_str(CLASSES_RON).unwrap_or_else(|e| panic!("assets/classes.ron is invalid: {e}")));
+// What the rest of the code relies on is checked as they load, so a bad edit stops the game at
+// once rather than misbehaving (`class_file_is_sane` checks the rest of the numbers).
+static CLASSES: LazyLock<Vec<ClassDef>> = LazyLock::new(|| {
+    let load = |file: &str| -> Result<ClassDef, String> {
+        let class: ClassDef = ron::from_str(file).map_err(|e| e.to_string())?;
+        if !(1..=MAX_ABILITIES).contains(&class.abilities.len()) {
+            return Err(format!("{}: one to {MAX_ABILITIES} abilities, not {}", class.id, class.abilities.len()));
+        }
+        Ok(class)
+    };
+    CLASS_FILES.iter().map(|file| load(file).unwrap_or_else(|e| panic!("a class file in assets/classes is invalid: {e}"))).collect()
+});
+
+static COMMON: LazyLock<Common> = LazyLock::new(|| {
+    let common: Common = ron::from_str(COMMON_FILE).unwrap_or_else(|e| panic!("assets/classes/common.ron is invalid: {e}"));
+    common.check().unwrap_or_else(|e| panic!("assets/classes/common.ron is invalid: {e}"));
+    common
+});
 
 pub fn classes() -> &'static [ClassDef] {
     &CLASSES
 }
 
-/// FNV-1a over the class file, folded into the protocol id.
+/// What every class shares.
+pub fn common() -> &'static Common {
+    &COMMON
+}
+
+/// FNV-1a over the class files and the common one, folded into the protocol id.
 pub const fn classes_hash() -> u64 {
-    text_hash(CLASSES_RON)
+    let mut hash = text_hash(COMMON_FILE);
+    let mut i = 0;
+    while i < CLASS_FILES.len() {
+        hash = hash.rotate_left(7) ^ text_hash(CLASS_FILES[i]);
+        i += 1;
+    }
+    hash
 }
 
 /// FNV-1a over `text`, skipping carriage returns: a CRLF checkout (git's autocrlf on Windows)
@@ -434,6 +447,9 @@ const fn text_hash(text: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::abilities::dash::DashDef;
+    use crate::abilities::nova::NovaDef;
+    use crate::abilities::throw::Throw;
 
     #[test]
     fn class_file_is_sane() {
@@ -456,25 +472,31 @@ mod tests {
                     assert!((1.0..=30.0).contains(&range), "{}: projectile range", c.id);
                 }
             }
-            assert!(c.ability.cooldown_ticks > 0, "{}: ability cooldown", c.id);
-            if c.ability.kind.damage() > 0 {
-                assert!(c.ability.description.contains("{ability_damage}"), "{}: Q description doesn't name its damage", c.id);
-            }
-            match c.ability.kind {
-                AbilityKind::Projectile { speed, radius, range, damage } => {
-                    assert!(damage > 0 && (2.0..=60.0).contains(&speed) && (0.05..=1.0).contains(&radius), "{}: Q", c.id);
-                    assert!((1.0..=30.0).contains(&range), "{}: Q range", c.id);
+            assert!((1..=MAX_ABILITIES).contains(&c.abilities.len()), "{}: one to {MAX_ABILITIES} abilities", c.id);
+            for (_, ability) in c.abilities() {
+                let what = format!("{}: {}", c.id, ability.name);
+                assert!(ability.cooldown_ticks > 0, "{what}: cooldown");
+                if ability.kind.effect().damage > 0 {
+                    assert!(ability.description.contains("{ability_damage}"), "{what}: the description doesn't name its damage");
                 }
-                AbilityKind::Dash { distance, min_distance, ticks, damage } => {
-                    assert!(damage >= 0 && (0.5..=15.0).contains(&distance) && (1..=TICK_HZ as u32).contains(&ticks), "{}: dash", c.id);
-                    assert!(min_distance.is_none_or(|min| min > 0.0 && min <= distance), "{}: dash min_distance", c.id);
-                    assert!(ticks < c.ability.cooldown_ticks, "{}: dash longer than its cooldown", c.id);
+                match ability.kind {
+                    AbilityKind::Projectile(Throw { speed, radius, range, damage }) => {
+                        assert!(damage > 0 && (2.0..=60.0).contains(&speed) && (0.05..=1.0).contains(&radius), "{what}: throw");
+                        assert!((1.0..=30.0).contains(&range), "{what}: throw range");
+                    }
+                    AbilityKind::Dash(DashDef { distance, min_distance, ticks, damage }) => {
+                        assert!(damage >= 0 && (0.5..=15.0).contains(&distance) && (1..=TICK_HZ as u32).contains(&ticks), "{what}: dash");
+                        assert!(min_distance.is_none_or(|min| min > 0.0 && min <= distance), "{what}: dash min_distance");
+                        assert!(ticks < ability.cooldown_ticks, "{what}: dash longer than its cooldown");
+                    }
+                    AbilityKind::Nova(NovaDef { radius, damage, chill }) => {
+                        assert!(damage >= 0 && (0.5..=10.0).contains(&radius), "{what}: nova");
+                        assert!(damage > 0 || !chill.is_none(), "{what}: a nova that does nothing");
+                        chill_is_sane(&c.id, chill);
+                    }
                 }
-                AbilityKind::Nova { radius, damage, chill } => {
-                    assert!(damage >= 0 && (0.5..=10.0).contains(&radius), "{}: nova", c.id);
-                    assert!(damage > 0 || !chill.is_none(), "{}: a nova that does nothing", c.id);
-                    chill_is_sane(&c.id, chill);
-                }
+                let filled = c.describe_ability(ability);
+                assert!(!filled.contains(['{', '}']), "{what}: unknown placeholder in {filled:?}");
             }
             chill_is_sane(&c.id, c.attack.chill);
             if let Some(RiftDef { ticks, haste }) = c.attack.rift {
@@ -490,8 +512,8 @@ mod tests {
             if let Some(passive) = &c.passive {
                 assert!(!passive.name.is_empty() && !passive.description.is_empty(), "{}: passive", c.id);
             }
-            for text in c.passive.iter().map(|p| &p.description).chain([&c.ability.description]) {
-                let filled = c.describe(text);
+            if let Some(passive) = &c.passive {
+                let filled = c.describe(&passive.description);
                 assert!(!filled.contains(['{', '}']), "{}: unknown placeholder in {filled:?}", c.id);
             }
             let Crit { chance, vs_frozen } = c.crit;
@@ -503,6 +525,13 @@ mod tests {
         assert!((0.0..1.0).contains(&chill.slow), "{id}: slow must leave some speed");
         // Long enough to matter, short enough to fight back: at most 5 s slowed, 3 s rooted.
         assert!(chill.slow_ticks <= 5 * TICK_HZ as u32 && chill.root_ticks <= 3 * TICK_HZ as u32, "{id}: chill too long");
+    }
+
+    #[test]
+    fn common_file_is_sane() {
+        common().check().unwrap();
+        assert!(Common { global_cooldown_ticks: 32, crit_multiplier: -2.0 }.check().is_err(), "a crit that heals");
+        assert!(Common { global_cooldown_ticks: 3200, crit_multiplier: 2.0 }.check().is_err(), "a 100 s global cooldown");
     }
 
     #[test]
