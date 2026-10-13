@@ -1,19 +1,20 @@
-//! Your abilities, LoL-style: a square icon at the bottom center of your own screen, with a dark
-//! clock-wipe sweeping away clockwise and the seconds left while it cools down (over it, a
-//! quicker, paler wipe for the global cooldown, if it's on it), and your passive
-//! (if your class has one) in a smaller square beside it. Hovering either shows what it does.
-//! Only you see them.
+//! Your abilities, LoL-style: a row of square icons at the bottom center of your own screen, one
+//! per ability (Q, W, E, R), each with a dark clock-wipe sweeping away clockwise and the seconds
+//! left while it cools down (over it, a quicker, paler wipe for the global cooldown, if it's on
+//! it), and your passive (if your class has one) in a smaller square left of them. Hovering one
+//! shows what it does. Only you see them.
 
 use std::f32::consts::TAU;
 
-use arena_shared::classes::AbilityKind;
-use arena_shared::config::{GLOBAL_COOLDOWN_TICKS, TICK_HZ};
+use arena_shared::classes::{AbilityDef, ClassDef, common};
+use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 
 use crate::Me;
 use crate::feedback::AttackClock;
 use crate::arena::palette;
+use crate::casting::key_label;
 use crate::render::{GameUi, shown, ui_text};
 use crate::stat_frame::{self, Blurb};
 use crate::tooltip::{Side, hover_shows, tip, tip_note, tip_text, tip_title};
@@ -22,117 +23,115 @@ pub struct ActionBarPlugin;
 
 impl Plugin for ActionBarPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (spawn_icon, update_icon).chain());
+        app.add_systems(Update, (spawn_icons, update_icons).chain());
     }
 }
 
-/// Icon size in pixels, and its gap from the bottom of the screen.
+/// Icon size in pixels, the gap between two, and their gap from the bottom of the screen.
 const ICON: f32 = 64.0;
+const ICON_GAP: f32 = 10.0;
 const BOTTOM: f32 = 18.0;
-/// The passive's icon size, and its gap from the Q icon.
+/// The passive's icon size, and its gap from the first ability's.
 const PASSIVE: f32 = 46.0;
 const PASSIVE_GAP: f32 = 10.0;
 /// A tooltip's width (pixels).
 const TIP_WIDTH: f32 = 280.0;
 
-/// The Q icon (this entity) and the parts that change: the wipe and the seconds. Clicking it
-/// aims Q, a normal cast whatever quick cast is set to (`render::read_local_input`).
+/// An ability's icon (this entity) and the parts that change: the wipe and the seconds.
+/// Clicking it aims the ability, a normal cast whatever quick cast is set to
+/// (`render::read_local_input`).
 #[derive(Component)]
 pub(crate) struct AbilityIcon {
+    pub slot: AbilitySlot,
     wipe: Entity,
     global_wipe: Entity,
     seconds: Entity,
 }
 
-/// The Q icon and the passive's: hidden outside the arena (`GameUi`), rebuilt for each fighter.
+/// What an ability icon's wipes show (their step, while they run) and its seconds, as last
+/// written: only what changes is written again.
+#[derive(Component, Default)]
+struct IconShown {
+    own: Option<u32>,
+    global: Option<u32>,
+    seconds: String,
+}
+
+/// A node filling its icon.
+pub(crate) fn fill() -> Node {
+    Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() }
+}
+
+/// A node filling its icon, its content in the middle.
+pub(crate) fn centered() -> Node {
+    Node { justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..fill() }
+}
+
+/// The ability icons and the passive's: hidden outside the arena (`GameUi`), rebuilt for each
+/// fighter.
 #[derive(Component)]
 struct ActionBarPart;
 
-/// Builds the icon each time our own player appears (any old one replaced, in case it was for
-/// another class): its frame, a picture for the ability, the key, the wipe and the seconds, and
-/// the ability's name under it.
-fn spawn_icon(mut commands: Commands, me: Query<&ClassId, Added<Me>>, parts: Query<Entity, With<ActionBarPart>>) {
+/// Builds the icons each time our own player appears (any old ones replaced, in case they were
+/// for another class), the row centered.
+fn spawn_icons(mut commands: Commands, me: Query<&ClassId, Added<Me>>, parts: Query<Entity, With<ActionBarPart>>) {
     let Ok(class) = me.single() else { return };
     for part in &parts {
         commands.entity(part).despawn();
     }
-    let ability = &class.def().ability;
-    let fill = || Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() };
-    let centered = || Node { justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..fill() };
+    let count = class.def().abilities.len() as f32;
+    let first = -(count * ICON + (count - 1.0) * ICON_GAP) / 2.0;
+    for (slot, ability) in class.def().abilities() {
+        spawn_icon(&mut commands, class.def(), slot, ability, first + slot.0 as f32 * (ICON + ICON_GAP));
+    }
+    if let Some(blurb) = stat_frame::passive_blurb(class.def()) {
+        spawn_passive(&mut commands, blurb, first - PASSIVE_GAP - PASSIVE);
+    }
+}
+
+/// An ability's icon, its left edge `from_center` pixels from the middle of the screen: its
+/// frame, a picture for the ability (`abilities::icon`), the key, the wipe and the seconds, and
+/// the ability's name under it.
+fn spawn_icon(commands: &mut Commands, class: &ClassDef, slot: AbilitySlot, ability: &AbilityDef, from_center: f32) {
     let wipe = commands.spawn((fill(), BackgroundGradient::default(), Visibility::Hidden)).id();
     let global_wipe = commands.spawn((fill(), BackgroundGradient::default(), Visibility::Hidden)).id();
     let seconds = commands.spawn(ui_text("", 22.0, palette::ui::TEXT)).id();
     let seconds_box = commands.spawn(centered()).add_child(seconds).id();
-    let picture = match ability.kind {
-        // A spear, point up and to the right.
-        AbilityKind::Projectile { .. } => commands
-            .spawn(fill())
-            .with_child((
-                Node { position_type: PositionType::Absolute, left: px(29.0), top: px(6.0), width: px(5.0), height: px(50.0), ..default() },
-                BackgroundColor(palette::SPIRIT),
-                UiTransform::from_rotation(Rot2::degrees(45.0)),
-            ))
-            .id(),
-        // Chevrons: a dash.
-        AbilityKind::Dash { .. } => commands.spawn(centered()).with_child(ui_text(">>", 30.0, palette::SPIRIT)).id(),
-        // A snowflake: three crossed bars.
-        AbilityKind::Nova { .. } => {
-            let bar = |degrees: f32| {
-                (
-                    Node { position_type: PositionType::Absolute, left: px(28.0), top: px(8.0), width: px(4.0), height: px(44.0), ..default() },
-                    BackgroundColor(palette::ICE),
-                    UiTransform::from_rotation(Rot2::degrees(degrees)),
-                )
-            };
-            commands.spawn(fill()).with_children(|flake| {
-                for degrees in [0.0, 60.0, 120.0] {
-                    flake.spawn(bar(degrees));
-                }
-            })
-            .id()
-        }
-    };
+    let picture = crate::abilities::icon(commands, &ability.kind);
     let key = commands
         .spawn(Node { position_type: PositionType::Absolute, left: px(4.0), top: px(1.0), ..default() })
-        .with_child(ui_text("Q", 13.0, palette::ui::TEXT))
+        .with_child(ui_text(key_label(slot), 13.0, palette::ui::TEXT))
         .id();
+    // As wide as its share of the row, so neighbors' names never overlap: a long one wraps.
     let name = commands
         .spawn(Node {
             position_type: PositionType::Absolute,
             top: px(ICON + 2.0),
-            width: px(ICON * 2.0),
-            left: px(-ICON / 2.0),
+            width: px(ICON + ICON_GAP),
+            left: px(-ICON_GAP / 2.0),
             justify_content: JustifyContent::Center,
             ..default()
         })
-        .with_child(ui_text(ability.name.clone(), 12.0, palette::ui::TEXT))
+        .with_child((ui_text(ability.name.clone(), 12.0, palette::ui::TEXT), TextLayout::justify(Justify::Center)))
         .id();
-    let tip = tooltip(&mut commands, stat_frame::ability_blurb(class.def()), ICON);
+    let tip = tooltip(commands, stat_frame::ability_blurb(class, slot, ability), ICON);
     commands
         .spawn((
-            AbilityIcon { wipe, global_wipe, seconds },
+            AbilityIcon { slot, wipe, global_wipe, seconds },
+            IconShown::default(),
             ActionBarPart,
             GameUi,
-            icon_frame(tip, ICON, -ICON / 2.0, palette::SPIRIT),
+            icon_frame(tip, ICON, from_center, palette::SPIRIT),
         ))
         .add_children(&[picture, wipe, global_wipe, seconds_box, key, name, tip]);
-    if let Some(blurb) = stat_frame::passive_blurb(class.def()) {
-        spawn_passive(&mut commands, blurb);
-    }
 }
 
-/// The passive's icon, left of Q, bottoms lined up: a gold diamond in a plain frame.
-fn spawn_passive(commands: &mut Commands, blurb: Blurb) {
+/// The passive's icon, its left edge `from_center` pixels from the middle of the screen, bottoms
+/// lined up with the abilities': a gold diamond in a plain frame.
+fn spawn_passive(commands: &mut Commands, blurb: Blurb, from_center: f32) {
     let tip = tooltip(commands, blurb, PASSIVE);
     let diamond = commands
-        .spawn(Node {
-            position_type: PositionType::Absolute,
-            width: percent(100.0),
-            height: percent(100.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        })
+        .spawn(centered())
         .with_child((
             Node { width: px(16.0), height: px(16.0), border: UiRect::all(px(2.0)), ..default() },
             BorderColor::all(palette::TORCH_FLAME),
@@ -141,7 +140,7 @@ fn spawn_passive(commands: &mut Commands, blurb: Blurb) {
         ))
         .id();
     commands
-        .spawn((ActionBarPart, GameUi, icon_frame(tip, PASSIVE, -ICON / 2.0 - PASSIVE_GAP - PASSIVE, palette::ui::MUTED)))
+        .spawn((ActionBarPart, GameUi, icon_frame(tip, PASSIVE, from_center, palette::ui::MUTED)))
         .add_children(&[diamond, tip]);
 }
 
@@ -168,7 +167,10 @@ fn icon_frame(tip: Entity, size: f32, from_center: f32, border: Color) -> impl B
 /// A tooltip above an icon `size` pixels wide, centered on it: the name, what kind it is, and
 /// what it does.
 fn tooltip(commands: &mut Commands, blurb: Blurb, size: f32) -> Entity {
-    let kind = blurb.cooldown.map_or("Passive".to_string(), |cooldown| format!("Q ability, {cooldown}"));
+    let kind = match (blurb.key, blurb.cooldown) {
+        (Some(key), Some(cooldown)) => format!("{key} ability, {cooldown}"),
+        _ => "Passive".to_string(),
+    };
     commands
         .spawn((
             tip(Side::Above, (size - TIP_WIDTH) / 2.0, TIP_WIDTH),
@@ -199,35 +201,48 @@ fn wipe_gradient(step: u32, shade: Color) -> BackgroundGradient {
 /// but isn't rebuilt every frame.
 const WIPE_STEPS: f32 = 256.0;
 
-/// While Q cools down: the wipe (dark over the part of the circle still to go, clockwise from
-/// twelve o'clock) and the seconds left (tenths under one). Over it, while the global cooldown
-/// runs (if Q is on it), its own quicker wipe, pale, so the cooldown shows through. When it's
-/// ready, a bright frame. Only writes what visibly changed.
-fn update_icon(
+/// While an ability cools down: the wipe (dark over the part of the circle still to go, clockwise
+/// from twelve o'clock) and the seconds left (tenths under one). Over it, while the global
+/// cooldown runs (if it's on it), its own quicker wipe, pale, so the cooldown shows through. When
+/// it's ready, a bright frame. Only writes what visibly changed.
+fn update_icons(
     clock: AttackClock,
-    me: Query<(&ClassId, &AbilityState), With<Me>>,
-    icons: Single<(&AbilityIcon, &mut BorderColor)>,
+    me: Query<(&ClassId, &Cooldowns), With<Me>>,
+    mut icons: Query<(&AbilityIcon, &mut IconShown, &mut BorderColor)>,
     mut wipes: Query<(&mut BackgroundGradient, &mut Visibility)>,
     mut texts: Query<&mut Text>,
-    // What each wipe shows (its step, while it runs) and the label, as last written.
-    mut shown_now: Local<(Option<u32>, Option<u32>, String)>,
 ) {
-    let (icon, mut border) = icons.into_inner();
-    let Ok((class, ability)) = me.single() else { return };
+    let Ok((class, cooldowns)) = me.single() else { return };
     let now = clock.now(true);
-    let left = (ability.cooldown_over_at() as f32 - now).max(0.0);
-    let global_left = (ability.global_over_at(*class) as f32 - now).max(0.0);
-    let own = (left > 0.0).then(|| step_of(left, class.def().ability.cooldown_ticks as f32));
-    let global = (global_left > 0.0).then(|| step_of(global_left, GLOBAL_COOLDOWN_TICKS as f32));
+    for (icon, shown, border) in &mut icons {
+        let Some(ability) = class.def().ability(icon.slot) else { continue };
+        update_icon(icon, shown.into_inner(), border, (now, cooldowns, ability), &mut wipes, &mut texts);
+    }
+}
+
+fn update_icon(
+    icon: &AbilityIcon,
+    shown_now: &mut IconShown,
+    mut border: Mut<BorderColor>,
+    (now, cooldowns, ability): (f32, &Cooldowns, &AbilityDef),
+    wipes: &mut Query<(&mut BackgroundGradient, &mut Visibility)>,
+    texts: &mut Query<&mut Text>,
+) {
+    let left = (cooldowns.cooldown_over_at(icon.slot) as f32 - now).max(0.0);
+    let global_left = (cooldowns.global_over_at(ability) as f32 - now).max(0.0);
+    let own = (left > 0.0).then(|| step_of(left, ability.cooldown_ticks as f32));
+    let global = (global_left > 0.0).then(|| step_of(global_left, common().global_cooldown_ticks as f32));
     border.set_if_neq(BorderColor::all(if own.is_some() || global.is_some() { palette::ui::MUTED } else { palette::SPIRIT }));
     // The seconds left: tenths under one second, whole seconds (rounded up) above.
     let seconds = left / TICK_HZ as f32;
+    // (Just under a second rounds up to a whole one, not to ten tenths.)
+    let tenths = (seconds * 10.0).ceil() as u32;
     let label = match own {
         None => String::new(),
-        Some(_) if seconds >= 1.0 => (seconds.ceil() as u32).to_string(),
-        Some(_) => format!("0.{}", (seconds * 10.0).ceil() as u32),
+        Some(_) if tenths >= 10 => (seconds.ceil() as u32).to_string(),
+        Some(_) => format!("0.{tenths}"),
     };
-    let (shown_own, shown_global, shown_label) = &mut *shown_now;
+    let IconShown { own: shown_own, global: shown_global, seconds: shown_label } = shown_now;
     let mut set_wipe = |entity: Entity, step: Option<u32>, was: &mut Option<u32>, shade: Color| {
         if *was == step {
             return;

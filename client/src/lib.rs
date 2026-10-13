@@ -17,6 +17,8 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 #[cfg(feature = "render")]
+pub mod abilities;
+#[cfg(feature = "render")]
 pub mod action_bar;
 pub mod bot;
 #[cfg(feature = "render")]
@@ -210,7 +212,7 @@ fn send_commands(
 ) {
     let (Ok(mut sender), false) = (client.single_mut(), me.is_empty()) else {
         *sent = Sent::default();
-        (desired.0.ability, desired.0.fire) = (false, false);
+        (desired.0.casts, desired.0.fire) = (default(), false);
         stop.0 = false;
         return;
     };
@@ -240,14 +242,17 @@ fn send_commands(
         desired.0.fire = false;
         walk_when_ordered.0 = input.move_to;
     }
-    if input.ability {
-        send(PlayerCommand::Cast(input.aim));
-        desired.0.ability = false;
+    if input.casts().next().is_some() {
+        for order in input.casts() {
+            send(PlayerCommand::Cast(order.slot, order.aim));
+        }
+        desired.0.casts = default();
         walk_when_ordered.0 = input.move_to;
     }
 }
 
-/// Where we were walking to when we last ordered an attack or a Q: what starting one drops.
+/// Where we were walking to when we last ordered an attack or an ability: what starting one
+/// drops.
 #[derive(Resource, Default)]
 struct WalkWhenOrdered(Option<Vec2>);
 
@@ -258,11 +263,11 @@ struct WalkWhenOrdered(Option<Vec2>);
 fn forget_walk_on_attack(
     mut desired: ResMut<DesiredInput>,
     walk_when_ordered: Res<WalkWhenOrdered>,
-    me: Query<(&AttackState, &AbilityState), With<Me>>,
+    me: Query<(&AttackState, &Dashing), With<Me>>,
     mut forgotten_for: Local<[Option<u32>; 2]>,
 ) {
-    let Ok((attack, ability)) = me.single() else { return };
-    let started = [attack.swing.map(|w| w.started_at), ability.dash.map(|d| d.started_at)];
+    let Ok((attack, dashing)) = me.single() else { return };
+    let started = [attack.swing.map(|w| w.started_at), dashing.0.map(|d| d.started_at)];
     for (started, forgotten) in started.into_iter().zip(forgotten_for.iter_mut()) {
         if started.is_some() && *forgotten != started {
             *forgotten = started;

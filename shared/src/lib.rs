@@ -3,6 +3,7 @@
 //! `protocol` defines what goes over the wire. `sim` holds the gameplay rules as pure
 //! functions: the server runs them; the client uses the few it draws with.
 
+pub mod abilities;
 pub mod classes;
 pub mod config;
 pub mod map;

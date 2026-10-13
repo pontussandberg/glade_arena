@@ -11,7 +11,8 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use arena_shared::classes::{AbilityKind, CRIT_MULTIPLIER, Chill};
+use arena_shared::abilities::{self, AbilityDef, Cast, dash};
+use arena_shared::classes::{Chill, common};
 use arena_shared::config::*;
 use arena_shared::map::Map;
 use arena_shared::protocol::*;
@@ -239,7 +240,7 @@ fn fighter(id: PeerId, class: ClassId, room: InRoom, team: Team, at: Vec2) -> im
         Pos(at),
         Health(class.def().max_hp),
         (Chilled::default(), Hasted::default(), RecentHits::default()),
-        (AttackState::default(), AbilityState::default(), LastSwing::default()),
+        (AttackState::default(), Cooldowns::default(), Dashing::default(), LastSwing::default()),
     )
 }
 
@@ -332,15 +333,16 @@ fn walk_dummies(timeline: Res<LocalTimeline>, mut dummies: Query<(&mut Pos, &Cla
 /// slows, roots and haste gone); its hits still show.
 fn restore_dummies(
     mut commands: Commands,
-    mut dummies: Query<(Entity, &Dummy, &ClassId, &mut Pos, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, &mut AbilityState), With<Dead>>,
+    mut dummies: Query<(Entity, &Dummy, &ClassId, &mut Pos, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, (&mut Cooldowns, &mut Dashing)), With<Dead>>,
 ) {
-    for (entity, dummy, class, mut pos, mut health, (mut chilled, mut hasted), mut attack, mut ability) in &mut dummies {
+    for (entity, dummy, class, mut pos, mut health, (mut chilled, mut hasted), mut attack, (mut cooldowns, mut dashing)) in &mut dummies {
         pos.set_if_neq(Pos(dummy.home));
         health.0 = class.def().max_hp;
         chilled.set_if_neq(Chilled::default());
         hasted.set_if_neq(Hasted::default());
         attack.set_if_neq(AttackState::default());
-        ability.set_if_neq(AbilityState::default());
+        cooldowns.set_if_neq(Cooldowns::default());
+        dashing.set_if_neq(Dashing::default());
         commands.entity(entity).remove::<Dead>();
     }
 }
@@ -392,12 +394,14 @@ fn apply_commands(
     }
 }
 
-/// After a tick: an attack click has been seen, used or not (one before the last attack is done
-/// is dropped, not kept for later).
+/// After a tick: an attack click and the abilities' keys pressed have been seen, used or not
+/// (one before the last attack is done, or while an ability cools down, is dropped, not kept for
+/// later). Every fighter's, in play or not: a key pressed while dead doesn't go off on respawn.
 fn use_up_clicks(mut players: Query<&mut PlayerInput>) {
     for mut input in &mut players {
-        if input.fire {
+        if input.fire || input.casts().next().is_some() {
             input.fire = false;
+            input.casts = default();
         }
     }
 }
@@ -407,16 +411,16 @@ fn move_players(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     rifts: Res<Rifts>,
-    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, &AttackState, &mut AbilityState, &Chilled, &Hasted, &InRoom), InPlay>,
+    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, &AttackState, &mut Dashing, &Chilled, &Hasted, &InRoom), InPlay>,
 ) {
     let now = timeline.tick().0;
-    for (id, mut pos, class, mut input, attack, mut ability, chilled, hasted, room) in &mut players {
+    for (id, mut pos, class, mut input, attack, mut dashing, chilled, hasted, room) in &mut players {
         let map = lobby.map(room);
-        let mut next = *ability;
+        let mut next = *dashing;
         // Hasted in its own rift (the most hasting, if it stands in several).
         let boost = rifts.0.iter().filter(|(r, rift)| r == room && rift.owner == id.0 && rift.holds(pos.0, now)).fold(1.0f32, |most, (_, rift)| most.max(1.0 + rift.haste));
         pos.set_if_neq(Pos(sim::move_player_boosted(map, pos.0, &input, *class, attack, &mut next, chilled, hasted, now, boost)));
-        ability.set_if_neq(next);
+        dashing.set_if_neq(next);
         if input.move_to.is_some_and(|point| sim::arrived(map, pos.0, point)) {
             input.move_to = None;
         }
@@ -456,14 +460,14 @@ struct OnGate(bool);
 fn use_gates(
     timeline: Res<LocalTimeline>,
     mut gates: Query<(Entity, &mut Waygate, &InRoom)>,
-    mut players: Query<(&PlayerId, &mut Pos, &mut PlayerInput, &mut AbilityState, &mut OnGate, &InRoom), (InPlay, Without<Dummy>)>,
+    mut players: Query<(&PlayerId, &mut Pos, &mut PlayerInput, &mut Dashing, &mut OnGate, &InRoom), (InPlay, Without<Dummy>)>,
 ) {
     // No map with gates in play anywhere: nothing to step on.
     if gates.is_empty() {
         return;
     }
     let now = timeline.tick().0;
-    for (id, mut pos, mut input, mut ability, mut on_gate, room) in &mut players {
+    for (id, mut pos, mut input, mut dashing, mut on_gate, room) in &mut players {
         let under = gates.iter().filter(|(.., r)| *r == room).find_map(|(gate, info, _)| sim::gate_end_at(info, pos.0).map(|end| (gate, end)));
         let stepped_on = !std::mem::replace(&mut on_gate.0, under.is_some());
         let Some((gate, end)) = under.filter(|_| stepped_on) else { continue };
@@ -473,9 +477,7 @@ fn use_gates(
         }
         pos.0 = gate.ends[1 - end];
         input.move_to = None;
-        if ability.dash.is_some() {
-            ability.dash = None;
-        }
+        dashing.set_if_neq(Dashing::default());
         gate.back_at = Some(now + GATE_CLOSED_TICKS);
         debug!(player = ?id.0, from = ?gate.ends[end], "through a waygate");
     }
@@ -554,7 +556,7 @@ fn damage(
     (by, class, with): Attacker,
 ) {
     let crit = blow.can_crit && fastrand::f32() < class.def().crit.chance_against(chilled.rooted_at(now));
-    let amount = if crit { (blow.amount as f32 * CRIT_MULTIPLIER).round() as i32 } else { blow.amount };
+    let amount = if crit { (blow.amount as f32 * common().crit_multiplier).round() as i32 } else { blow.amount };
     health.0 = (health.0 - amount).max(0);
     hits.push(amount, if crit { HitKind::Crit } else { HitKind::Damage });
     if !blow.chill.is_none() {
@@ -572,10 +574,10 @@ fn respawn(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
     // Dummies come back on the spot instead (`restore_dummies`).
-    mut dead: Query<(Entity, &ClassId, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, &mut AbilityState, &mut Dead), Without<Dummy>>,
+    mut dead: Query<(Entity, &ClassId, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, (&mut Cooldowns, &mut Dashing), &mut Dead), Without<Dummy>>,
 ) {
     let now = timeline.tick().0;
-    for (player, class, mut health, (mut chilled, mut hasted), mut attack, mut ability, mut dead) in &mut dead {
+    for (player, class, mut health, (mut chilled, mut hasted), mut attack, (mut cooldowns, mut dashing), mut dead) in &mut dead {
         if !dead.placed && now + PLACE_BEFORE_RESPAWN_TICKS >= dead.respawn_at {
             dead.placed = true;
             commands.entity(player).insert(NeedsSpawnPoint);
@@ -586,7 +588,8 @@ fn respawn(
             hasted.set_if_neq(Hasted::default());
             *attack = AttackState::default();
             // Practice's No cooldowns stays as it was.
-            *ability = AbilityState { free: ability.free, ..default() };
+            *cooldowns = Cooldowns { free: cooldowns.free, ..default() };
+            *dashing = Dashing::default();
             commands.entity(player).remove::<Dead>();
             debug!(?player, "respawned");
         }
@@ -699,24 +702,17 @@ fn close_rifts(timeline: Res<LocalTimeline>, mut rifts: ResMut<Rifts>) {
 #[derive(Component, Default)]
 struct DashHits(u32, Vec<PeerId>);
 
-/// Q abilities. Thrown ones are spawned. Dashes cut whoever the dasher passes through, each
-/// target once per dash; a rooted dasher cuts no one (its dash stops). Novas hit everyone around
-/// the caster. A Q press is used up here, whether or not the ability was ready (as in League);
-/// a dash drops the destination like an attack does.
+/// Abilities (`abilities::step`). Thrown ones are spawned. Dashes cut whoever the dasher passes
+/// through, each target once per dash; a rooted dasher cuts no one (its dash stops). Novas hit
+/// everyone around the caster. A key press is used up after the tick, whether or not the
+/// ability was ready (`use_up_clicks`, as in League); a dash drops the destination like an
+/// attack does.
 fn use_abilities(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut users: Query<
-        (
-            &PlayerId,
-            &ClassId,
-            &Pos,
-            &mut PlayerInput,
-            &mut AbilityState,
-            &mut DashHits,
-            (&InRoom, &Team),
-        ),
+        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, (&mut Cooldowns, &mut Dashing), &mut DashHits, (&InRoom, &Team)),
         InPlay,
     >,
     mut targets: Targets,
@@ -725,44 +721,48 @@ fn use_abilities(
     // Read up front: `targets` holds every player's `Chilled` mutably. A root or slow landing
     // during this loop starts next tick anyway.
     let chills: Vec<(PeerId, Chilled)> = targets.iter().map(|(_, id, .., chilled, _)| (id.0, *chilled)).collect();
-    for (id, class, pos, mut input, mut state, mut hits, (room, team)) in &mut users {
+    for (id, class, pos, mut input, (mut cooldowns, mut dashing), mut hits, (room, team)) in &mut users {
         let side = (*room, *team);
+        let map = lobby.map(room);
         let chilled = chills.iter().find(|(p, _)| *p == id.0).map(|(_, c)| *c).unwrap_or_default();
+        // What a hit by `ability` does, and its name for the log.
+        let blow = |ability: &'static AbilityDef| {
+            let effect = ability.kind.effect();
+            (Blow { amount: effect.damage, chill: effect.chill, can_crit: false }, (id.0, *class, ability.name.as_str()))
+        };
         // Cut whoever this tick's dash step reached (`move_players` just made it). Checked before
-        // the ability steps, which ends the dash on its last tick: so every step is checked, the
+        // the abilities step, which ends the dash on its last tick: so every step is checked, the
         // last one included, and the spot the dash started from isn't.
-        if let (Some(dash), AbilityKind::Dash { damage: cut, .. }) = (state.dash, &class.def().ability.kind)
+        if let Some(dash) = dashing.0
             && !chilled.rooted_at(now.0)
+            && let Some((blow, with)) = class.def().ability(dash.slot).map(blow)
         {
             if hits.0 != dash.started_at {
                 hits.0 = dash.started_at;
                 hits.1.clear();
             }
-            let with = (id.0, *class, class.def().ability.name.as_str());
-            let blow = Blow { amount: *cut, chill: Chill::default(), can_crit: false };
             hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |target, at| {
-                let fresh = !hits.1.contains(&target) && sim::dash_hits(lobby.map(room), pos.0, at);
+                let fresh = !hits.1.contains(&target) && dash::hits(map, pos.0, at);
                 if fresh {
                     hits.1.push(target);
                 }
                 fresh
             });
         }
-        let (next, cast) = sim::step_ability(now.0, id.0, *class, pos.0, &input, &chilled, *state);
-        input.ability = false;
-        if next.dash.is_some_and(|d| d.started_at == now.0) {
-            input.move_to = None;
-        }
-        state.set_if_neq(next);
-        match cast {
-            Some(sim::Cast::Throw(projectile)) => spawn_projectile(&mut commands, projectile, side),
-            Some(sim::Cast::Nova) => {
-                let AbilityKind::Nova { damage, chill, .. } = class.def().ability.kind else { continue };
-                let with = (id.0, *class, class.def().ability.name.as_str());
-                let blow = Blow { amount: damage, chill, can_crit: false };
-                hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |_, at| sim::nova_hits(lobby.map(room), pos.0, *class, at));
+        let (mut next_cooldowns, mut next_dashing) = (*cooldowns, *dashing);
+        let casts = abilities::step(now.0, id.0, *class, pos.0, &input, &chilled, &mut next_cooldowns, &mut next_dashing);
+        // Only on change: both are replicated.
+        cooldowns.set_if_neq(next_cooldowns);
+        dashing.set_if_neq(next_dashing);
+        for cast in casts {
+            match cast {
+                Cast::Throw(projectile) => spawn_projectile(&mut commands, projectile, side),
+                Cast::Dash => input.move_to = None,
+                Cast::Nova { ability, nova } => {
+                    let (blow, with) = blow(ability);
+                    hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |_, at| nova.hits(map, pos.0, at));
+                }
             }
-            None => {}
         }
     }
 }
@@ -802,10 +802,10 @@ fn resolve_projectile_hits(
             let blow = Blow {
                 amount: sim::projectile_damage(projectile, now.0),
                 chill: sim::projectile_chill(projectile),
-                can_crit: !projectile.ability,
+                can_crit: projectile.ability.is_none(),
             };
             let def = projectile.class.def();
-            let with = if projectile.ability { def.ability.name.as_str() } else { "auto-attack" };
+            let with = projectile.ability.and_then(|slot| def.ability(slot)).map_or("auto-attack", |ability| ability.name.as_str());
             let hit = (&mut *health, &mut *chilled, &mut *recent);
             damage(&mut commands, now.0, (target, target_id.0), hit, blow, (projectile.owner, projectile.class, with));
             break;

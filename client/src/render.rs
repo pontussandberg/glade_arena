@@ -5,7 +5,7 @@
 
 use std::fmt::Write;
 
-use arena_shared::classes::AbilityKind;
+use arena_shared::abilities::AbilityKind;
 use arena_shared::config::*;
 use arena_shared::protocol::*;
 use arena_shared::sim;
@@ -16,9 +16,10 @@ use lightyear::prelude::*;
 use crate::Me;
 
 use crate::{DesiredInput, StopWalking};
+use crate::abilities::SeenCasts;
 use crate::action_bar::AbilityIcon;
 use crate::camera::{CameraMode, CameraPlaced, key_axis};
-use crate::casting::{Aiming, CastMode};
+use crate::casting::{Aiming, CastMode, ability_key, key_casts, key_label};
 use crate::rooms::{load_setting, save_setting};
 use crate::feedback::AttackClock;
 use crate::arena::{self, palette, to_gameplay, to_world};
@@ -145,13 +146,13 @@ pub(crate) struct Visuals {
     /// A circle at the edge of a class's auto-attack range, shown around you.
     /// Each class's range circle, plain and empowered (`AttackDef::edge_reach`).
     range_circles: HashMap<ClassId, [Handle<Mesh>; 2]>,
-    /// A nova's burst (see `arena::NovaMeshes`).
-    novas: HashMap<ClassId, arena::NovaMeshes<Handle<Mesh>>>,
+    /// Each nova's burst (see `arena::NovaMeshes`), by its class and slot.
+    novas: HashMap<(ClassId, AbilitySlot), arena::NovaMeshes<Handle<Mesh>>>,
     /// The ice around a frozen (rooted) fighter's feet, and the frost under a slowed one's.
     ice_prison: Handle<Mesh>,
     frost_rune: Handle<Mesh>,
     /// Per class and shot (auto-attack: false, Q: true).
-    projectiles: HashMap<(ClassId, bool), arena::ShotLook<Handle<Mesh>>>,
+    projectiles: HashMap<(ClassId, Option<AbilitySlot>), arena::ShotLook<Handle<Mesh>>>,
     shot_tip: Handle<Mesh>,
     wind: Handle<Mesh>,
     /// Per owner (`None` for looks that are the same for everyone: all but bodies, so a hit
@@ -340,21 +341,20 @@ fn setup_scene(
             })
             .collect(),
         novas: ClassId::all()
-            .filter_map(|c| match c.def().ability.kind {
-                AbilityKind::Nova { radius, .. } => {
-                    let arena::NovaMeshes { disc, ring, shard, eruption } = arena::nova_meshes(radius);
-                    let mut add = |mesh| meshes.add(mesh);
-                    Some((c, arena::NovaMeshes { disc: add(disc), ring: add(ring), shard: add(shard), eruption: add(eruption) }))
-                }
-                AbilityKind::Projectile { .. } | AbilityKind::Dash { .. } => None,
+            .flat_map(|c| c.def().abilities().map(move |(slot, ability)| (c, slot, ability.kind)))
+            .filter_map(|(c, slot, kind)| {
+                let AbilityKind::Nova(nova) = kind else { return None };
+                let arena::NovaMeshes { disc, ring, shard, eruption } = arena::nova_meshes(nova.radius);
+                let mut add = |mesh| meshes.add(mesh);
+                Some(((c, slot), arena::NovaMeshes { disc: add(disc), ring: add(ring), shard: add(shard), eruption: add(eruption) }))
             })
             .collect(),
         ice_prison: meshes.add(arena::ice_prison_mesh()),
         frost_rune: meshes.add(arena::frost_rune_mesh()),
         projectiles: ClassId::all()
-            .flat_map(|c| [false, true].map(|ability| (c, ability)))
+            .flat_map(|c| std::iter::once(None).chain(c.def().abilities().map(|(slot, _)| Some(slot))).map(move |ability| (c, ability)))
             .filter_map(|(c, ability)| {
-                let arena::ShotLook { mesh, glow, thrown, aura, spin } = arena::shot_look(c.def(), c.def().shot(ability)?, ability);
+                let arena::ShotLook { mesh, glow, thrown, aura, spin } = arena::shot_look(c.def(), c.def().shot(ability)?, ability.is_some());
                 let look = arena::ShotLook { mesh: meshes.add(mesh), glow, thrown, aura: aura.map(|a| meshes.add(a)), spin };
                 Some(((c, ability), look))
             })
@@ -431,19 +431,20 @@ pub(crate) fn chevron_turn(open: bool) -> UiTransform {
 }
 
 /// Mouse -> `DesiredInput`, LoL-style: right click walks to the clicked point, left click
-/// attacks toward the cursor. Q casts right away (quick cast) or first shows where it will go,
-/// cast by the next left click and dropped by a right click (normal cast); Shift+Q is the other
-/// one (see `casting.rs`). Clicking the Q icon is always a normal cast.
+/// attacks toward the cursor. An ability's key (Q, W, E, R) casts it right away (quick cast) or
+/// first shows where it will go, cast by the next left click and dropped by a right click
+/// (normal cast); with Shift it's the other one (see `casting.rs`). Clicking an ability's icon is
+/// always a normal cast.
 #[allow(clippy::too_many_arguments)]
 fn read_local_input(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     window: Option<Single<&Window>>,
     camera: Single<(&Camera, &GlobalTransform)>,
-    me: Query<(&Pos, &ClassId, &AbilityState), (With<Me>, With<PlayerId>)>,
+    me: Query<(&Pos, &ClassId, &Cooldowns), (With<Me>, With<PlayerId>)>,
     (mode, cast_mode, clock, map): (Res<CameraMode>, Res<CastMode>, AttackClock, Res<crate::rooms::CurrentMap>),
     hud: Query<
-        (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Has<AbilityIcon>),
+        (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&AbilityIcon>),
         Or<(With<HudButton>, With<AbilityIcon>)>,
     >,
     mut aiming: ResMut<Aiming>,
@@ -452,21 +453,24 @@ fn read_local_input(
     (mut desired, mut stop): (ResMut<DesiredInput>, ResMut<StopWalking>),
 ) {
     let me = me.single().ok();
-    // A normal cast only aims while Q is ready (the global cooldown over too), as in LoL.
-    let ability_ready = me.is_some_and(|(_, class, ability)| ability.usable_at(*class) as f32 <= clock.now(true));
-    let me = me.map(|(p, ..)| p.0);
-    let (camera, camera_transform) = *camera;
-    // Whether the cursor is on a HUD control, or on the Q icon. Tested on the nodes themselves,
-    // so nothing drawn over them can get in the way.
-    let screen = window.as_ref().and_then(|w| w.physical_cursor_position());
-    let on = |icon: bool| {
-        screen.is_some_and(|at| {
-            hud.iter().any(|(node, transform, visible, is_icon)| {
-                is_icon == icon && visible.get() && node.contains_point(*transform, at)
-            })
+    // Our abilities. A normal cast only aims while its ability is ready (the global cooldown over
+    // too), as in LoL.
+    let my_class = me.map(|(_, class, _)| class.def());
+    let ready = |slot: AbilitySlot| {
+        me.is_some_and(|(_, class, cooldowns)| {
+            class.def().ability(slot).is_some_and(|ability| cooldowns.usable_at(slot, ability) as f32 <= clock.now(true))
         })
     };
-    let (on_control, on_icon) = (on(false), on(true));
+    let me = me.map(|(p, ..)| p.0);
+    let (camera, camera_transform) = *camera;
+    // Whether the cursor is on a HUD control, or on an ability's icon (and which). Tested on the
+    // nodes themselves, so nothing drawn over them can get in the way.
+    let screen = window.as_ref().and_then(|w| w.physical_cursor_position());
+    let under_cursor = |(node, transform, visible, _): &(&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&AbilityIcon>)| {
+        visible.get() && screen.is_some_and(|at| node.contains_point(**transform, at))
+    };
+    let on_control = hud.iter().filter(|part| part.3.is_none()).any(|part| under_cursor(&part));
+    let on_icon = hud.iter().filter(under_cursor).find_map(|(.., icon)| icon.map(|icon| icon.slot));
     let cursor = window.and_then(|w| w.cursor_position()).and_then(|c| ground_at(camera, camera_transform, c));
 
     let mut move_to = desired.0.move_to;
@@ -480,7 +484,7 @@ fn read_local_input(
     *last_pos = me;
     // A right click (MOBA camera) while aiming a normal cast only drops the aim: it doesn't walk.
     let right_click = !mode.free && mouse.just_pressed(MouseButton::Right);
-    let drops_aim = right_click && aiming.0;
+    let drops_aim = right_click && aiming.0.is_some();
     // Once per click: holding the button doesn't keep re-targeting. Not with the free camera:
     // there the right button turns the camera, and WASD walks.
     if right_click
@@ -501,38 +505,41 @@ fn read_local_input(
         (Some(cursor), Some(me)) => cursor - me,
         _ => desired.0.aim,
     };
-    let mut ability = desired.0.ability;
-    if keys.just_pressed(KeyCode::KeyQ) {
-        let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    // Casts not sent yet, and new ones after them, each toward the cursor as its key went down.
+    let mut casts = PlayerInput { casts: desired.0.casts, ..default() };
+    let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    for (slot, _) in my_class.into_iter().flat_map(|def| def.abilities()) {
+        if !keys.just_pressed(ability_key(slot)) || !key_casts(slot, mode.free) {
+            continue;
+        }
         if cast_mode.casts_now(shift) {
-            ability = true;
-            aiming.0 = false;
-        } else if ability_ready {
-            aiming.0 = true;
+            casts.order_cast(slot, aim);
+            aiming.0 = None;
+        } else if ready(slot) {
+            aiming.0 = Some(slot);
         }
     }
-    // A left click that casts, aims (on the Q icon) or is for a HUD control doesn't also
-    // attack. Any other one does: once per click (holding it doesn't attack again). A right click drops the aim (`drops_aim`); ESC
-    // does too (`esc_menu`).
+    // A left click that casts, aims (on an ability's icon) or is for a HUD control doesn't also
+    // attack. Any other one does: once per click (holding it doesn't attack again). A right
+    // click drops the aim (`drops_aim`); ESC does too (`esc_menu`).
     if mouse.just_pressed(MouseButton::Left) {
         if on_control {
             *held_click = true;
-        } else if on_icon {
-            aiming.0 = ability_ready;
+        } else if let Some(slot) = on_icon {
+            aiming.0 = Some(slot).filter(|&slot| ready(slot));
             *held_click = true;
-        } else if aiming.0 {
-            ability = true;
-            aiming.0 = false;
+        } else if let Some(slot) = aiming.0.take() {
+            casts.order_cast(slot, aim);
             *held_click = true;
         }
     }
     if drops_aim {
-        aiming.0 = false;
+        aiming.0 = None;
     }
     if !mouse.pressed(MouseButton::Left) {
         *held_click = false;
     }
-    let fire = desired.0.fire || (mouse.just_pressed(MouseButton::Left) && !aiming.0 && !*held_click);
+    let fire = desired.0.fire || (mouse.just_pressed(MouseButton::Left) && aiming.0.is_none() && !*held_click);
     // With the free camera, WASD walks relative to it, dropping any destination; otherwise S
     // stops: drops the destination (as in LoL).
     let walk = if mode.free {
@@ -548,9 +555,9 @@ fn read_local_input(
         move_to = None;
         stop.0 = true;
     }
-    // `ability` and `fire` are kept until they've been sent (`send_commands` clears them), so a
+    // `casts` and `fire` are kept until they've been sent (`send_commands` clears them), so a
     // short tap isn't missed.
-    desired.0 = PlayerInput { move_to, walk, aim, fire, ability };
+    desired.0 = PlayerInput { move_to, walk, aim, fire, casts: casts.casts };
 }
 
 /// The range circle shows how far our attack reaches as it is now: further while our `follow_up`
@@ -641,7 +648,7 @@ fn add_visuals(
                 Mesh3d(visuals.fighters[class].clone()),
                 MeshMaterial3d(material),
                 Transform::from_translation(to_world(pos.0, 0.0)),
-                ShownNova::default(),
+                SeenCasts::default(),
                 Frost { prison, rune, shown: (false, false) },
             ))
             .add_children(&[prison, rune]);
@@ -698,53 +705,65 @@ fn add_visuals(
     }
 }
 
-/// The tick of the last nova drawn for this player.
-#[derive(Component, Default)]
-struct ShownNova(u32);
-
 /// A burst of ice around each new nova: a bright shockwave races out from the caster to the
 /// nova's edge, a spray of ice erupts where the staff struck, frost spreads over the ground, and
-/// shards burst up in two rings as the wave passes them. `AbilityState` comes from the server
-/// (others' on the same delayed timeline as their positions); each nova is drawn once.
+/// shards burst up in two rings as the wave passes them. `Cooldowns` comes from the server
+/// (others' on the same delayed timeline as their positions); each nova is drawn once, and one
+/// cast before we saw its caster isn't (`SeenCasts`).
 fn show_novas(
     mut commands: Commands,
     time: Res<Time>,
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut casters: Query<(&PlayerId, &ClassId, &Pos, &AbilityState, &mut ShownNova), Changed<AbilityState>>,
+    mut casters: Query<(&PlayerId, &ClassId, &Pos, &Cooldowns, &mut SeenCasts), Changed<Cooldowns>>,
 ) {
-    for (id, class, pos, ability, mut shown) in &mut casters {
-        let Some(used_at) = ability.used_at(*class).filter(|&t| t > shown.0) else { continue };
-        shown.0 = used_at;
-        let AbilityKind::Nova { radius, .. } = class.def().ability.kind else { continue };
-        let Some(nova) = visuals.novas.get(class).cloned() else { continue };
-        let frost = visuals.material(&mut materials, id.0, Look::Frost);
-        let wave = visuals.material(&mut materials, id.0, Look::Spirit);
-        let now = time.elapsed_secs();
-        // Each piece starts at nothing and only grows from there (`grow_bursts`); `until` is how
-        // long it stays.
-        let mut burst = |mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>, at: Vec3, dir: Vec2, until: f32, burst: Burst| {
-            let placed = Transform::from_translation(at).with_rotation(Quat::from_rotation_y(dir.to_angle()));
-            commands.spawn((
-                Fleeting { until: now + until },
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(material.clone()),
-                placed.with_scale(Vec3::splat(1e-3)),
-                burst,
-            ));
-        };
-        let at_once = |grow| Burst { started: now, grow, size: Vec3::ONE };
-        burst(&nova.disc, &frost, to_world(pos.0, 0.05), Vec2::X, NOVA_SECONDS, at_once(NOVA_WAVE_SECONDS));
-        burst(&nova.ring, &wave, to_world(pos.0, 0.07), Vec2::X, NOVA_WAVE_SECONDS + 0.06, at_once(NOVA_WAVE_SECONDS));
-        burst(&nova.eruption, &frost, to_world(pos.0, 0.0), Vec2::X, NOVA_SECONDS * 0.6, at_once(0.07));
-        // Shards in two rings, the outer one taller; each bursts up as the wave reaches it.
-        for (count, out, tall, turn) in [(9, 0.5, 0.45, 0.35), (18, 0.92, 0.7, 0.0)] {
-            for i in 0..count {
-                let dir = Vec2::from_angle(i as f32 / count as f32 * std::f32::consts::TAU + turn);
-                let height = tall * (0.75 + 0.5 * ((i * 7) % 4) as f32 / 3.0);
-                let reached = Burst { started: now + NOVA_WAVE_SECONDS * out * 0.9, grow: NOVA_GROW_SECONDS, size: Vec3::splat(height) };
-                burst(&nova.shard, &frost, to_world(pos.0 + dir * radius * out, 0.0), dir, NOVA_SECONDS, reached);
-            }
+    for (id, class, pos, cooldowns, mut seen) in &mut casters {
+        for slot in seen.new_casts(cooldowns) {
+            let Some(AbilityKind::Nova(def)) = class.def().ability(slot).map(|ability| ability.kind) else { continue };
+            let Some(nova) = visuals.novas.get(&(*class, slot)).cloned() else { continue };
+            burst_nova(&mut commands, &time, &mut visuals, &mut materials, id.0, pos.0, def.radius, nova);
+        }
+    }
+}
+
+/// One nova's burst of ice, `radius` around `at`, cast by `owner`.
+#[allow(clippy::too_many_arguments)]
+fn burst_nova(
+    commands: &mut Commands,
+    time: &Time,
+    visuals: &mut Visuals,
+    materials: &mut Assets<StandardMaterial>,
+    owner: PeerId,
+    at: Vec2,
+    radius: f32,
+    nova: arena::NovaMeshes<Handle<Mesh>>,
+) {
+    let frost = visuals.material(materials, owner, Look::Frost);
+    let wave = visuals.material(materials, owner, Look::Spirit);
+    let now = time.elapsed_secs();
+    // Each piece starts at nothing and only grows from there (`grow_bursts`); `until` is how
+    // long it stays.
+    let mut burst = |mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>, place: Vec3, dir: Vec2, until: f32, burst: Burst| {
+        let placed = Transform::from_translation(place).with_rotation(Quat::from_rotation_y(dir.to_angle()));
+        commands.spawn((
+            Fleeting { until: now + until },
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            placed.with_scale(Vec3::splat(1e-3)),
+            burst,
+        ));
+    };
+    let at_once = |grow| Burst { started: now, grow, size: Vec3::ONE };
+    burst(&nova.disc, &frost, to_world(at, 0.05), Vec2::X, NOVA_SECONDS, at_once(NOVA_WAVE_SECONDS));
+    burst(&nova.ring, &wave, to_world(at, 0.07), Vec2::X, NOVA_WAVE_SECONDS + 0.06, at_once(NOVA_WAVE_SECONDS));
+    burst(&nova.eruption, &frost, to_world(at, 0.0), Vec2::X, NOVA_SECONDS * 0.6, at_once(0.07));
+    // Shards in two rings, the outer one taller; each bursts up as the wave reaches it.
+    for (count, out, tall, turn) in [(9, 0.5, 0.45, 0.35), (18, 0.92, 0.7, 0.0)] {
+        for i in 0..count {
+            let dir = Vec2::from_angle(i as f32 / count as f32 * std::f32::consts::TAU + turn);
+            let height = tall * (0.75 + 0.5 * ((i * 7) % 4) as f32 / 3.0);
+            let reached = Burst { started: now + NOVA_WAVE_SECONDS * out * 0.9, grow: NOVA_GROW_SECONDS, size: Vec3::splat(height) };
+            burst(&nova.shard, &frost, to_world(at + dir * radius * out, 0.0), dir, NOVA_SECONDS, reached);
         }
     }
 }
@@ -1053,10 +1072,10 @@ fn fly_shots(
         let launch = match thrown.launch {
             Some(launch) => launch,
             None => {
-                // Where it starts and which way it points: a Q where the sim threw it (just outside
+                // Where it starts and which way it points: an ability's where the sim threw it (just outside
                 // the thrower's body), along its flight; an auto-attack from the held javelin's
                 // point, as it's held (which points up, +Y, a shot along +X).
-                let start = if projectile.ability {
+                let start = if projectile.ability.is_some() {
                     Some((to_world(projectile.origin, height), along))
                 } else {
                     holders.iter().find(|(id, _)| id.0 == projectile.owner).map(|(_, held)| {
@@ -1177,34 +1196,44 @@ fn update_key_hints(
     mut commands: Commands,
     mode: Res<CameraMode>,
     cast_mode: Res<CastMode>,
+    me: Query<&ClassId, With<Me>>,
     hints: Single<Entity, With<KeyHints>>,
-    mut built_for: Local<Option<(bool, bool)>>,
+    mut built_for: Local<Option<(bool, bool, Option<ClassId>)>>,
 ) {
-    if *built_for == Some((mode.free, cast_mode.quick)) {
+    let class = me.single().ok().copied();
+    if *built_for == Some((mode.free, cast_mode.quick, class)) {
         return;
     }
-    *built_for = Some((mode.free, cast_mode.quick));
-    let keys: &[(&str, &str)] = if mode.free {
-        &[
+    *built_for = Some((mode.free, cast_mode.quick, class));
+    // Our class's abilities' keys (none before our fighter is in).
+    let abilities = class
+        .iter()
+        .flat_map(|class| class.def().abilities())
+        .filter(|(slot, _)| key_casts(*slot, mode.free))
+        .map(|(slot, _)| key_label(slot))
+        .collect::<Vec<_>>();
+    let abilities = (abilities.join(" "), if abilities.len() == 1 { "ability" } else { "abilities" });
+    let keys: Vec<(&str, &str)> = if mode.free {
+        vec![
             ("WASD", "move"),
             ("Left click", "attack"),
-            ("Q", "ability"),
+            (&abilities.0, abilities.1),
             ("Right drag, arrows", "turn camera"),
             ("Wheel, + -", "zoom"),
             ("Tab", "watch next fighter"),
         ]
     } else {
-        &[
+        vec![
             ("Right click", "move"),
             ("S", "stop"),
             ("Left click", "attack"),
-            ("Q", "ability"),
+            (&abilities.0, abilities.1),
             ("A", "show range"),
             ("Wheel", "zoom"),
         ]
     };
     commands.entity(*hints).despawn_children().with_children(|grid| {
-        for (key, action) in keys {
+        for (key, action) in &keys {
             grid.spawn(key_chip(*key, 11.0, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5)));
             grid.spawn(ui_text(*action, 12.0, palette::ui::MUTED));
         }

@@ -7,12 +7,13 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-use arena_shared::classes::AbilityKind;
+use arena_shared::abilities::AbilityKind;
 use arena_shared::config::PLAYER_RADIUS;
 use arena_shared::protocol::*;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
+use crate::abilities::SeenCasts;
 use crate::arena::to_world;
 use crate::rooms::Screen;
 
@@ -62,16 +63,15 @@ fn draw_on_top(mut store: ResMut<GizmoConfigStore>) {
 }
 
 /// Notes each swing and nova as it goes off (whether or not they're shown, so turning the view on
-/// doesn't flash old ones). A nova shows by its cast tick changing: each fighter's is noted the
-/// first time it's seen (`None` before its first cast), so the first cast flashes too, but one
-/// from before we saw the fighter doesn't.
+/// doesn't flash old ones). A nova shows as a new cast (`SeenCasts`): not one from before we saw
+/// its caster.
 fn note_attacks(
     time: Res<Time>,
     show: Res<ShowHitboxes>,
     mut flashes: ResMut<Flashes>,
     swings: Query<(&LastSwing, &Pos, &ClassId), Changed<LastSwing>>,
-    casts: Query<(Entity, &AbilityState, &Pos, &ClassId), Changed<AbilityState>>,
-    mut cast_at: Local<HashMap<Entity, Option<u32>>>,
+    casts: Query<(Entity, &Cooldowns, &Pos, &ClassId), Changed<Cooldowns>>,
+    mut seen: Local<HashMap<Entity, SeenCasts>>,
 ) {
     let now = time.elapsed_secs();
     flashes.0.retain(|(until, _)| *until > now);
@@ -80,11 +80,13 @@ fn note_attacks(
             flashes.0.push((now + FLASH_SECONDS, Flash::Lane { at: pos.0, dir: swing.dir, empowered: swing.empowered, class: *class }));
         }
     }
-    for (entity, ability, pos, class) in &casts {
-        let AbilityKind::Nova { radius, .. } = &class.def().ability.kind else { continue };
-        let used = ability.used_at(*class);
-        if cast_at.insert(entity, used).is_some_and(|before| before != used) && used.is_some() && show.0 {
-            flashes.0.push((now + FLASH_SECONDS, Flash::Burst { at: pos.0, radius: *radius }));
+    for (entity, cooldowns, pos, class) in &casts {
+        for slot in seen.entry(entity).or_default().new_casts(cooldowns) {
+            if let Some(AbilityKind::Nova(nova)) = class.def().ability(slot).map(|ability| ability.kind)
+                && show.0
+            {
+                flashes.0.push((now + FLASH_SECONDS, Flash::Burst { at: pos.0, radius: nova.radius }));
+            }
         }
     }
 }

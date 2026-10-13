@@ -63,8 +63,8 @@ fn toggle_menu(
 ) {
     let esc = keys.just_pressed(KeyCode::Escape);
     // ESC first drops a normal cast's aim; the next one opens the menu.
-    if esc && aiming.0 {
-        aiming.0 = false;
+    if esc && aiming.0.is_some() {
+        aiming.0 = None;
         return;
     }
     match menu.single() {

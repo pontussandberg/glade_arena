@@ -1,9 +1,12 @@
-//! Q abilities end to end: a real server and two headless clients over WebTransport, the user
+//! Abilities end to end: a real server and two headless clients over WebTransport, the user
 //! of the ability on a 60 ms + jitter + 2% loss connection.
 
 use std::time::{Duration, Instant};
 
-use arena_shared::classes::AbilityKind;
+use arena_shared::abilities::AbilityKind;
+use arena_shared::abilities::dash::DashDef;
+use arena_shared::abilities::nova::NovaDef;
+use arena_shared::abilities::throw::Throw;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use crate::common::*;
@@ -21,18 +24,25 @@ fn duel(port: u16, a_class: &str, b_class: &str) -> Duel {
 fn a_uses_q_at_b(d: &mut Duel) {
     let aim = sees(&mut d.a, B).unwrap() - sees(&mut d.a, A).unwrap();
     // The cursor well past B: a dash goes all the way.
-    edit_input(&mut d.a, |i| (i.aim, i.ability) = (aim * 10.0, true));
+    edit_input(&mut d.a, |i| i.order_cast(Q, aim * 10.0));
+}
+
+const Q: AbilitySlot = AbilitySlot(0);
+
+/// What `class`'s Q is.
+fn q_kind(class: &str) -> AbilityKind {
+    class_id(class).def().ability(Q).expect("no Q").kind
 }
 
 fn spirit_spears(app: &mut App) -> usize {
     let mut q = app.world_mut().query::<&Projectile>();
-    q.iter(app.world()).filter(|p| p.ability).count()
+    q.iter(app.world()).filter(|p| p.ability.is_some()).count()
 }
 
 #[test]
 fn spirit_spear_flies_and_hits() {
     let mut d = duel(5892, "javelinist", "revenant");
-    let AbilityKind::Projectile { damage, .. } = class_id("javelinist").def().ability.kind else { panic!("not a throw") };
+    let AbilityKind::Projectile(Throw { damage, .. }) = q_kind("javelinist") else { panic!("not a throw") };
     let full = server_player(&mut d.server, B).1;
 
     a_uses_q_at_b(&mut d);
@@ -51,7 +61,7 @@ fn spirit_spear_flies_and_hits() {
 #[test]
 fn rift_step_cuts_through() {
     let mut d = duel(5891, "revenant", "javelinist");
-    let AbilityKind::Dash { damage, .. } = class_id("revenant").def().ability.kind else { panic!("not a dash") };
+    let AbilityKind::Dash(DashDef { damage, .. }) = q_kind("revenant") else { panic!("not a dash") };
     let full = server_player(&mut d.server, B).1;
 
     a_uses_q_at_b(&mut d);
@@ -69,7 +79,7 @@ fn rift_step_cuts_through() {
 /// cut) and the spot it started from was (someone right behind A was cut as A dashed away).
 #[test]
 fn rift_step_cuts_where_it_ends_not_who_it_leaves_behind() {
-    let AbilityKind::Dash { distance, damage, .. } = class_id("revenant").def().ability.kind else { panic!("not a dash") };
+    let AbilityKind::Dash(DashDef { distance, damage, .. }) = q_kind("revenant") else { panic!("not a dash") };
 
     // B half a meter past where A's dash ends: A finishes on top of B.
     let mut d = Duel::placed(5890, ("revenant", A_SPOT), ("javelinist", A_SPOT + Vec2::X * (distance + 0.5)));
@@ -80,7 +90,7 @@ fn rift_step_cuts_where_it_ends_not_who_it_leaves_behind() {
     // B right behind A, and A dashes the other way.
     let mut d = Duel::placed(5889, ("revenant", A_SPOT), ("javelinist", A_SPOT - Vec2::X * 0.5));
     let full = server_player(&mut d.server, B).1;
-    edit_input(&mut d.a, |i| (i.aim, i.ability) = (Vec2::X * 100.0, true));
+    edit_input(&mut d.a, |i| i.order_cast(Q, Vec2::X * 100.0));
     d.until(Duration::from_secs(2), "A dashes away", |d| server_player(&mut d.server, A).0.x > A_SPOT.x + distance - 0.5);
     d.run(Duration::from_millis(300));
     assert_eq!(server_player(&mut d.server, B).1, full, "cut by a dash going the other way");
@@ -99,7 +109,7 @@ fn chilled(app: &mut App, id: u64) -> Chilled {
 #[test]
 fn frost_nova_freezes_a_revenant_then_lets_it_go() {
     let mut d = duel(5880, "frost_mage", "revenant");
-    let AbilityKind::Nova { damage, chill, .. } = class_id("frost_mage").def().ability.kind else { panic!("not a nova") };
+    let AbilityKind::Nova(NovaDef { damage, chill, .. }) = q_kind("frost_mage") else { panic!("not a nova") };
     let full = server_player(&mut d.server, B).1;
 
     a_uses_q_at_b(&mut d);
@@ -109,22 +119,25 @@ fn frost_nova_freezes_a_revenant_then_lets_it_go() {
 
     // B tries to walk away and to Rift Step out: neither goes anywhere while frozen.
     let away = arena_shared::map::Map::center(arena_shared::map::Map::tile_of(B_SPOT + Vec2::X * 4.0));
-    edit_input(&mut d.b, |i| (i.move_to, i.aim, i.ability) = (Some(away), Vec2::X, true));
+    edit_input(&mut d.b, |i| {
+        i.move_to = Some(away);
+        i.order_cast(Q, Vec2::X);
+    });
     d.until(Duration::from_secs(1), "the root starts", |d| server_tick(d) >= frozen.rooted.from);
     let held = server_player(&mut d.server, B).0;
     while server_tick(&mut d) + 4 < frozen.rooted.until {
         d.update();
         assert_eq!(server_player(&mut d.server, B).0, held, "B moved while frozen");
     }
-    let ability: AbilityState = player(&mut d.server, B).unwrap();
-    assert!(ability.dash.is_none() && ability.ready_at == 0, "B dashed (or spent Rift Step) while frozen");
+    let (cooldowns, dashing): (Cooldowns, Dashing) = (player(&mut d.server, B).unwrap(), player(&mut d.server, B).unwrap());
+    assert!(dashing.0.is_none() && cooldowns.used_at(Q).is_none(), "B dashed (or spent Rift Step) while frozen");
     assert!(sees(&mut d.b, B).unwrap().distance(held) < 0.05, "B's client didn't show it frozen");
 
     // Thawed, and not slowed (only frostbolts slow): B walks off at its full speed, to where it
     // was told to before the root (the Q pressed meanwhile was used up, doing nothing).
     assert!(chill.slow == 0.0 || chill.slow_ticks == 0, "the nova shouldn't slow");
     d.until(Duration::from_secs(1), "the root wears off", |d| server_tick(d) > frozen.rooted.until + 2);
-    edit_input(&mut d.b, |i| (i.move_to, i.ability) = (Some(away), false));
+    edit_input(&mut d.b, |i| (i.move_to, i.casts) = (Some(away), default()));
     d.until(Duration::from_secs(1), "B walks again", |d| server_player(&mut d.server, B).0 != held);
     let (from, from_tick) = (server_player(&mut d.server, B).0, server_tick(&mut d));
     d.run(Duration::from_millis(300));

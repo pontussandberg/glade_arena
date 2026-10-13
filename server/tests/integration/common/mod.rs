@@ -31,7 +31,7 @@ pub fn start_server(port: u16, setup: impl FnOnce(&mut App)) -> App {
 pub const TEST_ROOM: &str = "Test";
 
 /// A headless client that connects to the server on `port` on its first update, joins
-/// `TEST_ROOM` and enters the arena as `class` (a key from `classes.ron`).
+/// `TEST_ROOM` and enters the arena as `class` (a class's `id` from `assets/classes/`).
 pub fn start_client(id: u64, port: u16, class: &str, conditioner: Option<LinkConditionerConfig>) -> App {
     let mut client = build_headless_client_app(ClientSettings {
         client_id: id,
@@ -67,7 +67,7 @@ pub fn start_guest(id: u64, port: u16, class: &str) -> App {
 }
 
 pub fn class_id(key: &str) -> ClassId {
-    ClassId::by_key(key).unwrap_or_else(|| panic!("no class {key:?} in classes.ron"))
+    ClassId::by_key(key).unwrap_or_else(|| panic!("no class {key:?} in assets/classes"))
 }
 
 /// The usual bad-but-playable connection: 60 ms latency with jitter and 2% loss on receive.

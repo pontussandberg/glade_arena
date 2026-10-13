@@ -5,6 +5,8 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
+pub use crate::abilities::dash::{Dash, Dashing};
+pub use crate::abilities::{AbilitySlot, CastOrder, Cooldowns, MAX_ABILITIES};
 pub use crate::classes::ClassId;
 use crate::classes::{AttackDef, Chill};
 use crate::map::MapId;
@@ -202,50 +204,6 @@ fn hold<C>(start: C, _end: C, _t: f32) -> C {
     start
 }
 
-/// The Q ability's state: when it may be used again, when the global cooldown is over (shared by
-/// every ability on it, `GLOBAL_COOLDOWN_TICKS`), a dash in progress, and whether it has no
-/// cooldown of its own (practice's tool; the server sets it; the global cooldown still runs).
-/// Server-authoritative, replicated and shown like `AttackState`.
-#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
-pub struct AbilityState {
-    pub ready_at: u32,
-    pub global_ready_at: u32,
-    pub dash: Option<Dash>,
-    pub free: bool,
-}
-
-impl AbilityState {
-    /// When the ability's own cooldown is over (at once, with none).
-    pub fn cooldown_over_at(&self) -> u32 {
-        if self.free { 0 } else { self.ready_at }
-    }
-
-    /// When the global cooldown is over for the class's ability (at once, if it's not on it).
-    pub fn global_over_at(&self, class: ClassId) -> u32 {
-        if class.def().ability.global_cooldown { self.global_ready_at } else { 0 }
-    }
-
-    /// When the class's ability may be used next: both cooldowns over.
-    pub fn usable_at(&self, class: ClassId) -> u32 {
-        self.cooldown_over_at().max(self.global_over_at(class))
-    }
-
-    /// When the ability was last used (`None`: never).
-    pub fn used_at(&self, class: ClassId) -> Option<u32> {
-        let cooldown = if self.free { 0 } else { class.def().ability.cooldown_ticks };
-        (self.ready_at > 0).then(|| self.ready_at.saturating_sub(cooldown))
-    }
-}
-
-/// A dash: moving toward `dir` from `started_at` until it has covered the class's dash distance
-/// (`left` is how much of it is still to go).
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
-pub struct Dash {
-    pub started_at: u32,
-    pub dir: Vec2,
-    pub left: f32,
-}
-
 /// Crowd control on a player: how much it's slowed and when, and when it's frozen in place
 /// (rooted). Server-authoritative like `Health`. The spans are in ticks, so each fighter's are
 /// shown on the timeline it's drawn on (a span that hadn't started yet doesn't apply before it).
@@ -382,8 +340,8 @@ pub struct Projectile {
     pub origin: Vec2,
     pub dir: Vec2,
     pub spawn_tick: u32,
-    /// Thrown with the Q ability rather than the auto-attack.
-    pub ability: bool,
+    /// Thrown with the ability in this slot, rather than the auto-attack (`None`).
+    pub ability: Option<AbilitySlot>,
 }
 
 impl Projectile {
@@ -409,9 +367,28 @@ pub struct PlayerInput {
     /// Left click: auto-attack toward `aim`, if the last attack is done (else the click is
     /// dropped). Set by `PlayerCommand::Attack`, used up by the next tick.
     pub fire: bool,
-    /// Q pressed: use the ability toward `aim`. Set by `PlayerCommand::Cast`, used up by the next
-    /// tick.
-    pub ability: bool,
+    /// Abilities' keys pressed since the last tick, in order (`order_cast`), each used toward its
+    /// own aim. Set by `PlayerCommand::Cast`, used up by the next tick, whether or not they could
+    /// be used (as in League).
+    pub casts: [Option<CastOrder>; MAX_ABILITIES],
+}
+
+impl PlayerInput {
+    /// Orders the ability in `slot` used toward `aim`, after any ordered before it. Pressed again
+    /// before it's used, it keeps its place in line and takes the new aim.
+    pub fn order_cast(&mut self, slot: AbilitySlot, aim: Vec2) {
+        let order = CastOrder { slot, aim };
+        if let Some(same) = self.casts.iter_mut().flatten().find(|o| o.slot == slot) {
+            *same = order;
+        } else if let Some(free) = self.casts.iter_mut().find(|o| o.is_none()) {
+            *free = Some(order);
+        }
+    }
+
+    /// The abilities ordered used, in order.
+    pub fn casts(&self) -> impl Iterator<Item = CastOrder> + '_ {
+        self.casts.iter().flatten().copied()
+    }
 }
 
 /// What a client tells the server its player should do, League style: sent when it happens, and
@@ -428,8 +405,8 @@ pub enum PlayerCommand {
     /// Left click: auto-attack toward this aim. Holding the button doesn't attack again: each
     /// attack is its own click, once the last one is done.
     Attack(Vec2),
-    /// Q: use the ability toward this aim.
-    Cast(Vec2),
+    /// An ability's key (Q, W, E, R): use the ability in this slot toward this aim.
+    Cast(AbilitySlot, Vec2),
 }
 
 impl PlayerCommand {
@@ -439,7 +416,7 @@ impl PlayerCommand {
         match *self {
             PlayerCommand::MoveTo(_) | PlayerCommand::Stop => true,
             PlayerCommand::Walk(dir) => dir != Vec2::ZERO,
-            PlayerCommand::Attack(_) | PlayerCommand::Cast(_) => false,
+            PlayerCommand::Attack(_) | PlayerCommand::Cast(..) => false,
         }
     }
 
@@ -464,10 +441,7 @@ impl PlayerCommand {
                 input.aim = aim;
                 input.fire = true;
             }
-            PlayerCommand::Cast(aim) => {
-                input.aim = aim;
-                input.ability = true;
-            }
+            PlayerCommand::Cast(slot, aim) => input.order_cast(slot, aim),
         }
     }
 }
@@ -510,8 +484,8 @@ pub enum RoomRequest {
     /// Practice only: a target dummy at this point, the next class in turn: standing there, or
     /// (`walks`) walking back and forth along a line through it.
     PlaceDummy { at: Vec2, walks: bool },
-    /// Practice only: our Q with no cooldown (ready again the moment it's used), or back to
-    /// normal.
+    /// Practice only: our abilities with no cooldowns of their own (ready again the moment
+    /// they're used), or back to normal.
     NoCooldowns(bool),
 }
 
@@ -562,7 +536,8 @@ impl Plugin for ProtocolPlugin {
         app.component::<Pos>().replicate().add_interpolation_with(lerp_or_jump);
         app.component::<AttackState>().replicate().add_interpolation_with(hold);
         app.component::<LastSwing>().replicate().add_interpolation_with(hold);
-        app.component::<AbilityState>().replicate().add_interpolation_with(hold);
+        app.component::<Cooldowns>().replicate().add_interpolation_with(hold);
+        app.component::<Dashing>().replicate().add_interpolation_with(hold);
         // Projectiles fly on rails: clients draw them from this alone (`sim::projectile_pos`).
         app.component::<Projectile>().replicate();
     }
