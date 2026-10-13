@@ -20,7 +20,8 @@ fn duel(port: u16, a_class: &str, b_class: &str) -> Duel {
 /// A presses Q toward where it sees B.
 fn a_uses_q_at_b(d: &mut Duel) {
     let aim = sees(&mut d.a, B).unwrap() - sees(&mut d.a, A).unwrap();
-    edit_input(&mut d.a, |i| (i.aim, i.ability) = (aim, true));
+    // The cursor well past B: a dash goes all the way.
+    edit_input(&mut d.a, |i| (i.aim, i.ability) = (aim * 10.0, true));
 }
 
 fn spirit_spears(app: &mut App) -> usize {
@@ -79,7 +80,7 @@ fn rift_step_cuts_where_it_ends_not_who_it_leaves_behind() {
     // B right behind A, and A dashes the other way.
     let mut d = Duel::placed(5889, ("revenant", A_SPOT), ("javelinist", A_SPOT - Vec2::X * 0.5));
     let full = server_player(&mut d.server, B).1;
-    edit_input(&mut d.a, |i| (i.aim, i.ability) = (Vec2::X, true));
+    edit_input(&mut d.a, |i| (i.aim, i.ability) = (Vec2::X * 100.0, true));
     d.until(Duration::from_secs(2), "A dashes away", |d| server_player(&mut d.server, A).0.x > A_SPOT.x + distance - 0.5);
     d.run(Duration::from_millis(300));
     assert_eq!(server_player(&mut d.server, B).1, full, "cut by a dash going the other way");

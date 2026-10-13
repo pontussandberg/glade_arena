@@ -140,6 +140,9 @@ fn flip_toggle(toggles: Query<Ref<Interaction>, With<QuickCastToggle>>, mut mode
 struct AimIndicator {
     /// Whether it turns toward the cursor (a thrown ability or a dash; a nova is all around).
     aimed: bool,
+    /// A dash's: reaching as far as the dash would go (`AbilityKind::dash_length`), drawn 1 m
+    /// long and stretched to it.
+    dash: bool,
 }
 
 /// How high above the ground the indicator lies.
@@ -164,14 +167,14 @@ fn spawn_indicator(
         AbilityKind::Projectile { radius, range, .. } => {
             (arena::lane_mesh(PLAYER_RADIUS, PLAYER_RADIUS + 2.0 * radius + range, (2.0 * radius).max(0.4)), true)
         }
-        AbilityKind::Dash { distance, .. } => (arena::lane_mesh(0.0, distance + PLAYER_RADIUS, 2.0 * PLAYER_RADIUS), true),
+        AbilityKind::Dash { .. } => (arena::lane_mesh(0.0, 1.0, 2.0 * PLAYER_RADIUS), true),
         AbilityKind::Nova { radius, .. } => (
             Circle::new(radius).mesh().resolution(64).build().rotated_by(Quat::from_rotation_x(-FRAC_PI_2)),
             false,
         ),
     };
     commands.spawn((
-        AimIndicator { aimed },
+        AimIndicator { aimed, dash: matches!(class.def().ability.kind, AbilityKind::Dash { .. }) },
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.add(arena::translucent(palette::SPIRIT, 0.25, 1.5))),
         Transform::default(),
@@ -184,19 +187,21 @@ fn spawn_indicator(
 fn show_indicator(
     mut aiming: ResMut<Aiming>,
     desired: Res<DesiredInput>,
-    me: Query<(&Transform, &Health), (With<Me>, With<PlayerId>, Without<AimIndicator>)>,
+    me: Query<(&Transform, &Health, &ClassId), (With<Me>, With<PlayerId>, Without<AimIndicator>)>,
     indicator: Single<(&AimIndicator, &mut Transform, &mut Visibility)>,
 ) {
     let (indicator, mut transform, mut visibility) = indicator.into_inner();
-    let me = me.single().ok().filter(|(_, health)| health.alive());
+    let me = me.single().ok().filter(|(_, health, _)| health.alive());
     if me.is_none() && aiming.0 {
         aiming.0 = false;
     }
     visibility.set_if_neq(shown(aiming.0));
-    let Some((at, _)) = me.filter(|_| aiming.0) else { return };
+    let Some((at, _, class)) = me.filter(|_| aiming.0) else { return };
     let turn = if indicator.aimed { desired.0.aim.to_angle() } else { 0.0 };
+    let length = if indicator.dash { class.def().ability.kind.dash_length(desired.0.aim) + PLAYER_RADIUS } else { 1.0 };
     let wanted = Transform::from_xyz(at.translation.x, INDICATOR_HEIGHT, at.translation.z)
-        .with_rotation(Quat::from_rotation_y(turn));
+        .with_rotation(Quat::from_rotation_y(turn))
+        .with_scale(Vec3::new(length, 1.0, 1.0));
     transform.set_if_neq(wanted);
 }
 

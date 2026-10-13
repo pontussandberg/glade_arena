@@ -39,9 +39,11 @@
 //       leaves it armed): a miss loses it, an empowered one that lands arms the next
 //   ability       the Q ability, aimed at the cursor: name, description, cooldown_ticks, and
 //     kind: Projectile(speed, radius, range, damage)  thrown instantly: no windup, no root
-//           Dash(distance, ticks, damage)  dash `distance` toward the aim, through fighters,
-//             cutting each one crossed for `damage`; stops at walls. Takes `ticks` at normal
-//             speed (longer slowed, shorter hasted).
+//           Dash(distance, min_distance, ticks, damage)  dash toward the aim, through
+//             fighters, cutting each one crossed for `damage`; stops at walls. As far as the
+//             cursor, at least `min_distance` (optional: without it, always all the way) and at
+//             most `distance`. Covers `distance` in `ticks` at normal speed (longer slowed,
+//             shorter hasted).
 //           Nova(radius, damage, chill)  a burst around you, at once: everyone within `radius`
 //             (and not behind a wall) takes `damage` and `chill`
 //     global_cooldown (optional, true by default): using it starts the global cooldown (1 s),
@@ -83,9 +85,9 @@
         ),
         ability: (
             name: "Rift Step",
-            description: "Dash forward, dealing {ability_damage} damage to each enemy you pass through.",
+            description: "Dash toward the cursor, up to {ability_reach}, dealing {ability_damage} damage to each enemy you pass through.",
             cooldown_ticks: 256,
-            kind: Dash(distance: 6.0, ticks: 5, damage: 18),
+            kind: Dash(distance: 6.0, min_distance: Some(1.0), ticks: 5, damage: 18),
         ),
         passive: Some((
             name: "Follow Through",

@@ -177,9 +177,17 @@ pub struct PassiveDef {
 pub enum AbilityKind {
     /// Thrown instantly toward the aim (no windup, no root), fixed damage.
     Projectile { speed: f32, radius: f32, range: f32, damage: i32 },
-    /// A dash `distance` toward the aim, through fighters, cutting each one crossed for
-    /// `damage`; stops at walls. Takes `ticks` at normal speed (longer slowed, shorter hasted).
-    Dash { distance: f32, ticks: u32, damage: i32 },
+    /// A dash toward the aim, through fighters, cutting each one crossed for `damage`; stops at
+    /// walls. As far as the cursor (`AbilityKind::dash_length`), at least `min_distance` (if
+    /// given; without it, always all the way) and at most `distance`. Covers `distance` in
+    /// `ticks` at normal speed (longer slowed, shorter hasted), so a shorter one is over sooner.
+    Dash {
+        distance: f32,
+        #[serde(default)]
+        min_distance: Option<f32>,
+        ticks: u32,
+        damage: i32,
+    },
     /// A burst around the user, at once: everyone within `radius` (center to body, not behind a
     /// wall) takes `damage` and `chill`.
     Nova {
@@ -258,6 +266,17 @@ pub fn seconds(ticks: u32) -> String {
 }
 
 impl AbilityKind {
+    /// How far a dash aimed `aim` (from the dasher to the cursor) goes: as far as the cursor,
+    /// within its `min_distance` and `distance`, or all the way without a `min_distance`. 0 for
+    /// anything but a dash.
+    pub fn dash_length(&self, aim: Vec2) -> f32 {
+        match *self {
+            AbilityKind::Dash { distance, min_distance: Some(min), .. } => aim.length().clamp(min, distance),
+            AbilityKind::Dash { distance, .. } => distance,
+            _ => 0.0,
+        }
+    }
+
     /// What it deals to each fighter it hits.
     pub fn damage(&self) -> i32 {
         match *self {
@@ -437,8 +456,9 @@ mod tests {
                     assert!(damage > 0 && (2.0..=60.0).contains(&speed) && (0.05..=1.0).contains(&radius), "{}: Q", c.id);
                     assert!((1.0..=30.0).contains(&range), "{}: Q range", c.id);
                 }
-                AbilityKind::Dash { distance, ticks, damage, .. } => {
+                AbilityKind::Dash { distance, min_distance, ticks, damage } => {
                     assert!(damage >= 0 && (0.5..=15.0).contains(&distance) && (1..=TICK_HZ as u32).contains(&ticks), "{}: dash", c.id);
+                    assert!(min_distance.is_none_or(|min| min > 0.0 && min <= distance), "{}: dash min_distance", c.id);
                     assert!(ticks < c.ability.cooldown_ticks, "{}: dash longer than its cooldown", c.id);
                 }
                 AbilityKind::Nova { radius, damage, chill } => {

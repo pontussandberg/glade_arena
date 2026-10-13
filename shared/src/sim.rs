@@ -256,8 +256,8 @@ pub fn step_ability(
         }
         // Mid-windup too: the windup goes on, and the attack still goes off when it's over, from
         // wherever the dash took you (still aimed where it was locked).
-        AbilityKind::Dash { distance, .. } if !rooted => {
-            state.dash = Some(Dash { started_at: tick, dir, left: distance });
+        AbilityKind::Dash { .. } if !rooted => {
+            state.dash = Some(Dash { started_at: tick, dir, left: ability.kind.dash_length(input.aim) });
             None
         }
         AbilityKind::Dash { .. } => return (state, None),
@@ -683,8 +683,23 @@ mod tests {
         ClassId::all().find(|c| matches!(c.def().ability.kind, AbilityKind::Dash { .. })).unwrap()
     }
 
+    /// Q pressed toward `aim`, the cursor far off along it (a dash goes its full distance).
     fn press_q(aim: Vec2) -> PlayerInput {
-        PlayerInput { aim, ability: true, ..default() }
+        PlayerInput { aim: aim * 100.0, ability: true, ..default() }
+    }
+
+    #[test]
+    fn a_dash_goes_as_far_as_the_cursor_within_its_least_and_most() {
+        let class = dasher();
+        let AbilityKind::Dash { distance, min_distance: Some(min), .. } = class.def().ability.kind else { panic!("the dash has no least distance") };
+        let dash_to = |cursor: f32| {
+            let input = PlayerInput { aim: Vec2::X * cursor, ability: true, ..default() };
+            step_ability(10, PeerId::Netcode(1), class, Vec2::ZERO, &input, &default(), default()).0.dash.unwrap().left
+        };
+        let between = (min + distance) / 2.0;
+        assert!((dash_to(between) - between).abs() < 1e-4, "not as far as the cursor");
+        assert!((dash_to(min * 0.2) - min).abs() < 1e-4, "shorter than its least");
+        assert!((dash_to(distance * 3.0) - distance).abs() < 1e-4, "further than its most");
     }
 
     #[test]
