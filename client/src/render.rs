@@ -43,9 +43,8 @@ impl Plugin for RenderPlugin {
             crate::pickups::PickupsPlugin,
             crate::stat_frame::StatFramePlugin,
             crate::tooltip::TooltipPlugin,
-            crate::dummies::DummiesPlugin,
+            crate::practice::PracticePlugin,
         ));
-        app.add_plugins(crate::hitboxes::HitboxesPlugin);
         app.add_plugins(crate::waygates::WaygatesPlugin);
         app.insert_resource(ControlsOpen(load_setting(CONTROLS_KEY).as_deref() == Some("open")));
         app.add_systems(Startup, setup_scene);

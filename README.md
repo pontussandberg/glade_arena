@@ -173,12 +173,13 @@ Enter; in the arena, right click to move, S to stop, left
 click to attack toward the cursor, Q for your ability toward the cursor. The camera stays locked on
 you; the mouse wheel zooms.
 
-V toggles a free, WoW-style camera that follows behind you: WASD walks relative to it, holding
+In practice, the "Free camera" switch in the practice tools turns on a free, WoW-style camera
+for looking at fighters up close. It follows behind you: WASD walks relative to it, holding
 the right mouse button and dragging (or the arrow keys) turns it, the wheel (or + / -) zooms,
 down to arm's length. There the right button only turns the camera: click to move is off. Tab
 moves it on to the next fighter, to watch them play (and after the last, back to
-you). V again goes back. The keys for the current camera are listed
-top left, under the ping (with the free camera also jitter).
+you). Switching it off goes back; leaving practice does too. The keys for the current camera
+are listed top left, under the ping (with the free camera also jitter).
 
 Two tabs work: a hidden tab keeps simulating and networking without rendering (see
 `client/src/hidden_tab.rs`, which works around Bevy 0.19 ignoring Lightyear's keepalive). If a

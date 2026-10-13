@@ -325,7 +325,7 @@ fn place_bars(
         // the next attack may start.
         let cooling = attack.swing.filter(|_| attack.released());
         if let Some(swing) = cooling {
-            fill_to(ids.cast_fill, 1.0 - swing.cooldown_progress(clock.now(is_me), *class));
+            fill_to(ids.cast_fill, 1.0 - swing.cooldown_progress(clock.now(is_me), &class.def().attack));
         }
         if let Ok((_, mut cast_visibility)) = parts.get_mut(ids.cast) {
             cast_visibility.set_if_neq(shown(cooling.is_some()));

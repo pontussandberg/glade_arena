@@ -396,7 +396,7 @@ fn preview_attacks() {
         let moves = moves(key);
         let length = if key == "revenant" { arena::BLADE_LENGTH } else { 1.0 };
         let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false };
-        let (windup, period) = (swing.windup_ticks(class) as f32, swing.ticks(class) as f32);
+        let (windup, period) = (swing.windup_ticks(&class.def().attack) as f32, swing.ticks(&class.def().attack) as f32);
         let release = 10.0 + windup;
         // The moments to show, in ticks.
         let moments: Vec<(String, f32)> = [("carry", 9.0)]

@@ -140,8 +140,8 @@ fn flip_toggle(toggles: Query<Ref<Interaction>, With<QuickCastToggle>>, mut mode
 struct AimIndicator {
     /// Whether it turns toward the cursor (a thrown ability or a dash; a nova is all around).
     aimed: bool,
-    /// A dash's: reaching as far as the dash would go (`AbilityKind::dash_length`), drawn 1 m
-    /// long and stretched to it.
+    /// A dash's: reaching as far as the dash would go (`AbilityKind::dash_length`), a unit-long
+    /// mesh stretched to it.
     dash: bool,
 }
 

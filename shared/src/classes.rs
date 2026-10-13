@@ -309,6 +309,15 @@ impl AttackDef {
         Some((from * near, range * reach, width * reach))
     }
 
+    /// How near and how far ahead of your center a target's center can be along a melee attack's
+    /// lane, `empowered` or not, with its body still touching the lane (`sim::melee_hits`). A
+    /// lane that starts further out than a body's radius has a dead zone in front of you, where
+    /// nothing is hit. `None` for a ranged attack.
+    pub fn hit_span(&self, empowered: bool) -> Option<(f32, f32)> {
+        let (from, range, _) = self.lane(empowered)?;
+        Some((if from > 0.0 { from - PLAYER_RADIUS } else { 0.0 }, range + PLAYER_RADIUS))
+    }
+
     /// How far from your center a target's body can reach and still be hit (`AttackKind::edge_reach`),
     /// `empowered` by the `follow_up` or not: its longer lane's far end. What the range circle and
     /// the attack range stat show.

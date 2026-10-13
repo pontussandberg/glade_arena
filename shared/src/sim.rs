@@ -174,7 +174,7 @@ pub fn step_attack(
 /// the second half, `start_attack`, so an attack started on the same tick is quickened by it.
 pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, mut state: AttackState) -> (AttackState, Option<Attack>) {
     let mut released = None;
-    if let Some(Swing { dir, quick, .. }) = state.winding_up().filter(|swing| tick >= swing.releases_at(class)) {
+    if let Some(Swing { dir, quick, .. }) = state.winding_up().filter(|swing| tick >= swing.releases_at(&class.def().attack)) {
         state.released_at = Some(tick);
         // An attack going off uses up the `follow_up` (one cancelled first doesn't).
         state.quick_until = None;
@@ -186,7 +186,7 @@ pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, mut s
             AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir, empowered: quick }),
         });
     }
-    if state.released() && state.swing.is_some_and(|swing| tick >= swing.ready_at(class)) {
+    if state.released() && state.swing.is_some_and(|swing| tick >= swing.ready_at(&class.def().attack)) {
         state.swing = None;
     }
     (state, released)
@@ -194,7 +194,7 @@ pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, mut s
 
 /// `step_attack`'s second half: a new attack starting, if clicked for and none is in progress.
 pub fn start_attack(tick: u32, class: ClassId, input: &PlayerInput, mut state: AttackState) -> AttackState {
-    let ready = state.swing.is_none_or(|swing| tick >= swing.ready_at(class));
+    let ready = state.swing.is_none_or(|swing| tick >= swing.ready_at(&class.def().attack));
     if ready
         && input.fire
         && let Some(dir) = input.aim.try_normalize()
@@ -309,14 +309,15 @@ pub fn projectile_hits(projectile_pos: Vec2, projectile: &Projectile, player_pos
 /// `target`? Its lane (`AttackDef::lane`) reaches the target's body, and not through a wall.
 /// Only the server decides this.
 pub fn melee_hits(map: &Map, attacker: Vec2, dir: Vec2, empowered: bool, class: ClassId, target: Vec2) -> bool {
-    let Some((from, range, width)) = class.def().attack.lane(empowered) else { return false };
+    let attack = &class.def().attack;
+    let (Some((from, _, width)), Some((nearest, farthest))) = (attack.lane(empowered), attack.hit_span(empowered)) else { return false };
     let to_target = target - attacker;
     let dir = dir.normalize_or_zero();
     let (along, across) = (to_target.dot(dir), to_target.perp_dot(dir).abs());
     // A lane from the attacker: overlapping bodies always connect. One further out: a body
     // touching its near end does.
-    let (overlapping, nearest) = if from > 0.0 { (false, from - PLAYER_RADIUS) } else { (to_target.length() <= PLAYER_RADIUS, 0.0) };
-    let in_lane = overlapping || ((nearest..=range + PLAYER_RADIUS).contains(&along) && across <= width / 2.0 + PLAYER_RADIUS);
+    let overlapping = from <= 0.0 && to_target.length() <= PLAYER_RADIUS;
+    let in_lane = overlapping || ((nearest..=farthest).contains(&along) && across <= width / 2.0 + PLAYER_RADIUS);
     in_lane && map.shot_clear(attacker, target)
 }
 
@@ -350,6 +351,7 @@ pub fn pick_spawn_point(map: &Map, others: impl IntoIterator<Item = Vec2> + Clon
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::classes::{AttackDef, FollowUp};
     use crate::protocol::PlayerCommand;
 
     /// The tests walk and fight on the first map.
@@ -530,23 +532,32 @@ mod tests {
         }
     }
 
+    /// `class`'s attack, its `follow_up` quickening it a lot (no class's has to). The quickening
+    /// is tested on this, so it stays tested whatever the classes are tuned to.
+    fn quickened(class: ClassId) -> AttackDef {
+        let mut attack = class.def().attack.clone();
+        attack.follow_up = attack.follow_up.map(|f| FollowUp { attack_speed: 1.0, ..f });
+        attack
+    }
+
     #[test]
     fn an_armed_follow_up_quickens_the_whole_attack_once_and_only_in_time() {
-        let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some_and(|f| f.attack_speed > 0.0)) else { return };
-        let attack = &class.def().attack;
-        let (period, windup) = timers(class);
+        let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some()) else { return };
+        let attack = quickened(class);
+        let (period, windup) = (attack.period_ticks(1.0), attack.windup_ticks(1.0));
         let speed = attack.speed(true);
-        assert!(attack.windup_ticks(speed) < windup && attack.period_ticks(speed) < period, "{}: follow_up doesn't quicken", class.def().id);
+        assert!(attack.windup_ticks(speed) < windup && attack.period_ticks(speed) < period, "follow_up doesn't quicken");
         let fire = aim(Vec2::X, true);
         let start = |at: u32, quick_until| {
             let state = AttackState { quick_until: Some(quick_until), ..default() };
             step_attack(at, PeerId::Netcode(1), class, Vec2::ZERO, &fire, state).0
         };
-        let armed = start(10, 10);
-        let quick = armed.swing.unwrap();
-        assert_eq!((quick.releases_at(class), quick.ready_at(class)), (10 + attack.windup_ticks(speed), 10 + attack.period_ticks(speed)));
-        let late = start(11, 10);
-        assert_eq!(late.swing.map(|w| w.releases_at(class)), Some(11 + windup), "quick after the window");
+        let quick = start(10, 10).swing.unwrap();
+        assert!(quick.quick, "not quick while armed");
+        assert_eq!((quick.releases_at(&attack), quick.ready_at(&attack)), (10 + attack.windup_ticks(speed), 10 + attack.period_ticks(speed)));
+        let late = start(11, 10).swing.unwrap();
+        assert!(!late.quick, "quick after the window");
+        assert_eq!(late.releases_at(&attack), 11 + windup);
     }
 
     #[test]
@@ -562,7 +573,7 @@ mod tests {
         let again = step_attack(12, PeerId::Netcode(1), class, Vec2::ZERO, &fire, cancelled).0;
         assert!(again.swing.is_some_and(|s| s.quick), "the attack after a cancelled one wasn't empowered");
         // Gone off: used up.
-        let windup = again.swing.unwrap().windup_ticks(class);
+        let windup = again.swing.unwrap().windup_ticks(&class.def().attack);
         let (gone, released) = step_attack(12 + windup, PeerId::Netcode(1), class, Vec2::ZERO, &PlayerInput::default(), again);
         assert!(released.is_some());
         assert_eq!(gone.quick_until, None, "an empowered attack that went off kept the follow_up");
@@ -570,17 +581,16 @@ mod tests {
 
     #[test]
     fn a_hit_that_arms_the_follow_up_shortens_what_is_left_of_its_attack() {
-        let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some_and(|f| f.attack_speed > 0.0)) else { return };
-        let (period, windup) = timers(class);
-        let (_, mut state) = attack_ticks(class, &[10], 10, 10 + windup);
-        let plain = state.swing.unwrap().ready_at(class);
-        assert_eq!(plain, 10 + period);
+        let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some()) else { return };
+        let attack = quickened(class);
+        let (period, windup) = (attack.period_ticks(1.0), attack.windup_ticks(1.0));
+        let mut swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false };
+        assert_eq!(swing.ready_at(&attack), 10 + period);
         // As the server does when the swing lands.
-        state.swing.as_mut().unwrap().hastened = true;
-        let backswing = (period - windup) as f32 / class.def().attack.speed(true);
-        assert_eq!(state.swing.unwrap().ready_at(class), 10 + windup + backswing.round() as u32);
-        let restarted = start_attack(state.swing.unwrap().ready_at(class), class, &aim(Vec2::X, true), state);
-        assert_ne!(restarted.swing, state.swing, "couldn't attack again once the hastened timer was up");
+        swing.hastened = true;
+        let backswing = (period - windup) as f32 / attack.speed(true);
+        assert_eq!(swing.ready_at(&attack), 10 + windup + backswing.round() as u32);
+        assert!(swing.ready_at(&attack) < 10 + period, "a hastened backswing wasn't any shorter");
     }
 
     #[test]

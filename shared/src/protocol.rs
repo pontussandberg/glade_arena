@@ -6,7 +6,7 @@ use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
 pub use crate::classes::ClassId;
-use crate::classes::Chill;
+use crate::classes::{AttackDef, Chill};
 use crate::map::MapId;
 use crate::rooms::{LeaveReason, Mode, NO_TEAM, RoomKey, RoomSummary, RoomView};
 
@@ -127,7 +127,7 @@ impl AttackState {
 }
 
 /// An attack, from the click until the next may start: aim locked toward `dir`, winding up for
-/// `windup_ticks(class)` until it goes off, then the backswing until `ready_at(class)`.
+/// `windup_ticks` until it goes off, then the backswing until `ready_at`.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Swing {
     pub started_at: u32,
@@ -140,50 +140,52 @@ pub struct Swing {
 }
 
 impl Swing {
+    // Its timing depends only on the attack (`AttackDef`), so any attack can be timed and
+    // tested, not just the classes'.
+
     /// How many times the normal attack speed it has.
-    pub fn speed(&self, class: ClassId) -> f32 {
-        class.def().attack.speed(self.quick)
+    pub fn speed(&self, attack: &AttackDef) -> f32 {
+        attack.speed(self.quick)
     }
 
     /// How long it winds up.
-    pub fn windup_ticks(&self, class: ClassId) -> u32 {
-        class.def().attack.windup_ticks(self.speed(class))
+    pub fn windup_ticks(&self, attack: &AttackDef) -> u32 {
+        attack.windup_ticks(self.speed(attack))
     }
 
     /// How long the whole attack is: its attack timer.
-    pub fn ticks(&self, class: ClassId) -> u32 {
-        class.def().attack.period_ticks(self.speed(class))
+    pub fn ticks(&self, attack: &AttackDef) -> u32 {
+        attack.period_ticks(self.speed(attack))
     }
 
     /// The tick the attack goes off.
-    pub fn releases_at(&self, class: ClassId) -> u32 {
-        self.started_at + self.windup_ticks(class)
+    pub fn releases_at(&self, attack: &AttackDef) -> u32 {
+        self.started_at + self.windup_ticks(attack)
     }
 
     /// How many times the normal attack speed its backswing has: hastened, or quick all through.
-    pub fn backswing_speed(&self, class: ClassId) -> f32 {
-        class.def().attack.speed(self.quick || self.hastened)
+    pub fn backswing_speed(&self, attack: &AttackDef) -> f32 {
+        attack.speed(self.quick || self.hastened)
     }
 
     /// The tick the next attack may start: after its backswing, sped up if its hit armed the
     /// `follow_up` (a quick one's already is).
-    pub fn ready_at(&self, class: ClassId) -> u32 {
-        let attack = &class.def().attack;
-        let backswing = self.ticks(class) - self.windup_ticks(class);
+    pub fn ready_at(&self, attack: &AttackDef) -> u32 {
+        let backswing = self.ticks(attack) - self.windup_ticks(attack);
         let backswing = if self.hastened && !self.quick { (backswing as f32 / attack.speed(true)).round() as u32 } else { backswing };
-        self.releases_at(class) + backswing.max(1)
+        self.releases_at(attack) + backswing.max(1)
     }
 
     /// How far it is from going off to the next attack being ready at `now` (a fractional
     /// tick), from 0 to 1: the cast bar, shown once it has gone off.
-    pub fn cooldown_progress(&self, now: f32, class: ClassId) -> f32 {
-        let (from, to) = (self.releases_at(class) as f32, self.ready_at(class) as f32);
+    pub fn cooldown_progress(&self, now: f32, attack: &AttackDef) -> f32 {
+        let (from, to) = (self.releases_at(attack) as f32, self.ready_at(attack) as f32);
         ((now - from) / (to - from)).clamp(0.0, 1.0)
     }
 
     /// How far along the windup is at `now` (a fractional tick), from 0 to 1.
-    pub fn windup_progress(&self, now: f32, class: ClassId) -> f32 {
-        ((now - self.started_at as f32) / self.windup_ticks(class) as f32).clamp(0.0, 1.0)
+    pub fn windup_progress(&self, now: f32, attack: &AttackDef) -> f32 {
+        ((now - self.started_at as f32) / self.windup_ticks(attack) as f32).clamp(0.0, 1.0)
     }
 }
 

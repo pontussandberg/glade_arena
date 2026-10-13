@@ -743,10 +743,11 @@ fn soft_min(a: f32, b: f32) -> f32 {
 /// or two after. A windup that will have gone off by then has (`windup` and `released` as for
 /// `strike_phase`).
 pub(crate) fn ahead_of_springs(class: ClassId, moves: &Moves, windup: Option<Swing>, released: Option<f32>, now: f32) -> (Option<Swing>, Option<f32>, f32) {
+    let attack = &class.def().attack;
     let lead = 2.0 * moves.damping / moves.stiffness * TICK_HZ as f32;
     let ahead = now + lead;
     match windup {
-        Some(swing) if ahead >= swing.releases_at(class) as f32 => (None, Some((ahead - swing.releases_at(class) as f32) * swing.speed(class)), ahead),
+        Some(swing) if ahead >= swing.releases_at(attack) as f32 => (None, Some((ahead - swing.releases_at(attack) as f32) * swing.speed(attack)), ahead),
         _ => (windup, released.map(|since| since + lead), ahead),
     }
 }
@@ -759,7 +760,7 @@ pub(crate) fn ahead_of_springs(class: ClassId, moves: &Moves, windup: Option<Swi
 /// stretched out (0..1), longest as the strike is done.
 pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, windup: Option<Swing>, released: Option<f32>, now: f32) -> (f32, f32, f32) {
     let def = class.def();
-    let strike_ticks = |swing: &Swing| (moves.strike_ticks / swing.speed(class)).min(swing.windup_ticks(class) as f32 * (1.0 - moves.draw_end));
+    let strike_ticks = |swing: &Swing| (moves.strike_ticks / swing.speed(&def.attack)).min(swing.windup_ticks(&def.attack) as f32 * (1.0 - moves.draw_end));
     // A melee windup picks up from how much of the last strike's follow-through was left when
     // it started (1: still fully held; 0: settled back to carrying): the blade comes from
     // there straight into the draw, never sinking further toward carrying.
@@ -771,8 +772,8 @@ pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, 
     };
     match (windup, released) {
         (Some(windup), _) => {
-            let progress = windup.windup_progress(now, class);
-            let windup_ticks = windup.windup_ticks(class) as f32;
+            let progress = windup.windup_progress(now, &def.attack);
+            let windup_ticks = windup.windup_ticks(&def.attack) as f32;
             let striking = strike_ticks(&windup);
             let (strike, _) = strike_at(striking - (1.0 - progress) * windup_ticks, striking, moves.contact, moves.heavy);
             // What's left of the strike eases out over the draw, and how much the pose
@@ -1025,7 +1026,7 @@ fn pose_rigs(
         let windup = SeenThrows::windup(seen, attack);
         // The last attack's speed scales its backswing like its windup, and a hit that armed its
         // `follow_up` speeds it up (normal once it's done).
-        let speed = attack.swing.map_or(1.0, |swing| swing.backswing_speed(*class));
+        let speed = attack.swing.map_or(1.0, |swing| swing.backswing_speed(&class.def().attack));
         // Ticks since the last attack went off, at normal attack speed.
         let released = since_throw(attack.released_at, seen.and_then(|seen| seen.attack)).map(|since| since * speed);
         let moves = rig.moves;
@@ -1149,7 +1150,7 @@ fn show_auras(
 ) {
     for (rig, attack, is_me, blade) in &mut fighters {
         // Hidden without a synced clock (e.g. after a disconnect): no telling when the window ends.
-        let on = clock.as_ref().is_some_and(|clock| attack.quick_at(clock.now(is_me)) || attack.swing.is_some_and(|w| w.quick));
+        let on = clock.as_ref().is_some_and(|clock| attack.empowered_at(clock.now(is_me)));
         if let Some(mut blade) = blade
             && blade.quickened != on
         {

@@ -76,11 +76,12 @@
             damage: 20,
             attack_ticks: 34,
             windup: 0.35,
-            // The glaive comes down flat on the ground, its blade from 1.6 m to 3.08 m ahead.
+            // The glaive comes down flat on the ground: its blade hits a lane starting a way ahead, not at
+            // the revenant's feet.
             kind: Melee(range: 3.08, width: 0.5, from: 1.6),
             // The ground it hits tears open for a while; inside it the revenant walks faster.
             rift: Some((ticks: 96, haste: 0.3)),
-            // Empowered: from 2 m to 4.4 m, 0.8 m wide.
+            // Empowered: the lane starts a little further out, and reaches further and wider.
             follow_up: Some((within_ticks: 96, attack_speed: 0.0, reach: 1.5, near: Some(1.25))),
         ),
         ability: (

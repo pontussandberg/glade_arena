@@ -631,8 +631,10 @@ fn hit_foes(
 }
 
 /// Auto-attacks, as they go off after their windup: projectiles are spawned; melee swings are
-/// resolved right here. Starting an attack drops the destination and the walking keys: afterwards
-/// the fighter stands still until its player orders it somewhere new.
+/// resolved right here. Starting an attack drops the destination: afterwards the fighter stands
+/// still until its player orders it somewhere new. Walking keys still held walk on once the
+/// windup is over (it roots the fighter meanwhile: `sim::move_player`); nothing would resend
+/// them.
 fn attack(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
@@ -676,7 +678,6 @@ fn attack(
         let next = sim::start_attack(now.0, *class, &input, next);
         if next.swing.is_some_and(|w| w.started_at == now.0) {
             input.move_to = None;
-            input.walk = Vec2::ZERO;
         }
         // Only on change: AttackState is replicated.
         state.set_if_neq(next);

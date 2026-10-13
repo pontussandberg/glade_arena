@@ -24,12 +24,11 @@ impl Plugin for HitboxesPlugin {
         app.init_resource::<Flashes>();
         app.add_systems(Startup, draw_on_top);
         app.add_systems(Update, (note_attacks, draw_hitboxes.run_if(|show: Res<ShowHitboxes>| show.0)).chain().run_if(in_state(Screen::InGame)));
-        app.add_systems(OnExit(Screen::InGame), |mut show: ResMut<ShowHitboxes>| show.0 = false);
     }
 }
 
 /// Whether the hitboxes are drawn (the practice tools' "Hitboxes" switch).
-#[derive(Resource, Default)]
+#[derive(Resource, Default, PartialEq)]
 pub struct ShowHitboxes(pub bool);
 
 /// How long (seconds) an attack's shape stays drawn after it goes off.
@@ -63,14 +62,16 @@ fn draw_on_top(mut store: ResMut<GizmoConfigStore>) {
 }
 
 /// Notes each swing and nova as it goes off (whether or not they're shown, so turning the view on
-/// doesn't flash old ones).
+/// doesn't flash old ones). A nova shows by its cast tick changing: each fighter's is noted the
+/// first time it's seen (`None` before its first cast), so the first cast flashes too, but one
+/// from before we saw the fighter doesn't.
 fn note_attacks(
     time: Res<Time>,
     show: Res<ShowHitboxes>,
     mut flashes: ResMut<Flashes>,
     swings: Query<(&LastSwing, &Pos, &ClassId), Changed<LastSwing>>,
     casts: Query<(Entity, &AbilityState, &Pos, &ClassId), Changed<AbilityState>>,
-    mut cast_at: Local<HashMap<Entity, u32>>,
+    mut cast_at: Local<HashMap<Entity, Option<u32>>>,
 ) {
     let now = time.elapsed_secs();
     flashes.0.retain(|(until, _)| *until > now);
@@ -80,8 +81,9 @@ fn note_attacks(
         }
     }
     for (entity, ability, pos, class) in &casts {
-        let (Some(used), AbilityKind::Nova { radius, .. }) = (ability.used_at(*class), &class.def().ability.kind) else { continue };
-        if cast_at.insert(entity, used).is_some_and(|before| before != used) && show.0 {
+        let AbilityKind::Nova { radius, .. } = &class.def().ability.kind else { continue };
+        let used = ability.used_at(*class);
+        if cast_at.insert(entity, used).is_some_and(|before| before != used) && used.is_some() && show.0 {
             flashes.0.push((now + FLASH_SECONDS, Flash::Burst { at: pos.0, radius: *radius }));
         }
     }

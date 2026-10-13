@@ -26,13 +26,11 @@ pub mod camera;
 #[cfg(feature = "render")]
 pub mod cloth;
 #[cfg(feature = "render")]
-pub mod dummies;
-#[cfg(feature = "render")]
 pub mod casting;
 #[cfg(feature = "render")]
 pub mod esc_menu;
 #[cfg(feature = "render")]
-pub mod hitboxes;
+pub mod practice;
 #[cfg(feature = "render")]
 pub mod feedback;
 #[cfg(feature = "render")]
