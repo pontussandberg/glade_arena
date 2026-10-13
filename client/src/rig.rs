@@ -500,7 +500,7 @@ struct RigHandles {
     held_glow: Option<Handle<Mesh>>,
     body_glow: Option<Handle<Mesh>>,
     held_aura: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
-    held_glint: Option<(Handle<Mesh>, Handle<StandardMaterial>, Vec3)>,
+    held_glint: Option<(Handle<Mesh>, Handle<StandardMaterial>, fn(f32) -> Vec3)>,
     wardrobe: Option<WardrobeAssets>,
 }
 
@@ -562,8 +562,9 @@ pub(crate) struct Rig {
     held: Entity,
     /// The held weapon's aura (`RigMeshes::held_aura`), if it has one.
     aura: Option<Entity>,
-    /// A gleam running along a gripped blade's edge now and then (`gleam_blades`), and when.
-    gleam: Option<Entity>,
+    /// A gleam catching along the held blade's edge now and then (`gleam_blades`), where along it
+    /// (`RigMeshes::held_glint`), and when.
+    gleam: Option<(Entity, fn(f32) -> Vec3)>,
     gleaming: Gleaming,
     moves: &'static Moves,
     /// Walk cycles so far, and how much the fighter is walking (0..1, eased).
@@ -997,7 +998,7 @@ fn load_rigs(
                 held_glow: rig.held_glow.map(|mesh| meshes.add(mesh)),
                 body_glow: rig.body_glow.map(|mesh| meshes.add(mesh)),
                 held_aura: rig.held_aura.map(|mesh| (meshes.add(mesh), materials.add(arena::glow(rig.glow, AURA_GLOW)))),
-                held_glint: rig.held_glint.map(|(mesh, at)| (meshes.add(mesh), materials.add(arena::glow(Color::WHITE, EYE_GLOW)), at)),
+                held_glint: rig.held_glint.map(|(mesh, edge)| (meshes.add(mesh), materials.add(arena::glow(Color::WHITE, EYE_GLOW)), edge)),
                 wardrobe: rig.wardrobe.map(|wardrobe| WardrobeAssets::load(wardrobe, &mut meshes, &mut bindposes, &mut materials)),
             };
             (c, handles)
@@ -1034,7 +1035,7 @@ fn add_rigs(
             knees,
             held: part(&handles.held, own, class_moves.hand_at - class_moves.elbow_at),
             aura: handles.held_aura.as_ref().map(|(mesh, material)| part(mesh, material, Vec3::ZERO)),
-            gleam: handles.held_glint.as_ref().filter(|_| matches!(moves(&class.def().id).held, Held::Gripped { .. })).map(|(mesh, material, _)| part(mesh, material, Vec3::ZERO)),
+            gleam: handles.held_glint.as_ref().map(|(mesh, material, edge)| (part(mesh, material, Vec3::ZERO), *edge)),
             gleaming: Gleaming { seed: player.index().index(), ..default() },
             moves: moves(&class.def().id),
             stride: 0.0,
@@ -1067,7 +1068,7 @@ fn add_rigs(
         if let Some(glow) = held_glow {
             commands.entity(rig.held).add_child(glow);
         }
-        for shown_armed in rig.aura.into_iter().chain(rig.gleam) {
+        for shown_armed in rig.aura.into_iter().chain(rig.gleam.map(|(gleam, _)| gleam)) {
             commands.entity(shown_armed).insert((Visibility::Hidden, NotShadowCaster, NotShadowReceiver));
             commands.entity(rig.held).add_child(shown_armed);
         }
@@ -1384,12 +1385,12 @@ pub(crate) fn pose_releasing(class: ClassId, moves: &Moves, attack: &AttackState
     assemble(moves, &angles, &aimed, look, stride, walking * (1.0 - phase.braced()), moves.stretch * smear, 1.0, 1.0 - phase.braced())
 }
 
-/// Every couple of seconds a gleam catches somewhere along a gripped blade's edge, a star of
+/// Every couple of seconds a gleam catches somewhere along a held blade's edge, a star of
 /// light swelling to a random brightness and going out again, each blade on its own time.
 fn gleam_blades(time: Res<Time>, mut rigs: Query<&mut Rig>, mut parts: Query<(&mut Visibility, &mut Transform)>) {
     let now = time.elapsed_secs();
     for mut rig in &mut rigs {
-        let Some(gleam) = rig.gleam else { continue };
+        let Some((gleam, edge)) = rig.gleam else { continue };
         let g = &mut rig.gleaming;
         let mut random = || {
             g.seed = g.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
@@ -1399,9 +1400,11 @@ fn gleam_blades(time: Res<Time>, mut rigs: Query<&mut Rig>, mut parts: Query<(&m
             g.next = now + random() * GLEAM_EVERY.1;
         }
         if now >= g.next {
-            let (along, peak, wait) = (random(), random(), random());
+            let (along, peak, wait, side) = (random(), random(), random(), random());
             g.from = now;
-            g.at = arena::glaive_edge(0.1 + 0.85 * along);
+            // On either edge of a blade sharp both sides (mirrored across it; nothing changes for
+            // an edge in its middle).
+            g.at = edge(0.1 + 0.85 * along) * if side < 0.5 { Vec3::new(1.0, 1.0, -1.0) } else { Vec3::ONE };
             g.peak = GLEAM_SIZE.0 + (GLEAM_SIZE.1 - GLEAM_SIZE.0) * peak;
             g.next = now + GLEAM_EVERY.0 + (GLEAM_EVERY.1 - GLEAM_EVERY.0) * wait;
         }

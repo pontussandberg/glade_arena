@@ -480,9 +480,10 @@ pub struct RigMeshes {
     /// What lights up on the held weapon (in its space), glowing like the eyes, while the
     /// attack's `follow_up` is armed (`rig::show_auras`): cracks of light through a blade.
     pub held_aura: Option<Mesh>,
-    /// A sharp glint of white light, and where on the weapon it sits: a gripped blade's gleam
-    /// (`rig::gleam_blades`) runs along its edge with it.
-    pub held_glint: Option<(Mesh, Vec3)>,
+    /// A sharp glint of white light catching now and then somewhere along the held blade's edge
+    /// (`rig::gleam_blades`): the glint, and where along the edge (0..1, from its base to its
+    /// point) is where on the weapon.
+    pub held_glint: Option<(Mesh, fn(f32) -> Vec3)>,
     /// Cloth that moves (see `cloth.rs`), in the fighter's space.
     pub wardrobe: Option<Wardrobe>,
 }
@@ -519,9 +520,9 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             eyes: slit_eyes(HUNTER_EYES),
             glow: palette::SOUL,
             held_glow: None,
-            body_glow: Some(javelinist_glow()),
+            body_glow: None,
             held_aura: None,
-            held_glint: None,
+            held_glint: Some((glint(), spear_edge)),
             wardrobe: Some(javelinist_wardrobe()),
         },
         "revenant" => RigMeshes {
@@ -537,7 +538,7 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             held_glow: Some(glaive_glow()),
             body_glow: Some(revenant_glow()),
             held_aura: Some(glaive_cracks()),
-            held_glint: Some((glint(), Vec3::new(GLAIVE[GLAIVE.len() - 1].1, BLADE_LENGTH, 0.0))),
+            held_glint: Some((glint(), glaive_edge)),
             wardrobe: Some(revenant_wardrobe()),
         },
         "frost_mage" => RigMeshes {
@@ -1336,6 +1337,18 @@ fn blade_at(y: f32) -> (f32, f32, f32) {
     (x + depth, x - depth, width)
 }
 
+/// A point `t` (0..1, from the base of its blade to its point) along an edge of the javelin
+/// held (`held_spear`), in the spear's space: its right one (the left mirrors it across Z).
+pub fn spear_edge(t: f32) -> Vec3 {
+    // How far back from the point along the blade, and how broad it is there (`javelin`).
+    const EDGE: [(f32, f32); 6] = [(0.58, 0.062), (0.5, 0.084), (0.36, 0.08), (0.2, 0.06), (0.07, 0.03), (0.0, 0.0)];
+    let back = EDGE[0].0 * (1.0 - t.clamp(0.0, 1.0));
+    let k = EDGE.windows(2).position(|w| back >= w[1].0).unwrap_or(EDGE.len() - 2);
+    let (a, b) = (EDGE[k], EDGE[k + 1]);
+    let u = ((a.0 - back) / (a.0 - b.0)).clamp(0.0, 1.0);
+    Vec3::new(0.0, GRIP_TO_TIP - back, a.1 + (b.1 - a.1) * u)
+}
+
 /// A glint: a star of three long, thin crystals crossed through its middle, so it reads as a
 /// sharp twinkle from any angle.
 fn glint() -> Mesh {
@@ -1535,9 +1548,9 @@ fn ice_staff() -> Mesh {
 /// The executioner's body, under its moving cloth (`javelinist_wardrobe`): upright and squared,
 /// a fitted, hooded coat over an ashen undertunic showing at the knee, its hood's cowl lying over
 /// the shoulders and gathered round the neck (the hood itself is on the head); a leather harness
-/// slung across the chest from the right shoulder, ringed in iron; a wide belt with an iron
-/// buckle and an hourglass hung at the left hip. Few details: the hood and the blade overhead
-/// are the figure.
+/// slung across the chest from the right shoulder, ringed in iron; a wide belt over the coat's
+/// top with an iron buckle, a sheathed knife hung from it at the left hip (`hip_knife`). Few
+/// details: the hood and the blade overhead are the figure.
 fn javelinist_body() -> Mesh {
     const FOLDS: u32 = 9;
     let tunic = tube(
@@ -1578,25 +1591,8 @@ fn javelinist_body() -> Mesh {
     // The belt goes over the coat's top (the coat hangs from under it).
     parts.push(belt(0.01, (0.84, 0.95), (0.183, 0.223), palette::DARK_LEATHER));
     parts.push(bevel_box(Vec3::new(0.03, 0.08, 0.075), 0.01, palette::IRON).translated_by(Vec3::new(0.2, 0.895, 0.0)));
-    // An hourglass hung from the belt at the left hip on a short chain: two dark caps on three
-    // posts, open between, so its glowing sand shows (`javelinist_glow`).
-    for (i, y) in [0.84, 0.8].into_iter().enumerate() {
-        parts.push(chain_link(Vec3::new(HOURGLASS.x - 0.004, y, HOURGLASS.z), i % 2 == 1));
-    }
-    for end in [1.0, -1.0] {
-        let at = HOURGLASS + Vec3::Y * end * HOURGLASS_HALF;
-        parts.push(tube(
-            &[ring(at.x, at.y - 0.014, (0.058, 0.058), palette::BLACK_STEEL).exact(), ring(at.x, at.y + 0.014, (0.058, 0.058), palette::BLACK_STEEL).exact()],
-            12,
-            (true, true),
-        ));
-        parts.push(tinted(ball(0.012).translated_by(at + Vec3::Y * end * 0.018), palette::BLACK_STEEL));
-    }
-    for k in 0..3 {
-        let a = k as f32 / 3.0 * std::f32::consts::TAU + 0.4;
-        let post = |y: f32| HOURGLASS + Vec3::new(a.cos() * 0.047, y, a.sin() * 0.047);
-        parts.push(sweep(&[post(-HOURGLASS_HALF), post(0.0), post(HOURGLASS_HALF)], &[0.008, 0.006, 0.008], 5, palette::BLACK_STEEL));
-    }
+    // A long knife in a leather sheath, hung from the belt at the left front hip.
+    parts.push(hip_knife());
     // The coat's hood, down off the head: gathered loose round the neck, its lip rolled; the
     // hood itself (on the head, `javelinist_hood`) rises out of it, and the rest of it lies over
     // the shoulders as moving cloth (`javelinist_mantle`).
@@ -1616,21 +1612,49 @@ fn javelinist_body() -> Mesh {
     sculpted(parts)
 }
 
-/// How many leather straps hang from the executioner's belt.
-const STRAPS: usize = 7;
-
-/// Where the executioner's hourglass hangs (its middle), and half its height.
-const HOURGLASS: Vec3 = Vec3::new(0.235, 0.66, -0.13);
-const HOURGLASS_HALF: f32 = 0.1;
-
-/// What glows on the executioner: the sand in its hourglass, most of it run down into the lower
-/// bulb, a thin stream still falling.
-fn javelinist_glow() -> Mesh {
-    let top = cone(0.032, 0.04, 8).rotated_by(Quat::from_rotation_x(std::f32::consts::PI)).translated_by(HOURGLASS + Vec3::Y * 0.035);
-    let stream = cylinder(0.004, 0.08, 4).translated_by(HOURGLASS - Vec3::Y * 0.025);
-    let pile = cone(0.042, 0.05, 8).translated_by(HOURGLASS - Vec3::Y * (HOURGLASS_HALF - 0.04));
-    sculpted([top, stream, pile].map(|m| tinted(m, Color::WHITE)).to_vec())
+/// A long knife sheathed in dark leather, hung straight down from the executioner's belt at the
+/// left front on a short loop: an iron throat and tip on the sheath, a leather-bound grip over a
+/// short iron guard, an iron pommel.
+fn hip_knife() -> Mesh {
+    // Built hanging down (-Y) from the top of its sheath, flat across X, thin through Z.
+    let (leather, iron) = (palette::DARK_LEATHER, palette::IRON);
+    let sheath = tube(
+        &[
+            ring(0.0, 0.0, (0.03, 0.012), leather),
+            ring(0.0, -0.09, (0.032, 0.013), leather),
+            ring(0.0, -0.2, (0.026, 0.011), leather),
+            ring(0.0, -0.26, (0.016, 0.009), leather),
+            ring(0.0, -0.29, (0.006, 0.005), leather),
+        ],
+        12,
+        (true, true),
+    );
+    let band = |y: f32, half: (f32, f32)| tube(&[ring(0.0, y, half, iron).exact(), ring(0.0, y - 0.016, half, iron).exact()], 12, (true, true));
+    let mut parts = vec![sheath, band(0.004, (0.034, 0.015)), band(-0.25, (0.02, 0.012))];
+    parts.push(bevel_box(Vec3::new(0.075, 0.012, 0.03), 0.003, iron).translated_by(Vec3::Y * 0.012));
+    parts.push(tube(&[ring(0.0, 0.018, (0.013, 0.011), palette::LEATHER), ring(0.0, 0.1, (0.012, 0.01), palette::LEATHER)], 10, (true, true)));
+    for y in [0.04, 0.065, 0.09] {
+        parts.push(tube(&[ring(0.0, y, (0.015, 0.013), leather).exact(), ring(0.0, y - 0.006, (0.015, 0.013), leather).exact()], 10, (true, true)));
+    }
+    parts.push(tinted(ball(1.0).scaled_by(Vec3::new(0.02, 0.016, 0.017)).translated_by(Vec3::Y * 0.113), iron));
+    let knife = sculpted(parts);
+    // Hung straight down at the belt's left front, in the coat's opening (clear of its skirt),
+    // flat to the belt.
+    let angle: f32 = -0.25;
+    let at = Vec3::new(0.01 + 0.2 * angle.cos(), 0.82, 0.24 * angle.sin());
+    let out = Vec3::new(angle.cos() / 0.2, 0.0, angle.sin() / 0.24).normalize();
+    let up = Vec3::Y;
+    let flat = (out - up * out.dot(up)).normalize();
+    let across = up.cross(flat);
+    let turn = Quat::from_mat3(&Mat3::from_cols(across, up, flat));
+    // The loop it hangs by, from the belt down to the sheath's throat.
+    let belt_at = Vec3::new(0.01 + 0.19 * angle.cos(), 0.86, 0.23 * angle.sin());
+    let loop_strap = sweep(&[belt_at, at + flat * 0.004], &[0.012, 0.012], 6, leather);
+    sculpted(vec![knife.rotated_by(turn).translated_by(at), loop_strap])
 }
+
+/// How high the coat's skirt starts, up under the belt.
+const COAT_TOP: f32 = 0.94;
 
 /// Where the coat's skirt is, at `u` (0..1) round it from its right front edge, round the back, to
 /// its left front edge, and `v` (0..1) from the belt down to the hem; `ragged` for the cloth
@@ -1639,14 +1663,17 @@ fn coat_point(u: f32, v: f32, ragged: bool) -> Vec3 {
     // Open at the front, this far (radians) either side of it.
     const OPEN: f32 = 0.45;
     let a = OPEN + u * (std::f32::consts::TAU - 2.0 * OPEN);
+    // From under the belt (tucked in inside it), flaring out below it.
     let flare = v.powf(1.25);
-    let (depth, width) = (0.172 + 0.15 * flare, 0.212 + 0.15 * flare);
+    let (depth, width) = (0.158 + 0.164 * flare, 0.198 + 0.164 * flare);
     // The hem: just off the ground behind, a little higher at the front.
     let hem = 0.035 + 0.075 * (1.0 + a.cos()) / 2.0;
-    let mut y = 0.925 + (hem - 0.925) * v;
+    let mut y = COAT_TOP + (hem - COAT_TOP) * v;
     let mut out = 1.0;
     if ragged {
-        out += v * 0.06 * (a * 8.0 + v * 1.8).sin() * (0.6 + 0.4 * (a * 3.1).sin()) + 0.02 * (a * 5.0 + v * 7.0).sin();
+        // Its folds, from below the belt down.
+        let below = (v / 0.15).clamp(0.0, 1.0);
+        out += v * 0.06 * (a * 8.0 + v * 1.8).sin() * (0.6 + 0.4 * (a * 3.1).sin()) + 0.02 * below * (a * 5.0 + v * 7.0).sin();
         let scallop = 0.5 + 0.5 * (a * 5.0 + 0.8).sin();
         let strip = (a * 13.0 + 2.0).sin().max(0.0).powi(6);
         y -= 0.1 * (0.35 * scallop + 0.65 * strip) * v.powi(8);
@@ -1710,8 +1737,7 @@ fn javelinist_mantle() -> Drape {
     Drape::new(cloth, None, chains, Weave { hold: (8.0, 2.5), damping: 8.0, air: 0.1, inertia: 0.05, gravity: 8.0, flutter: 0.05, joined: true, wisps: 0.0 })
 }
 
-/// All the executioner's moving cloth: the coat skirt, the straps and the cowl
-/// (`javelinist_mantle`).
+/// All the executioner's moving cloth: the coat skirt and the cowl (`javelinist_mantle`).
 fn javelinist_wardrobe() -> Wardrobe {
     const ROWS: usize = 18;
     const COLS: usize = 64;
@@ -1728,27 +1754,13 @@ fn javelinist_wardrobe() -> Wardrobe {
         Weave { hold: (7.0, 2.2), damping: 7.5, air: 0.15, inertia: 0.28, gravity: 10.0, flutter: 0.15, joined: true, wisps: 5.0 },
     );
 
-    // Straps of leather hanging from the belt round the front, long and short by turns, each cut
-    // to a point, darker toward it.
-    let mut drapes = vec![coat];
-    for i in 0..STRAPS {
-        let a = (i as f32 / (STRAPS - 1) as f32 * 2.0 - 1.0) * 1.05;
-        let (out, long) = (Vec3::new(a.cos(), 0.0, a.sin()), i % 2 == 0);
-        let leather = if long { palette::LEATHER } else { palette::DARK_LEATHER };
-        let colors = hemmed(12, 2, leather, leather.darker(0.04));
-        let top = Vec3::new(a.cos() * 0.2, 0.87, a.sin() * 0.235);
-        let drop = out * 0.05 - Vec3::Y * if long { 0.34 } else { 0.26 };
-        // Torn to one point in its middle.
-        drapes.push(tabard(top, drop, (0.03, 0.026), 0.0, (0.05, std::f32::consts::PI / 8.0), &colors));
-    }
-
-    drapes.push(javelinist_mantle());
+    let drapes = vec![coat, javelinist_mantle()];
 
     Wardrobe {
         drapes,
         trim: palette::SOUL,
         body: vec![
-            Column { center: Vec2::ZERO, half: Vec2::new(0.165, 0.205), from: 0.3, to: 1.05 },
+            Column { center: Vec2::ZERO, half: Vec2::new(0.152, 0.192), from: 0.3, to: 1.05 },
             // The chest and shoulders, under the cowl.
             Column { center: Vec2::new(-0.01, 0.0), half: Vec2::new(0.15, 0.25), from: 1.05, to: 1.45 },
         ],
@@ -2045,8 +2057,8 @@ pub fn fighter_mesh(class_key: &str) -> Mesh {
     // Drawn in a white material: these are the real colors, the same for every player (ground
     // rings and health bars tell who is who).
     match class_key {
-        // Marksman: a death hunter in a hooded coat and a pale bandana, a skirt of leather
-        // straps. Head, arms, legs and spear are separate, animated parts (`fighter_rig`).
+        // Marksman: a death hunter in a hooded coat and a pale bandana, a knife at his belt.
+        // Head, arms, legs and spear are separate, animated parts (`fighter_rig`).
         "javelinist" => javelinist_body(),
         // Duelist: a spectral revenant: one long, cold near-black robe from the collar to a hem
         // fraying into tatters below the knee, belted in ash with a steel buckle, under heavy ash
