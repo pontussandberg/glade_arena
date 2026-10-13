@@ -95,7 +95,8 @@ fn melee_hits_where_the_target_is_now() {
     // when B was in the swing's lane on the server at that tick, whatever A saw.
     place(&mut d.server, B, a_spot + Vec2::X * 0.5);
     d.run(Duration::from_millis(500));
-    let goal = Vec2::new(-12.5, -6.5);
+    // Open ground straight out along A's swing, short of the wall past it.
+    let goal = Vec2::new(-14.5, -6.5);
     assert!(map().line_walkable(a_spot, goal));
     set_input(&mut d.b, PlayerInput { move_to: Some(Map::center(Map::tile_of(goal))), ..default() });
     let lead = class_id(B_CLASS).def().move_speed * windup(A_CLASS).as_secs_f32();
