@@ -6,7 +6,7 @@ use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
 pub use crate::classes::ClassId;
-use crate::classes::Chill;
+use crate::classes::{AttackDef, Chill};
 use crate::map::MapId;
 use crate::rooms::{LeaveReason, Mode, NO_TEAM, RoomKey, RoomSummary, RoomView};
 
@@ -89,50 +89,103 @@ impl RecentHits {
     }
 }
 
-/// The auto-attack's state: the windup in progress (if any; the next may start once it's off),
-/// and when the last one went off. Server-authoritative and replicated: others' is shown on the
-/// same delayed timeline as their positions, so they see your windup coming.
+/// The auto-attack's state: the attack in progress (if any; from the click until the next may
+/// start), when the last one went off, and the follow-up's window. Server-authoritative and
+/// replicated: others' is shown on the same delayed timeline as their positions, so they see your
+/// windup coming.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct AttackState {
-    pub windup: Option<Windup>,
+    pub swing: Option<Swing>,
     /// The tick the last attack went off (`None`: never).
     pub released_at: Option<u32>,
-    /// An attack started by this tick winds up quick (`FollowUp`; `None`: not armed).
+    /// An attack started by this tick is quick (`FollowUp`; `None`: not armed). Used up when an
+    /// attack goes off, not when one is cancelled.
     pub quick_until: Option<u32>,
 }
 
 impl AttackState {
-    /// Would an attack started at `now` (a fractional tick) wind up quick?
+    /// Would an attack started at `now` (a fractional tick) be quick?
     pub fn quick_at(&self, now: f32) -> bool {
         self.quick_until.is_some_and(|until| now <= until as f32)
     }
+
+    /// Is the next attack (or the one under way) empowered by the `follow_up` at `now` (a
+    /// fractional tick)?
+    pub fn empowered_at(&self, now: f32) -> bool {
+        self.quick_at(now) || self.swing.is_some_and(|swing| swing.quick)
+    }
+
+    /// Has the attack in progress gone off yet?
+    pub fn released(&self) -> bool {
+        self.swing.is_some_and(|swing| self.released_at.is_some_and(|at| at >= swing.started_at))
+    }
+
+    /// The attack in progress while it's still winding up (rooting its fighter).
+    pub fn winding_up(&self) -> Option<Swing> {
+        self.swing.filter(|_| !self.released())
+    }
 }
 
-/// An attack winding up: aim locked toward `dir`, goes off `ticks(class)` after `started_at`.
+/// An attack, from the click until the next may start: aim locked toward `dir`, winding up for
+/// `windup_ticks` until it goes off, then the backswing until `ready_at`.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
-pub struct Windup {
+pub struct Swing {
     pub started_at: u32,
     pub dir: Vec2,
-    /// Wound up quick, by the attack's `follow_up`.
+    /// Quickened by the attack's `follow_up`.
     pub quick: bool,
+    /// Its hit armed the `follow_up`: the rest of its backswing runs at that attack speed too,
+    /// so the empowered attack can come that much sooner.
+    pub hastened: bool,
 }
 
-impl Windup {
+impl Swing {
+    // Its timing depends only on the attack (`AttackDef`), so any attack can be timed and
+    // tested, not just the classes'.
+
+    /// How many times the normal attack speed it has.
+    pub fn speed(&self, attack: &AttackDef) -> f32 {
+        attack.speed(self.quick)
+    }
+
     /// How long it winds up.
-    pub fn ticks(&self, class: ClassId) -> u32 {
-        let attack = &class.def().attack;
-        if self.quick { attack.quick_windup_ticks() } else { attack.windup_ticks }
+    pub fn windup_ticks(&self, attack: &AttackDef) -> u32 {
+        attack.windup_ticks(self.speed(attack))
+    }
+
+    /// How long the whole attack is: its attack timer.
+    pub fn ticks(&self, attack: &AttackDef) -> u32 {
+        attack.period_ticks(self.speed(attack))
     }
 
     /// The tick the attack goes off.
-    pub fn releases_at(&self, class: ClassId) -> u32 {
-        self.started_at + self.ticks(class)
+    pub fn releases_at(&self, attack: &AttackDef) -> u32 {
+        self.started_at + self.windup_ticks(attack)
+    }
+
+    /// How many times the normal attack speed its backswing has: hastened, or quick all through.
+    pub fn backswing_speed(&self, attack: &AttackDef) -> f32 {
+        attack.speed(self.quick || self.hastened)
+    }
+
+    /// The tick the next attack may start: after its backswing, sped up if its hit armed the
+    /// `follow_up` (a quick one's already is).
+    pub fn ready_at(&self, attack: &AttackDef) -> u32 {
+        let backswing = self.ticks(attack) - self.windup_ticks(attack);
+        let backswing = if self.hastened && !self.quick { (backswing as f32 / attack.speed(true)).round() as u32 } else { backswing };
+        self.releases_at(attack) + backswing.max(1)
+    }
+
+    /// How far it is from going off to the next attack being ready at `now` (a fractional
+    /// tick), from 0 to 1: the cast bar, shown once it has gone off.
+    pub fn cooldown_progress(&self, now: f32, attack: &AttackDef) -> f32 {
+        let (from, to) = (self.releases_at(attack) as f32, self.ready_at(attack) as f32);
+        ((now - from) / (to - from)).clamp(0.0, 1.0)
     }
 
     /// How far along the windup is at `now` (a fractional tick), from 0 to 1.
-    pub fn progress(&self, now: f32, class: ClassId) -> f32 {
-        let windup = self.ticks(class).max(1) as f32;
-        ((now - self.started_at as f32) / windup).clamp(0.0, 1.0)
+    pub fn windup_progress(&self, now: f32, attack: &AttackDef) -> f32 {
+        ((now - self.started_at as f32) / self.windup_ticks(attack) as f32).clamp(0.0, 1.0)
     }
 }
 
@@ -310,11 +363,13 @@ impl Waygate {
     }
 }
 
-/// The player's most recent melee swing, for drawing it. Server-authoritative and replicated.
+/// The player's most recent melee swing, for drawing it: when, which way, and whether its
+/// `follow_up` empowered it. Server-authoritative and replicated.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct LastSwing {
     pub tick: u32,
     pub dir: Vec2,
+    pub empowered: bool,
 }
 
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
@@ -351,7 +406,8 @@ pub struct PlayerInput {
     pub walk: Vec2,
     /// Aim direction on the gameplay plane; the sim normalizes it.
     pub aim: Vec2,
-    /// Left mouse held: auto-attack toward `aim`.
+    /// Left click: auto-attack toward `aim`, if the last attack is done (else the click is
+    /// dropped). Set by `PlayerCommand::Attack`, used up by the next tick.
     pub fire: bool,
     /// Q pressed: use the ability toward `aim`. Set by `PlayerCommand::Cast`, used up by the next
     /// tick.
@@ -369,16 +425,29 @@ pub enum PlayerCommand {
     Stop,
     /// Keys held to walk (WASD, free camera), this way; zero when none are.
     Walk(Vec2),
-    /// Left mouse held (`fire`) toward `aim`. Sent when it's pressed or let go, and while it's
-    /// held, when the aim changes (at most once a tick).
-    Attack { aim: Vec2, fire: bool },
+    /// Left click: auto-attack toward this aim. Holding the button doesn't attack again: each
+    /// attack is its own click, once the last one is done.
+    Attack(Vec2),
     /// Q: use the ability toward this aim.
     Cast(Vec2),
 }
 
 impl PlayerCommand {
+    /// Is it an order to move (or stop)? One cancels an attack still winding up, as in League
+    /// (`sim::cancel_attack`), and drops a click no tick has seen yet: the last order wins.
+    pub fn moves(&self) -> bool {
+        match *self {
+            PlayerCommand::MoveTo(_) | PlayerCommand::Stop => true,
+            PlayerCommand::Walk(dir) => dir != Vec2::ZERO,
+            PlayerCommand::Attack(_) | PlayerCommand::Cast(_) => false,
+        }
+    }
+
     /// What the command does to a player's intent.
     pub fn apply(self, input: &mut PlayerInput) {
+        if self.moves() {
+            input.fire = false;
+        }
         match self {
             PlayerCommand::MoveTo(point) => {
                 input.move_to = Some(point);
@@ -391,9 +460,9 @@ impl PlayerCommand {
                     input.move_to = None;
                 }
             }
-            PlayerCommand::Attack { aim, fire } => {
+            PlayerCommand::Attack(aim) => {
                 input.aim = aim;
-                input.fire = fire;
+                input.fire = true;
             }
             PlayerCommand::Cast(aim) => {
                 input.aim = aim;

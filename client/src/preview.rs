@@ -11,12 +11,16 @@ use crate::arena::{self, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER};
 
 const SIZE: usize = 360;
 
+#[derive(Clone, Copy)]
 struct Tri {
     at: [Vec3; 3],
     normal: [Vec3; 3],
     color: Vec3,
     /// Drawn at full brightness, whatever the light.
     glow: bool,
+    /// See-through, this opaque at each corner: drawn over what's behind it (after everything
+    /// solid), unlit.
+    alpha: Option<[f32; 3]>,
 }
 
 fn triangles(mesh: &Mesh, place: Mat4, out: &mut Vec<Tri>, glow: bool) {
@@ -36,7 +40,24 @@ fn triangles(mesh: &Mesh, place: Mat4, out: &mut Vec<Tri>, glow: bool) {
         let at = t.map(|i| place.transform_point3(Vec3::from(p[i as usize])));
         let normal = t.map(|i| place.transform_vector3(Vec3::from(n[i as usize])).normalize_or_zero());
         let c = t.iter().map(|&i| Vec3::from_slice(&colors[i as usize][..3])).sum::<Vec3>() / 3.0;
-        out.push(Tri { at, normal, color: c, glow });
+        out.push(Tri { at, normal, color: c, glow, alpha: None });
+    }
+}
+
+/// A see-through mesh (vertex alphas, as `FlatMesh::tri_faded` makes) in `color`, `alpha` opaque
+/// at most.
+fn see_through(mesh: &Mesh, place: Mat4, color: Vec3, alpha: f32, out: &mut Vec<Tri>) {
+    let Some(VertexAttributeValues::Float32x3(p)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { return };
+    let Some(VertexAttributeValues::Float32x4(c)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else { return };
+    let idx: Vec<u32> = match mesh.indices() {
+        Some(Indices::U32(i)) => i.clone(),
+        Some(Indices::U16(i)) => i.iter().map(|&v| v as u32).collect(),
+        None => (0..p.len() as u32).collect(),
+    };
+    for t in idx.chunks(3) {
+        let t = [t[0], t[1], t[2]];
+        let at = t.map(|i| place.transform_point3(Vec3::from(p[i as usize])));
+        out.push(Tri { at, normal: [Vec3::Y; 3], color, glow: true, alpha: Some(t.map(|i| c[i as usize][3] * alpha)) });
     }
 }
 
@@ -81,7 +102,9 @@ fn render(tris: &[Tri], from: Vec3, center: Vec3, span: f32, image: &mut [[u8; 3
     let sun = Vec3::new(-0.6, 0.75, 0.35).normalize();
     let mut depth = vec![f32::INFINITY; SIZE * SIZE];
     let scale = SIZE as f32 / span;
-    for t in tris {
+    // Everything solid first, then what's see-through over it.
+    let (solid, clear): (Vec<&Tri>, Vec<&Tri>) = tris.iter().partition(|t| t.alpha.is_none());
+    for t in solid.into_iter().chain(clear) {
         let s = t.at.map(|p| {
             let d = p - center;
             Vec3::new(SIZE as f32 / 2.0 + d.dot(right) * scale, SIZE as f32 / 2.0 - d.dot(up) * scale, d.dot(forward))
@@ -102,6 +125,15 @@ fn render(tris: &[Tri], from: Vec3, center: Vec3, span: f32, image: &mut [[u8; 3
                 }
                 let z = w0 * s[0].z + w1 * s[1].z + w2 * s[2].z;
                 if z >= depth[y * SIZE + x] {
+                    continue;
+                }
+                if let Some(a) = t.alpha {
+                    let a = (w0 * a[0] + w1 * a[1] + w2 * a[2]).clamp(0.0, 1.0);
+                    let over = t.color.to_array().map(|c| c.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0);
+                    let pixel = &mut image[y * stride + x0 + x];
+                    for k in 0..3 {
+                        pixel[k] = (pixel[k] as f32 * (1.0 - a) + over[k] * a) as u8;
+                    }
                     continue;
                 }
                 depth[y * SIZE + x] = z;
@@ -182,11 +214,12 @@ fn preview_fighters() {
         if let Some(glow) = &rig.held_glow {
             triangles(glow, Mat4::IDENTITY, &mut weapon, true);
         }
-        let mut image = vec![[60u8, 70, 80]; 2 * SIZE * SIZE];
-        for (i, from) in [Vec3::X, Vec3::new(0.3, 0.2, 1.0)].into_iter().enumerate() {
-            render(&weapon, from, Vec3::Y * 0.6, 1.9, &mut image, 2 * SIZE, i * SIZE);
+        // Edge on, flat on, and the head up close.
+        let mut image = vec![[60u8, 70, 80]; 3 * SIZE * SIZE];
+        for (i, (from, center, span)) in [(Vec3::X, Vec3::Y * 0.67, 2.6), (Vec3::new(0.3, 0.2, 1.0), Vec3::Y * 0.67, 2.6), (Vec3::Z, Vec3::Y * 1.62, 0.7)].into_iter().enumerate() {
+            render(&weapon, from, center, span, &mut image, 3 * SIZE, i * SIZE);
         }
-        std::fs::write(dir.join(format!("weapon-{class}.png")), png(2 * SIZE, SIZE, &image)).unwrap();
+        std::fs::write(dir.join(format!("weapon-{class}.png")), png(3 * SIZE, SIZE, &image)).unwrap();
 
         let tris = figure(class);
         let width = SIZE * views.len();
@@ -200,3 +233,228 @@ fn preview_fighters() {
     }
 }
 
+
+/// The figure posed as `posed` (facing +X, standing at the origin), its cloth hanging at rest
+/// from the body; and where its weapon's grip and point are (the point as low as any of the
+/// weapon goes).
+fn posed_figure(class: &str, posed: &crate::rig::Posed, length: f32) -> (Vec<Tri>, Vec3, Vec3) {
+    let rig = arena::fighter_rig(class);
+    let mut tris = Vec::new();
+    let place = |t: &Transform| Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.translation);
+    let body = place(&posed.body);
+    let on = |at: Vec3, turn: Quat| body * Mat4::from_rotation_translation(turn, at);
+    let mirrored = |p: Vec3| Vec3::new(p.x, p.y, -p.z);
+    triangles(&arena::fighter_mesh(class), body, &mut tris, false);
+    if let Some(glow) = &rig.body_glow {
+        triangles(glow, body, &mut tris, true);
+    }
+    let head = on(RIG_NECK, posed.head);
+    triangles(&rig.head, head, &mut tris, false);
+    triangles(&rig.eyes, head, &mut tris, true);
+    let weapon_arm = on(RIG_SHOULDER, posed.arms[0]);
+    triangles(&rig.arm, weapon_arm, &mut tris, false);
+    triangles(&rig.arm, on(mirrored(RIG_SHOULDER), posed.arms[1]), &mut tris, false);
+    triangles(&rig.leg, on(RIG_HIP, posed.legs[0]), &mut tris, false);
+    triangles(&rig.leg, on(mirrored(RIG_HIP), posed.legs[1]), &mut tris, false);
+    let held = weapon_arm * place(&posed.held);
+    let before = tris.len();
+    triangles(&rig.held, held, &mut tris, false);
+    let lowest = tris[before..].iter().flat_map(|t| t.at).map(|p| p.y).fold(f32::INFINITY, f32::min);
+    if let Some(glow) = &rig.held_glow {
+        triangles(glow, held, &mut tris, true);
+    }
+    for drape in rig.wardrobe.iter().flat_map(|wardrobe| &wardrobe.drapes) {
+        triangles(&drape.mesh, body, &mut tris, false);
+    }
+    // The point, as low as the weapon goes (y), wherever on it that is.
+    (tris, held.transform_point3(Vec3::ZERO), held.transform_point3(Vec3::Y * length).with_y(lowest))
+}
+
+/// Flat ground around the origin, in half-meter checks, a darker line along +X (the facing).
+fn ground(tris: &mut Vec<Tri>) {
+    ground_in(tris, [Vec3::new(0.16, 0.2, 0.13), Vec3::new(0.13, 0.17, 0.1)], true);
+}
+
+/// Flat ground in checks of `colors` (linear), with the line along +X or not.
+fn ground_in(tris: &mut Vec<Tri>, colors: [Vec3; 2], line: bool) {
+    let quad = |tris: &mut Vec<Tri>, a: Vec3, b: Vec3, color: Vec3| {
+        let (c, d) = (Vec3::new(b.x, 0.0, a.z), Vec3::new(a.x, 0.0, b.z));
+        for at in [[a, c, b], [a, b, d]] {
+            tris.push(Tri { at, normal: [Vec3::Y; 3], color, glow: false, alpha: None });
+        }
+    };
+    for i in -6i32..10 {
+        for j in -6..6 {
+            let (x, z) = (i as f32 * 0.5, j as f32 * 0.5);
+            let color = colors[(i + j).rem_euclid(2) as usize];
+            quad(tris, Vec3::new(x, 0.0, z), Vec3::new(x + 0.5, 0.0, z + 0.5), color);
+        }
+    }
+    if line {
+        quad(tris, Vec3::new(-3.0, 0.002, -0.02), Vec3::new(5.0, 0.002, 0.02), Vec3::new(0.05, 0.05, 0.05));
+    }
+}
+
+/// A heavy strike's impact as it breaks the ground: the fighter as it lands, the rift along its
+/// blade with its rim, the dust half burst out and a few chunks in the air (`swish`), on
+/// different grounds (a row each: meadow, stone, marsh), from the game's camera and up close:
+/// `impact-<class>.png`.
+#[test]
+#[ignore = "writes images; run by hand when working on animation"]
+fn preview_impact() {
+    use arena_shared::protocol::ClassId;
+
+    use crate::rig::{EMPOWERED_BLADE, EMPOWERED_STRETCH, Phase, assemble, moves, targets};
+    use crate::arena::palette;
+
+    use crate::swish::{CORE_THICKNESS, INK_THICKNESS, RIFT_ALPHA, RIM_ALPHA, bleed_mesh, dust_mesh, rift_mesh, rubble_mesh};
+
+    let dir = std::env::var("PREVIEW_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    let key = "revenant";
+    let class = ClassId::by_key(key).unwrap();
+    let moves = moves(key);
+    let landed = targets(moves, Phase { draw: 0.0, throw: 1.0, dashing: 0.0 }, 0.0, 0.0);
+    // Plain, and empowered (`follow_up`): the blade grown, smeared out at its longest.
+    for empowered in [false, true] {
+    let (smear, blade) = if empowered { (moves.stretch + EMPOWERED_STRETCH, EMPOWERED_BLADE) } else { (0.0, 1.0) };
+    let posed = assemble(moves, &landed, &landed, Vec2::X, 0.0, 0.0, smear, blade, 0.0);
+    let (figure, grip, point) = posed_figure(key, &posed, arena::BLADE_LENGTH);
+    println!("landed{}: grip {grip:5.2} point {point:5.2}", if empowered { " empowered, smeared" } else { "" });
+    // Over the strike's hitbox, its lane, ahead (+X) of where it stands.
+    // The plain break, grown to an empowered lane (as `swish::strike_ground` does).
+    let ((plain_start, plain, plain_width), (start, range, width)) = (class.def().attack.lane(false).unwrap(), class.def().attack.lane(empowered).unwrap());
+    let grown = Vec3::new((range - start) / (plain - plain_start), 1.0, width / plain_width);
+    let (from, to) = (Vec3::new(start, 0.03, 0.0), Vec3::new(range, 0.03, 0.0));
+    let length = plain - plain_start;
+    let turn = Quat::IDENTITY;
+    let linear = |c: Color| Vec3::from_slice(&c.to_linear().to_f32_array()[..3]);
+    let mut effect = Vec::new();
+    let at = |p: Vec3, scale: Vec3| Mat4::from_scale_rotation_translation(scale, turn, p);
+    // As it settles (the light past its flare, breathing low), the mist half gone.
+    see_through(&bleed_mesh(length, plain_width, 7), at(from - Vec3::Y * 0.006, grown), linear(palette::TATTERS), RIM_ALPHA, &mut effect);
+    see_through(&rubble_mesh(length, plain_width, 7), at(from - Vec3::Y * 0.005, grown), linear(palette::TATTERS), RIM_ALPHA, &mut effect);
+    see_through(&rift_mesh(length, plain_width, 7, INK_THICKNESS), at(from, grown), linear(palette::INK), RIFT_ALPHA, &mut effect);
+    see_through(&rift_mesh(length, plain_width, 7, CORE_THICKNESS), at(from + Vec3::Y * 0.004, grown), linear(palette::WISP) * 1.4, 0.75, &mut effect);
+    see_through(&dust_mesh(), at((from + to) / 2.0 + Vec3::Y * 0.15, Vec3::new(length * grown.x + 0.9, 1.0, width + 0.9) * 0.9), linear(palette::WISP), 0.08, &mut effect);
+    for i in 0..10 {
+        let t = i as f32 / 9.0;
+        let p = from.lerp(to, 0.1 + 0.8 * t) + Vec3::Z * if i % 2 == 0 { 0.3 } else { -0.35 } * (0.5 + t) + Vec3::Y * (0.2 + 0.5 * (i % 3) as f32 * 0.4);
+        let mut chunk = Vec::new();
+        triangles(&Mesh::from(Cuboid::new(1.0, 0.7, 0.85)), Mat4::from_scale_rotation_translation(Vec3::splat(0.06), Quat::from_rotation_y(i as f32) * Quat::from_rotation_x(i as f32 * 0.7), p), &mut chunk, false);
+        let color = linear(if i % 3 == 0 { palette::ASH } else { palette::HUNTER_DARK });
+        effect.extend(chunk.into_iter().map(|t| Tri { color, ..t }));
+    }
+    // The hitbox's outline (what the practice tools draw), to see the blade and the break on it.
+    let mut outline = |a: Vec3, b: Vec3| {
+        let side = (b - a).cross(Vec3::Y).normalize() * 0.012;
+        for at in [[a - side, b - side, b + side], [a - side, b + side, a + side]] {
+            effect.push(Tri { at: at.map(|p| p + Vec3::Y * 0.04), normal: [Vec3::Y; 3], color: Vec3::new(1.0, 0.15, 0.1), glow: true, alpha: None });
+        }
+    };
+    let corners = [Vec3::new(start, 0.0, width / 2.0), Vec3::new(range, 0.0, width / 2.0), Vec3::new(range, 0.0, -width / 2.0), Vec3::new(start, 0.0, -width / 2.0)];
+    for i in 0..4 {
+        outline(corners[i], corners[(i + 1) % 4]);
+    }
+    println!("hitbox from {start} to {range} m, {width} m wide");
+    let grounds = [[palette::MEADOW, palette::MOSS], [palette::STONE, palette::PATH], [palette::MARSH, palette::RIVERBED]];
+    let mid = (start + range) / 2.0;
+    let views: [(Vec3, Vec3, f32); 3] = [(crate::camera::OFFSET, Vec3::new(mid, 0.3, 0.0), range + 3.0), (Vec3::new(0.6, 0.8, 1.0), Vec3::new(mid, 0.2, 0.0), range + 1.5), (Vec3::new(0.05, 1.0, 0.0), Vec3::new(mid, 0.0, 0.0), range + 1.5)];
+    let width = SIZE * views.len();
+    let mut image = Vec::new();
+    for colors in grounds {
+        let mut tris: Vec<Tri> = Vec::new();
+        ground_in(&mut tris, colors.map(|c| linear(c) * 0.33), false);
+        tris.extend(figure.iter().copied());
+        tris.extend(effect.iter().copied());
+        let mut row = vec![[0u8; 3]; width * SIZE];
+        for (i, (from, center, span)) in views.into_iter().enumerate() {
+            render(&tris, from, center, span, &mut row, width, i * SIZE);
+        }
+        image.extend(row);
+    }
+    let name = if empowered { format!("impact-{key}-empowered.png") } else { format!("impact-{key}.png") };
+    std::fs::write(dir.join(name), png(width, SIZE * grounds.len(), &image)).unwrap();
+    }
+}
+
+/// The heavy attack, frame by frame: `attack-<class>.png`, a column per moment (carrying, through
+/// the windup, the attack going off, the backswing), a row per view (from the weapon side, from
+/// ahead and to the side, from the game's camera). The grip and point of each are printed, to
+/// check it reaches the ground. The game's own posing (`rig::strike_phase`, `targets`, springs
+/// at 60 fps, `assemble`), standing still facing +X.
+#[test]
+#[ignore = "writes images; run by hand when working on animation"]
+fn preview_attacks() {
+    use arena_shared::protocol::{AttackState, ClassId, Swing};
+
+    use crate::rig::{Joints, Phase, ahead_of_springs, assemble, moves, strike_phase, targets};
+
+    let dir = std::env::var("PREVIEW_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    const PER_SHEET: usize = 6;
+    for key in ["revenant", "javelinist", "frost_mage"] {
+        let class = ClassId::by_key(key).unwrap();
+        let moves = moves(key);
+        let length = if key == "revenant" { arena::BLADE_LENGTH } else { 1.0 };
+        let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false };
+        let (windup, period) = (swing.windup_ticks(&class.def().attack) as f32, swing.ticks(&class.def().attack) as f32);
+        let release = 10.0 + windup;
+        // The moments to show, in ticks.
+        let moments: Vec<(String, f32)> = [("carry", 9.0)]
+            .into_iter()
+            .map(|(n, t)| (n.to_string(), t))
+            .chain([0.25, 0.5, 0.65, 0.8, 0.92].map(|f| (format!("windup {:.0}%", f * 100.0), 10.0 + windup * f)))
+            .chain([0.0, 1.0, 2.0, 3.0, 5.0, 9.0].map(|t| (format!("release +{t}"), release + t)))
+            .collect();
+        let views = [Vec3::Z, Vec3::new(1.0, 0.3, 0.7), Vec3::new(-0.4, 0.5, 1.0), crate::camera::OFFSET];
+        let width = SIZE * PER_SHEET;
+        let sheets = moments.len().div_ceil(PER_SHEET);
+        let mut rows = vec![vec![vec![[0u8; 3]; width * SIZE]; views.len()]; sheets];
+        let mut joints = Joints::default();
+        let dt = 1.0 / 60.0;
+        let mut next = 0;
+        let mut frame = 0;
+        println!("{key}: windup {windup} ticks, attack {period} ticks; grip and point (x ahead, y up, z weapon side)");
+        while next < moments.len() {
+            let now = frame as f32 * dt * arena_shared::config::TICK_HZ as f32;
+            frame += 1;
+            let mut attack = AttackState::default();
+            if now >= 10.0 && now < 10.0 + period {
+                attack.swing = Some(swing);
+            }
+            if now >= release {
+                attack.released_at = Some(release as u32);
+            }
+            let released = attack.released_at.map(|at| now - at as f32);
+            let (shown, shown_released, ahead) = ahead_of_springs(class, moves, attack.winding_up(), released, now);
+            let (draw, throw, smear) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
+            let phase = Phase { draw, throw, dashing: 0.0 };
+            let angles = joints.follow(&targets(moves, phase, 0.0, 0.0), dt, moves);
+            // The blade's point every frame through the strike, to catch it jumping sideways.
+            if std::env::var_os("PREVIEW_TRACE").is_some() && key == "revenant" && now > release - 4.0 && now < release + 3.0 {
+                let posed = assemble(moves, &angles, &targets(moves, phase, 0.0, 0.0), Vec2::X, 0.0, 0.0, moves.stretch * smear, 1.0, 1.0 - phase.braced());
+                let (_, _, point) = posed_figure(key, &posed, length);
+                println!("    trace {:6.2}: phase ({draw:.2}, {throw:.3}) point {point:5.2} roll {:.3} wrist {:.3}", now - release, angles.roll, angles.tip);
+            }
+            if now < moments[next].1 {
+                continue;
+            }
+            let posed = assemble(moves, &angles, &targets(moves, phase, 0.0, 0.0), Vec2::X, 0.0, 0.0, moves.stretch * smear, 1.0, 1.0 - phase.braced());
+            let (mut tris, grip, point) = posed_figure(key, &posed, length);
+            println!("  {:>14}: phase ({draw:.2}, {throw:.2}) grip {grip:5.2} point {point:5.2} arm {:.2} lean {:.2} twist {:.2} wrist {:.2} roll {:.2}", moments[next].0, angles.weapon_arm, angles.lean, angles.twist, angles.tip, angles.roll);
+            ground(&mut tris);
+            for (row, from) in rows[next / PER_SHEET].iter_mut().zip(views) {
+                let mut cell = vec![[200u8, 204, 200]; SIZE * SIZE];
+                render(&tris, from, Vec3::new(0.5, 1.2, 0.0), 5.2, &mut cell, SIZE, 0);
+                for y in 0..SIZE {
+                    let at = y * width + (next % PER_SHEET) * SIZE;
+                    row[at..at + SIZE].copy_from_slice(&cell[y * SIZE..(y + 1) * SIZE]);
+                }
+            }
+            next += 1;
+        }
+        for (i, sheet) in rows.iter().enumerate() {
+            let image: Vec<[u8; 3]> = sheet.concat();
+            std::fs::write(dir.join(format!("attack-{key}-{}.png", i + 1)), png(width, SIZE * views.len(), &image)).unwrap();
+        }
+    }
+}

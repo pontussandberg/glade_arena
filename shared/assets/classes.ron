@@ -10,27 +10,40 @@
 //   move_speed    walking speed
 //   attack        the left-click auto-attack, aimed at the cursor (skillshot)
 //     damage
-//     windup_ticks  from click to the attack going off, the whole attack (32 = one per second):
-//                   the next may start the tick it goes off. You stand still with your aim
-//                   locked meanwhile (see the README): holding fire keeps you planted, to move
-//                   you stop firing
-//     kind: Melee(range, width)             a thrust: hits everyone whose body a straight lane
-//             `width` wide reaches, out to `range` from your center
+//     attack_ticks  the whole attack (32 = one per second): from the click to when the next
+//                   may start. Once it has gone off, the cast bar fills until then. A click before then
+//                   is dropped (no holding fire, no queueing: click again once it's ready)
+//     windup        how much of the attack (0 to 1) comes before it goes off: the spear leaving
+//                   the hand, the blade reaching the target. You stand still with your aim locked
+//                   meanwhile (see the README); moving cancels the attack (no hit, and you may
+//                   attack again at once). The rest is the backswing: move whenever you like,
+//                   cutting the animation short. Not shown anywhere: read it off the animation
+//     kind: Melee(range, width, from)       a blow: hits everyone whose body a straight lane
+//             `width` wide reaches, from `from` (optional, 0 by default) out to `range` from
+//             your center: where the blade comes down, its hitbox (see the practice tools)
 //           Projectile(speed, radius, range) flies straight, stops at walls/rocks/trees;
 //             optional far_scale: damage after flying the full range, as a multiple of `damage`
 //             (point blank), scaling linearly by how far the shot flew (2.0 = double at full range)
 //     chill (optional): crowd control each hit applies on top of its damage:
 //       (slow: fraction of speed taken away, slow_ticks: for how long, root_ticks: frozen in
 //       place this long: no walking, no dashing, and a dash in progress stops)
-//     follow_up (optional, melee only): landing a hit gives the next attack, if started
-//       within `within_ticks`, `attack_speed` more attack speed (0.6 = 60% more attacks per
-//       second: the windup divided by 1.6). Only that one attack: a miss loses it, a quick one
-//       that lands arms the next
+//     rift (optional, melee only): (ticks, haste) each strike tears the ground open over its
+//       lane (as wide and far as it hit, empowered or not) for `ticks`; its striker walks `haste`
+//       faster (0.3 = 30%) while its body is in it
+//     follow_up (optional, melee only): landing a hit empowers the next attack, if started
+//       within `within_ticks` (and speeds up what's left of the attack that landed it, so the
+//       next comes sooner): `attack_speed` more attack speed (0.6 = 60% more attacks per
+//       second: its windup and its whole attack divided by 1.6, animated that much faster),
+//       and (optional) its lane's far end and width `reach` times as far, its start (optional)
+//       `near` times as far (`reach` unless given) (the weapon grows and smears out to match). Used up as an attack goes off (cancelling one first
+//       leaves it armed): a miss loses it, an empowered one that lands arms the next
 //   ability       the Q ability, aimed at the cursor: name, description, cooldown_ticks, and
 //     kind: Projectile(speed, radius, range, damage)  thrown instantly: no windup, no root
-//           Dash(distance, ticks, damage)  dash `distance` toward the aim, through fighters,
-//             cutting each one crossed for `damage`; stops at walls. Takes `ticks` at normal
-//             speed (longer slowed, shorter hasted).
+//           Dash(distance, min_distance, ticks, damage)  dash toward the aim, through
+//             fighters, cutting each one crossed for `damage`; stops at walls. As far as the
+//             cursor, at least `min_distance` (optional: without it, always all the way) and at
+//             most `distance`. Covers `distance` in `ticks` at normal speed (longer slowed,
+//             shorter hasted).
 //           Nova(radius, damage, chill)  a burst around you, at once: everyone within `radius`
 //             (and not behind a wall) takes `damage` and `chill`
 //     global_cooldown (optional, true by default): using it starts the global cooldown (1 s),
@@ -41,8 +54,10 @@
 // Descriptions (the passive's and the ability's) can name this class's numbers in braces, filled
 // in when shown, so the words follow a retune: {far_scale} (the auto-attack's damage after its full
 // range, as a percent of point blank), {attack_slow} / {attack_slow_time} (the auto-attack's slow,
-// as a percent / in seconds), {follow_up_time} / {follow_up_speed} (the follow_up's window, in
-// seconds / its attack speed, as a percent), {crit}, {crit_vs_frozen}, {crit_multiplier} (as percentages),
+// as a percent / in seconds), {rift_time} / {rift_haste} (how long a strike's rift lasts / how
+// much faster its striker walks in it), {follow_up_time} / {follow_up_speed} / {follow_up_reach} (the
+// follow_up's window, in seconds / its attack speed / how much further its lane reaches, as
+// percents), {crit}, {crit_vs_frozen}, {crit_multiplier} (as percentages),
 // {ability_damage}, {ability_reach} (a thrown ability's range, a dash's distance, a nova's
 // radius, in meters), {ability_root} (a nova's root, in seconds). A Q that deals damage must name
 // {ability_damage}.
@@ -59,19 +74,25 @@
         move_speed: 3.7,
         attack: (
             damage: 20,
-            windup_ticks: 30,
-            kind: Melee(range: 3.75, width: 0.05),
-            follow_up: Some((within_ticks: 48, attack_speed: 1.0)),
+            attack_ticks: 34,
+            windup: 0.35,
+            // The glaive comes down flat on the ground: its blade hits a lane starting a way ahead, not at
+            // the revenant's feet.
+            kind: Melee(range: 3.08, width: 0.5, from: 1.6),
+            // The ground it hits tears open for a while; inside it the revenant walks faster.
+            rift: Some((ticks: 96, haste: 0.3)),
+            // Empowered: the lane starts a little further out, and reaches further and wider.
+            follow_up: Some((within_ticks: 96, attack_speed: 0.0, reach: 1.5, near: Some(1.25))),
         ),
         ability: (
             name: "Rift Step",
-            description: "Dash forward, dealing {ability_damage} damage to each enemy you pass through.",
+            description: "Dash toward the cursor, up to {ability_reach}, dealing {ability_damage} damage to each enemy you pass through.",
             cooldown_ticks: 256,
-            kind: Dash(distance: 6.0, ticks: 5, damage: 18),
+            kind: Dash(distance: 6.0, min_distance: Some(1.0), ticks: 5, damage: 18),
         ),
         passive: Some((
             name: "Follow Through",
-            description: "Landing an auto-attack gives your next one +{follow_up_speed} attack speed, if you swing again within {follow_up_time}. Miss and you lose it.",
+            description: "Your auto-attacks tear the ground open for {rift_time}: inside the tear you move {rift_haste} faster. After landing a hit, your glaive is empowered for {follow_up_time}: your next auto-attack reaches {follow_up_reach} further and wider. An empowered hit renews it.",
         )),
         crit: (chance: 0.1),
     ),
@@ -84,7 +105,8 @@
         move_speed: 3.7,
         attack: (
             damage: 16,
-            windup_ticks: 24,
+            attack_ticks: 28,
+            windup: 0.3,
             kind: Projectile(speed: 15.0, radius: 0.25, range: 15.0, far_scale: Some(2.25)),
         ),
         ability: (
@@ -108,7 +130,8 @@
         move_speed: 3.7,
         attack: (
             damage: 8,
-            windup_ticks: 22,
+            attack_ticks: 26,
+            windup: 0.32,
             kind: Projectile(speed: 17.0, radius: 0.28, range: 10.0),
             chill: (slow: 0.4, slow_ticks: 64),
         ),

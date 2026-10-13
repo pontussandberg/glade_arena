@@ -1,8 +1,9 @@
-//! Two cameras, toggled with V:
+//! Two cameras:
 //!
-//! - MOBA-style (the default): locked on your fighter, looking down from above; the wheel zooms
-//!   (in a narrow range, so you never see much farther than the fight around you).
-//! - Free (WoW-style): follows behind your fighter; hold the right mouse button and drag (or the
+//! - MOBA-style (the one played with): locked on your fighter, looking down from above; the
+//!   wheel zooms (in a narrow range, so you never see much farther than the fight around you).
+//! - Free (WoW-style), a practice tool for looking at fighters (`practice`, which switches
+//!   `CameraMode::free`): follows behind your fighter; hold the right mouse button and drag (or the
 //!   arrow keys) to turn it, wheel (or + / -) to zoom, down to arm's length to look at fighters up
 //!   close. WASD walks relative to it (`render::read_local_input`); the right button only turns
 //!   it, it doesn't walk. Tab moves it on to the next fighter (and back to you), to watch them
@@ -124,7 +125,7 @@ impl Plugin for CameraPlugin {
         app.add_systems(
             Update,
             (
-                (toggle_camera, next_fighter).chain(),
+                (switch_camera, next_fighter).chain(),
                 move_camera.run_if(|mode: Res<CameraMode>| !mode.free),
                 follow_camera.run_if(|mode: Res<CameraMode>| mode.free),
             )
@@ -180,12 +181,12 @@ fn spawn_camera(mut commands: Commands) {
     ));
 }
 
-/// V switches between the MOBA and the free camera.
-fn toggle_camera(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<CameraMode>, mut cursor: Single<&mut CursorOptions>) {
-    if !keys.just_pressed(KeyCode::KeyV) {
+/// Whichever way `free` was switched, the free camera starts over: on you, not dragging.
+fn switch_camera(mut mode: ResMut<CameraMode>, mut cursor: Single<&mut CursorOptions>, mut was_free: Local<bool>) {
+    if mode.free == *was_free {
         return;
     }
-    mode.free = !mode.free;
+    *was_free = mode.free;
     mode.watching = None;
     mode.dragged = 0.0;
     release_cursor(&mut cursor);

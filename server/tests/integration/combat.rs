@@ -16,7 +16,8 @@ const B_CLASS: &str = "javelinist";
 
 /// Open ground, B one step in front of A.
 const A_SPOT: Vec2 = Vec2::new(-22.5, -6.5);
-const B_SPOT: Vec2 = Vec2::new(-21.5, -6.5);
+/// In A's (a revenant's) lane, empowered or not: its glaive's blade lands out ahead of it.
+const B_SPOT: Vec2 = Vec2::new(-20.2, -6.5);
 
 fn duel_at_close_range(port: u16) -> Duel {
     Duel::placed(port, (A_CLASS, A_SPOT), (B_CLASS, B_SPOT))
@@ -37,13 +38,18 @@ fn a_swings_at_b(d: &mut Duel) {
     a_swings(d, aim);
 }
 
-/// A starts a swing toward `aim`, and steps until it goes off on A (after the windup).
+/// A clicks to swing toward `aim` once its last attack is done, and steps until it goes off on A
+/// (after the windup).
 fn a_swings(d: &mut Duel, aim: Vec2) {
     let before = a_last_swing(d);
+    a_ready(d);
     set_input(&mut d.a, PlayerInput { aim, fire: true, ..default() });
-    d.until(Duration::from_secs(1), "A's windup starts", |d| attack_state(&mut d.a, A).windup.is_some());
-    set_input(&mut d.a, PlayerInput::default());
     d.until(Duration::from_secs(2), "A's swing goes off", |d| a_last_swing(d) > before);
+}
+
+/// Steps until A's last attack is done on the server: a click before then would be dropped.
+fn a_ready(d: &mut Duel) {
+    d.until(Duration::from_secs(2), "A's attack is ready", |d| player::<AttackState>(&mut d.server, A).is_some_and(|a| a.swing.is_none()));
 }
 
 fn reach() -> f32 {
@@ -58,10 +64,9 @@ fn server_swing(d: &mut Duel) -> u32 {
 /// A swings toward +x with B wherever it is; the swing is judged on the server when it goes
 /// off. Returns where A and B were on the server at that tick, and the damage B took.
 fn swing_judged_on_server(d: &mut Duel) -> (Vec2, Vec2, i32) {
+    a_ready(d);
     let (before, health) = (server_swing(d), b_health(d));
     set_input(&mut d.a, PlayerInput { aim: Vec2::X, fire: true, ..default() });
-    d.until(Duration::from_secs(1), "A's windup starts on A", |d| attack_state(&mut d.a, A).windup.is_some());
-    set_input(&mut d.a, PlayerInput::default());
     // Checked every frame: a frame runs at most one tick here, so this is B where it was judged.
     d.until(Duration::from_secs(3), "A's swing goes off on the server", |d| server_swing(d) > before);
     let (a, b) = (server_player(&mut d.server, A).0, server_player(&mut d.server, B).0);
@@ -74,13 +79,14 @@ fn melee_hits_where_the_target_is_now() {
     let a_spot = A_SPOT + Vec2::X * 2.0;
     let mut d = Duel::placed(5895, (A_CLASS, a_spot), (B_CLASS, a_spot + Vec2::X * (reach() - 0.3)));
     let damage = class_id(A_CLASS).def().attack.damage;
-    let hits = |a: Vec2, b: Vec2| sim::melee_hits(map(), a, Vec2::X, class_id(A_CLASS), b);
+    let hits = |a: Vec2, b: Vec2| sim::melee_hits(map(), a, Vec2::X, false, class_id(A_CLASS), b);
 
     // B standing just inside reach is hit; just outside, it isn't.
     let (_, _, dealt) = swing_judged_on_server(&mut d);
     assert!(dealt >= damage, "a swing at B standing in reach missed");
-    place(&mut d.server, B, a_spot + Vec2::X * (reach() + 0.3));
-    d.run(windup(A_CLASS) + Duration::from_millis(300)); // past the attack cooldown
+    // (That hit empowered the next swing: out of even its longer reach.)
+    let empowered_reach = class_id(A_CLASS).def().attack.lane(true).unwrap().1 + arena_shared::config::PLAYER_RADIUS;
+    place(&mut d.server, B, a_spot + Vec2::X * (empowered_reach + 0.3));
     let (_, _, dealt) = swing_judged_on_server(&mut d);
     assert_eq!(dealt, 0, "a swing at B standing out of reach hit");
 
@@ -89,7 +95,8 @@ fn melee_hits_where_the_target_is_now() {
     // when B was in the swing's lane on the server at that tick, whatever A saw.
     place(&mut d.server, B, a_spot + Vec2::X * 0.5);
     d.run(Duration::from_millis(500));
-    let goal = Vec2::new(-12.5, -6.5);
+    // Open ground straight out along A's swing, short of the wall past it.
+    let goal = Vec2::new(-14.5, -6.5);
     assert!(map().line_walkable(a_spot, goal));
     set_input(&mut d.b, PlayerInput { move_to: Some(Map::center(Map::tile_of(goal))), ..default() });
     let lead = class_id(B_CLASS).def().move_speed * windup(A_CLASS).as_secs_f32();
