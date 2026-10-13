@@ -112,6 +112,11 @@ pub struct DesiredInput(pub PlayerInput);
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct StopWalking(pub bool);
 
+/// Extra latency to fake on everything we receive (the practice tools' "Fake ping"), to feel how
+/// the game plays at a higher ping: it adds to the round trip, as a farther server would.
+#[derive(Resource, Default, Clone, Copy, Debug, PartialEq)]
+pub struct FakeLatency(pub Duration);
+
 /// Our own fighter (the one the server says we control).
 #[derive(Component, Debug)]
 pub struct Me;
@@ -141,6 +146,7 @@ impl Plugin for ClientNetPlugin {
         });
         app.init_resource::<DesiredInput>();
         app.init_resource::<StopWalking>();
+        app.init_resource::<FakeLatency>();
         app.insert_resource(ChosenClass(self.settings.class));
 
         spawn_client_entity(app.world_mut(), &self.settings);
@@ -152,7 +158,21 @@ impl Plugin for ClientNetPlugin {
         app.configure_sets(Update, SendCommands.after(PlayerControls));
         app.init_resource::<WalkWhenOrdered>();
         app.add_systems(Update, (forget_walk_on_attack, send_commands).chain().in_set(SendCommands));
+        app.add_systems(Update, fake_latency.run_if(resource_changed::<FakeLatency>));
     }
+}
+
+/// Delays what we receive by `FakeLatency`, with Lightyear's link conditioner (replacing one from
+/// `ClientSettings`). Packets already held back keep their times, so none are lost on a switch.
+fn fake_latency(latency: Res<FakeLatency>, mut link: Single<&mut Link, With<Client>>) {
+    if latency.is_added() && latency.0.is_zero() {
+        return;
+    }
+    let mut conditioner = RecvLinkConditioner::new(LinkConditionerConfig { incoming_latency: latency.0, ..default() });
+    if let Some(old) = link.recv.conditioner.as_mut() {
+        conditioner.time_queue = std::mem::take(&mut old.time_queue);
+    }
+    link.recv.conditioner = Some(conditioner);
 }
 
 fn spawn_client_entity(world: &mut World, settings: &ClientSettings) {

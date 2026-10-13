@@ -170,3 +170,48 @@ fn players_spawn_apart() {
     println!("spawned at {a} and {b}");
     assert!(a.distance(b) > 10.0, "players spawned on top of each other");
 }
+
+/// How soon after a right click B (the clean connection) sees itself start walking: the best of
+/// a few clicks back and forth, so a slow frame under load doesn't count.
+fn walk_shows_after(h: &mut Duel) -> Duration {
+    let home = Map::tile_of(server_player(&mut h.server, B).0);
+    let spots = [map().nearest_walkable(home + IVec2::new(0, 3), 3).unwrap(), home];
+    let mut best = Duration::MAX;
+    for spot in spots.into_iter().cycle().take(4) {
+        let start = sees(&mut h.b, B).unwrap();
+        set_input(&mut h.b, PlayerInput { move_to: Some(Map::center(spot)), ..default() });
+        let t0 = Instant::now();
+        h.until(Duration::from_secs(2), "B's own view moves", |h| sees(&mut h.b, B).unwrap().distance(start) > 0.01);
+        best = best.min(t0.elapsed());
+        h.until(Duration::from_secs(3), "B arrives", |h| sees(&mut h.b, B) == Some(Map::center(spot)));
+    }
+    best
+}
+
+fn rtt(client: &mut App) -> Duration {
+    let mut q = client.world_mut().query_filtered::<&lightyear::prelude::Link, With<lightyear::prelude::client::Client>>();
+    q.single(client.world()).unwrap().stats.rtt
+}
+
+/// The practice tools' "Fake ping" (`FakeLatency`) delays what the client receives: commands
+/// show that much later and the ping shows it, and switching it off brings both back.
+#[test]
+fn fake_latency_adds_to_the_round_trip() {
+    let mut h = Duel::new(5883, A_CLASS, B_CLASS);
+    h.until(Duration::from_secs(15), "B sees itself", |h| sees(&mut h.b, B).is_some());
+    h.run(Duration::from_millis(1500));
+    let clean = walk_shows_after(&mut h);
+
+    h.b.world_mut().resource_mut::<arena_client::FakeLatency>().0 = Duration::from_millis(100);
+    h.until(Duration::from_secs(5), "B's ping shows the fake latency", |h| rtt(&mut h.b) >= Duration::from_millis(90));
+    let faked = walk_shows_after(&mut h);
+
+    h.b.world_mut().resource_mut::<arena_client::FakeLatency>().0 = Duration::ZERO;
+    h.until(Duration::from_secs(5), "B's ping drops back", |h| rtt(&mut h.b) < Duration::from_millis(50));
+    let back = walk_shows_after(&mut h);
+
+    println!("walk showed after {clean:?} clean, {faked:?} with +100 ms, {back:?} switched off");
+    assert!(faked >= Duration::from_millis(100), "+100 ms of fake latency, but the walk showed after {faked:?}");
+    assert!(faked >= clean + Duration::from_millis(70), "fake latency added too little: {clean:?} -> {faked:?}");
+    assert!(back + Duration::from_millis(70) <= faked, "switching it off didn't bring the delay back: {back:?}");
+}
