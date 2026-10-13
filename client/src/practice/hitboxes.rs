@@ -5,7 +5,7 @@
 //! off; each projectile's body; a nova's burst, for a moment. A dash cuts the bodies it touches.
 //! The 3D view (`ShowHitboxes3d`, a switch of its own) draws them standing up instead, every
 //! ring colored by its height off the floor (`height_color`): each fighter's body as a column
-//! of rings, each projectile's as a ring around it where it's drawn, so where a spear will cross
+//! of rings, each projectile's as a ball around it where it's drawn, so where a spear will cross
 //! a body shows in the matching color. Local only: nothing is sent.
 
 use std::f32::consts::FRAC_PI_2;
@@ -153,8 +153,8 @@ fn draw_hitboxes(
     }
 }
 
-/// Draws every fighter's body as a column of rings and every projectile's as a ring around it
-/// where it's drawn, each colored by its height (`height_color`).
+/// Draws every fighter's body as a column of rings and every projectile's as a ball around it
+/// where it's drawn (around its point), each colored by its height (`height_color`).
 fn draw_hitboxes_3d(mut gizmos: Gizmos, fighters: Query<(&Pos, Option<&Health>)>, shots: Query<(&Projectile, &Transform)>) {
     let flat = Quat::from_rotation_x(FRAC_PI_2);
     for (pos, health) in &fighters {
@@ -175,9 +175,7 @@ fn draw_hitboxes_3d(mut gizmos: Gizmos, fighters: Query<(&Pos, Option<&Health>)>
     }
     for (shot, transform) in &shots {
         let radius = shot.class.def().shot(shot.ability).unwrap_or_default().radius;
-        let color = height_color(transform.translation.y);
-        gizmos.circle(Isometry3d::new(transform.translation, flat), radius, color);
-        gizmos.sphere(Isometry3d::from_translation(transform.translation), radius * 0.35, color);
+        gizmos.sphere(Isometry3d::from_translation(transform.translation), radius, height_color(transform.translation.y)).resolution(16);
     }
 }
 

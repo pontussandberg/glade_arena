@@ -175,7 +175,7 @@ pub(crate) struct Moves {
     /// Throws its weapon with the auto-attack: the hand is empty until a new one is drawn.
     throws: bool,
     /// How big the fighter is drawn (1 = the joints in `arena`).
-    scale: f32,
+    pub(crate) scale: f32,
     /// How much longer the weapon is drawn for a moment as a strike lands (a fraction of its
     /// length), the hand pushed out with it: a fighting game's smear, so the blade's tip reaches
     /// as far as the strike does.
@@ -234,16 +234,17 @@ const JAVELINIST: Moves = Moves {
     // A long arm, reaching mid-thigh.
     elbow_at: arena::JAVELINIST_ELBOW,
     hand_at: arena::JAVELINIST_HAND,
-    // Never quite straight: bent carried and cocked (the way an elbow bends, the arm having
-    // come up over the front), straightening through the whip; spent in the follow-through,
-    // the arm come in across the body, the elbow out, the forearm folded in across the belt,
-    // the hand by the left hip.
-    elbow: [-0.3, -0.35, 0.8, -0.3],
-    elbow_turn: [0.0, 0.0, 1.78, 0.0],
+    // Never quite straight: carried overhead, bent out to the side (the elbow pointing out
+    // right, the forearm in over the head); cocked, bent the way an elbow bends with the arm
+    // come up over the front; straightening through the whip; spent in the follow-through, the
+    // arm come in across the body, the elbow out, the forearm folded in across the belt, the
+    // hand by the left hip.
+    elbow: [0.3, -0.35, 0.8, 0.3],
+    elbow_turn: [FRAC_PI_2, 0.0, 1.78, FRAC_PI_2],
     arm_yaw: [0.0, 0.0, 1.56, 0.0],
     windmill: false,
-    // One-armed: the empty sleeve only swings a little with the body.
-    lead_arm: [0.05, 0.35, -0.3, -0.2],
+    // One-armed: the empty sleeve hangs nearly limp.
+    lead_arm: [0.0, 0.1, -0.1, 0.0],
     // Sinking low into the windup, knees bent: the lead thigh well forward over an upright shin,
     // the back leg stretched out behind, a little bent, both feet down; still low through the
     // throw.
@@ -1075,7 +1076,7 @@ fn add_rigs(
         }
         commands.entity(player).add_children(&[rig.head, rig.arms[0], rig.arms[1], rig.legs[0], rig.legs[1]]);
         if let Some(wardrobe) = &handles.wardrobe {
-            crate::cloth::dress(&mut commands, player, rig.legs, own, wardrobe);
+            crate::cloth::dress(&mut commands, player, (rig.legs, rig.arms[0]), own, wardrobe);
         }
         if matches!(rig.moves.held, Held::Gripped { .. }) {
             commands.entity(player).insert(crate::swish::Blade { held: rig.held, length: arena::BLADE_LENGTH, shown: 0, quickened: false, striking: false, dragged: None, corner: arena::glaive_edge(1.0), rasp: 0, embers: (0.0, 0) });
