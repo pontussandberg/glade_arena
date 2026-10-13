@@ -92,6 +92,7 @@ pub struct Wardrobe {
 impl Drape {
     /// `mesh` and `glow` skinned to `chains`.
     pub fn new(mut mesh: Mesh, glow: Option<Mesh>, chains: Vec<Vec<Vec3>>, weave: Weave) -> Self {
+        debug_assert!(1 + chains.iter().map(Vec::len).sum::<usize>() <= MAX_JOINTS, "a drape with more joints than a skin holds");
         skin(&mut mesh, &chains, weave.joined);
         let glow = glow.map(|mut glow| {
             skin(&mut glow, &chains, weave.joined);
@@ -122,16 +123,23 @@ fn nearest(chain: &[Vec3], v: Vec3) -> (f32, usize, f32) {
     best
 }
 
-/// Gives every vertex of `mesh` its joints and weights: along its nearest chain (or two, blended
-/// by distance, if `joined`) between the joints either side of it, or the body above the top.
+/// Gives every vertex of `mesh` its joints and weights: along its nearest chain (blended by
+/// distance with the nearer of its neighbours, if `joined`) between the joints either side of it,
+/// or the body above the top.
 fn skin(mesh: &mut Mesh, chains: &[Vec<Vec3>], joined: bool) {
     let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { return };
     let (mut indices, mut weights) = (Vec::with_capacity(positions.len()), Vec::with_capacity(positions.len()));
     for p in positions {
         let v = Vec3::from(*p);
-        let mut near: Vec<(usize, (f32, usize, f32))> = chains.iter().enumerate().map(|(c, chain)| (c, nearest(chain, v))).collect();
-        near.sort_by(|a, b| a.1.0.total_cmp(&b.1.0));
-        near.truncate(if joined { 2 } else { 1 });
+        let all: Vec<(usize, (f32, usize, f32))> = chains.iter().enumerate().map(|(c, chain)| (c, nearest(chain, v))).collect();
+        let first = *all.iter().min_by(|a, b| a.1.0.total_cmp(&b.1.0)).expect("a drape has chains");
+        // Blended with the nearer of the chains either side of its nearest, not just the next
+        // nearest: that may be across a slit (the two sides of a cut, close at rest).
+        let mut near = vec![first];
+        if joined {
+            let beside = [first.0.wrapping_sub(1), first.0 + 1].into_iter().filter_map(|c| all.get(c).copied());
+            near.extend(beside.min_by(|a, b| a.1.0.total_cmp(&b.1.0)));
+        }
         let total: f32 = near.iter().map(|(_, (d, _, _))| 1.0 / (d * d + 1e-4)).sum();
         let mut influence: Vec<(u16, f32)> = Vec::new();
         let mut add = |j: u16, w: f32| match influence.iter_mut().find(|(i, _)| *i == j) {
@@ -216,9 +224,10 @@ pub(crate) struct Cloth {
     hangings: Vec<Hanging>,
     body: Vec<Column>,
     leg_radius: f32,
-    /// The (right, left) legs and the weapon arm, posed by `rig.rs`, and how thick and long the
-    /// arm is.
+    /// The (right, left) legs, their knees and the weapon arm, posed by `rig.rs`, and how thick
+    /// and long the arm is.
     legs: [Entity; 2],
+    knees: [Entity; 2],
     arm: Entity,
     arm_size: Option<(f32, f32)>,
     /// Where the body was in the world last frame (none before the first).
@@ -268,7 +277,7 @@ impl Hanging {
 }
 
 /// Hangs a class's cloth on `fighter`, in its own `material` (so it flashes and chills with it).
-pub(crate) fn dress(commands: &mut Commands, fighter: Entity, (legs, arm): ([Entity; 2], Entity), material: &Handle<StandardMaterial>, wardrobe: &WardrobeAssets) {
+pub(crate) fn dress(commands: &mut Commands, fighter: Entity, (legs, knees, arm): ([Entity; 2], [Entity; 2], Entity), material: &Handle<StandardMaterial>, wardrobe: &WardrobeAssets) {
     let mut hangings = Vec::new();
     for drape in &wardrobe.drapes {
         let mut joints = vec![commands.spawn(Transform::IDENTITY).id()];
@@ -293,6 +302,7 @@ pub(crate) fn dress(commands: &mut Commands, fighter: Entity, (legs, arm): ([Ent
         body: wardrobe.body.clone(),
         leg_radius: wardrobe.leg_radius,
         legs,
+        knees,
         arm,
         arm_size: wardrobe.arm,
         was: None,
@@ -302,6 +312,9 @@ pub(crate) fn dress(commands: &mut Commands, fighter: Entity, (legs, arm): ([Ent
     });
 }
 
+/// The most joints a skinned mesh can have (one for the body, one per chain point): what the web
+/// build's skinning holds.
+pub(crate) const MAX_JOINTS: usize = 256;
 /// Simulation steps per second (each frame is split into enough of them).
 const STEPS_PER_SECOND: f32 = 120.0;
 /// How long a leg is, hip to sole (just off the ground), and how low cloth can go.
@@ -324,17 +337,30 @@ struct Motion {
     pivot: Vec3,
 }
 
-/// A leg (or an arm): a capsule down from its hip (or shoulder), in the fighter's space.
+/// A leg's thigh or shin (or an arm): a capsule from `hip` down to `sole`, in the fighter's space.
 struct Leg {
     hip: Vec3,
     sole: Vec3,
+}
+
+/// Both legs as capsules, each a thigh down to its knee and a shin from there, hanging from the
+/// hips turned `legs` and bent at the knees `knees` (as `rig::Posed` turns them; straight legs,
+/// unbent, for a rig whose legs don't bend).
+fn legs_at(legs: [Quat; 2], knees: [Quat; 2]) -> [Leg; 4] {
+    let hips = [RIG_HIP, RIG_HIP * Vec3::new(1.0, 1.0, -1.0)];
+    let thigh = |i: usize| Leg { hip: hips[i], sole: hips[i] + legs[i] * arena::RIG_KNEE };
+    let shin = |i: usize| {
+        let knee = hips[i] + legs[i] * arena::RIG_KNEE;
+        Leg { hip: knee, sole: knee + legs[i] * knees[i] * (Vec3::NEG_Y * LEG_LENGTH - arena::RIG_KNEE) }
+    };
+    [thigh(0), shin(0), thigh(1), shin(1)]
 }
 
 /// What the cloth moves around, in the fighter's space: the weapon arm (if cloth lies on it)
 /// and how thick it is.
 struct Body<'a> {
     columns: &'a [Column],
-    legs: [Leg; 2],
+    legs: [Leg; 4],
     leg_radius: f32,
     arm: Option<(Leg, f32)>,
 }
@@ -361,10 +387,13 @@ impl Body<'_> {
             let mut off = local - closest;
             if off.length() < radius {
                 // An arm: always out on its own side (left or right), never caught between it and
-                // the body (cloth lies over an arm, not in under its pit).
+                // the body (cloth lies over an arm, not in under its pit). Its side, square to the
+                // arm, so the push stays square to it however it's turned.
+                let axis = along.normalize_or(Vec3::Y);
                 let outward = Vec3::Z * limb.hip.z.signum();
-                if arm && off.dot(outward) < 0.0 {
-                    off -= outward * 2.0 * off.dot(outward);
+                let side = (outward - axis * outward.dot(axis)).normalize_or_zero();
+                if arm && off.dot(side) < 0.0 {
+                    off -= side * 2.0 * off.dot(side);
                 }
                 // Out the way it's in from, or up if it's right on the line.
                 (local, pushed) = (closest + off.normalize_or(Vec3::Y) * radius, true);
@@ -518,10 +547,8 @@ fn drape(
                 hanging.at.clear();
             }
         }
-        let legs: [Leg; 2] = std::array::from_fn(|i| {
-            let leg = parts.get(cloth.legs[i]).copied().unwrap_or_default();
-            Leg { hip: leg.translation, sole: leg.translation + leg.rotation * Vec3::NEG_Y * LEG_LENGTH }
-        });
+        let turn = |part: Entity| parts.get(part).map_or(Quat::IDENTITY, |t| t.rotation);
+        let legs = legs_at(cloth.legs.map(turn), cloth.knees.map(turn));
         let arm = cloth.arm_size.map(|(radius, length)| {
             let arm = parts.get(cloth.arm).copied().unwrap_or_default();
             (Leg { hip: arm.translation + arm.rotation * Vec3::Y * ARM_TOP, sole: arm.translation + arm.rotation * Vec3::NEG_Y * length }, radius)
@@ -618,20 +645,21 @@ fn drift_motes(time: Res<Time>, mut commands: Commands, mut motes: Query<(Entity
     }
 }
 
-/// A class's cloth on a still fighter drawn `scale` times its size, its weapon arm raised
-/// from hanging to turned `arm` at the shoulder (as `rig::Posed::arms`) and held there, settled
-/// for `seconds`: each drape's mesh as it came to hang, in the fighter's space (for previews).
+/// A class's cloth on a still fighter posed as `posed` (its body, weapon arm, legs and knees
+/// eased there from standing over a third of a second and held there), settled for `seconds`:
+/// each drape's mesh as it came to hang, in the fighter's space (for previews).
 #[cfg(test)]
-pub(crate) fn settled(wardrobe: &Wardrobe, arm: Quat, scale: f32, seconds: f32) -> Vec<Mesh> {
+pub(crate) fn settled(wardrobe: &Wardrobe, posed: &crate::rig::Posed, seconds: f32) -> Vec<Mesh> {
     let mut hangings: Vec<Hanging> = wardrobe.drapes.iter().map(|d| Hanging::new(&d.chains, d.weave, Vec::new())).collect();
-    let body = Transform::from_scale(Vec3::splat(scale));
+    let body = Transform { translation: Vec3::ZERO, ..posed.body };
     let (m, inverse) = (body.compute_affine(), body.compute_affine().inverse());
     let still = Motion { shift: Vec3::ZERO, turn: Quat::IDENTITY, pivot: Vec3::ZERO };
     let dt = 1.0 / STEPS_PER_SECOND;
     let steps = (seconds / dt).round() as usize;
     for i in 0..steps {
-        let turn = Quat::IDENTITY.slerp(arm, (i as f32 / (0.3 / dt)).min(1.0));
-        let legs = [RIG_HIP, RIG_HIP * Vec3::new(1.0, 1.0, -1.0)].map(|hip| Leg { hip, sole: hip + Vec3::NEG_Y * LEG_LENGTH });
+        let eased = (i as f32 / (0.3 / dt)).min(1.0);
+        let turn = Quat::IDENTITY.slerp(posed.arms[0], eased);
+        let legs = legs_at(posed.legs.map(|q| Quat::IDENTITY.slerp(q, eased)), posed.knees.map(|q| Quat::IDENTITY.slerp(q, eased)));
         let arm = wardrobe.arm.map(|(radius, length)| {
             let shoulder = arena::RIG_SHOULDER;
             (Leg { hip: shoulder + turn * Vec3::Y * ARM_TOP, sole: shoulder + turn * Vec3::NEG_Y * length }, radius)
@@ -688,6 +716,17 @@ mod tests {
     /// Every class's cloth simulated through standing, walking, a sharp turn and a stop: it
     /// never strays far from its rest shape (in the body's space), never ends up inside the body,
     /// and settles again.
+    /// Every drape can be skinned on the web build: no more joints than it holds.
+    #[test]
+    fn drapes_fit_a_skin() {
+        for class in arena::FIGHTER_LOOKS {
+            for drape in arena::fighter_rig(class).wardrobe.iter().flat_map(|w| &w.drapes) {
+                let joints = 1 + drape.chains.iter().map(Vec::len).sum::<usize>();
+                assert!(joints <= MAX_JOINTS, "{class}: a drape with {joints} joints (at most {MAX_JOINTS})");
+            }
+        }
+    }
+
     #[test]
     fn cloth_hangs_calmly() {
         for class in arena::FIGHTER_LOOKS {
@@ -699,7 +738,7 @@ mod tests {
 
     fn hangs_calmly(class: &str, wardrobe: &Wardrobe) {
         let mut hangings: Vec<Hanging> = wardrobe.drapes.iter().map(|d| Hanging::new(&d.chains, d.weave, Vec::new())).collect();
-        let legs = [RIG_HIP, RIG_HIP * Vec3::new(1.0, 1.0, -1.0)].map(|hip| Leg { hip, sole: hip + Vec3::NEG_Y * LEG_LENGTH });
+        let legs = legs_at([Quat::IDENTITY; 2], [Quat::IDENTITY; 2]);
         let arm = wardrobe.arm.map(|(radius, length)| {
             let shoulder = arena::RIG_SHOULDER;
             (Leg { hip: shoulder + Vec3::Y * ARM_TOP, sole: shoulder + Vec3::NEG_Y * length }, radius)
@@ -756,7 +795,7 @@ mod tests {
             let Some(wardrobe) = arena::fighter_rig(class).wardrobe else { continue };
             let Some((radius, length)) = wardrobe.arm else { continue };
             let mut hangings: Vec<Hanging> = wardrobe.drapes.iter().map(|d| Hanging::new(&d.chains, d.weave, Vec::new())).collect();
-            let legs = [RIG_HIP, RIG_HIP * Vec3::new(1.0, 1.0, -1.0)].map(|hip| Leg { hip, sole: hip + Vec3::NEG_Y * LEG_LENGTH });
+            let straight = [Quat::IDENTITY; 2];
             let shoulder = arena::RIG_SHOULDER;
             let body = Transform::from_scale(Vec3::splat(1.16));
             let (m, inverse) = (body.compute_affine(), body.compute_affine().inverse());
@@ -766,9 +805,10 @@ mod tests {
             // The weapon arm swung up from hanging to over the head (`raise` 0 to 1); gives how
             // far the cloth strays at most, checking it's never in the arm.
             let mut hold = |seconds: f32, raise: f32| {
-                let up = Quat::from_rotation_z(-2.9 * raise);
+                // Swung up and turned in a little, as the throw turns it (`rig::assemble`).
+                let up = Quat::from_rotation_y(0.35 * raise) * Quat::from_rotation_z(-2.9 * raise);
                 let arm = Leg { hip: shoulder + up * Vec3::Y * ARM_TOP, sole: shoulder + up * Vec3::NEG_Y * length };
-                let around = Body { columns: &wardrobe.body, legs: [Leg { ..legs[0] }, Leg { ..legs[1] }], leg_radius: wardrobe.leg_radius, arm: Some((arm, radius)) };
+                let around = Body { columns: &wardrobe.body, legs: legs_at(straight, straight), leg_radius: wardrobe.leg_radius, arm: Some((arm, radius)) };
                 let mut worst = 0.0f32;
                 for _ in 0..(seconds / dt).round() as usize {
                     time += dt;

@@ -481,12 +481,15 @@ pub struct RigMeshes {
     /// attack's `follow_up` is armed (`rig::show_auras`): cracks of light through a blade.
     pub held_aura: Option<Mesh>,
     /// A sharp glint of white light catching now and then somewhere along the held blade's edge
-    /// (`rig::gleam_blades`): the glint, and where along the edge (0..1, from its base to its
-    /// point) is where on the weapon.
-    pub held_glint: Option<(Mesh, fn(f32) -> Vec3)>,
+    /// (`rig::gleam_blades`).
+    pub held_glint: Option<(Mesh, Edge)>,
     /// Cloth that moves (see `cloth.rs`), in the fighter's space.
     pub wardrobe: Option<Wardrobe>,
 }
+
+/// Where along a blade's edge (0..1, from its base to its point) is where on the weapon, in the
+/// weapon's space.
+pub type Edge = fn(f32) -> Vec3;
 
 /// Where a rig's parts attach, in the fighter's space (feet at the origin). Hips and shoulders
 /// are given for the right side; the left mirrors them in Z.
@@ -1728,7 +1731,8 @@ fn mantle_point(u: f32, v: f32, ragged: bool) -> Vec3 {
 fn javelinist_mantle() -> Drape {
     const ROWS: usize = 18;
     const COLS: usize = 96;
-    const CHAINS: usize = 36;
+    // As many as a skin can have joints (`cloth::MAX_JOINTS`), one per chain point.
+    const CHAINS: usize = 30;
     let point = |u, v| mantle_point(u, v, true);
     let cloth = sheet(&grid(ROWS, COLS, (0.0, 1.0), point), &hemmed(ROWS, 2, palette::HUNTER, palette::HUNTER_DARK), 0.022);
     let chains: Vec<Vec<Vec3>> = (0..=CHAINS).map(|c| [0.0, 0.14, 0.28, 0.42, 0.56, 0.7, 0.85, 1.0].map(|v| mantle_point(c as f32 / CHAINS as f32, v, false)).to_vec()).collect();

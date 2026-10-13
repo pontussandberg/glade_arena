@@ -440,6 +440,9 @@ const CUT_RATE: f32 = 30.0;
 const CHAIN_HOLD: f32 = 0.15;
 /// A thrown Q's flick: ticks after the throw until the arm starts and finishes coming back.
 const FLICK: (f32, f32) = (0.5, 5.0);
+/// How far through its throw (0 to 1) a thrower's arm flicks for a Q: through the release, short
+/// of the spent follow-through its throw ends in.
+const FLICK_REACH: f32 = 0.55;
 /// A nova's slam: ticks after the cast until it starts and finishes rising out of it.
 const SLAM: (f32, f32) = (4.0, 12.0);
 /// How quickly a fighter turns toward where it wants to face, and eases in and out of its walk
@@ -500,7 +503,7 @@ struct RigHandles {
     held_glow: Option<Handle<Mesh>>,
     body_glow: Option<Handle<Mesh>>,
     held_aura: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
-    held_glint: Option<(Handle<Mesh>, Handle<StandardMaterial>, fn(f32) -> Vec3)>,
+    held_glint: Option<(Handle<Mesh>, Handle<StandardMaterial>, arena::Edge)>,
     wardrobe: Option<WardrobeAssets>,
 }
 
@@ -564,7 +567,7 @@ pub(crate) struct Rig {
     aura: Option<Entity>,
     /// A gleam catching along the held blade's edge now and then (`gleam_blades`), where along it
     /// (`RigMeshes::held_glint`), and when.
-    gleam: Option<(Entity, fn(f32) -> Vec3)>,
+    gleam: Option<(Entity, arena::Edge)>,
     gleaming: Gleaming,
     moves: &'static Moves,
     /// Walk cycles so far, and how much the fighter is walking (0..1, eased).
@@ -959,7 +962,8 @@ pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, 
             let (strike, finish) = strike_at(striking + since, striking, moves.contact, moves.heavy, moves.throws);
             let (hold, settle) = match moves.throws {
                 true => {
-                    let rest = (def.attack.period_ticks(1.0) - def.attack.windup_ticks(1.0)) as f32 - finish;
+                    // At least a tick of it, however short the backswing.
+                    let rest = ((def.attack.period_ticks(1.0) - def.attack.windup_ticks(1.0)) as f32 - finish).max(1.0);
                     (moves.follow_through.0 * rest, moves.follow_through.1 * rest)
                 }
                 false => moves.follow_through,
@@ -1077,7 +1081,7 @@ fn add_rigs(
         }
         commands.entity(player).add_children(&[rig.head, rig.arms[0], rig.arms[1], rig.legs[0], rig.legs[1]]);
         if let Some(wardrobe) = &handles.wardrobe {
-            crate::cloth::dress(&mut commands, player, (rig.legs, rig.arms[0]), own, wardrobe);
+            crate::cloth::dress(&mut commands, player, (rig.legs, rig.knees, rig.arms[0]), own, wardrobe);
         }
         if matches!(rig.moves.held, Held::Gripped { .. }) {
             commands.entity(player).insert(crate::swish::Blade { held: rig.held, length: arena::BLADE_LENGTH, shown: 0, quickened: false, striking: false, dragged: None, corner: arena::glaive_edge(1.0), rasp: 0, embers: (0.0, 0) });
@@ -1237,7 +1241,10 @@ fn pose_rigs(
             Some(seen) => Some((present - seen as f32).max(0.0)),
             None => tick.map(|t| (now - t as f32).max(0.0)),
         };
-        let windup = SeenThrows::windup(seen, attack);
+        // Ours: news of the attack going off arrives a moment (`ME_BEHIND_TICKS`) before our clock
+        // gets there; until it does, it's still winding up, so the strike plays out in full.
+        let windup = SeenThrows::windup(seen, attack)
+            .or_else(|| attack.swing.filter(|swing| is_me && attack.released_at.is_some_and(|at| at >= swing.started_at && now < at as f32)));
         // The last attack's speed scales its backswing like its windup, and a hit that armed its
         // `follow_up` speeds it up (normal once it's done).
         let speed = attack.swing.map_or(1.0, |swing| swing.backswing_speed(&class.def().attack));
@@ -1252,7 +1259,7 @@ fn pose_rigs(
         let blade = 1.0 + (EMPOWERED_BLADE - 1.0) * rig.empowered;
         let stretch = moves.stretch + if empowering { EMPOWERED_STRETCH } else { 0.0 };
         let (posed_windup, posed_released, ahead) = ahead_of_springs(*class, moves, windup, released, now);
-        let (draw, mut throw, mut smear) = strike_phase(*class, moves, attack, posed_windup, posed_released, ahead);
+        let (mut draw, mut throw, mut smear) = strike_phase(*class, moves, attack, posed_windup, posed_released, ahead);
         // Walking off (or dashing off, after it went off) once the attack has gone off cuts its
         // backswing short, for good: the follow-through blends out quickly into the walk.
         let cut = match (windup, attack.released_at) {
@@ -1268,18 +1275,23 @@ fn pose_rigs(
                 0.0
             }
         };
+        draw *= 1.0 - cut;
         throw *= 1.0 - cut;
         smear *= 1.0 - cut;
-        // A dash has no pose of its own; a nova's slam is the ability pose.
+        // A dash has no pose of its own; a nova's slam is the ability pose. A thrower's flick
+        // goes only so far through the throw (`FLICK_REACH`), short of its spent follow-through.
         let mut dashing = 0.0;
+        let mut flick = 0.0f32;
+        let reach = if moves.throws { FLICK_REACH } else { 1.0 };
         for (slot, ability) in def.abilities() {
             let thrown = seen.and_then(|seen| seen.abilities.get(slot.0 as usize).copied().flatten());
             match (&ability.kind, since_throw(cooldowns.used_at(slot), thrown)) {
-                (AbilityKind::Projectile(_), Some(since)) => throw = throw.max(1.0 - ease(FLICK.0, FLICK.1, since)),
+                (AbilityKind::Projectile(_), Some(since)) => flick = flick.max(reach * (1.0 - ease(FLICK.0, FLICK.1, since))),
                 (AbilityKind::Nova(_), Some(since)) => dashing = f32::max(dashing, 1.0 - ease(SLAM.0, SLAM.1, since)),
                 _ => {}
             }
         }
+        let throw = throw.max(flick);
         let phase = Phase { draw, throw, dashing };
         // A thrown weapon: the hand is empty from a throw until the next attack is ready (its
         // backswing at normal speed, as `released` counts), when a new one is drawn.
@@ -1296,7 +1308,7 @@ fn pose_rigs(
         let released_from = match let_go {
             Some(at) if is_me && moves.throws && held_at.let_go != let_go && now - (at as f32) < frame_ticks => {
                 let back = (dt - (now - at as f32) / TICK_HZ as f32).clamp(0.0, dt);
-                let posed = pose_releasing(*class, moves, attack, &rig.joints, back, at as f32, (facing.look, step, rig.walking, stride));
+                let posed = pose_releasing(*class, moves, attack, &rig.joints, back, at as f32, flick, (facing.look, step, rig.walking, stride));
                 let placed = Transform { translation: body.translation.with_y(posed.body.translation.y), ..posed.body };
                 Some(held_in_world(&placed, &posed))
             }
@@ -1315,9 +1327,11 @@ fn pose_rigs(
         // transforms aren't propagated until after this frame's shots are placed).
         // Let go of, but its flying spear not here yet (the news of it late): it flies on by
         // itself from just where it was let go, along the aim at its speed, not dragged on in
-        // the hand, until the flying spear takes over just there (`render::fly_shots`).
+        // the hand, until the flying spear takes over just there (`render::fly_shots`), or for
+        // good until it's late (it may never come: a shot that hit or ended at once), when it's
+        // back in the hand, hidden till the next attack's ready (`empty_hands`).
         let mut held = posed.held;
-        let ahead_of_news = released_from.filter(|_| let_go.is_some() && held_at.launched < let_go);
+        let ahead_of_news = released_from.filter(|_| let_go.is_some() && held_at.launched < let_go && !late);
         let at = match (ahead_of_news, let_go, def.attack.kind.shot()) {
             (Some(from), Some(at), Some(shot)) => {
                 let flown = (now - at as f32).max(0.0) / TICK_HZ as f32 * shot.speed;
@@ -1373,13 +1387,15 @@ pub(crate) fn empty_hands(rigs: Query<(&Rig, &HeldAt)>, mut parts: Query<&mut Vi
 }
 
 /// How a thrower is posed `dt` (seconds) on from its `joints`, just as its attack goes off then
-/// (`at`, a fractional tick), facing, stepping, walking and striding as `walk` says: where its
-/// hand lets go, wherever between frames that falls.
-pub(crate) fn pose_releasing(class: ClassId, moves: &Moves, attack: &AttackState, joints: &Joints, dt: f32, at: f32, walk: (Vec2, f32, f32, f32)) -> Posed {
+/// (`at`, a fractional tick), mid-`flick` of a Q (0 if none, as `pose_rigs` layers it on), facing,
+/// stepping, walking and striding as `walk` says: where its hand lets go, wherever between
+/// frames that falls.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pose_releasing(class: ClassId, moves: &Moves, attack: &AttackState, joints: &Joints, dt: f32, at: f32, flick: f32, walk: (Vec2, f32, f32, f32)) -> Posed {
     let (look, step, walking, stride) = walk;
     let (windup, released, ahead) = ahead_of_springs(class, moves, None, Some(0.0), at);
     let (draw, throw, smear) = strike_phase(class, moves, attack, windup, released, ahead);
-    let phase = Phase { draw, throw, dashing: 0.0 };
+    let phase = Phase { draw, throw: throw.max(flick), dashing: 0.0 };
     let angles = joints.clone().follow(&targets(moves, phase, step, walking), dt, moves);
     let aimed = targets(moves, phase, 0.0, walking);
     assemble(moves, &angles, &aimed, look, stride, walking * (1.0 - phase.braced()), moves.stretch * smear, 1.0, 1.0 - phase.braced())
@@ -1510,7 +1526,7 @@ mod tests {
                         attack.released_at = Some(release);
                         // The frame the hand lets go: posed just as it did.
                         let back = dt - (now - release as f32) / TICK_HZ as f32;
-                        break pose_releasing(class, moves, &attack, &joints, back, release as f32, (Vec2::X, 0.0, 0.0, 0.0));
+                        break pose_releasing(class, moves, &attack, &joints, back, release as f32, 0.0, (Vec2::X, 0.0, 0.0, 0.0));
                     }
                     let (shown, shown_released, ahead) = ahead_of_springs(class, moves, attack.winding_up(), None, now);
                     let (draw, throw, _) = strike_phase(class, moves, &attack, shown, shown_released, ahead);

@@ -63,7 +63,7 @@ impl Plugin for RenderPlugin {
                 (add_visuals, sync_transforms).chain().before(crate::rig::Posing),
                 (fly_shots, crate::rig::empty_hands).chain().after(crate::rig::Posing),
                 (show_novas, grow_bursts, end_fleeting, show_frost),
-                align_to_world.after(crate::rig::Posing),
+                align_to_world.after(crate::rig::Posing).after(fly_shots),
                 toggle_range_circle,
                 fit_range_circle,
                 (update_status, update_key_hints, fold_controls),
@@ -700,7 +700,7 @@ fn add_visuals(
         // A real weapon, in its own colors, gets a white glow on its point.
         if glow == arena::ShotGlow::Weapon {
             let spark = visuals.material(&mut materials, projectile.owner, Look::Spark);
-            shot.with_child((Mesh3d(visuals.shot_tip.clone()), MeshMaterial3d(spark)));
+            shot.with_child((Mesh3d(visuals.shot_tip.clone()), MeshMaterial3d(spark), NotShadowCaster));
         }
         if let Some(aura) = aura {
             let material = visuals.material(&mut materials, projectile.owner, Look::Aura);
@@ -710,10 +710,11 @@ fn add_visuals(
             let material = visuals.material(&mut materials, projectile.owner, Look::Wind);
             // No length yet: it grows as the spear flies.
             let wind = Transform::from_xyz(-WIND_FRONT, 0.0, 0.0).with_scale(Vec3::new(0.0, 1.0, 1.0));
-            let wind = shot.commands().spawn((Mesh3d(visuals.wind.clone()), MeshMaterial3d(material), wind)).id();
+            let wind = shot.commands().spawn((Mesh3d(visuals.wind.clone()), MeshMaterial3d(material), wind, NotShadowCaster)).id();
             shot.add_child(wind).insert(Thrown { wind, launch: None, length: 0.0, stretch: 0.0 });
             // Its only shadow is the one straight under it, on its line: where it really is (the
-            // sun's would fall meters off to the side).
+            // sun's would fall meters off to the side), so none of it casts one, its point's spark
+            // and its wind neither.
             let shadow = visuals.material(&mut materials, projectile.owner, Look::Shadow);
             let flat = Quat::from_rotation_y(projectile.dir.to_angle());
             shot.insert(NotShadowCaster).with_child((Mesh3d(visuals.spear_shadow.clone()), MeshMaterial3d(shadow), WorldAligned(flat, 0.03), NotShadowCaster));
@@ -1050,6 +1051,17 @@ fn sync_transforms(mut q: Query<(&Pos, &mut Transform), (Changed<Pos>, Without<P
     }
 }
 
+/// A thrown spear as it leaves the hand that holds it at `held` (`HeldAt::at`, the grip, the
+/// spear along +Y): drawn just over the held one, its point where that one's is (the flying
+/// spear's mesh has its point at its origin, along +X), turned and as big as it's held.
+pub(crate) fn leaving_hand(held: &Transform) -> Transform {
+    Transform {
+        translation: held.transform_point(Vec3::Y * arena::GRIP_TO_TIP),
+        rotation: held.rotation * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        scale: held.scale,
+    }
+}
+
 /// Places every shot each frame from where and when it was thrown, on our own fighter's clock
 /// (between ticks too, so it glides instead of stepping): a shot coming at us is drawn where it is
 /// relative to us. Never before where it starts.
@@ -1067,17 +1079,6 @@ fn sync_transforms(mut q: Query<(&Pos, &mut Transform), (Changed<Pos>, Without<P
 /// fast and are where they really are almost at once. Its wind stretches back to where it left
 /// the hand, up to `WIND_LENGTH`. A thrown Q isn't the held javelin (that stays in the hand): it
 /// shoots straight out from where the sim threw it, already pointing the way it flies.
-/// A thrown spear as it leaves the hand that holds it at `held` (`HeldAt::at`, the grip, the
-/// spear along +Y): drawn just over the held one, its point where that one's is (the flying
-/// spear's mesh has its point at its origin, along +X), turned and as big as it's held.
-pub(crate) fn leaving_hand(held: &Transform) -> Transform {
-    Transform {
-        translation: held.transform_point(Vec3::Y * arena::GRIP_TO_TIP),
-        rotation: held.rotation * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
-        scale: held.scale,
-    }
-}
-
 fn fly_shots(
     time: Res<Time>,
     clock: AttackClock,
@@ -1171,7 +1172,8 @@ fn fly_shots(
         thrown.stretch += pull * dt;
         thrown.length = (thrown.length + thrown.stretch * dt).max(0.0);
         if let Ok(mut wind) = winds.get_mut(thrown.wind) {
-            let scale = Vec3::new(thrown.length, 1.0, 1.0);
+            // In meters: undoing the spear's own drawn size (`Launch::scale`).
+            let scale = Vec3::new(thrown.length / launch.scale.x, 1.0, 1.0);
             if wind.scale != scale {
                 wind.scale = scale;
             }

@@ -262,7 +262,7 @@ fn preview_cloth_on_arm() {
         let phase = Phase { draw, throw: 0.0, dashing: 0.0 };
         let angles = targets(moves, phase, 0.0, 0.0);
         let posed = assemble(moves, &angles, &angles, Vec2::X, 0.0, 0.0, 0.0, 1.0, 1.0 - phase.braced());
-        let cloth = crate::cloth::settled(&wardrobe, posed.arms[0], moves.scale, 2.0);
+        let cloth = crate::cloth::settled(&wardrobe, &posed, 2.0);
         let (tris, _, _) = posed_figure(key, &posed, 1.0, Some(&cloth));
         for (i, from) in views.into_iter().enumerate() {
             let mut cell = vec![[200u8, 204, 200]; SIZE * SIZE];

@@ -155,7 +155,11 @@ fn draw_hitboxes(
 
 /// Draws every fighter's body as a column of rings and every projectile's as a ball around it
 /// where it's drawn (around its point), each colored by its height (`height_color`).
-fn draw_hitboxes_3d(mut gizmos: Gizmos, fighters: Query<(&Pos, Option<&Health>)>, shots: Query<(&Projectile, &Transform)>) {
+fn draw_hitboxes_3d(
+    mut gizmos: Gizmos,
+    fighters: Query<(&Pos, Option<&Health>), Without<Projectile>>,
+    shots: Query<(&Projectile, &Transform, &InheritedVisibility)>,
+) {
     let flat = Quat::from_rotation_x(FRAC_PI_2);
     for (pos, health) in &fighters {
         if health.is_some_and(|h| !h.alive()) {
@@ -173,7 +177,8 @@ fn draw_hitboxes_3d(mut gizmos: Gizmos, fighters: Query<(&Pos, Option<&Health>)>
             gizmos.line_gradient(at + side, at + side + Vec3::Y * BODY_HEIGHT, height_color(0.0), height_color(BODY_HEIGHT));
         }
     }
-    for (shot, transform) in &shots {
+    // Only one that's shown: a thrown spear still in the hand isn't anywhere yet.
+    for (shot, transform, _) in shots.iter().filter(|(_, _, shown)| shown.get()) {
         let radius = shot.class.def().shot(shot.ability).unwrap_or_default().radius;
         gizmos.sphere(Isometry3d::from_translation(transform.translation), radius, height_color(transform.translation.y)).resolution(16);
     }
