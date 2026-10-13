@@ -10,6 +10,7 @@ use arena_shared::config::*;
 use arena_shared::protocol::*;
 use arena_shared::sim;
 use bevy::platform::collections::HashMap;
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
@@ -23,7 +24,7 @@ use crate::casting::{Aiming, CastMode, ability_key, key_casts, key_label};
 use crate::rooms::{load_setting, save_setting};
 use crate::feedback::AttackClock;
 use crate::arena::{self, palette, to_gameplay, to_world};
-use crate::rig::HeldAt;
+use crate::rig::{HeldAt, MAX_HOLD_TICKS};
 
 pub struct RenderPlugin;
 
@@ -60,7 +61,7 @@ impl Plugin for RenderPlugin {
             (
                 (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
                 (add_visuals, sync_transforms).chain().before(crate::rig::Posing),
-                fly_shots.after(crate::rig::Posing),
+                (fly_shots, crate::rig::empty_hands).chain().after(crate::rig::Posing),
                 (show_novas, grow_bursts, end_fleeting, show_frost),
                 align_to_world.after(crate::rig::Posing),
                 toggle_range_circle,
@@ -74,23 +75,26 @@ impl Plugin for RenderPlugin {
 
 /// Shots fly at chest height; fighters stand on the floor (their feet are at the mesh origin).
 const PROJECTILE_HEIGHT: f32 = 0.9;
-/// Thrown spears fly a little higher, at the height the throw lets go of them, so they leave the
-/// hand straight down their line instead of sinking onto it.
-const THROWN_HEIGHT: f32 = 1.2;
+/// Thrown spears fly a little higher, at the height the throw lets go of them (`rig.rs` times the
+/// release to it), so they leave the hand straight down their line instead of sinking onto it.
+pub(crate) const THROWN_HEIGHT: f32 = 1.2;
 
 /// How high a shot flies: a thrown spear at `THROWN_HEIGHT`, the rest at `PROJECTILE_HEIGHT`.
 fn shot_height(thrown: bool) -> f32 {
     if thrown { THROWN_HEIGHT } else { PROJECTILE_HEIGHT }
 }
-/// How long a thrown spear takes to ease from the hand onto its real path (seconds).
+/// How long a thrown spear takes to turn from how it was held to the way it flies, and to catch
+/// up its real path from a hand behind it (seconds).
 const SETTLE_SECONDS: f32 = 0.2;
+/// How far (meters) a thrown spear flies before it has come in from where it left the hand (to
+/// the side and above) onto its real path at `THROWN_HEIGHT`: one long, gentle curve, no dive.
+const CONVERGE_METERS: f32 = 7.0;
 /// Others' spears reach us a round trip (and a bit) after they're thrown, when their real path
 /// is already meters ahead of the hand. A spear never starts more than this far (meters) behind
 /// it; beyond that (a very high ping) the rest is skipped.
 const MAX_CATCH_UP: f32 = 8.0;
-/// Where a thrown spear's wind starts (just behind its butt, the spear is 2 m long) and how long
-/// it gets.
-const WIND_FRONT: f32 = 2.05;
+/// Where a thrown spear's wind starts (just behind its butt) and how long it gets.
+const WIND_FRONT: f32 = arena::SPEAR_LENGTH;
 const WIND_LENGTH: f32 = 2.4;
 /// The wind's rubber: its spring (stiffness rad/s, damping; loose, so it overshoots), and how
 /// much and how often (per second) it pulses.
@@ -155,6 +159,7 @@ pub(crate) struct Visuals {
     projectiles: HashMap<(ClassId, Option<AbilitySlot>), arena::ShotLook<Handle<Mesh>>>,
     shot_tip: Handle<Mesh>,
     wind: Handle<Mesh>,
+    spear_shadow: Handle<Mesh>,
     /// Per owner (`None` for looks that are the same for everyone: all but bodies, so a hit
     /// flashes just that fighter) and look.
     materials: HashMap<(Option<PeerId>, Look), Handle<StandardMaterial>>,
@@ -177,6 +182,8 @@ pub(crate) enum Look {
     Wind,
     /// The white glow on a thrown spear's point.
     Spark,
+    /// The faint dark streak on the ground under a thrown spear.
+    Shadow,
     /// The faint circle at the edge of your auto-attack's range.
     Range,
     /// See-through, glowing ice: novas and frozen fighters, whoever's.
@@ -211,6 +218,7 @@ impl Visuals {
                     Look::Plain => arena::matte(Color::WHITE),
                     Look::Wind => arena::translucent(Color::WHITE, 0.6, 1.5),
                     Look::Spark => arena::glow(Color::WHITE, 5.0),
+                    Look::Shadow => arena::translucent(palette::INK, 0.4, 0.0),
                     Look::Range => arena::translucent(Color::WHITE, 0.2, 1.0),
                     Look::Frost => arena::translucent(palette::ICE, 0.45, 1.6),
                     Look::Chill => arena::translucent(palette::FROST_GLOW, 0.75, 2.5),
@@ -268,6 +276,8 @@ struct Launch {
     from: Vec3,
     offset: Vec3,
     held: Quat,
+    /// As big as the thrower drew it in the hand.
+    scale: Vec3,
 }
 
 /// A child that keeps this orientation and size in the world, this high above the ground,
@@ -361,6 +371,7 @@ fn setup_scene(
             .collect(),
         shot_tip: meshes.add(arena::shot_tip_mesh()),
         wind: meshes.add(arena::wind_mesh()),
+        spear_shadow: meshes.add(arena::spear_shadow_mesh()),
         materials: HashMap::default(),
     });
     commands
@@ -701,6 +712,11 @@ fn add_visuals(
             let wind = Transform::from_xyz(-WIND_FRONT, 0.0, 0.0).with_scale(Vec3::new(0.0, 1.0, 1.0));
             let wind = shot.commands().spawn((Mesh3d(visuals.wind.clone()), MeshMaterial3d(material), wind)).id();
             shot.add_child(wind).insert(Thrown { wind, launch: None, length: 0.0, stretch: 0.0 });
+            // Its only shadow is the one straight under it, on its line: where it really is (the
+            // sun's would fall meters off to the side).
+            let shadow = visuals.material(&mut materials, projectile.owner, Look::Shadow);
+            let flat = Quat::from_rotation_y(projectile.dir.to_angle());
+            shot.insert(NotShadowCaster).with_child((Mesh3d(visuals.spear_shadow.clone()), MeshMaterial3d(shadow), WorldAligned(flat, 0.03), NotShadowCaster));
         }
     }
 }
@@ -1038,26 +1054,40 @@ fn sync_transforms(mut q: Query<(&Pos, &mut Transform), (Changed<Pos>, Without<P
 /// (between ticks too, so it glides instead of stepping): a shot coming at us is drawn where it is
 /// relative to us. Never before where it starts.
 ///
-/// A thrown spear leaves the hand: the first frame it's drawn (after the thrower is posed,
-/// releasing) it takes over the held javelin's place (where the throw sends it, see `HeldAt`),
-/// then eases onto its real path (which starts at the thrower's center, where hits are judged),
-/// across and up/down within `SETTLE_SECONDS`, turning from how it was held to the way it flies.
+/// A thrown spear leaves the hand: out of sight until the thrower's hand has let go of it (our
+/// own fighter is drawn a moment behind the news of its throw), then it takes over the held
+/// javelin's place (where the throw sends it, see `HeldAt`),
+/// then comes in onto its real path (which starts at the thrower's center, where hits are judged)
+/// along one gentle curve over its first `CONVERGE_METERS`, across and down (or up) at once:
+/// heading in from the moment it leaves the hand, it meets the path running along it, its nose
+/// following the curve, turned from how it was held within `SETTLE_SECONDS`. A dark streak on the ground straight under it shows where it really is.
 /// A hand ahead of the real path is given back more slowly, so the spear never seems to slow
 /// below 3/4 speed; one behind it is caught up within `SETTLE_SECONDS` however far behind it is,
 /// so others' spears (which reach us late, already meters down their path) shoot out of the hand
 /// fast and are where they really are almost at once. Its wind stretches back to where it left
 /// the hand, up to `WIND_LENGTH`. A thrown Q isn't the held javelin (that stays in the hand): it
 /// shoots straight out from where the sim threw it, already pointing the way it flies.
+/// A thrown spear as it leaves the hand that holds it at `held` (`HeldAt::at`, the grip, the
+/// spear along +Y): drawn just over the held one, its point where that one's is (the flying
+/// spear's mesh has its point at its origin, along +X), turned and as big as it's held.
+pub(crate) fn leaving_hand(held: &Transform) -> Transform {
+    Transform {
+        translation: held.transform_point(Vec3::Y * arena::GRIP_TO_TIP),
+        rotation: held.rotation * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        scale: held.scale,
+    }
+}
+
 fn fly_shots(
     time: Res<Time>,
     clock: AttackClock,
-    holders: Query<(&PlayerId, &HeldAt)>,
-    mut shots: Query<(&Projectile, &mut Transform, Option<&mut Thrown>, Option<&Spin>), With<Mesh3d>>,
+    mut holders: Query<(&PlayerId, &mut HeldAt)>,
+    mut shots: Query<(&Projectile, &mut Transform, &mut Visibility, Option<&mut Thrown>, Option<&Spin>), With<Mesh3d>>,
     mut winds: Query<&mut Transform, Without<Projectile>>,
 ) {
     let now = time.elapsed_secs();
     let tick = clock.now(true);
-    for (projectile, mut transform, thrown, spin) in &mut shots {
+    for (projectile, mut transform, mut visibility, thrown, spin) in &mut shots {
         let speed = projectile.class.def().shot(projectile.ability).map_or(0.0, |s| s.speed);
         let height = shot_height(thrown.is_some());
         let at_tick = tick.max(projectile.spawn_tick as f32 - 1.0);
@@ -1071,40 +1101,67 @@ fn fly_shots(
         };
         let launch = match thrown.launch {
             Some(launch) => launch,
+            // Not yet let go of: the thrower's hand still swinging it (our own fighter is drawn a
+            // moment behind the news of its throw). Out of sight until it is, or until it's late.
+            None if projectile.ability.is_none()
+                && tick < projectile.spawn_tick as f32 + MAX_HOLD_TICKS
+                && holders.iter().any(|(id, held)| id.0 == projectile.owner && held.let_go.is_none_or(|at| at < projectile.spawn_tick)) =>
+            {
+                visibility.set_if_neq(Visibility::Hidden);
+                continue;
+            }
             None => {
-                // Where it starts and which way it points: an ability's where the sim threw it (just outside
-                // the thrower's body), along its flight; an auto-attack from the held javelin's
-                // point, as it's held (which points up, +Y, a shot along +X).
+                visibility.set_if_neq(Visibility::Inherited);
+                // Where it starts, which way it points and how big it is: an ability's where the
+                // sim threw it (just outside the thrower's body), along its flight; an
+                // auto-attack just as the held javelin is this frame (its point, held pointing up,
+                // +Y, a shot along +X, as big as the thrower draws it), the hand letting go of it.
                 let start = if projectile.ability.is_some() {
-                    Some((to_world(projectile.origin, height), along))
+                    Some((to_world(projectile.origin, height), along, Vec3::ONE))
                 } else {
-                    holders.iter().find(|(id, _)| id.0 == projectile.owner).map(|(_, held)| {
-                        let from = held.0.translation + held.0.rotation * Vec3::Y * arena::GRIP_TO_TIP;
-                        (from, held.0.rotation * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2))
+                    holders.iter_mut().find(|(id, _)| id.0 == projectile.owner).map(|(_, mut held)| {
+                        held.launched = held.launched.max(Some(projectile.spawn_tick));
+                        // Our own: from just where the hand let go between frames, flown on
+                        // along its path since (off it as far as the hand was then).
+                        let (hand, path) = match held.released_from.filter(|_| held.let_go == Some(projectile.spawn_tick)) {
+                            Some(hand) => (hand, to_world(sim::projectile_pos(projectile, projectile.spawn_tick as f32), height)),
+                            None => (held.at, on_path),
+                        };
+                        let leaving = leaving_hand(&hand);
+                        (leaving.translation + on_path - path, leaving.rotation, leaving.scale)
                     })
                 };
                 *thrown.launch.insert(match start {
-                    Some((from, rotation)) => {
+                    Some((from, rotation, scale)) => {
                         // No more than `MAX_CATCH_UP` behind its real path.
                         let mut offset = from - on_path;
                         let excess = offset.dot(forward_dir) + MAX_CATCH_UP;
                         offset -= forward_dir * excess.min(0.0);
-                        Launch { at: now, from, offset, held: rotation }
+                        Launch { at: now, from, offset, held: rotation, scale }
                     }
                     // No thrower to be seen: straight from its path.
-                    None => Launch { at: now, from: on_path, offset: Vec3::ZERO, held: along },
+                    None => Launch { at: now, from: on_path, offset: Vec3::ZERO, held: along, scale: Vec3::ONE },
                 })
             }
         };
         let since = now - launch.at;
-        let ahead = launch.offset.dot(forward_dir);
-        let across = launch.offset - forward_dir * ahead;
+        let rise = launch.offset.y;
+        let flat = launch.offset.with_y(0.0);
+        let ahead = flat.dot(forward_dir);
+        let across = flat - forward_dir * ahead;
         // Eased out (1 to 0 over `seconds`), so the spear runs onto its path without a kink.
         let left = |seconds: f32| (1.0 - since / seconds).max(0.0).powi(2);
         let give_back = SETTLE_SECONDS.max(8.0 * ahead / speed.max(1.0));
-        let at = on_path + across * left(SETTLE_SECONDS) + forward_dir * ahead * left(give_back);
+        // Across and down onto its path over `CONVERGE_METERS` of flight, on a parabola: leaving
+        // the hand heading in, meeting the path along it; the nose along the curve.
+        let off = across + Vec3::Y * rise;
+        let flown = (on_path - (launch.from - launch.offset)).dot(forward_dir).max(0.0);
+        let rest = (1.0 - flown / CONVERGE_METERS).max(0.0);
+        let at = on_path + off * rest * rest + forward_dir * ahead * left(give_back);
+        let heading = (forward_dir - off * 2.0 * rest / CONVERGE_METERS).normalize();
+        let flying = Quat::from_rotation_arc(forward_dir, heading) * along;
         let turned = 1.0 - left(SETTLE_SECONDS);
-        transform.set_if_neq(Transform::from_translation(at).with_rotation(launch.held.slerp(along, turned)));
+        transform.set_if_neq(Transform::from_translation(at).with_rotation(launch.held.slerp(flying, turned)).with_scale(launch.scale));
         // The wind, rubbery like a sprint's: its length chases how far the spear has flown (up to
         // `WIND_LENGTH`), pulsing, on a loose spring, so it stretches out past that and snaps back.
         let flown = (at.distance(launch.from) - WIND_FRONT).clamp(0.0, WIND_LENGTH);

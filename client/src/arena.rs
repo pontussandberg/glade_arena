@@ -51,11 +51,15 @@ pub mod palette {
     pub const FUR: Color = Color::srgb_u8(0x55, 0x55, 0x52);
     /// Charred, ash-black antlers; pauldrons, gauntlets, sword guards.
     pub const ASH: Color = Color::srgb_u8(0x2B, 0x2A, 0x2E);
-    /// The javelinist's wraith-hunter's coat: a cold near-black with a breath of moss in it, its
+    /// The executioner's coat, hood and cape: a cold near-black with a breath of moss in it, its
     /// darker lining and hem, and the ashen grey of its undertunic and wraps.
     pub const HUNTER: Color = Color::srgb_u8(0x1A, 0x1E, 0x1C);
     pub const HUNTER_DARK: Color = Color::srgb_u8(0x0D, 0x10, 0x0F);
     pub const HUNTER_ASH: Color = Color::srgb_u8(0x3A, 0x3E, 0x3C);
+    /// Old blood gone black-brown: the executioner's leather apron and the rag on its spear.
+    pub const OXBLOOD: Color = Color::srgb_u8(0x33, 0x1D, 0x1B);
+    /// Pale, cold bone: the death hunter's bandana, faded.
+    pub const BONE: Color = Color::srgb_u8(0xB9, 0xC2, 0xC0);
     /// The revenant's blackened plate, and the faded grey of its bandana.
     pub const BLACK_STEEL: Color = Color::srgb_u8(0x2A, 0x2E, 0x36);
     pub const SHROUD: Color = Color::srgb_u8(0x4B, 0x47, 0x54);
@@ -75,7 +79,7 @@ pub mod palette {
     /// Pale, cold blade steel, and dark iron for shafts.
     pub const STEEL: Color = Color::srgb_u8(0xA9, 0xB5, 0xBC);
     pub const IRON: Color = Color::srgb_u8(0x5E, 0x66, 0x6E);
-    /// Polished silver: the javelinist's spearhead, the brightest thing on it.
+    /// Polished silver: the ground edges of the executioner's blade, the brightest thing on it.
     pub const SILVER: Color = Color::srgb_u8(0xDC, 0xE4, 0xE8);
     /// The glow in fighters' eyes: a pale ghostly green.
     pub const WISP: Color = Color::srgb_u8(0xB8, 0xFF, 0xD6);
@@ -370,53 +374,78 @@ fn tinted(mut mesh: Mesh, color: Color) -> Mesh {
     mesh
 }
 
-/// The javelinist's spear, standing along +Y with its point at the origin, carried and thrown
-/// alike: a long, dark shaft (in `shaft`), faceted like worked wood and thickening a little toward
-/// the head; a long leaf-shaped head in `metal`, flat in Z (so it shows from above as it flies),
-/// sharp-edged with a ridge down its middle, two small barbs swept back from its base, on a
-/// ridged socket bound below in `wrap`; a grip wrapped in `wrap` between two `metal` bands; and a
-/// short metal butt spike.
-fn javelin(shaft: Color, metal: Color, wrap: Color) -> Mesh {
-    const LENGTH: f32 = 2.0;
-    const HEAD: f32 = 0.44;
-    let head = faceted(tube(
-        &smoothed(
-            &[(HEAD, 0.014, 0.02), (0.34, 0.016, 0.055), (0.2, 0.013, 0.05), (0.08, 0.008, 0.028), (0.0, 0.0, 0.0)]
-                .map(|(back, depth, width)| Section::new(Vec3::Y * -back, Vec2::new(depth, width), metal).squared(1.0).exact()),
-            2,
-        ),
+/// The executioner's spear, standing along +Y with its point at the origin, carried and thrown
+/// alike: a headsman's blade on a pole. A long, broad, straight blade narrowing to a cruel point,
+/// flat in Z (so it shows from above as it flies), its edges ground bright (`metal`) either side
+/// of a thick dark midrib (`dark`); two hooked ears at its base curling forward like horns; a long
+/// socket with langets riveted down the shaft, a rag (`rag`) knotted below them, its two ends
+/// streaming back; a dark shaft (`shaft`), faceted like worked wood, bound in `wrap` where it's
+/// gripped between two rings; and a heavy butt spike.
+fn javelin(shaft: Color, metal: Color, dark: Color, wrap: Color, rag: Color) -> Mesh {
+    const LENGTH: f32 = SPEAR_LENGTH;
+    const HEAD: f32 = 0.62;
+    // The blade: (how far back from the point, half its thickness, half its breadth).
+    let blade = [(HEAD, 0.016, 0.028), (0.58, 0.018, 0.062), (0.5, 0.018, 0.084), (0.36, 0.017, 0.08), (0.2, 0.014, 0.06), (0.07, 0.008, 0.03), (0.0, 0.0, 0.0)];
+    let edges = faceted(tube(
+        &smoothed(&blade.map(|(back, depth, width)| Section::new(Vec3::Y * -back, Vec2::new(depth, width), metal).squared(1.0).exact()), 2),
         4,
         (true, false),
     ));
-    let mut parts = vec![head];
+    // The midrib: thicker than the blade and narrower, so only the ground edges show bright.
+    let rib = faceted(tube(
+        &smoothed(
+            &blade[..blade.len() - 1].iter().map(|&(back, depth, width)| Section::new(Vec3::Y * -(back + 0.012), Vec2::new(depth * 1.5, width * 0.62), dark).squared(1.0).exact()).collect::<Vec<_>>(),
+            2,
+        ),
+        4,
+        (true, true),
+    ));
+    let mut parts = vec![edges, rib];
+    // The ears: out from the blade's base and curling forward along it, flat like the blade.
     for side in [1.0, -1.0] {
-        let barb = [Vec3::new(0.0, -0.36, side * 0.045), Vec3::new(0.0, -0.42, side * 0.07), Vec3::new(0.0, -0.47, side * 0.074)];
-        parts.push(sweep(&barb, &[0.011, 0.007, 0.0], 6, metal));
+        let ear = [(HEAD - 0.03, 0.03), (HEAD + 0.01, 0.085), (HEAD - 0.02, 0.14), (HEAD - 0.1, 0.165), (HEAD - 0.2, 0.158)]
+            .map(|(back, out)| Vec3::new(0.0, -back, side * out));
+        parts.push(faceted(sweep(&ear, &[0.02, 0.017, 0.013, 0.008, 0.0], 4, dark)).scaled_by(Vec3::new(0.55, 1.0, 1.0)));
     }
-    // The socket, ridged where it takes the head and where it grips the shaft.
-    let socket = [(HEAD - 0.02, 0.022), (HEAD, 0.03), (HEAD + 0.02, 0.026), (HEAD + 0.1, 0.026), (HEAD + 0.12, 0.031), (HEAD + 0.14, 0.027)];
-    parts.push(tube(&socket.map(|(back, r)| Section::round(Vec3::Y * -back, r, metal).exact()), 12, (true, true)));
-    // Cord binding the socket to the shaft.
-    for i in 0..4 {
-        let at = HEAD + 0.16 + 0.022 * i as f32;
-        parts.push(band(-at, -(at + 0.018), 0.027, 10, wrap));
+    // The socket, ridged where it takes the blade and where it grips the shaft.
+    let socket = [(HEAD - 0.01, 0.024), (HEAD + 0.02, 0.034), (HEAD + 0.05, 0.028), (HEAD + 0.13, 0.027), (HEAD + 0.15, 0.033), (HEAD + 0.17, 0.028)];
+    parts.push(faceted(tube(&socket.map(|(back, r)| Section::round(Vec3::Y * -back, r, dark).exact()), 8, (true, true))));
+    // Langets: iron strips down two sides of the shaft from the socket, each held by two rivets.
+    for side in [1.0, -1.0] {
+        let strip = bevel_box(Vec3::new(0.008, 0.26, 0.022), 0.003, dark);
+        parts.push(strip.translated_by(Vec3::new(side * 0.026, -(HEAD + 0.29), 0.0)));
+        for at in [HEAD + 0.24, HEAD + 0.38] {
+            parts.push(tinted(ball(0.007).translated_by(Vec3::new(side * 0.031, -at, 0.0)), metal));
+        }
+    }
+    // The rag knotted below the langets, its two ends streaming back along the shaft.
+    let knot = HEAD + 0.45;
+    parts.push(tinted(ball(1.0).scaled_by(Vec3::new(0.034, 0.03, 0.036)).translated_by(Vec3::new(0.012, -knot, 0.0)), rag));
+    for (side, length) in [(1.0, 0.36), (-1.0, 0.27)] {
+        let end: Vec<Vec3> = (0..=4).map(|i| i as f32 / 4.0).map(|t| Vec3::new(0.03 + 0.03 * t, -(knot + length * t), side * (0.012 + 0.02 * t + 0.012 * (t * 7.0).sin()))).collect();
+        parts.push(sweep(&end, &[0.018, 0.02, 0.019, 0.016, 0.0], 5, rag).scaled_by(Vec3::new(0.45, 1.0, 1.0)));
     }
     let wood = faceted(tube(
-        &[(HEAD + 0.1, 0.025), (0.9, 0.024), (1.5, 0.022), (LENGTH - 0.1, 0.02)]
+        &[(HEAD + 0.12, 0.024), (0.95, 0.024), (1.5, 0.023), (LENGTH - 0.12, 0.022)]
             .map(|(back, r)| Section::round(Vec3::Y * -back, r, shaft).squared(2.2)),
         8,
         (false, false),
     ));
     parts.push(wood);
-    // The grip: wrapped between two bands.
-    parts.push(band(-1.1, -1.13, 0.03, 12, metal));
+    // The grip: bound between two rings.
+    parts.push(band(-1.1, -1.13, 0.03, 10, dark));
     for i in 0..7 {
         let at = 1.14 + 0.026 * i as f32;
         parts.push(band(-at, -(at + 0.022), 0.027, 10, wrap));
     }
-    parts.push(band(-1.33, -1.36, 0.03, 12, metal));
-    // The butt spike.
-    parts.push(sweep(&[Vec3::Y * -(LENGTH - 0.12), Vec3::Y * -(LENGTH - 0.07), Vec3::Y * -LENGTH], &[0.024, 0.02, 0.0], 8, metal));
+    parts.push(band(-1.33, -1.36, 0.03, 10, dark));
+    // The butt: a heavy ferrule and a long spike.
+    parts.push(faceted(tube(
+        &[(LENGTH - 0.2, 0.025), (LENGTH - 0.17, 0.031), (LENGTH - 0.12, 0.028), (LENGTH - 0.1, 0.022), (LENGTH, 0.0)]
+            .map(|(back, r)| Section::round(Vec3::Y * -back, r, dark).exact()),
+        4,
+        (true, false),
+    )));
     sculpted(parts)
 }
 
@@ -428,8 +457,16 @@ pub struct RigMeshes {
     pub head: Mesh,
     /// An arm, hanging down (-Y) from the shoulder.
     pub arm: Mesh,
+    /// A forearm hanging down from the elbow (`rig::Moves::elbow_at`), in its own space, if the arm bends
+    /// there (`arm` is then only the upper arm).
+    pub forearm: Option<Mesh>,
+    /// The left arm, if it isn't `arm` (and `forearm`) again: an empty sleeve.
+    pub lead_arm: Option<Mesh>,
     /// A leg, hanging down from the hip.
     pub leg: Mesh,
+    /// A shin hanging down from the knee (`RIG_KNEE`), in its own space, if the leg bends there
+    /// (`leg` is then only the thigh).
+    pub shin: Option<Mesh>,
     /// The weapon in the right hand, pointing up (+Y) from the grip.
     pub held: Mesh,
     /// Eyes in the head's space, drawn glowing cold white (`palette::SOUL`, everyone's).
@@ -457,6 +494,13 @@ pub const RIG_SHOULDER: Vec3 = Vec3::new(0.0, 1.32, 0.3);
 pub const RIG_HIP: Vec3 = Vec3::new(0.0, 0.8, 0.11);
 /// Where the hand is, in the arm's space.
 pub const RIG_HAND: Vec3 = Vec3::new(0.0, -0.52, 0.0);
+/// Where the knee is, in the leg's space.
+pub const RIG_KNEE: Vec3 = Vec3::new(0.0, -0.4, 0.0);
+/// Where the elbow is, in the arm's space.
+pub const RIG_ELBOW: Vec3 = Vec3::new(0.0, -0.26, 0.0);
+/// The javelinist's longer arm: where its elbow and hand are instead (`rig::Moves::elbow_at`).
+pub const JAVELINIST_ELBOW: Vec3 = Vec3::new(0.0, -0.34, 0.0);
+pub const JAVELINIST_HAND: Vec3 = Vec3::new(0.0, -0.7, 0.0);
 
 /// Where the eyes sit in a `deep_hood`'s opening (and ±z, the other one).
 const HOOD_EYES: Vec3 = Vec3::new(0.165, 0.2, 0.055);
@@ -467,12 +511,15 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
         "javelinist" => RigMeshes {
             head: javelinist_hood(),
             arm: javelinist_arm(),
+            forearm: Some(javelinist_forearm()),
+            shin: Some(javelinist_shin()),
+            lead_arm: Some(javelinist_stump()),
             leg: javelinist_leg(),
             held: held_spear(),
-            eyes: spectral_eyes(JAVELINIST_HOOD),
+            eyes: slit_eyes(HUNTER_EYES),
             glow: palette::SOUL,
             held_glow: None,
-            body_glow: None,
+            body_glow: Some(javelinist_glow()),
             held_aura: None,
             held_glint: None,
             wardrobe: Some(javelinist_wardrobe()),
@@ -480,6 +527,9 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
         "revenant" => RigMeshes {
             head: revenant_head(),
             arm: revenant_arm(),
+            forearm: None,
+            shin: None,
+            lead_arm: None,
             leg: booted_leg(palette::ROBE, palette::DARK_LEATHER, 0.082, 0.07),
             held: glaive(),
             eyes: slit_eyes(REVENANT_EYES),
@@ -493,6 +543,9 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
         "frost_mage" => RigMeshes {
             head: frost_crowned_hood(),
             arm: frost_mage_arm(),
+            forearm: None,
+            shin: None,
+            lead_arm: None,
             leg: booted_leg(palette::FROST_DARK, palette::DARK_LEATHER, 0.1, 0.08),
             held: ice_staff(),
             eyes: spectral_eyes(Vec2::ONE),
@@ -680,9 +733,9 @@ fn held_spear() -> Mesh {
     carried_javelin().translated_by(Vec3::Y * GRIP_TO_TIP)
 }
 
-/// The javelinist's javelin in its own colors, point at the origin.
+/// The executioner's spear in its own colors, point at the origin.
 fn carried_javelin() -> Mesh {
-    javelin(palette::HUNTER_DARK, palette::SILVER, palette::LEATHER)
+    javelin(palette::HUNTER_DARK, palette::SILVER, palette::BLACK_STEEL, palette::DARK_LEATHER, palette::OXBLOOD)
 }
 
 /// A section of a fighter part: `half` (depth, width) across at height `y`, offset `x` forward.
@@ -1477,11 +1530,12 @@ fn ice_staff() -> Mesh {
     sculpted(parts)
 }
 
-/// The javelinist's body, under its moving cloth (`javelinist_wardrobe`): a slim, fitted tunic
-/// from an ashen undertunic showing at the knee up to a high collar, a wide leather belt with a
-/// silver buckle, and a mantle draped over the shoulders, its torn edge hanging longer behind.
-/// Sloping shoulders, no bulk. Quiet details: the coat and the spear overhead are
-/// the figure.
+/// The executioner's body, under its moving cloth (`javelinist_wardrobe`): upright and squared,
+/// a fitted, hooded coat over an ashen undertunic showing at the knee, its hood's cowl lying over
+/// the shoulders and gathered round the neck (the hood itself is on the head); a leather harness
+/// slung across the chest from the right shoulder, ringed in iron; a wide belt with an iron
+/// buckle and an hourglass hung at the left hip. Few details: the hood and the blade overhead
+/// are the figure.
 fn javelinist_body() -> Mesh {
     const FOLDS: u32 = 9;
     let tunic = tube(
@@ -1490,10 +1544,10 @@ fn javelinist_body() -> Mesh {
                 ring(0.0, 0.42, (0.15, 0.185), palette::HUNTER_ASH).torn(0.05).folded(0.05, FOLDS),
                 ring(0.0, 0.6, (0.145, 0.18), palette::HUNTER_ASH).folded(0.03, FOLDS),
                 ring(0.0, 0.84, (0.145, 0.18), palette::HUNTER),
-                ring(0.01, 0.98, (0.15, 0.19), palette::HUNTER),
-                ring(0.015, 1.13, (0.155, 0.215), palette::HUNTER).squared(2.2),
-                ring(0.0, 1.3, (0.14, 0.235), palette::HUNTER).squared(2.2),
-                ring(-0.01, 1.41, (0.11, 0.18), palette::HUNTER),
+                ring(0.01, 0.98, (0.152, 0.192), palette::HUNTER),
+                ring(0.018, 1.13, (0.16, 0.225), palette::HUNTER).squared(2.4),
+                ring(0.005, 1.3, (0.145, 0.25), palette::HUNTER).squared(2.8),
+                ring(-0.01, 1.41, (0.11, 0.19), palette::HUNTER).squared(2.2),
                 ring(-0.01, 1.49, (0.075, 0.1), palette::HUNTER_DARK),
                 ring(-0.01, 1.57, (0.07, 0.095), palette::HUNTER_DARK),
             ],
@@ -1502,24 +1556,80 @@ fn javelinist_body() -> Mesh {
         40,
         (true, true),
     );
+    let mut parts = vec![tunic];
+    // The harness: a strap round the chest, high on the right shoulder and low at the left
+    // hip, an iron ring where it crosses the breast.
+    let strap: Vec<Section> = (0..=40)
+        .map(|i| i as f32 / 40.0 * std::f32::consts::TAU)
+        .map(|t| {
+            let z = t.sin();
+            let y = 1.06 + 0.2 * z;
+            let grow = 1.07 + 0.04 * z.max(0.0);
+            let at = Vec3::new(0.012 + 0.158 * grow * t.cos(), y, 0.205 * grow * z);
+            Section::new(at, Vec2::new(0.007, 0.024), palette::DARK_LEATHER)
+        })
+        .collect();
+    parts.push(tube(&strap, 6, (true, true)));
+    let ring_at = Vec3::new(0.186, 1.08, 0.03);
+    let iron_ring: Vec<Vec3> = (0..=12).map(|i| i as f32 / 12.0 * std::f32::consts::TAU).map(|a| ring_at + Vec3::new(0.0, a.cos() * 0.03, a.sin() * 0.03)).collect();
+    parts.push(sweep(&iron_ring, &[0.007; 13], 6, palette::IRON));
     // The belt goes over the coat's top (the coat hangs from under it).
-    let belt = belt(0.01, (0.855, 0.95), (0.183, 0.223), palette::LEATHER);
-    let buckle = bevel_box(Vec3::new(0.03, 0.075, 0.07), 0.01, palette::SILVER).translated_by(Vec3::new(0.2, 0.902, 0.0));
-    let mantle = tube(
+    parts.push(belt(0.01, (0.84, 0.95), (0.183, 0.223), palette::DARK_LEATHER));
+    parts.push(bevel_box(Vec3::new(0.03, 0.08, 0.075), 0.01, palette::IRON).translated_by(Vec3::new(0.2, 0.895, 0.0)));
+    // An hourglass hung from the belt at the left hip on a short chain: two dark caps on three
+    // posts, open between, so its glowing sand shows (`javelinist_glow`).
+    for (i, y) in [0.84, 0.8].into_iter().enumerate() {
+        parts.push(chain_link(Vec3::new(HOURGLASS.x - 0.004, y, HOURGLASS.z), i % 2 == 1));
+    }
+    for end in [1.0, -1.0] {
+        let at = HOURGLASS + Vec3::Y * end * HOURGLASS_HALF;
+        parts.push(tube(
+            &[ring(at.x, at.y - 0.014, (0.058, 0.058), palette::BLACK_STEEL).exact(), ring(at.x, at.y + 0.014, (0.058, 0.058), palette::BLACK_STEEL).exact()],
+            12,
+            (true, true),
+        ));
+        parts.push(tinted(ball(0.012).translated_by(at + Vec3::Y * end * 0.018), palette::BLACK_STEEL));
+    }
+    for k in 0..3 {
+        let a = k as f32 / 3.0 * std::f32::consts::TAU + 0.4;
+        let post = |y: f32| HOURGLASS + Vec3::new(a.cos() * 0.047, y, a.sin() * 0.047);
+        parts.push(sweep(&[post(-HOURGLASS_HALF), post(0.0), post(HOURGLASS_HALF)], &[0.008, 0.006, 0.008], 5, palette::BLACK_STEEL));
+    }
+    // The coat's hood, down off the head: the coat's own cloth rising from the shoulders, where
+    // it lies in soft folds cut in shallow points, into a cowl gathered loose round the neck, its
+    // lip rolled; the hood itself (on the head, `javelinist_hood`) rises out of it.
+    parts.push(tube(
         &smoothed(
             &[
-                ring(-0.01, 1.58, (0.085, 0.11), palette::HUNTER),
-                ring(-0.01, 1.52, (0.15, 0.21), palette::HUNTER),
-                ring(-0.015, 1.43, (0.2, 0.32), palette::HUNTER).folded(0.03, 13),
-                ring(-0.02, 1.3, (0.22, 0.375), palette::HUNTER).folded(0.05, 13),
-                ring(-0.02, 1.17, (0.225, 0.385), palette::HUNTER_DARK).folded(0.065, 13).torn(0.1).trailing(0.12),
+                ring(-0.02, 1.2, (0.205, 0.335), palette::HUNTER).squared(2.2).folded(0.04, 7).jagged(0.03).trailing(0.08),
+                ring(-0.018, 1.29, (0.2, 0.32), palette::HUNTER).squared(2.4).folded(0.036, 7),
+                ring(-0.016, 1.38, (0.183, 0.265), palette::HUNTER).squared(2.2).folded(0.03, 6),
+                ring(-0.016, 1.46, (0.165, 0.195), palette::HUNTER).folded(0.03, 5),
+                ring(-0.016, 1.515, (0.155, 0.168), palette::HUNTER).folded(0.032, 5),
+                ring(-0.016, 1.545, (0.145, 0.158), palette::HUNTER_DARK),
             ],
             3,
         ),
         48,
         (true, true),
-    );
-    sculpted(vec![tunic, belt, buckle, mantle])
+    ));
+    sculpted(parts)
+}
+
+/// How many leather straps hang from the executioner's belt.
+const STRAPS: usize = 7;
+
+/// Where the executioner's hourglass hangs (its middle), and half its height.
+const HOURGLASS: Vec3 = Vec3::new(0.235, 0.66, -0.13);
+const HOURGLASS_HALF: f32 = 0.1;
+
+/// What glows on the executioner: the sand in its hourglass, most of it run down into the lower
+/// bulb, a thin stream still falling.
+fn javelinist_glow() -> Mesh {
+    let top = cone(0.032, 0.04, 8).rotated_by(Quat::from_rotation_x(std::f32::consts::PI)).translated_by(HOURGLASS + Vec3::Y * 0.035);
+    let stream = cylinder(0.004, 0.08, 4).translated_by(HOURGLASS - Vec3::Y * 0.025);
+    let pile = cone(0.042, 0.05, 8).translated_by(HOURGLASS - Vec3::Y * (HOURGLASS_HALF - 0.04));
+    sculpted([top, stream, pile].map(|m| tinted(m, Color::WHITE)).to_vec())
 }
 
 /// Where the coat's skirt is, at `u` (0..1) round it from its right front edge, round the back, to
@@ -1527,16 +1637,16 @@ fn javelinist_body() -> Mesh {
 /// itself (folds, unevenness and the torn hem), not for the chains it hangs from.
 fn coat_point(u: f32, v: f32, ragged: bool) -> Vec3 {
     // Open at the front, this far (radians) either side of it.
-    const OPEN: f32 = 0.3;
+    const OPEN: f32 = 0.45;
     let a = OPEN + u * (std::f32::consts::TAU - 2.0 * OPEN);
     let flare = v.powf(1.25);
-    let (depth, width) = (0.172 + 0.17 * flare, 0.212 + 0.17 * flare);
+    let (depth, width) = (0.172 + 0.15 * flare, 0.212 + 0.15 * flare);
     // The hem: just off the ground behind, a little higher at the front.
     let hem = 0.035 + 0.075 * (1.0 + a.cos()) / 2.0;
     let mut y = 0.925 + (hem - 0.925) * v;
     let mut out = 1.0;
     if ragged {
-        out += v * 0.075 * (a * 8.0 + v * 1.8).sin() * (0.6 + 0.4 * (a * 3.1).sin()) + 0.025 * (a * 5.0 + v * 7.0).sin();
+        out += v * 0.06 * (a * 8.0 + v * 1.8).sin() * (0.6 + 0.4 * (a * 3.1).sin()) + 0.02 * (a * 5.0 + v * 7.0).sin();
         let scallop = 0.5 + 0.5 * (a * 5.0 + 0.8).sin();
         let strip = (a * 13.0 + 2.0).sin().max(0.0).powi(6);
         y -= 0.1 * (0.35 * scallop + 0.65 * strip) * v.powi(8);
@@ -1544,31 +1654,40 @@ fn coat_point(u: f32, v: f32, ragged: bool) -> Vec3 {
     Vec3::new(a.cos() * depth * out, y, a.sin() * width * out)
 }
 
-/// The javelinist's moving cloth: a long coat skirt open at the front, its torn hem glowing with
-/// spirit light, and a tabard hanging from the belt between its edges.
+/// The executioner's moving cloth: a long coat skirt open at the front, its torn hem glowing with
+/// spirit light, and straps of leather hanging from the belt round its front.
 fn javelinist_wardrobe() -> Wardrobe {
     const ROWS: usize = 18;
     const COLS: usize = 64;
     let point = |u, v| coat_point(u, v, true);
-    let coat = sheet(&grid(ROWS, COLS, (0.0, 1.0), point), &hemmed(ROWS, 3, palette::HUNTER, palette::HUNTER_DARK), 0.01);
+    let coat = sheet(&grid(ROWS, COLS, (0.0, 1.0), point), &hemmed(ROWS, 3, palette::HUNTER, palette::HUNTER_DARK), 0.024);
     // The glowing hem, wrapped round the cloth's last few centimeters.
-    let trim = sheet(&grid(2, COLS, (0.975, 1.0), point), &[Color::WHITE], 0.02);
+    let trim = sheet(&grid(2, COLS, (0.975, 1.0), point), &[Color::WHITE], 0.034);
     let coat_chains: Vec<Vec<Vec3>> = (0..=8).map(|c| [0.07, 0.3, 0.53, 0.77, 1.0].map(|v| coat_point(c as f32 / 8.0, v, false)).to_vec()).collect();
     let coat = Drape::new(
         coat,
         Some(trim),
         coat_chains,
-        Weave { hold: (6.0, 1.5), damping: 6.0, air: 0.3, inertia: 0.35, gravity: 7.0, flutter: 0.5, joined: true, wisps: 5.0 },
+        // Heavy cloth: hanging straight, swinging slow and settling, hardly drifting.
+        Weave { hold: (7.0, 2.2), damping: 7.5, air: 0.15, inertia: 0.28, gravity: 10.0, flutter: 0.15, joined: true, wisps: 5.0 },
     );
 
-    // The tabard: down the front, curving round the legs, its end torn; leather where it hangs
-    // from the belt, darker at its end.
-    let mut colors = hemmed(12, 2, palette::HUNTER, palette::HUNTER_DARK);
-    colors[0] = palette::LEATHER;
-    let tabard = tabard(Vec3::new(0.19, 0.9, 0.0), Vec3::new(0.042, -0.62, 0.0), (0.072, 0.064), 1.2, (0.04, 2.1), &colors);
+    // Straps of leather hanging from the belt round the front, long and short by turns, each cut
+    // to a point, darker toward it.
+    let mut drapes = vec![coat];
+    for i in 0..STRAPS {
+        let a = (i as f32 / (STRAPS - 1) as f32 * 2.0 - 1.0) * 1.05;
+        let (out, long) = (Vec3::new(a.cos(), 0.0, a.sin()), i % 2 == 0);
+        let leather = if long { palette::LEATHER } else { palette::DARK_LEATHER };
+        let colors = hemmed(12, 2, leather, leather.darker(0.04));
+        let top = Vec3::new(a.cos() * 0.2, 0.87, a.sin() * 0.235);
+        let drop = out * 0.05 - Vec3::Y * if long { 0.34 } else { 0.26 };
+        // Torn to one point in its middle.
+        drapes.push(tabard(top, drop, (0.03, 0.026), 0.0, (0.05, std::f32::consts::PI / 8.0), &colors));
+    }
 
     Wardrobe {
-        drapes: vec![coat, tabard],
+        drapes,
         trim: palette::SOUL,
         body: vec![
             Column { center: Vec2::ZERO, half: Vec2::new(0.165, 0.205), from: 0.3, to: 1.05 },
@@ -1577,51 +1696,282 @@ fn javelinist_wardrobe() -> Wardrobe {
     }
 }
 
-/// Long bell sleeves, rounded over the shoulder and falling in deepening folds to a torn cuff that
-/// hangs longer underneath, over a dark-gloved hand.
+/// Fitted sleeves, creased above the elbow, down to it, rounded there so the arm shows no gap
+/// as it bends (the forearm is `javelinist_forearm`).
 fn javelinist_arm() -> Mesh {
     let sleeve = tube(
         &smoothed(
             &[
                 ring(-0.01, 0.06, (0.0, 0.0), palette::HUNTER),
-                ring(-0.01, 0.05, (0.045, 0.05), palette::HUNTER),
-                ring(0.0, 0.0, (0.068, 0.07), palette::HUNTER),
-                ring(0.0, -0.12, (0.08, 0.082), palette::HUNTER).folded(0.02, 7),
-                ring(0.0, -0.28, (0.11, 0.11), palette::HUNTER).folded(0.05, 7),
-                ring(-0.01, -0.4, (0.138, 0.138), palette::HUNTER).folded(0.07, 7),
-                ring(-0.015, -0.44, (0.148, 0.148), palette::HUNTER_DARK).folded(0.07, 7),
-                ring(-0.02, -0.47, (0.152, 0.152), palette::HUNTER_DARK).folded(0.07, 7).torn(0.09).trailing(0.1),
+                ring(-0.01, 0.05, (0.05, 0.055), palette::HUNTER),
+                ring(0.0, 0.0, (0.07, 0.072), palette::HUNTER),
+                ring(0.0, -0.15, (0.068, 0.07), palette::HUNTER).folded(0.03, 6),
+                ring(0.0, -0.27, (0.066, 0.066), palette::HUNTER).folded(0.04, 6),
+                ring(0.0, JAVELINIST_ELBOW.y, (0.064, 0.064), palette::HUNTER),
             ],
-            3,
+            2,
         ),
-        32,
+        24,
         (true, true),
     );
-    sculpted(vec![sleeve, fist(palette::DARK_LEATHER, -0.34, 0.05)])
+    sculpted(vec![sleeve, tinted(ball(0.064).translated_by(JAVELINIST_ELBOW), palette::HUNTER)])
 }
 
-/// Baggy trousers gathered into soft, wrapped boots: seen at the coat's opening as it walks.
-fn javelinist_leg() -> Mesh {
-    booted_leg(palette::HUNTER_DARK, palette::DARK_LEATHER, 0.1, 0.095)
+/// The forearm, from the elbow (`JAVELINIST_ELBOW`): the sleeve's creased end into a long
+/// leather bracer strapped tight over a dark-gloved hand (at `JAVELINIST_HAND`).
+fn javelinist_forearm() -> Mesh {
+    let (elbow, wrist) = (JAVELINIST_ELBOW.y, JAVELINIST_HAND.y + 0.12);
+    let sleeve = tube(
+        &[
+            ring(0.0, elbow, (0.064, 0.064), palette::HUNTER).folded(0.04, 6),
+            ring(0.0, elbow - 0.015, (0.066, 0.066), palette::HUNTER),
+        ],
+        24,
+        (true, true),
+    );
+    let bracer = tube(
+        &[
+            ring(0.0, elbow - 0.005, (0.062, 0.062), palette::DARK_LEATHER),
+            ring(0.0, elbow - 0.02, (0.072, 0.072), palette::DARK_LEATHER),
+            ring(0.0, wrist, (0.068, 0.066), palette::DARK_LEATHER),
+            ring(0.0, wrist - 0.02, (0.06, 0.058), palette::DARK_LEATHER),
+        ],
+        20,
+        (true, false),
+    );
+    // The fist at the hand (`fist` draws it at `RIG_HAND`).
+    let hand = fist(palette::DARK_LEATHER, RIG_HAND.y + 0.12, 0.056).translated_by(JAVELINIST_HAND - RIG_HAND);
+    let mut parts = vec![sleeve, bracer, hand];
+    // Straps round the bracer, each with a small iron buckle on the outside.
+    for y in [elbow - 0.03, elbow - 0.1, elbow - 0.17] {
+        parts.push(tube(&[ring(0.0, y, (0.078, 0.078), palette::LEATHER).exact(), ring(0.0, y - 0.022, (0.076, 0.076), palette::LEATHER).exact()], 20, (true, true)));
+        parts.push(bevel_box(Vec3::new(0.012, 0.026, 0.026), 0.004, palette::IRON).translated_by(Vec3::new(0.0, y - 0.011, -0.078)));
+    }
+    sculpted(parts).translated_by(-JAVELINIST_ELBOW)
 }
 
-/// How much smaller the javelinist's hood is than a `deep_hood` (its width, and its height).
-const JAVELINIST_HOOD: Vec2 = Vec2::new(0.86, 0.95);
-
-/// A narrow hood whose crown rises to a low peak that hangs forward over the brow, soft folds down
-/// its sides; inside it only darkness and the eyes.
-fn javelinist_hood() -> Mesh {
+/// The empty left sleeve of a one-armed man: under the coat's shoulder, cut short, gathered in
+/// and tied off in a knot, its two ends hanging.
+fn javelinist_stump() -> Mesh {
     let cloth = palette::HUNTER;
-    let top = [
-        ring(-0.045, 0.22, (0.2, 0.19), cloth).folded(0.04, 5),
-        ring(-0.045, 0.35, (0.17, 0.155), cloth).folded(0.035, 5),
-        ring(-0.02, 0.45, (0.125, 0.105), cloth).folded(0.02, 5),
-        ring(0.04, 0.52, (0.075, 0.06), cloth),
-        ring(0.11, 0.55, (0.035, 0.028), cloth),
-        ring(0.165, 0.53, (0.0, 0.0), cloth),
-    ];
-    let scale = Vec3::new(JAVELINIST_HOOD.x, JAVELINIST_HOOD.y, JAVELINIST_HOOD.x);
-    sculpted(deep_hood(cloth, palette::HUNTER_DARK, palette::HUNTER_DARK.darker(0.05), &top)).scaled_by(scale)
+    let sleeve = tube(
+        &smoothed(
+            &[
+                ring(-0.01, 0.06, (0.0, 0.0), cloth),
+                ring(-0.01, 0.05, (0.05, 0.055), cloth),
+                ring(0.0, 0.0, (0.07, 0.072), cloth),
+                ring(0.0, -0.08, (0.064, 0.066), cloth).folded(0.03, 6),
+                ring(0.005, -0.15, (0.044, 0.046), cloth).folded(0.05, 6),
+                ring(0.01, -0.19, (0.026, 0.028), cloth),
+            ],
+            2,
+        ),
+        24,
+        (true, true),
+    );
+    let knot = Vec3::new(0.012, -0.205, -0.005);
+    let mut parts = vec![sleeve, tinted(ball(1.0).scaled_by(Vec3::new(0.04, 0.034, 0.043)).translated_by(knot), cloth.darker(0.04))];
+    // The ends: one longer, hanging forward and out, one short and back.
+    for (end, color) in [(Vec3::new(0.03, -0.16, -0.035), cloth), (Vec3::new(-0.03, -0.11, 0.02), cloth.darker(0.06))] {
+        let bend = knot + end * 0.5 + Vec3::new(end.x * 0.4, 0.0, end.z * 0.4);
+        parts.push(sweep(&[knot, bend, knot + end], &[0.022, 0.017, 0.005], 6, color));
+    }
+    sculpted(parts)
+}
+
+/// The thigh, in close trousers, down to the knee (the shin is `javelinist_shin`): seen at the
+/// coat's opening as it walks.
+fn javelinist_leg() -> Mesh {
+    let cloth = palette::HUNTER_DARK;
+    let thigh = tube(
+        &[
+            ring(0.0, 0.05, (0.09, 0.09), cloth),
+            ring(0.0, -0.2, (0.095, 0.09), cloth),
+            ring(0.01, RIG_KNEE.y, (0.088, 0.084), cloth),
+        ],
+        16,
+        (true, true),
+    );
+    // The knee, rounded so the leg shows no gap as it bends.
+    sculpted(vec![thigh, tinted(ball(0.086).translated_by(RIG_KNEE + Vec3::X * 0.01), cloth)])
+}
+
+/// The shin, from the knee (`RIG_KNEE`): close trousers into a soft, wrapped boot.
+fn javelinist_shin() -> Mesh {
+    let (cloth, boot) = (palette::HUNTER_DARK, palette::DARK_LEATHER);
+    let (knee, kneecap) = (0.088, 0.086);
+    tube(
+        &[
+            ring(0.01, RIG_KNEE.y + 0.02, (kneecap, kneecap * 0.96), cloth),
+            ring(0.0, -0.55, (knee * 0.92, knee * 0.88), cloth),
+            ring(0.0, -0.6, (0.078, 0.076), boot),
+            ring(0.015, -0.7, (0.085, 0.078), boot),
+            ring(0.04, -0.76, (0.11, 0.082), boot).squared(3.0),
+            ring(0.05, -0.8, (0.115, 0.08), boot).squared(3.0),
+        ],
+        16,
+        (true, true),
+    )
+    .translated_by(-RIG_KNEE)
+}
+
+/// The middle of the death hunter's head (in the head's space, the neck at the origin, facing
+/// +X), and its half sizes: how deep, how tall, how wide.
+const SKULL: Vec3 = Vec3::new(0.0, 0.2, 0.0);
+const SKULL_HALF: Vec3 = Vec3::new(0.135, 0.165, 0.11);
+/// Where its eyes are, on the face, in shadow under the hood's brow.
+const HUNTER_EYES: Vec3 = Vec3::new(0.128, 0.198, 0.043);
+
+/// A point `out` off the skull, `theta` round it from the front (radians, toward +Z), `phi` up
+/// from its middle: rounder behind, swelling at the back of the crown.
+fn on_skull(theta: f32, phi: f32, out: f32) -> Vec3 {
+    let back = (-theta.cos()).max(0.0) * phi.cos();
+    let half = SKULL_HALF + Vec3::new(0.012, 0.0, 0.004) * back;
+    SKULL + Vec3::new((half.x + out) * phi.cos() * theta.cos(), (half.y + out) * phi.sin(), (half.z + out) * phi.cos() * theta.sin())
+}
+
+/// How far (radians either side of the front) the hood is open at `phi` up the skull: shut over
+/// the crown, round the face from the brow down to the jaw, then closing in under the bandana.
+fn hood_open(phi: f32) -> f32 {
+    let brow = 1.0 - ((phi - 0.32) / 0.22).clamp(0.0, 1.0);
+    let chin = ((phi + 1.15) / 0.4).clamp(0.0, 1.0);
+    0.95 * brow * brow * (3.0 - 2.0 * brow) * (0.55 + 0.45 * chin)
+}
+
+/// How far up the skull (`phi`) the hood is at `v` (0..1) down it: over the crown and down to the
+/// jaw (`v` up to `HOOD_JAW`), below that tucked down into the coat's cowl.
+const HOOD_JAW: f32 = 0.78;
+const HOOD_PHI: (f32, f32) = (std::f32::consts::FRAC_PI_2, -0.8);
+
+/// A point on the death hunter's hood, `u` (-1..1) round the head from the left side of its
+/// opening, round the back, to the right side, `v` (0..1) from the crown down into the coat's
+/// cowl: close over the skull, softly creased, a short point at the back of the crown, its brow
+/// pulled forward over the eyes.
+fn hood_point(u: f32, v: f32) -> Vec3 {
+    let jaw = (v / HOOD_JAW).min(1.0);
+    let phi = HOOD_PHI.0 + (HOOD_PHI.1 - HOOD_PHI.0) * jaw;
+    let open = hood_open(phi);
+    let theta = std::f32::consts::PI + u * (std::f32::consts::PI - open);
+    let edge = ((u.abs() - 0.8) / 0.2).clamp(0.0, 1.0);
+    let brow = (-((phi - 0.3) / 0.22).powi(2)).exp();
+    let folds = 0.008 * (theta * 4.0 + phi * 2.0).sin() * (0.4 + 0.6 * v);
+    let point = 0.03 * (-((theta.cos() + 1.0) / 0.08)).exp() * (-((phi - 0.75) / 0.25).powi(2)).exp();
+    let mut at = on_skull(theta, phi, 0.032 + 0.018 * edge + folds + point);
+    // The brow: pulled forward and down over the face, dipping to a point at its middle.
+    let middle = (-(theta.sin() / 0.3).powi(2)).exp();
+    at += (Vec3::new(0.03, -0.012, 0.0) + Vec3::new(0.012, -0.03, 0.0) * middle) * brow * edge * theta.cos().max(0.0);
+    if v <= HOOD_JAW {
+        return at;
+    }
+    // Below the jaw: down into the coat's cowl round the neck (`javelinist_body`), tucked in.
+    let s = (v - HOOD_JAW) / (1.0 - HOOD_JAW);
+    let tucked = Vec3::new(-0.016 + 0.134 * theta.cos(), 0.05, 0.148 * theta.sin());
+    at.lerp(tucked, s)
+}
+
+/// The death hunter's head: a real skull's shape, its face in shadow but for the eyes, under the
+/// coat's hood, close, pulled forward over the brow, its edge rolled, rising out of the cowl
+/// round the neck (`javelinist_body`); a bandana of pale, faded cloth (`hunter_bandana`) over the nose and mouth,
+/// tucked in under the hood's sides.
+fn javelinist_hood() -> Mesh {
+    const ROWS: usize = 28;
+    const COLS: usize = 56;
+    let cloth = palette::HUNTER;
+    let face = palette::HUNTER_DARK.mix(&palette::BONE, 0.12);
+    let mut head = vec![tinted(ball(1.0).scaled_by(SKULL_HALF).translated_by(SKULL), face)];
+    // A hard brow, the bridge of the nose, and the eyes sunk in dark hollows under it.
+    let brow = HUNTER_EYES + Vec3::new(-0.012, 0.022, 0.0);
+    head.push(sweep(&[brow.with_z(-0.06), brow.with_z(0.0) + Vec3::X * 0.008, brow.with_z(0.06)], &[0.012, 0.016, 0.012], 8, face));
+    head.push(tinted(ball(1.0).scaled_by(Vec3::new(0.02, 0.035, 0.014)).translated_by(Vec3::new(0.133, 0.17, 0.0)), face));
+    for side in [1.0, -1.0] {
+        let hollow = ball(1.0).scaled_by(Vec3::new(0.012, 0.016, 0.026)).translated_by(HUNTER_EYES * Vec3::new(1.0, 1.0, side) - Vec3::X * 0.003);
+        head.push(tinted(hollow, palette::INK.darker(0.05)));
+    }
+    let head = sculpted(head);
+    let neck = tube(&[ring(-0.01, -0.06, (0.06, 0.058), face), ring(0.0, 0.08, (0.066, 0.062), face)], 12, (true, true));
+    let colors = hemmed(ROWS, 3, cloth, palette::HUNTER_DARK);
+    let hood = sheet(&grid(ROWS, COLS, (0.0, 1.0), |u, v| hood_point(u * 2.0 - 1.0, v)), &colors, 0.026);
+    // The rolled edge round the face: up one side, over the brow, down the other.
+    let rows = 60;
+    let side = |u: f32| -> Vec<Vec3> {
+        (0..=rows)
+            .map(|i| HOOD_JAW * 1.08 * i as f32 / rows as f32)
+            .filter(|&v| hood_open(HOOD_PHI.0 + (HOOD_PHI.1 - HOOD_PHI.0) * (v / HOOD_JAW).min(1.0)) > 0.02)
+            .map(|v| hood_point(u, v))
+            .collect()
+    };
+    let mut edge: Vec<Vec3> = side(-1.0).into_iter().rev().collect();
+    edge.extend(side(1.0));
+    let hem = sweep(&edge, &vec![0.018; edge.len()], 8, palette::HUNTER_DARK);
+    sculpted(vec![head, neck, hood, hem, hunter_bandana()])
+}
+
+/// The bandana's front (in the head's space): its middle, how far it reaches forward and out to
+/// either side round the face, and the height of its top edge, just under the eyes.
+const BANDANA: (f32, f32, f32, f32) = (0.02, 0.13, 0.105, 0.162);
+
+/// How far down the bandana hangs at `u` (-1..1, across the face): a short point in the middle.
+fn bandana_drop(u: f32) -> f32 {
+    0.075 + 0.085 * (1.0 - u.abs()).powf(1.8)
+}
+
+/// A point on the bandana, `u` (-1..1) across the face from its left to its right, `v` (0..1) down
+/// from its top edge: drawn up over the bridge of the nose, round the face, falling straight from
+/// the nose in soft folds that deepen as they hang, then in a short, crumpled point over the
+/// throat, pushed out in front of the cape as it falls.
+fn bandana_point(u: f32, v: f32) -> Vec3 {
+    let (middle, forward, out, top) = BANDANA;
+    let a = u * 1.35;
+    let nose = (-(u / 0.3).powi(2)).exp();
+    let point = (1.0 - u.abs()).powf(1.8);
+    let folds = 0.005 * v * (u * 11.0 + 1.3).sin() * (0.6 + 0.4 * (u * 4.0).cos()) + 0.004 * v.powi(3) * (u * 23.0).sin() * point;
+    let reach = forward + 0.016 * nose * (1.0 - 0.4 * v) + folds;
+    let ahead = (0.008 + 0.05 * point) * v * v;
+    let y = top + 0.01 * nose - bandana_drop(u) * v - 0.008 * v.powi(4) * (u * 17.0).sin().abs();
+    Vec3::new(middle + reach * a.cos() + ahead, y, out * a.sin() * (1.0 + folds))
+}
+
+/// Just off the front of the bandana at `u` across it and height `y`: where its stitches go.
+fn on_bandana(u: f32, y: f32) -> Vec3 {
+    let (middle, _, _, top) = BANDANA;
+    let v = ((top - y) / bandana_drop(u)).clamp(0.0, 1.0);
+    let p = bandana_point(u, v);
+    p + Vec3::new(p.x - middle, 0.0, p.z).normalize() * 0.007
+}
+
+/// The bandana over the nose and mouth, in pale, faded cloth gone greyer toward its point, its
+/// top edge rolled, a skull's jaw sewn across it in dark thread: the teeth, closed, the grin
+/// turning up at its corners, and the hollow of a nose above them.
+fn hunter_bandana() -> Mesh {
+    const ROWS: usize = 16;
+    const COLS: usize = 40;
+    let cloth = palette::BONE.darker(0.26);
+    let colors = hemmed(ROWS, 4, cloth, cloth.darker(0.1));
+    let mut parts = vec![sheet(&grid(ROWS, COLS, (0.0, 1.0), |u, v| bandana_point(u * 2.0 - 1.0, v)), &colors, 0.007)];
+    // The rolled top edge.
+    let hem: Vec<Vec3> = (0..=COLS).map(|i| bandana_point(i as f32 / COLS as f32 * 2.0 - 1.0, 0.0) + Vec3::Y * 0.002).collect();
+    parts.push(sweep(&hem, &vec![0.0055; hem.len()], 6, cloth.darker(0.06)));
+    let thread = palette::TATTERS;
+    let stitch = |from: Vec3, to: Vec3| sweep(&[from, to], &[0.0028, 0.0028], 4, thread);
+    // The jaw: two lines of thread, the grin turning up at the corners, closed teeth across them.
+    let (mouth, gap) = (0.112, 0.013);
+    let grin = |u: f32| 0.012 * (u / 0.45).powi(2);
+    for side in [1.0, -1.0] {
+        let line: Vec<Vec3> = (0..=12).map(|i| -0.45 + 0.9 * i as f32 / 12.0).map(|u| on_bandana(u, mouth + side * gap + grin(u))).collect();
+        parts.push(sweep(&line, &[0.003; 13], 4, thread));
+    }
+    for i in 0..9 {
+        let u = -0.38 + 0.76 * i as f32 / 8.0;
+        let y = mouth + grin(u);
+        parts.push(stitch(on_bandana(u, y + gap + 0.009), on_bandana(u, y - gap - 0.009)));
+    }
+    // The nose: a hollow pointed at the top, two slanting stitches meeting over a short one.
+    let nose = mouth + 0.036;
+    for side in [1.0, -1.0] {
+        parts.push(stitch(on_bandana(0.0, nose + 0.014), on_bandana(side * 0.1, nose - 0.006)));
+    }
+    parts.push(stitch(on_bandana(-0.1, nose - 0.006), on_bandana(0.1, nose - 0.006)));
+    sculpted(parts)
 }
 
 /// A fighter's low-poly figure, feet at the origin, picked by class id so each class has its own
@@ -1630,8 +1980,8 @@ pub fn fighter_mesh(class_key: &str) -> Mesh {
     // Drawn in a white material: these are the real colors, the same for every player (ground
     // rings and health bars tell who is who).
     match class_key {
-        // Marksman: a tall, faceless hunter in one long near-black moss robe, a draped cowl and a
-        // cord belt. Head, arms, legs and spear are separate, animated parts (`fighter_rig`).
+        // Marksman: a death hunter in a hooded coat and a pale bandana, a skirt of leather
+        // straps. Head, arms, legs and spear are separate, animated parts (`fighter_rig`).
         "javelinist" => javelinist_body(),
         // Duelist: a spectral revenant: one long, cold near-black robe from the collar to a hem
         // fraying into tatters below the knee, belted in ash with a steel buckle, under heavy ash
@@ -1702,7 +2052,7 @@ pub fn shot_look(class: &ClassDef, shot: Shot, ability: bool) -> ShotLook {
             ..plain(carried_javelin().rotated_by(ALONG_X), ShotGlow::Weapon)
         },
         ("javelinist", true) => {
-            ShotLook { thrown: true, ..plain(javelin(Color::WHITE, Color::WHITE, Color::WHITE).rotated_by(ALONG_X), ShotGlow::Spirit) }
+            ShotLook { thrown: true, ..plain(javelin(Color::WHITE, Color::WHITE, Color::WHITE, Color::WHITE, Color::WHITE).rotated_by(ALONG_X), ShotGlow::Spirit) }
         }
         ("frost_mage", false) => ShotLook {
             aura: Some(frost_aura(shot.radius)),
@@ -1788,6 +2138,23 @@ pub fn wind_mesh() -> Mesh {
             b.tri_faded([near + near_half, far - far_half, near - near_half], [near_alpha, far_alpha, near_alpha]);
             b.tri_faded([near + near_half, far + far_half, far - far_half], [near_alpha, far_alpha, far_alpha]);
         }
+    }
+    b.build()
+}
+
+/// How long the executioner's spear is, from its point to the end of its butt spike.
+pub const SPEAR_LENGTH: f32 = 2.05;
+
+/// A thrown spear's shadow, flat on the ground along -X from under its point at the origin: a
+/// thin streak as long as the spear, darkest just behind the point, fading out toward the butt.
+pub fn spear_shadow_mesh() -> Mesh {
+    let mut b = FlatMesh::default();
+    // Stations down the streak: how far along it (0..1), its half width and opacity there.
+    let stations = [(0.0, 0.0, 0.6), (0.1, 0.05, 1.0), (0.35, 0.045, 0.8), (1.0, 0.02, 0.0)];
+    for pair in stations.windows(2) {
+        let [(near, near_half, a), (far, far_half, z)] = [pair[0], pair[1]].map(|(t, w, a)| (Vec3::X * -t * SPEAR_LENGTH, Vec3::Z * w, a));
+        b.tri_faded_both([near - near_half, far - far_half, near + near_half], [a, z, a]);
+        b.tri_faded_both([near + near_half, far - far_half, far + far_half], [a, z, z]);
     }
     b.build()
 }

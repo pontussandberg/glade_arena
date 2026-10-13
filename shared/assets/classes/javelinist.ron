@@ -9,8 +9,8 @@
     move_speed: 3.7,
     attack: (
         damage: 16,
-        attack_ticks: 28,
-        windup: 0.3,
+        attack_ticks: 31,
+        windup: 0.613,
         kind: Projectile(speed: 15.0, radius: 0.25, range: 15.0, far_scale: Some(2.25)),
     ),
     abilities: [

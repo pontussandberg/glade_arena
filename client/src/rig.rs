@@ -12,11 +12,11 @@
 //! gone off but the fighter itself. A quicker attack (`follow_up`) plays all of it faster.
 //!
 //! The javelinist always carries the javelin cocked over the shoulder, ready to throw. The
-//! windup: twist the throwing shoulder far back, lean back and sink into a wide stance, lead arm
+//! windup: twist the throwing shoulder far back, lean well back and sink into a wide stance, lead arm
 //! pointing at the target, while drawing the javelin further back; then lunge forward through
 //! the throw, the arm whipping over the top, hold the follow-through for a moment and settle
 //! back. Head and javelin stay on the target throughout. The hand is empty until a new javelin
-//! is drawn, halfway through the cooldown. A thrown Q is a quick flick of the arm through the
+//! is drawn, as the next attack is ready. A thrown Q is a quick flick of the arm through the
 //! same throw.
 //!
 //! The revenant drags its great blade behind it, the point trailing just above the ground. Its
@@ -53,7 +53,7 @@ use bevy::prelude::*;
 use crate::Me;
 use crate::cloth::WardrobeAssets;
 use crate::feedback::AttackClock;
-use crate::arena::{self, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER};
+use crate::arena::{self, RIG_ELBOW, RIG_HAND, RIG_HIP, RIG_KNEE, RIG_NECK, RIG_SHOULDER};
 use crate::render::shown;
 
 pub struct RigPlugin;
@@ -135,12 +135,28 @@ pub(crate) struct Moves {
     /// facing rather than across the twisted chest: an overhand throw draws straight back behind
     /// the shoulder and whips straight through, instead of round behind the head.
     weapon_arm_untwist: f32,
+    /// Where its arms' elbows and hands are, in the arm's space (`arena::RIG_ELBOW` and
+    /// `RIG_HAND` for most): its arm meshes are built to them.
+    pub(crate) elbow_at: Vec3,
+    pub(crate) hand_at: Vec3,
+    /// How far the weapon arm's elbow bends (positive: the forearm forward), and the plane it
+    /// bends in, turned about the upper arm (positive: in across the body).
+    elbow: [f32; 4],
+    elbow_turn: [f32; 4],
+    /// The weapon arm's swing turned in across the body (keyframes, on top of `swing_yaw`).
+    /// These three only move once the strike has gone off (`contact`).
+    arm_yaw: [f32; 4],
     /// The weapon arm goes right round with each strike (a windmill: up behind, over the top,
     /// down ahead and on round back to the carry), rather than back the way it came.
     pub(crate) windmill: bool,
     lead_arm: [f32; 4],
     lead_leg: [f32; 4],
     back_leg: [f32; 4],
+    /// How much of the body's twist its legs turn with (0: they keep along the facing).
+    hip_turn: f32,
+    /// How far each knee bends (positive: the shin back), for a rig whose legs bend there.
+    lead_knee: [f32; 4],
+    back_knee: [f32; 4],
     twist: [f32; 4],
     lean: [f32; 4],
     /// How it leans standing still while carrying (the carry keyframe is how it leans walking).
@@ -172,7 +188,9 @@ pub(crate) struct Moves {
     /// than snapping out and slowing into place.
     pub(crate) heavy: bool,
     /// After the strike is done: how long (ticks) its end is held, and when it's back to
-    /// carrying (`FOLLOW_THROUGH` for most).
+    /// carrying (`FOLLOW_THROUGH` for most). A thrower's (`throws`) are parts (0 to 1) of the
+    /// rest of its backswing instead: it's back to carrying, the next one drawn, just as the
+    /// next attack is ready, whatever the attack speed.
     pub(crate) follow_through: (f32, f32),
     /// How stiff its joints' springs are (natural frequency, rad/s; `JOINT_STIFFNESS` for most):
     /// stiffer is more solid, with less lag and give.
@@ -192,9 +210,9 @@ pub(crate) struct Moves {
 
 /// How the weapon sits in the hand.
 pub(crate) enum Held {
-    /// Kept pointing (a little above) the aim, whatever the arm and body do: a javelin ready to
-    /// throw.
-    OnTarget,
+    /// Kept pointing along the aim, tipped up over it this far (radians, keyframes like the
+    /// joints'), whatever the arm and body do: a javelin ready to throw.
+    OnTarget([f32; 4]),
     /// Kept standing up, whatever the arm and body do, tipped this far (radians, keyframes like
     /// the joints') toward the facing: a staff.
     Upright([f32; 4]),
@@ -207,34 +225,70 @@ pub(crate) enum Held {
 }
 
 const JAVELINIST: Moves = Moves {
-    weapon_arm: [-2.9, -2.8, 1.9, -2.1],
+    // Overhand: carried straight up, cocked up behind the shoulder (the hand over it, the spear
+    // over the shoulder, the arm under it), the spear let go just as the arm starts forward
+    // (`contact`), the empty arm whipping on over the top after it (not down past the hip) and
+    // down in front. After the throw it reaches back up over the shoulder for the next.
+    weapon_arm: [-2.9, -2.6, -5.45, -2.1],
     weapon_arm_untwist: 1.0,
+    // A long arm, reaching mid-thigh.
+    elbow_at: arena::JAVELINIST_ELBOW,
+    hand_at: arena::JAVELINIST_HAND,
+    // Never quite straight: bent carried and cocked (the way an elbow bends, the arm having
+    // come up over the front), straightening through the whip; spent in the follow-through,
+    // the arm come in across the body, the elbow out, the forearm folded in across the belt,
+    // the hand by the left hip.
+    elbow: [-0.3, -0.35, 0.8, -0.3],
+    elbow_turn: [0.0, 0.0, 1.78, 0.0],
+    arm_yaw: [0.0, 0.0, 1.56, 0.0],
     windmill: false,
-    lead_arm: [0.35, 1.5, -0.9, -0.8],
-    lead_leg: [0.12, 0.55, 0.4, 0.6],
-    back_leg: [-0.1, -0.5, -0.75, -0.6],
+    // One-armed: the empty sleeve only swings a little with the body.
+    lead_arm: [0.05, 0.35, -0.3, -0.2],
+    // Sinking low into the windup, knees bent: the lead thigh well forward over an upright shin,
+    // the back leg stretched out behind, a little bent, both feet down; still low through the
+    // throw.
+    lead_leg: [0.12, 0.84, 0.9, 0.6],
+    back_leg: [-0.1, -0.87, -0.75, -0.6],
+    lead_knee: [0.0, 1.3, 0.9, 0.0],
+    back_knee: [0.0, 0.9, 0.3, 0.0],
+    // The hips turning a little with the shoulders, back into the windup and round through the
+    // throw.
+    hip_turn: 0.3,
     // Drawn: the shoulder turned back only so far that the javelin, held on target, stays clear
-    // of the head. Released: the shoulder comes round, the javelin in front of the chest.
-    twist: [0.0, -0.8, 0.55, 0.0],
-    lean: [0.0, 0.28, -0.38, -0.45],
+    // of the head. Released: the whole shoulder driven round after the arm and on past the
+    // facing, the throwing side leading, held there through the follow-through.
+    twist: [0.0, -0.8, 1.15, 0.0],
+    // Leaning back at full draw (sunk low on bent knees), then pitching forward through the
+    // throw and over into the follow-through.
+    lean: [0.0, 0.5, -0.8, -0.45],
     standing_lean: 0.0,
     standing_arm: 0.0,
     rests: false,
     stride: 1.0,
-    head_dip: [0.0, 0.2, -0.15, 0.0],
-    held: Held::OnTarget,
+    head_dip: [0.0, 0.3, -0.15, 0.0],
+    // Tipped up a little over the aim carried; cocked, its point dipped toward the target, down
+    // to the height it flies at, right over the thrower's middle: it leaves the hand just where
+    // its real path starts (`render::THROWN_HEIGHT`).
+    held: Held::OnTarget([0.12, -0.3, 0.0, 0.12]),
     throws: true,
     scale: 1.16,
     stretch: 0.0,
-    draw_end: DRAW_END,
-    strike_ticks: STRIKE_TICKS,
+    // Drawn back, a short hold at full draw, then snapped out of it, quick.
+    draw_end: 0.553,
+    strike_ticks: 1.5,
     heavy: false,
-    follow_through: FOLLOW_THROUGH,
+    // After the arm has carried on down through the throw, held there bent over it a while
+    // (unless walking off cuts it short), then standing calmly back up, the next spear drawn
+    // just as the attack is ready again.
+    follow_through: (0.45, 1.0),
     stiffness: JOINT_STIFFNESS,
     damping: JOINT_DAMPING,
     head_follow: HEAD_FOLLOW,
     swing_yaw: 0.0,
-    contact: 1.0,
+    // Let go early, just as the arm starts forward out of the cock (the spear's point over the
+    // thrower's middle then): the arm whips on through after it (`WHIP_TICKS`), the shoulder
+    // and the lean carrying on, a whole-body throw.
+    contact: 0.2,
 };
 
 const REVENANT: Moves = Moves {
@@ -244,6 +298,11 @@ const REVENANT: Moves = Moves {
     weapon_arm: [-0.35, -3.35, -6.03, 1.45],
     // The arm swings in its own plane, whatever the body's twist: a straight blow.
     weapon_arm_untwist: 1.0,
+    elbow_at: RIG_ELBOW,
+    hand_at: RIG_HAND,
+    elbow: [0.0; 4],
+    elbow_turn: [0.0; 4],
+    arm_yaw: [0.0; 4],
     windmill: true,
     // The free arm dangles carelessly toward the ground throughout, whatever the body does:
     // against its lean (leaning back, it hangs a little back; bowed into the blow, forward).
@@ -252,6 +311,9 @@ const REVENANT: Moves = Moves {
     // and the back one, straight under the hips, braces back.
     lead_leg: [0.25, 0.25, 1.85, 0.7],
     back_leg: [-0.2, -0.6, -0.45, -0.75],
+    lead_knee: [0.0; 4],
+    back_knee: [0.0; 4],
+    hip_turn: 0.0,
     // Side on, the weapon shoulder back; wound further round, then turning into the blow.
     twist: [-0.8, -0.5, 0.8, 0.5],
     // A careless reaper's hunch: leaning forward always, leading the attack with the body, never
@@ -297,10 +359,18 @@ const REVENANT: Moves = Moves {
 const FROST_MAGE: Moves = Moves {
     weapon_arm: [0.3, 1.9, 1.25, 0.75],
     weapon_arm_untwist: 0.0,
+    elbow_at: RIG_ELBOW,
+    hand_at: RIG_HAND,
+    elbow: [0.0; 4],
+    elbow_turn: [0.0; 4],
+    arm_yaw: [0.0; 4],
     windmill: false,
     lead_arm: [-0.1, 1.25, 0.8, -1.0],
     lead_leg: [0.1, 0.3, 0.5, 0.55],
     back_leg: [-0.1, -0.3, -0.5, -0.5],
+    lead_knee: [0.0; 4],
+    back_knee: [0.0; 4],
+    hip_turn: 0.0,
     twist: [0.0, -0.4, 0.35, 0.15],
     lean: [0.0, 0.12, -0.25, -0.35],
     standing_lean: 0.0,
@@ -345,8 +415,11 @@ const STRIKE_TICKS: f32 = 2.5;
 /// of the stretch).
 const STRETCH_TICKS: f32 = 3.0;
 const SMEAR_REACH: f32 = 0.4;
-/// A thrown weapon: ticks after a throw until a new one is in the hand.
-const REARM_TICKS: f32 = 6.0;
+/// How long (ticks) a throw's arm takes to whip through after letting go (`strike_at`).
+const WHIP_TICKS: f32 = 4.0;
+/// Where what moves only after the strike has gone off starts: this far (0 to 1) on from the
+/// contact pose through the rest of the strike.
+const AFTER_CONTACT: f32 = 0.6;
 /// After the strike is done: how long (ticks) the follow-through is held, and when it's back to
 /// carrying.
 const FOLLOW_THROUGH: (f32, f32) = (1.5, 7.0);
@@ -416,7 +489,10 @@ struct RigAssets {
 struct RigHandles {
     head: Handle<Mesh>,
     arm: Handle<Mesh>,
+    forearm: Option<Handle<Mesh>>,
+    lead_arm: Option<Handle<Mesh>>,
     leg: Handle<Mesh>,
+    shin: Option<Handle<Mesh>>,
     held: Handle<Mesh>,
     eyes: Handle<Mesh>,
     glow: Handle<StandardMaterial>,
@@ -440,21 +516,48 @@ struct Facing {
     steady: Option<f32>,
 }
 
-/// Where a fighter's held weapon is in the world in the pose it's heading for this frame (its
-/// joints' targets, not where their springs have got to): its grip, the weapon pointing along
-/// +Y. A thrown javelin leaves the hand from here (`render::fly_shots`): where the throw sends
-/// it, out in front, rather than from an arm the springs still hold halfway through the swing.
+/// Where a fighter's held weapon is in the world as posed this frame, and the hand-off of a thrown
+/// one to its flying spear (`render::fly_shots`), frame-exact whatever the attack speed or the
+/// network does: the flying spear stays out of sight until the hand has let go of it, and the
+/// held one stays in the hand until the flying one has left it, so on the frame they swap both
+/// are just where the hand holds it.
 #[derive(Component, Default, PartialEq)]
-pub(crate) struct HeldAt(pub Transform);
+pub(crate) struct HeldAt {
+    /// The grip, the weapon pointing along +Y, drawn as big as the fighter.
+    pub at: Transform,
+    /// The latest attack (its release tick) the pose has got as far as letting go of.
+    pub let_go: Option<u32>,
+    /// The latest attack whose flying spear has left the hand (its spawn tick).
+    pub launched: Option<u32>,
+    /// Where the hand was (as `at`) just as it let go of `let_go`, between frames: our own
+    /// throws' flying spears leave from here, flown on since, however the frames fall.
+    pub released_from: Option<Transform>,
+    /// A throw (its release tick) whose spear the hand is empty of until the next attack is
+    /// ready, once its flying spear has left the hand, or it's `late` for it.
+    pub rearming: Option<u32>,
+    pub late: bool,
+}
+
+/// Where a fighter's held weapon is in the world (its grip, the weapon along +Y), the fighter
+/// placed at `placed` and posed `posed`: just where its parts draw it (`HeldAt::at`).
+pub(crate) fn held_in_world(placed: &Transform, posed: &Posed) -> Transform {
+    Transform::from_translation(placed.translation.with_y(0.0)) * posed.held_on_body
+}
+
+/// How long (ticks past a throw) each side of a hand-off (`HeldAt`) waits for the other, at most.
+pub(crate) const MAX_HOLD_TICKS: f32 = 3.0;
 
 /// A fighter's moving parts (child entities), its moves and walk state.
 #[derive(Component)]
-struct Rig {
+pub(crate) struct Rig {
     head: Entity,
-    /// Right (weapon) arm and left (lead) arm.
+    /// Right (weapon) arm and left (lead) arm, and their elbows (the held weapon hangs from the
+    /// weapon arm's).
     arms: [Entity; 2],
-    /// Right (back) leg and left (lead) leg.
+    elbows: [Entity; 2],
+    /// Right (back) leg and left (lead) leg, and their knees.
     legs: [Entity; 2],
+    knees: [Entity; 2],
     held: Entity,
     /// The held weapon's aura (`RigMeshes::held_aura`), if it has one.
     aura: Option<Entity>,
@@ -474,40 +577,62 @@ struct Rig {
 }
 
 /// A value on a damped spring: chases its target with a little lag and overshoot, then settles.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Spring {
     at: f32,
     speed: f32,
+    /// Its target last step: it moves on from there to the next one steadily through the step.
+    target: Option<f32>,
 }
 
 impl Spring {
     fn follow(&mut self, target: f32, dt: f32, stiffness: f32, damping: f32) -> f32 {
-        // Semi-implicit Euler, in small enough steps to stay stable at low frame rates.
-        let steps = (dt / 0.008).ceil().max(1.0);
-        let h = dt / steps;
-        for _ in 0..steps as u32 {
-            let pull = stiffness * stiffness * (target - self.at) - 2.0 * damping * stiffness * self.speed;
-            self.speed += pull * h;
-            self.at += self.speed * h;
-        }
+        // Solved exactly over the step, its target moving steadily from where it was last step
+        // (unless that's a jump right round), so it moves the same at any frame rate; damped at
+        // least critically (no overshoot) above 1. Chasing a target moving at `rate`, it trails
+        // `lag` behind it; how far it is off that swings out and settles.
+        let from = self.target.filter(|from| (target - from).abs() < PI && dt > 0.0).unwrap_or(target);
+        let rate = if dt > 0.0 { (target - from) / dt } else { 0.0 };
+        let (w, z) = (stiffness, damping);
+        let lag = -2.0 * z.min(1.0) * rate / w;
+        let (off, v) = (self.at - from - lag, self.speed - rate);
+        let (off, v) = if z < 1.0 {
+            let wd = w * (1.0 - z * z).sqrt();
+            let fade = (-z * w * dt).exp();
+            let (sin, cos) = (wd * dt).sin_cos();
+            let b = (v + z * w * off) / wd;
+            (fade * (off * cos + b * sin), fade * ((b * wd - z * w * off) * cos - (off * wd + z * w * b) * sin))
+        } else {
+            let fade = (-w * dt).exp();
+            let b = v + w * off;
+            (fade * (off + b * dt), fade * (b - w * (off + b * dt)))
+        };
+        self.at = target + lag + off;
+        self.speed = v + rate;
+        self.target = Some(target);
         // Settled: stop, so a still fighter stops writing transforms.
         if (target - self.at).abs() < 1e-4 && self.speed.abs() < 1e-3 {
-            *self = Spring { at: target, speed: 0.0 };
+            *self = Spring { at: target, speed: 0.0, target: Some(target) };
         }
         self.at
     }
 }
 
 /// Every posed angle, each on its spring.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct Joints {
     weapon_arm: Spring,
     lead_arm: Spring,
     back_leg: Spring,
     lead_leg: Spring,
+    back_knee: Spring,
+    lead_knee: Spring,
     twist: Spring,
     lean: Spring,
     head_dip: Spring,
+    elbow: Spring,
+    elbow_turn: Spring,
+    arm_yaw: Spring,
     /// The held weapon's tip (`Held::Upright`) or wrist (`Held::Gripped`): an
     /// angle, which may come right round, so it takes the nearest way to its target.
     held_tip: Spring,
@@ -532,7 +657,12 @@ impl Joints {
             lead_arm: spring(&mut self.lead_arm, to.lead_arm),
             back_leg: spring(&mut self.back_leg, to.back_leg),
             lead_leg: spring(&mut self.lead_leg, to.lead_leg),
+            back_knee: spring(&mut self.back_knee, to.back_knee),
+            lead_knee: spring(&mut self.lead_knee, to.lead_knee),
             head_dip: spring(&mut self.head_dip, to.head_dip),
+            elbow: spring(&mut self.elbow, to.elbow),
+            elbow_turn: spring(&mut self.elbow_turn, to.elbow_turn),
+            arm_yaw: spring(&mut self.arm_yaw, to.arm_yaw),
             tip: spring(&mut self.held_tip, to.tip),
             roll: spring(&mut self.roll, to.roll),
         }
@@ -569,7 +699,14 @@ pub(crate) struct Angles {
     pub(crate) lead_arm: f32,
     pub(crate) back_leg: f32,
     pub(crate) lead_leg: f32,
+    pub(crate) back_knee: f32,
+    pub(crate) lead_knee: f32,
     pub(crate) head_dip: f32,
+    /// The weapon arm's elbow: how far it bends, and the plane it bends in.
+    pub(crate) elbow: f32,
+    pub(crate) elbow_turn: f32,
+    /// The weapon arm's swing turned in across the body.
+    pub(crate) arm_yaw: f32,
     /// The held weapon's tip, or its wrist (`Held`).
     pub(crate) tip: f32,
     /// The forearm's roll (`Held::Gripped`).
@@ -581,6 +718,12 @@ pub(crate) struct Angles {
 /// 1: carrying, it stands as `Moves::standing_lean` says when still).
 pub(crate) fn targets(moves: &Moves, phase: Phase, step: f32, walking: f32) -> Angles {
     let pose = |keys| phase.pose(keys);
+    // What only moves once the strike has gone off (the arm folding in after the throw), over
+    // the last of the strike: the joints' springs lag their targets, so it starts a little
+    // after the contact pose, or they'd already be on their way as it goes off.
+    let from = moves.contact + (1.0 - moves.contact) * AFTER_CONTACT;
+    let gone = ((phase.throw - from) / (1.0 - from).max(1e-3)).clamp(0.0, 1.0);
+    let after = Phase { throw: gone * gone * (3.0 - 2.0 * gone), ..phase };
     // Standing still while carrying: leaning as it stands rather than as it walks, the arms
     // turned back by as much so they hang (and what they hold lies) just as they did.
     let still = (1.0 - walking) * (1.0 - phase.braced());
@@ -591,7 +734,7 @@ pub(crate) fn targets(moves: &Moves, phase: Phase, step: f32, walking: f32) -> A
     let gait = walking * (1.0 - phase.braced());
     let middle = (moves.lead_leg[0] + moves.back_leg[0]) / 2.0;
     let (tip, roll) = match moves.held {
-        Held::OnTarget => (0.0, 0.0),
+        Held::OnTarget(tilt) => (pose(tilt), 0.0),
         // After a strike that took it right round (over the top), it settles back to the carry
         // the same way round, not back over the top.
         Held::Upright([carry, drawn, released, dash]) => {
@@ -611,7 +754,12 @@ pub(crate) fn targets(moves: &Moves, phase: Phase, step: f32, walking: f32) -> A
         lead_arm: pose(moves.lead_arm) + step * ARM_SWING - stand,
         back_leg: pose(moves.back_leg) + (middle - moves.back_leg[0]) * gait - legs,
         lead_leg: pose(moves.lead_leg) + (middle - moves.lead_leg[0]) * gait + legs,
+        back_knee: pose(moves.back_knee),
+        lead_knee: pose(moves.lead_knee),
         head_dip: pose(moves.head_dip),
+        elbow: after.pose(moves.elbow),
+        elbow_turn: after.pose(moves.elbow_turn),
+        arm_yaw: after.pose(moves.arm_yaw),
         tip,
         roll,
     }
@@ -625,12 +773,14 @@ pub(crate) struct Posed {
     pub(crate) head: Quat,
     /// Weapon arm, lead arm.
     pub(crate) arms: [Quat; 2],
-    /// Back leg, lead leg.
+    /// Their elbows (the lead arm's stays straight).
+    pub(crate) elbows: [Quat; 2],
+    /// Back leg, lead leg; and their knees.
     pub(crate) legs: [Quat; 2],
+    pub(crate) knees: [Quat; 2],
     pub(crate) held: Transform,
-    /// The held weapon in the pose the joints are heading for (`aimed`), on the body as placed
-    /// (only its height): see `HeldAt`.
-    pub(crate) held_aimed: Transform,
+    /// The held weapon as posed, on the body as placed (only its height): see `HeldAt`.
+    pub(crate) held_on_body: Transform,
 }
 
 /// Puts a rig together from its `angles` (and from `aimed`, the ones its joints are heading
@@ -643,16 +793,24 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
     // Leaning along the facing, then twisting: leaning back about the twisted body's own axis
     // would tip it sideways, across the line of the strike.
     let leaning = |twist: f32, lean: f32, sway: f32| Quat::from_rotation_z(lean) * Quat::from_rotation_y(twist) * Quat::from_rotation_x(sway);
-    let arm_turn = |twist: f32, swing: f32| Quat::from_rotation_y(moves.swing_yaw - moves.weapon_arm_untwist * twist) * Quat::from_rotation_z(swing);
+    let arm_turn = |angles: &Angles| Quat::from_rotation_y(moves.swing_yaw + angles.arm_yaw - moves.weapon_arm_untwist * angles.twist) * Quat::from_rotation_z(angles.weapon_arm);
+    // The elbow bending in its plane, the forearm not rolled by it.
+    let bent = |angles: &Angles| {
+        let plane = Quat::from_rotation_y(angles.elbow_turn);
+        plane * Quat::from_rotation_z(angles.elbow) * plane.inverse()
+    };
     let facing_turn = Quat::from_rotation_y(look.to_angle());
     let lean = leaning(angles.twist, angles.lean, sway);
-    // The legs swing along the facing, however the body twists above them (the hips turn less
-    // than the shoulders): a lunge stays a lunge, not a split.
-    let leg_turn = |leg: f32| Quat::from_rotation_y(-angles.twist) * Quat::from_rotation_z(leg);
+    // The legs swing along the facing, turned only `hip_turn` of the way with the body twisting
+    // above them (the hips turn less than the shoulders): a lunge stays a lunge, not a split.
+    let leg_turn = |leg: f32| Quat::from_rotation_y(-(1.0 - moves.hip_turn) * angles.twist) * Quat::from_rotation_z(leg);
     // Standing on the lower foot, however the body leans and the legs spread (the legs are
     // straight, as long as the hips are high, and hang from the leaning body).
-    let foot = |hip: Vec3, leg: f32| (lean * (hip + leg_turn(leg) * Vec3::NEG_Y * RIG_HIP.y)).y;
-    let lowest = soft_min(foot(RIG_HIP, angles.back_leg), foot(RIG_HIP.with_z(-RIG_HIP.z), angles.lead_leg));
+    // A knee bends the shin back, in the leg's plane.
+    let knee_turn = |bend: f32| Quat::from_rotation_z(-bend);
+    let sole = |leg: f32, knee: f32| leg_turn(leg) * (RIG_KNEE + knee_turn(knee) * (Vec3::NEG_Y * RIG_HIP.y - RIG_KNEE));
+    let foot = |hip: Vec3, leg: f32, knee: f32| (lean * (hip + sole(leg, knee))).y;
+    let lowest = soft_min(foot(RIG_HIP, angles.back_leg, angles.back_knee), foot(RIG_HIP.with_z(-RIG_HIP.z), angles.lead_leg, angles.lead_knee));
     let body = Transform {
         translation: Vec3::Y * (-lowest + stride.cos().powi(2) * BOB * walk) * moves.scale,
         rotation: facing_turn * lean,
@@ -661,7 +819,6 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
     let unlean = lean.inverse();
     // The pose the joints are heading for (not where their springs have got to): the body's
     // lean and the weapon arm, and where the hand is (in the facing's frame, unscaled).
-    let (aimed_lean, aimed_arm) = (leaning(aimed.twist, aimed.lean, 0.0), arm_turn(aimed.twist, aimed.weapon_arm));
     // A gripped blade as its arm holds it: a bigger one tipped up a little, so it still lands
     // along the ground rather than into it.
     let lift = (blade - 1.0) * BIG_BLADE_LIFT;
@@ -672,13 +829,13 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
     // whatever the stride, the bob and the sway do to the body.
     let rested = if moves.rests && rest > 0.0 && matches!(moves.held, Held::Gripped { .. }) {
         let point_at = |lean: Quat, height: f32, angles: &Angles, local: Vec3| {
-            Vec3::Y * height + moves.scale * (lean * (RIG_SHOULDER + arm_turn(angles.twist, angles.weapon_arm) * (RIG_HAND + gripped(angles) * local * blade)))
+            Vec3::Y * height + moves.scale * (lean * (RIG_SHOULDER + arm_turn(angles) * (moves.elbow_at + bent(angles) * (moves.hand_at - moves.elbow_at + gripped(angles) * local * blade))))
         };
         let (tip, corner) = (Vec3::Y * arena::BLADE_LENGTH, arena::glaive_edge(1.0));
         // Where it rests: the aimed pose, standing as it would without the walk's bob.
         let aimed_lean = leaning(aimed.twist, aimed.lean, 0.0);
-        let aimed_foot = |hip: Vec3, leg: f32| (aimed_lean * (hip + leg_turn(leg) * Vec3::NEG_Y * RIG_HIP.y)).y;
-        let aimed_height = -soft_min(aimed_foot(RIG_HIP, aimed.back_leg), aimed_foot(RIG_HIP.with_z(-RIG_HIP.z), aimed.lead_leg)) * moves.scale;
+        let aimed_foot = |hip: Vec3, leg: f32, knee: f32| (aimed_lean * (hip + sole(leg, knee))).y;
+        let aimed_height = -soft_min(aimed_foot(RIG_HIP, aimed.back_leg, aimed.back_knee), aimed_foot(RIG_HIP.with_z(-RIG_HIP.z), aimed.lead_leg, aimed.lead_knee)) * moves.scale;
         let lowest = |wrist: f32| {
             let posed = Angles { tip: wrist, ..*aimed };
             point_at(aimed_lean, aimed_height, &posed, tip).y.min(point_at(aimed_lean, aimed_height, &posed, corner).y)
@@ -710,30 +867,31 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
         *angles
     };
     let angles = &rested;
-    let weapon_arm = arm_turn(angles.twist, angles.weapon_arm);
+    let weapon_arm = arm_turn(angles);
+    let elbow = bent(angles);
     let held_in = |weapon_arm: Quat, unlean: Quat, angles: &Angles| match moves.held {
-        Held::OnTarget => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-(FRAC_PI_2 - 0.12)),
+        Held::OnTarget(_) => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-(FRAC_PI_2 - angles.tip)),
         Held::Upright(_) => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-angles.tip),
         // In the arm's plane: it swings with the arm (`Moves::swing_yaw` aims it).
         Held::Gripped { .. } => gripped(angles),
     };
-    // The held weapon's world pose in the pose the joints are heading for, rebuilt from the joints
-    // it hangs from (it's a child of the weapon arm at the hand, see `add_rigs`).
-    let aimed_body = Transform { rotation: facing_turn * aimed_lean, ..body };
-    let held_aimed = aimed_body
-        * Transform::from_translation(RIG_SHOULDER).with_rotation(aimed_arm)
-        * Transform::from_translation(RIG_HAND).with_rotation(held_in(aimed_arm, aimed_lean.inverse(), aimed));
+    let held = Transform {
+        translation: moves.hand_at - moves.elbow_at + moves.hand_at * SMEAR_REACH * smear,
+        rotation: held_in(weapon_arm * elbow, unlean, angles),
+        scale: Vec3::new(1.0, 1.0 + smear, 1.0) * blade,
+    };
+    // The held weapon's pose on the body, rebuilt from the joints it hangs from (it's a child of
+    // the weapon arm's elbow at the hand, see `add_rigs`).
+    let held_on_body = body * Transform::from_translation(RIG_SHOULDER).with_rotation(weapon_arm) * Transform::from_translation(moves.elbow_at).with_rotation(elbow) * held;
     Posed {
         body,
         head: unlean.slerp(Quat::IDENTITY, moves.head_follow) * Quat::from_rotation_z(-angles.head_dip),
         arms: [weapon_arm, Quat::from_rotation_z(angles.lead_arm)],
+        elbows: [elbow, Quat::IDENTITY],
         legs: [leg_turn(angles.back_leg), leg_turn(angles.lead_leg)],
-        held: Transform {
-            translation: RIG_HAND * (1.0 + SMEAR_REACH * smear),
-            rotation: held_in(weapon_arm, unlean, angles),
-            scale: Vec3::new(1.0, 1.0 + smear, 1.0) * blade,
-        },
-        held_aimed,
+        knees: [knee_turn(angles.back_knee), knee_turn(angles.lead_knee)],
+        held,
+        held_on_body,
     }
 }
 
@@ -752,7 +910,9 @@ fn soft_min(a: f32, b: f32) -> f32 {
 /// `strike_phase`).
 pub(crate) fn ahead_of_springs(class: ClassId, moves: &Moves, windup: Option<Swing>, released: Option<f32>, now: f32) -> (Option<Swing>, Option<f32>, f32) {
     let attack = &class.def().attack;
-    let lead = 2.0 * moves.damping / moves.stiffness * TICK_HZ as f32;
+    // A thrower's hand needn't be at the contact pose as it goes off: the spear leaves from
+    // wherever the hand is then (`pose_releasing`).
+    let lead = if moves.throws { 0.0 } else { 2.0 * moves.damping / moves.stiffness * TICK_HZ as f32 };
     let ahead = now + lead;
     match windup {
         Some(swing) if ahead >= swing.releases_at(attack) as f32 => (None, Some((ahead - swing.releases_at(attack) as f32) * swing.speed(attack)), ahead),
@@ -783,7 +943,7 @@ pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, 
             let progress = windup.windup_progress(now, &def.attack);
             let windup_ticks = windup.windup_ticks(&def.attack) as f32;
             let striking = strike_ticks(&windup);
-            let (strike, _) = strike_at(striking - (1.0 - progress) * windup_ticks, striking, moves.contact, moves.heavy);
+            let (strike, _) = strike_at(striking - (1.0 - progress) * windup_ticks, striking, moves.contact, moves.heavy, moves.throws);
             // What's left of the strike eases out over the draw, and how much the pose
             // carries only ever shrinks, from what it was when the windup began.
             let follow = follow_left(&windup);
@@ -794,11 +954,20 @@ pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, 
         }
         (None, Some(since)) => {
             let striking = attack.swing.map_or(moves.strike_ticks, |swing| strike_ticks(&swing));
-            let (strike, finish) = strike_at(striking + since, striking, moves.contact, moves.heavy);
-            let (hold, settle) = moves.follow_through;
+            let (strike, finish) = strike_at(striking + since, striking, moves.contact, moves.heavy, moves.throws);
+            let (hold, settle) = match moves.throws {
+                true => {
+                    let rest = (def.attack.period_ticks(1.0) - def.attack.windup_ticks(1.0)) as f32 - finish;
+                    (moves.follow_through.0 * rest, moves.follow_through.1 * rest)
+                }
+                false => moves.follow_through,
+            };
             let follow = 1.0 - ease(finish + hold, finish + settle, since);
             let smear = strike.powi(3) * (1.0 - ease(finish, finish + STRETCH_TICKS, since));
-            (0.0, strike.min(follow), smear)
+            // A throw goes off early in the strike: on from the draw as it goes, the draw only
+            // easing out with the rest as it settles back to carrying.
+            let draw = if moves.throws { follow } else { 0.0 };
+            (draw, strike.min(follow), smear)
         }
         (None, None) => (0.0, 0.0, 0.0),
     }
@@ -817,7 +986,10 @@ fn load_rigs(
             let handles = RigHandles {
                 head: add(rig.head),
                 arm: add(rig.arm),
+                forearm: rig.forearm.map(&mut add),
+                lead_arm: rig.lead_arm.map(&mut add),
                 leg: add(rig.leg),
+                shin: rig.shin.map(&mut add),
                 held: add(rig.held),
                 eyes: add(rig.eyes),
                 glow: materials.add(arena::glow(rig.glow, EYE_GLOW)),
@@ -845,6 +1017,9 @@ fn add_rigs(
 ) {
     for (player, class, pos, body) in &new {
         let Some(handles) = assets.meshes.get(class) else { continue };
+        let class_moves = moves(&class.def().id);
+        let elbows = [(); 2].map(|_| commands.spawn((Transform::from_translation(class_moves.elbow_at), Visibility::default())).id());
+        let knees = [(); 2].map(|_| commands.spawn((Transform::from_translation(RIG_KNEE), Visibility::default())).id());
         let mut part = |mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>, at: Vec3| {
             let transform = Transform::from_translation(at);
             commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), transform)).id()
@@ -852,9 +1027,11 @@ fn add_rigs(
         let own = &body.0;
         let rig = Rig {
             head: part(&handles.head, own, RIG_NECK),
-            arms: [part(&handles.arm, own, RIG_SHOULDER), part(&handles.arm, own, mirrored(RIG_SHOULDER))],
+            arms: [part(&handles.arm, own, RIG_SHOULDER), part(handles.lead_arm.as_ref().unwrap_or(&handles.arm), own, mirrored(RIG_SHOULDER))],
+            elbows,
             legs: [part(&handles.leg, own, RIG_HIP), part(&handles.leg, own, mirrored(RIG_HIP))],
-            held: part(&handles.held, own, RIG_HAND),
+            knees,
+            held: part(&handles.held, own, class_moves.hand_at - class_moves.elbow_at),
             aura: handles.held_aura.as_ref().map(|(mesh, material)| part(mesh, material, Vec3::ZERO)),
             gleam: handles.held_glint.as_ref().filter(|_| matches!(moves(&class.def().id).held, Held::Gripped { .. })).map(|(mesh, material, _)| part(mesh, material, Vec3::ZERO)),
             gleaming: Gleaming { seed: player.index().index(), ..default() },
@@ -868,8 +1045,24 @@ fn add_rigs(
         let eyes = part(&handles.eyes, &assets.eye_glow, Vec3::ZERO);
         let held_glow = handles.held_glow.as_ref().map(|mesh| part(mesh, &handles.glow, Vec3::ZERO));
         let body_glow = handles.body_glow.as_ref().map(|mesh| part(mesh, &handles.glow, Vec3::ZERO));
+        // A forearm on each arm, or only the weapon arm if the other is an empty sleeve.
+        let arms_with_forearms = if handles.lead_arm.is_some() { 1 } else { 2 };
+        let shins: Vec<Entity> = handles.shin.iter().flat_map(|mesh| [mesh, mesh]).map(|mesh| part(mesh, own, Vec3::ZERO)).collect();
+        let forearms: Vec<Entity> = handles.forearm.iter().flat_map(|mesh| std::iter::repeat_n(mesh, arms_with_forearms)).map(|mesh| part(mesh, own, Vec3::ZERO)).collect();
         commands.entity(rig.head).add_child(eyes);
-        commands.entity(rig.arms[0]).add_child(rig.held);
+        for (arm, elbow) in rig.arms.into_iter().zip(rig.elbows) {
+            commands.entity(arm).add_child(elbow);
+        }
+        for (elbow, forearm) in rig.elbows.into_iter().zip(forearms) {
+            commands.entity(elbow).add_child(forearm);
+        }
+        for (leg, knee) in rig.legs.into_iter().zip(rig.knees) {
+            commands.entity(leg).add_child(knee);
+        }
+        for (knee, shin) in rig.knees.into_iter().zip(shins) {
+            commands.entity(knee).add_child(shin);
+        }
+        commands.entity(rig.elbows[0]).add_child(rig.held);
         if let Some(glow) = held_glow {
             commands.entity(rig.held).add_child(glow);
         }
@@ -964,9 +1157,20 @@ fn ease_out(from: f32, to: f32, x: f32) -> f32 {
 
 /// The strike (0..1) `ticks` after it started, as one committed motion: `contact` of the way
 /// through after `strike_ticks`, when the attack goes off, and the rest after that. Snapping
-/// out and slowing into place, or (`heavy`) gathering speed all the way into its end. Also how
-/// many ticks after it went off the strike is done.
-fn strike_at(ticks: f32, strike_ticks: f32, contact: f32, heavy: bool) -> (f32, f32) {
+/// out and slowing into place, or (`heavy`) gathering speed all the way into its end, or
+/// (`throws`) gathering speed up to letting go, then whipped through the rest in `WHIP_TICKS`,
+/// slowing into place. Also how many ticks after it went off the strike is done.
+fn strike_at(ticks: f32, strike_ticks: f32, contact: f32, heavy: bool, throws: bool) -> (f32, f32) {
+    if throws {
+        // The rest of it whipped through quickly after letting go, slowing into place.
+        let after = WHIP_TICKS;
+        let strike = if ticks < strike_ticks {
+            contact * (ticks / strike_ticks).clamp(0.0, 1.0).powi(2)
+        } else {
+            contact + (1.0 - contact) * (1.0 - (1.0 - ((ticks - strike_ticks) / after.max(1e-3)).min(1.0)).powi(2))
+        };
+        return (strike, after);
+    }
     // Where on the ease the contact falls.
     let at_contact = if heavy { contact.cbrt() } else { 1.0 - (1.0 - contact).cbrt() };
     let whole = strike_ticks / at_contact;
@@ -1075,11 +1279,28 @@ fn pose_rigs(
             }
         }
         let phase = Phase { draw, throw, dashing };
-        // A thrown weapon: the hand is empty for a moment after a throw, until a new one is
-        // drawn (whatever the arm does meanwhile).
-        let empty_handed = moves.throws
-            && matches!(def.attack.kind, AttackKind::Projectile { .. })
-            && released.is_some_and(|s| s < REARM_TICKS);
+        // A thrown weapon: the hand is empty from a throw until the next attack is ready (its
+        // backswing at normal speed, as `released` counts), when a new one is drawn.
+        let rearm = (def.attack.period_ticks(1.0) - def.attack.windup_ticks(1.0)) as f32;
+        // The latest throw the pose has let go of: ours as our clock gets to it (the state says
+        // so a moment early), another's as soon as its spear is seen (it's released then).
+        let let_go = attack.released_at.filter(|&at| now >= at as f32).max(seen.and_then(|seen| seen.attack).filter(|_| !is_me));
+        // Empty once the flying spear has left the hand (or it's late: `empty_hands`).
+        let throw = attack.released_at.max(seen.and_then(|seen| seen.attack).filter(|_| !is_me));
+        let rearming = throw.filter(|_| moves.throws && matches!(def.attack.kind, AttackKind::Projectile { .. }) && released.is_some_and(|s| s < rearm));
+        let late = throw.is_some_and(|at| present > at as f32 + MAX_HOLD_TICKS);
+        // Our own hand letting go this frame: just how it was posed as it did, between frames.
+        let frame_ticks = dt * TICK_HZ as f32;
+        let released_from = match let_go {
+            Some(at) if is_me && moves.throws && held_at.let_go != let_go && now - (at as f32) < frame_ticks => {
+                let back = (dt - (now - at as f32) / TICK_HZ as f32).clamp(0.0, dt);
+                let posed = pose_releasing(*class, moves, attack, &rig.joints, back, at as f32, (facing.look, step, rig.walking, stride));
+                let placed = Transform { translation: body.translation.with_y(posed.body.translation.y), ..posed.body };
+                Some(held_in_world(&placed, &posed))
+            }
+            _ if held_at.let_go == let_go => held_at.released_from,
+            _ => None,
+        };
 
         // Every angle chases its pose on a spring, and the rig is put together from them.
         let angles = rig.joints.follow(&targets(moves, phase, step, rig.walking), dt, moves);
@@ -1088,13 +1309,42 @@ fn pose_rigs(
         let posed = assemble(moves, &angles, &aimed, facing.look, stride, walk, stretch * smear, blade, 1.0 - phase.braced());
         let placed = Transform { translation: body.translation.with_y(posed.body.translation.y), ..posed.body };
         body.set_if_neq(placed);
-        // For a fighter that throws its weapon: where it is in the pose the joints are heading for
-        // (child transforms aren't propagated until after this frame's shots are placed).
+        // For a fighter that throws its weapon: where it is in the hand this frame (child
+        // transforms aren't propagated until after this frame's shots are placed).
+        // Let go of, but its flying spear not here yet (the news of it late): it flies on by
+        // itself from just where it was let go, along the aim at its speed, not dragged on in
+        // the hand, until the flying spear takes over just there (`render::fly_shots`).
+        let mut held = posed.held;
+        let ahead_of_news = released_from.filter(|_| let_go.is_some() && held_at.launched < let_go);
+        let at = match (ahead_of_news, let_go, def.attack.kind.shot()) {
+            (Some(from), Some(at), Some(shot)) => {
+                let flown = (now - at as f32).max(0.0) / TICK_HZ as f32 * shot.speed;
+                let flying = Transform { translation: from.translation + arena::to_world(facing.look, 0.0) * flown, ..from };
+                // What it hangs from: the fighter, its weapon arm and elbow (see `add_rigs`).
+                let elbow = Transform::from_translation(placed.translation.with_y(0.0))
+                    * posed.body
+                    * Transform::from_translation(RIG_SHOULDER).with_rotation(posed.arms[0])
+                    * Transform::from_translation(moves.elbow_at).with_rotation(posed.elbows[0]);
+                held = Transform::from_matrix(Mat4::from(elbow.compute_affine().inverse() * flying.compute_affine()));
+                flying
+            }
+            _ => held_in_world(&placed, &posed),
+        };
         if moves.throws {
-            let at = Transform::from_translation(placed.translation.with_y(0.0)) * posed.held_aimed;
-            held_at.set_if_neq(HeldAt(at));
+            let launched = held_at.launched;
+            held_at.set_if_neq(HeldAt { at, let_go, launched, released_from, rearming, late });
         }
-        let rotations = [(rig.head, posed.head), (rig.arms[0], posed.arms[0]), (rig.arms[1], posed.arms[1]), (rig.legs[0], posed.legs[0]), (rig.legs[1], posed.legs[1])];
+        let rotations = [
+            (rig.head, posed.head),
+            (rig.arms[0], posed.arms[0]),
+            (rig.arms[1], posed.arms[1]),
+            (rig.elbows[0], posed.elbows[0]),
+            (rig.elbows[1], posed.elbows[1]),
+            (rig.legs[0], posed.legs[0]),
+            (rig.legs[1], posed.legs[1]),
+            (rig.knees[0], posed.knees[0]),
+            (rig.knees[1], posed.knees[1]),
+        ];
         for (part, rotation) in rotations {
             if let Ok((mut transform, _)) = parts.get_mut(part)
                 && transform.rotation != rotation
@@ -1102,11 +1352,35 @@ fn pose_rigs(
                 transform.rotation = rotation;
             }
         }
-        if let Ok((mut transform, mut visibility)) = parts.get_mut(rig.held) {
-            visibility.set_if_neq(shown(!empty_handed));
-            transform.set_if_neq(posed.held);
+        if let Ok((mut transform, _)) = parts.get_mut(rig.held) {
+            transform.set_if_neq(held);
         }
     }
+}
+
+/// A thrower's hand is empty from when its flying spear leaves it (`render::fly_shots`, just
+/// before this, so the two swap on the same frame) until the next attack is ready, when a new one
+/// is drawn.
+pub(crate) fn empty_hands(rigs: Query<(&Rig, &HeldAt)>, mut parts: Query<&mut Visibility>) {
+    for (rig, held_at) in &rigs {
+        let empty = held_at.rearming.is_some_and(|at| held_at.late || held_at.launched.is_some_and(|l| l >= at));
+        if let Ok(mut visibility) = parts.get_mut(rig.held) {
+            visibility.set_if_neq(shown(!empty));
+        }
+    }
+}
+
+/// How a thrower is posed `dt` (seconds) on from its `joints`, just as its attack goes off then
+/// (`at`, a fractional tick), facing, stepping, walking and striding as `walk` says: where its
+/// hand lets go, wherever between frames that falls.
+pub(crate) fn pose_releasing(class: ClassId, moves: &Moves, attack: &AttackState, joints: &Joints, dt: f32, at: f32, walk: (Vec2, f32, f32, f32)) -> Posed {
+    let (look, step, walking, stride) = walk;
+    let (windup, released, ahead) = ahead_of_springs(class, moves, None, Some(0.0), at);
+    let (draw, throw, smear) = strike_phase(class, moves, attack, windup, released, ahead);
+    let phase = Phase { draw, throw, dashing: 0.0 };
+    let angles = joints.clone().follow(&targets(moves, phase, step, walking), dt, moves);
+    let aimed = targets(moves, phase, 0.0, walking);
+    assemble(moves, &angles, &aimed, look, stride, walking * (1.0 - phase.braced()), moves.stretch * smear, 1.0, 1.0 - phase.braced())
 }
 
 /// Every couple of seconds a gleam catches somewhere along a gripped blade's edge, a star of
@@ -1182,4 +1456,95 @@ mod tests {
             super::moves(&class.def().id);
         }
     }
+
+    fn positions(mesh: &bevy::prelude::Mesh) -> Vec<bevy::prelude::Vec3> {
+        use bevy::mesh::VertexAttributeValues;
+        match mesh.attribute(bevy::prelude::Mesh::ATTRIBUTE_POSITION) {
+            Some(VertexAttributeValues::Float32x3(p)) => p.iter().map(|&p| p.into()).collect(),
+            _ => panic!("a mesh without positions"),
+        }
+    }
+
+    /// Plays the javelinist's throw frame by frame as `pose_rigs` poses it, at several frame
+    /// rates and with the release falling at different points between frames. Just as the hand
+    /// lets go (`pose_releasing`), the flying spear (`render::leaving_hand`) is drawn exactly over
+    /// the held one as its parts draw it, every vertex, its point over the thrower's own hitbox
+    /// (where the spear's real path starts) at the height it flies at (`render::THROWN_HEIGHT`),
+    /// passing over the shoulder (the arm under it), however the frames fall.
+    #[test]
+    fn a_thrown_spear_leaves_the_hand_just_where_it_is_held() {
+        use arena_shared::protocol::{AttackState, Swing};
+        use bevy::prelude::*;
+
+        use super::*;
+        use crate::render::{THROWN_HEIGHT, leaving_hand};
+
+        let key = "javelinist";
+        let class = ClassId::by_key(key).unwrap();
+        let def = class.def();
+        let moves = moves(key);
+        let rig = arena::fighter_rig(key);
+        let shot = arena::shot_look(def, def.shot(None).unwrap(), false).mesh;
+        let (held_mesh, shot_mesh) = (positions(&rig.held), positions(&shot));
+        assert_eq!(held_mesh.len(), shot_mesh.len(), "the flying spear is the held one");
+        let mut heights = Vec::new();
+        for fps in [30.0, 60.0, 144.0] {
+            for phase in 0..8 {
+                let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false };
+                let release = 10 + swing.windup_ticks(&def.attack);
+                let mut joints = Joints::default();
+                let dt = 1.0 / fps;
+                let mut frame = 0;
+                let leave = loop {
+                    // Our own fighter's clock (`pose_rigs`), starting at a different point
+                    // between frames each time.
+                    let now = (frame as f32 + phase as f32 / 8.0) * dt * TICK_HZ as f32;
+                    frame += 1;
+                    let mut attack = AttackState { swing: Some(swing), ..default() };
+                    if now >= release as f32 {
+                        attack.swing = None;
+                        attack.released_at = Some(release);
+                        // The frame the hand lets go: posed just as it did.
+                        let back = dt - (now - release as f32) / TICK_HZ as f32;
+                        break pose_releasing(class, moves, &attack, &joints, back, release as f32, (Vec2::X, 0.0, 0.0, 0.0));
+                    }
+                    let (shown, shown_released, ahead) = ahead_of_springs(class, moves, attack.winding_up(), None, now);
+                    let (draw, throw, _) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
+                    joints.follow(&targets(moves, Phase { draw, throw, dashing: 0.0 }, 0.0, 0.0), dt, moves);
+                };
+                let placed = Transform { translation: Vec3::new(3.0, leave.body.translation.y, -2.0), ..leave.body };
+                // The held spear as its parts (fighter, arm, elbow, spear) draw it.
+                let drawn = GlobalTransform::from(placed)
+                    .mul_transform(Transform::from_translation(arena::RIG_SHOULDER).with_rotation(leave.arms[0]))
+                    .mul_transform(Transform::from_translation(moves.elbow_at).with_rotation(leave.elbows[0]))
+                    .mul_transform(leave.held);
+                let flying = leaving_hand(&held_in_world(&placed, &leave));
+                let off = held_mesh.iter().zip(&shot_mesh).map(|(&h, &s)| drawn.transform_point(h).distance(flying.transform_point(s))).fold(0.0, f32::max);
+                assert!(off < 1e-3, "at {fps} fps, phase {phase}: the flying spear is drawn up to {off} m off the held one");
+                heights.push((fps, phase, flying.translation.y));
+                // Over the shoulder, the arm under it, not through it.
+                let shoulder = GlobalTransform::from(placed).transform_point(arena::RIG_SHOULDER);
+                let (grip, along) = (drawn.translation(), drawn.rotation() * Vec3::Y);
+                let over = (grip + along * (shoulder - grip).dot(along) - shoulder).y;
+                assert!(over > SHOULDER_CLEARANCE, "at {fps} fps, phase {phase}: the spear passes only {over} m over the shoulder");
+                // Over its own hitbox, where its real path starts.
+                let off_center = (flying.translation - placed.translation).with_y(0.0).length();
+                assert!(off_center < arena_shared::config::PLAYER_RADIUS, "at {fps} fps, phase {phase}: let go {off_center} m off its thrower's middle");
+            }
+        }
+        for &(fps, phase, height) in &heights {
+            println!("{fps:>5} fps, phase {phase}: let go with its point at {height:.3} m (flies at {THROWN_HEIGHT} m)");
+            let slack = RELEASE_HEIGHT_SLACK.iter().find(|(at, _)| *at == fps).map(|(_, slack)| *slack).unwrap();
+            assert!((height - THROWN_HEIGHT).abs() < slack, "at {fps} fps, phase {phase}: let go at {height} m, off the height it flies at");
+        }
+    }
+
+    /// How far (meters) over its thrower's weapon shoulder (the joint) a thrown spear passes as
+    /// it's let go, at least.
+    const SHOULDER_CLEARANCE: f32 = 0.2;
+
+    /// How far (meters) from the height a thrown spear flies its point may be let go, by frame
+    /// rate: the arm snaps through the throw in a few frames at the lowest, which only roughly
+    /// follow it.
+    const RELEASE_HEIGHT_SLACK: [(f32, f32); 3] = [(30.0, 0.15), (60.0, 0.04), (144.0, 0.02)];
 }

@@ -7,7 +7,7 @@
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
 
-use crate::arena::{self, RIG_HAND, RIG_HIP, RIG_NECK, RIG_SHOULDER};
+use crate::arena::{self, RIG_HIP, RIG_KNEE, RIG_NECK, RIG_SHOULDER};
 
 const SIZE: usize = 360;
 
@@ -64,24 +64,34 @@ fn see_through(mesh: &Mesh, place: Mat4, color: Vec3, alpha: f32, out: &mut Vec<
 /// The figure in its rest pose: arms hanging, the weapon upright in the right hand.
 fn figure(class: &str) -> Vec<Tri> {
     let rig = arena::fighter_rig(class);
+    let moves = crate::rig::moves(class);
     let mut tris = Vec::new();
     let at = |p: Vec3| Mat4::from_translation(p);
     triangles(&arena::fighter_mesh(class), Mat4::IDENTITY, &mut tris, false);
     triangles(&rig.head, at(RIG_NECK), &mut tris, false);
     triangles(&rig.eyes, at(RIG_NECK), &mut tris, true);
     let left = Vec3::new(RIG_SHOULDER.x, RIG_SHOULDER.y, -RIG_SHOULDER.z);
-    for shoulder in [RIG_SHOULDER, left] {
-        triangles(&rig.arm, at(shoulder), &mut tris, false);
+    let lead = rig.lead_arm.as_ref();
+    triangles(lead.unwrap_or(&rig.arm), at(left), &mut tris, false);
+    triangles(&rig.arm, at(RIG_SHOULDER), &mut tris, false);
+    if let Some(forearm) = &rig.forearm {
+        triangles(forearm, at(RIG_SHOULDER + moves.elbow_at), &mut tris, false);
+        if lead.is_none() {
+            triangles(forearm, at(left + moves.elbow_at), &mut tris, false);
+        }
     }
-    triangles(&rig.held, at(RIG_SHOULDER + RIG_HAND), &mut tris, false);
+    triangles(&rig.held, at(RIG_SHOULDER + moves.hand_at), &mut tris, false);
     if let Some(glow) = &rig.held_glow {
-        triangles(glow, at(RIG_SHOULDER + RIG_HAND), &mut tris, true);
+        triangles(glow, at(RIG_SHOULDER + moves.hand_at), &mut tris, true);
     }
     if let Some(glow) = &rig.body_glow {
         triangles(glow, Mat4::IDENTITY, &mut tris, true);
     }
     for hip in [RIG_HIP, Vec3::new(RIG_HIP.x, RIG_HIP.y, -RIG_HIP.z)] {
         triangles(&rig.leg, at(hip), &mut tris, false);
+        if let Some(shin) = &rig.shin {
+            triangles(shin, at(hip + RIG_KNEE), &mut tris, false);
+        }
     }
     // Cloth at rest.
     for drape in rig.wardrobe.iter().flat_map(|wardrobe| &wardrobe.drapes) {
@@ -251,12 +261,24 @@ fn posed_figure(class: &str, posed: &crate::rig::Posed, length: f32) -> (Vec<Tri
     let head = on(RIG_NECK, posed.head);
     triangles(&rig.head, head, &mut tris, false);
     triangles(&rig.eyes, head, &mut tris, true);
-    let weapon_arm = on(RIG_SHOULDER, posed.arms[0]);
-    triangles(&rig.arm, weapon_arm, &mut tris, false);
-    triangles(&rig.arm, on(mirrored(RIG_SHOULDER), posed.arms[1]), &mut tris, false);
-    triangles(&rig.leg, on(RIG_HIP, posed.legs[0]), &mut tris, false);
-    triangles(&rig.leg, on(mirrored(RIG_HIP), posed.legs[1]), &mut tris, false);
-    let held = weapon_arm * place(&posed.held);
+    let arms = [on(RIG_SHOULDER, posed.arms[0]), on(mirrored(RIG_SHOULDER), posed.arms[1])];
+    let elbow_at = crate::rig::moves(class).elbow_at;
+    let elbows = [0, 1].map(|i| arms[i] * Mat4::from_rotation_translation(posed.elbows[i], elbow_at));
+    for (i, (arm, elbow)) in arms.into_iter().zip(elbows).enumerate() {
+        let lead = rig.lead_arm.as_ref().filter(|_| i == 1);
+        triangles(lead.unwrap_or(&rig.arm), arm, &mut tris, false);
+        if let Some(forearm) = rig.forearm.as_ref().filter(|_| lead.is_none()) {
+            triangles(forearm, elbow, &mut tris, false);
+        }
+    }
+    for (i, hip) in [RIG_HIP, mirrored(RIG_HIP)].into_iter().enumerate() {
+        let leg = on(hip, posed.legs[i]);
+        triangles(&rig.leg, leg, &mut tris, false);
+        if let Some(shin) = &rig.shin {
+            triangles(shin, leg * Mat4::from_rotation_translation(posed.knees[i], RIG_KNEE), &mut tris, false);
+        }
+    }
+    let held = elbows[0] * place(&posed.held);
     let before = tris.len();
     triangles(&rig.held, held, &mut tris, false);
     let lowest = tris[before..].iter().flat_map(|t| t.at).map(|p| p.y).fold(f32::INFINITY, f32::min);
@@ -440,7 +462,10 @@ fn preview_attacks() {
             }
             let posed = assemble(moves, &angles, &targets(moves, phase, 0.0, 0.0), Vec2::X, 0.0, 0.0, moves.stretch * smear, 1.0, 1.0 - phase.braced());
             let (mut tris, grip, point) = posed_figure(key, &posed, length);
-            println!("  {:>14}: phase ({draw:.2}, {throw:.2}) grip {grip:5.2} point {point:5.2} arm {:.2} lean {:.2} twist {:.2} wrist {:.2} roll {:.2}", moments[next].0, angles.weapon_arm, angles.lean, angles.twist, angles.tip, angles.roll);
+            let tip = posed.held_on_body.transform_point(Vec3::Y * arena::GRIP_TO_TIP);
+            println!("  {:>14}: spear point (where a throw leaves from) {tip:5.2}", moments[next].0);
+            let on_body = Mat4::from_scale_rotation_translation(posed.body.scale, posed.body.rotation, posed.body.translation).inverse().transform_point3(grip);
+            println!("  {:>14}: phase ({draw:.2}, {throw:.2}) grip {grip:5.2} (on the body {on_body:5.2}) body at {:.3} point {point:5.2} arm {:.2} lean {:.2} twist {:.2} wrist {:.2} roll {:.2}", moments[next].0, posed.body.translation.y, angles.weapon_arm, angles.lean, angles.twist, angles.tip, angles.roll);
             ground(&mut tris);
             for (row, from) in rows[next / PER_SHEET].iter_mut().zip(views) {
                 let mut cell = vec![[200u8, 204, 200]; SIZE * SIZE];
