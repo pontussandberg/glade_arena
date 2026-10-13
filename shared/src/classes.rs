@@ -3,7 +3,7 @@
 //!
 //! Gameplay code never names a class: it reads a `ClassDef` (HP, speed, auto-attack, abilities)
 //! through the player's `ClassId`. Retuning a class is a data change; a new class also needs its
-//! look in the client (`arena.rs` figure and parts, `rig.rs` moves).
+//! look in the client (`arena/` figure and parts, `rig/` moves).
 
 use std::sync::LazyLock;
 

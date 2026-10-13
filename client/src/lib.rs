@@ -28,6 +28,8 @@ pub mod camera;
 #[cfg(feature = "render")]
 pub mod cloth;
 #[cfg(feature = "render")]
+mod ease;
+#[cfg(feature = "render")]
 pub mod casting;
 #[cfg(feature = "render")]
 pub mod esc_menu;
@@ -55,6 +57,8 @@ pub mod rooms;
 mod preview;
 #[cfg(feature = "render")]
 pub mod sculpt;
+#[cfg(feature = "render")]
+mod spring;
 #[cfg(feature = "render")]
 pub mod stat_frame;
 #[cfg(feature = "render")]
