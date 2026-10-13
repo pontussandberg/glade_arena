@@ -6,7 +6,7 @@
 //! Also the words for a class's passive and Q, which the lobby lists and the action bar shows
 //! as tooltips.
 
-use arena_shared::classes::{AttackKind, ClassDef, seconds};
+use arena_shared::classes::{AbilityDef, AttackKind, ClassDef, seconds};
 use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
@@ -182,25 +182,27 @@ fn range_text(def: &ClassDef, empowered: bool) -> String {
     if now > base { format!("{} + {} m, {kind}", meters(base), meters(now - base)) } else { format!("{} m, {kind}", meters(base)) }
 }
 
-/// What a passive or the Q says about itself: its name, its cooldown (the Q's; a passive has
-/// none), and what it does.
+/// What a passive or an ability says about itself: its name, its key and cooldown (an
+/// ability's; a passive has neither), and what it does.
 pub struct Blurb {
     pub name: String,
+    pub key: Option<&'static str>,
     pub cooldown: Option<String>,
     pub description: String,
 }
 
 pub fn passive_blurb(def: &ClassDef) -> Option<Blurb> {
     let passive = def.passive.as_ref()?;
-    Some(Blurb { name: passive.name.clone(), cooldown: None, description: def.describe(&passive.description) })
+    Some(Blurb { name: passive.name.clone(), key: None, cooldown: None, description: def.describe(&passive.description) })
 }
 
-pub fn ability_blurb(def: &ClassDef) -> Blurb {
-    let ability = &def.ability;
+/// What `def`'s ability in `slot` says about itself.
+pub fn ability_blurb(def: &ClassDef, slot: AbilitySlot, ability: &AbilityDef) -> Blurb {
     Blurb {
         name: ability.name.clone(),
+        key: Some(crate::casting::key_label(slot)),
         cooldown: Some(format!("{} cooldown", seconds(ability.cooldown_ticks))),
-        description: def.describe(&ability.description),
+        description: def.describe_ability(ability),
     }
 }
 

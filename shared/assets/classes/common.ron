@@ -1,0 +1,8 @@
+// What every class shares (field reference: README.md).
+(
+    // Using an ability on the global cooldown keeps every ability on it from being used again
+    // for this long, whatever their own cooldowns.
+    global_cooldown_ticks: 32,
+    // How many times its damage a critical hit deals.
+    crit_multiplier: 2.0,
+)

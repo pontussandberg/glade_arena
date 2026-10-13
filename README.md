@@ -16,8 +16,10 @@ click). Your ability's cooldown shows on an icon at the bottom of your screen, a
 the corner shows everyone.
 
 Before joining you pick a **class** in the lobby, where it stands on a stage to look at (drag
-to turn it) next to its numbers and Q ability; then enter the arena. Each class has its own HP, speed, auto-attack (melee or
-projectile) and Q ability; all of it lives in `shared/assets/classes.ron`:
+to turn it) next to its numbers and abilities; then enter the arena. Each class has its own HP, speed, auto-attack (melee or
+projectile) and abilities (up to four, on Q, W, E and R; each class has one on Q so far); all of
+it lives in its own file in `shared/assets/classes/`, next to `common.ron` for what every class
+shares (field reference in the README there):
 
 | Class | Role | Auto-attack | Q |
 |---|---|---|---|
@@ -25,7 +27,7 @@ projectile) and Q ability; all of it lives in `shared/assets/classes.ron`:
 | Revenant | Duelist | A heavy overhead blow of its dark glaive, the blade coming down flat on the ground from 1.6 m to 3.08 m ahead, tearing it open for 3 s (inside the tear the revenant moves 30% faster); each hit empowers the glaive for the next swing if it follows within 3 s: a lane 50% further and wider, from 2 m to 4.62 m, 0.75 m wide (an empowered hit renews it), lost on a miss (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash toward the cursor, 1 m to 6 m, damaging each enemy you pass through |
 | Frost Mage | Controller | Frostbolts: little damage and shorter range (mid range), but each hit slows (40% for 2 s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5 s (no walking, no dashing) |
 
-Hits can carry **crowd control** (`chill` in `classes.ron`): a slow takes a share off walking
+Hits can carry **crowd control** (`chill` in the class files): a slow takes a share off walking
 and dashing speed (a dash still goes its full distance, just slower; a haste speeds it up the
 same way), a root freezes a fighter in place (it can't walk or dash, and a dash in
 progress stops) but it can still attack. Slowed fighters take on a cold blue cast and frost turns
@@ -59,7 +61,8 @@ the same Rust code compiled to WASM, talking WebTransport to the server.
 
 ```
 shared/   protocol (replicated components, PlayerInput, messages), sim (pure gameplay rules),
-          map (the tile map, A* pathfinding, line-of-movement checks), classes (+ assets/classes.ron),
+          map (the tile map, A* pathfinding, line-of-movement checks), classes (+ assets/classes/),
+          abilities (one module per kind: throw, dash, nova),
           config
 server/   headless authoritative server (commands, spawning, hit decisions, respawns);
           tests/integration/ has the end-to-end tests (one test binary: each links all of Bevy)
@@ -95,7 +98,7 @@ scripts/  build-web.sh, serve.mjs
   interpolated, for the least delay), so a click shows about a round trip later: ~75-100 ms on a
   60 ms link, not noticeable below ~40 ms ping. The destination marker shows at once.
 - Other players are **interpolated** between server updates, a little in the past. Their
-  `AttackState` and `AbilityState` are shown on that same timeline, so a cast bar and a dash line
+  `AttackState`, `Cooldowns` and `Dashing` are shown on that same timeline, so a cast bar and a dash line
   up with where you see them; except that a throw shows the moment its spear appears
   (`SeenThrows`), which can be a little ahead of the thrower's body.
 - **Projectiles** fly on rails: a shot's position is a pure function of the tick
@@ -105,8 +108,8 @@ scripts/  build-web.sh, serve.mjs
 - **Every hit is judged where everyone is on the server** at that tick (no lag compensation, as
   in League): melee, dashes, novas and projectiles alike. What you dodge on the server, you
   dodged; an attacker at high ping may see a swing that looked in reach miss.
-- `classes.ron` is compiled into both sides, and its hash is part of the protocol id: a client
-  built with different class numbers can't connect.
+- The class files (`shared/assets/classes/`) are compiled into both sides, and their hash is
+  part of the protocol id: a client built with different class numbers can't connect.
 
 Rule of thumb: gameplay rules go in `shared/src/sim.rs` as pure functions. Server-only
 decisions (damage, death) stay in `server/`.

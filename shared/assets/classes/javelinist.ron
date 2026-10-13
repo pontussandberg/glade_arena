@@ -1,0 +1,29 @@
+#![enable(unwrap_variant_newtypes)]
+// The Javelinist (field reference: README.md).
+(
+    id: "javelinist",
+    name: "Jav",
+    role: "Marksman",
+    blurb: "Hurls heavy javelins. The farther they fly, the harder they hit.",
+    max_hp: 95,
+    move_speed: 3.7,
+    attack: (
+        damage: 16,
+        attack_ticks: 28,
+        windup: 0.3,
+        kind: Projectile(speed: 15.0, radius: 0.25, range: 15.0, far_scale: Some(2.25)),
+    ),
+    abilities: [
+        (
+            name: "Spirit Spear",
+            description: "Instantly hurl a fast spectral spear for {ability_damage} damage. No windup: throw on the move.",
+            cooldown_ticks: 192,
+            kind: Projectile(speed: 32.0, radius: 0.2, range: 13.0, damage: 22),
+        ),
+    ],
+    passive: Some(
+        name: "Long Shot",
+        description: "Your auto-attacks hit harder the farther they fly, up to {far_scale} damage at full range.",
+    ),
+    crit: (chance: 0.1),
+)

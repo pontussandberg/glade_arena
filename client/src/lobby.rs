@@ -25,7 +25,7 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-use arena_shared::protocol::{AbilityState, AttackState, ClassId, Pos, RoomRequest};
+use arena_shared::protocol::{AttackState, ClassId, Cooldowns, Dashing, Pos, RoomRequest};
 use arena_shared::map::MapId;
 use arena_shared::rooms::{MAX_PER_TEAM, Member, Mode, NO_TEAM, RoomView, TEAMS};
 use bevy::input::mouse::AccumulatedMouseMotion;
@@ -507,7 +507,8 @@ fn show_fighter(mut commands: Commands, mut lobby: ResMut<Lobby>, visuals: Res<V
             selected,
             Pos(STAGE),
             AttackState::default(),
-            AbilityState::default(),
+            Cooldowns::default(),
+            Dashing::default(),
             Mesh3d(visuals.fighter(selected)),
             MeshMaterial3d(materials.add(arena::matte(Color::WHITE))),
             Transform::from_translation(to_world(STAGE, 0.0)),
@@ -551,7 +552,12 @@ fn show_details(
                 power(card, "P", palette::TORCH_FLAME, passive);
                 card.spawn(Node { height: px(GAP), ..default() });
             }
-            power(card, "Q", palette::SPIRIT, stat_frame::ability_blurb(def));
+            for (i, (slot, ability)) in def.abilities().enumerate() {
+                if i > 0 {
+                    card.spawn(Node { height: px(GAP), ..default() });
+                }
+                power(card, crate::casting::key_label(slot), palette::SPIRIT, stat_frame::ability_blurb(def, slot, ability));
+            }
         });
     });
 }

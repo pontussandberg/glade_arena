@@ -1,0 +1,30 @@
+#![enable(unwrap_variant_newtypes)]
+// The Frost Mage (field reference: README.md).
+(
+    id: "frost_mage",
+    name: "Frost Mage",
+    role: "Controller",
+    blurb: "Bends the cold. Little damage, but its frostbolts slow, its nova freezes, and it always crits the frozen.",
+    max_hp: 100,
+    move_speed: 3.7,
+    attack: (
+        damage: 8,
+        attack_ticks: 26,
+        windup: 0.32,
+        kind: Projectile(speed: 17.0, radius: 0.28, range: 10.0),
+        chill: (slow: 0.4, slow_ticks: 64),
+    ),
+    abilities: [
+        (
+            name: "Frost Nova",
+            description: "Instantly deal {ability_damage} damage to everyone within {ability_reach} and freeze them in place for {ability_root}: no walking, no dashing.",
+            cooldown_ticks: 224,
+            kind: Nova(radius: 3.5, damage: 6, chill: (root_ticks: 80)),
+        ),
+    ],
+    passive: Some(
+        name: "Shatter",
+        description: "Auto-attacks against targets frozen by Frost Nova have a {crit_vs_frozen} crit chance. Auto-attacks also slow on hit, by {attack_slow} for {attack_slow_time}.",
+    ),
+    crit: (vs_frozen: 1.0),
+)

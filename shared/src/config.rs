@@ -17,16 +17,14 @@ pub const PROTOCOL_ID: u64 = 0xA4E7_0008 ^ crate::classes::classes_hash();
 pub const DEV_PRIVATE_KEY: [u8; 32] = [0; 32];
 
 // Gameplay tuning that isn't per class, in world units (1 unit = 1 meter = 1 tile).
-// Per-class numbers are in `assets/classes.ron`; the map is in `map.rs`.
+// Per-class numbers (and what every class shares) are in `assets/classes/`; the map is in
+// `map.rs`.
 /// Further than anything moves in a tick (a hasted dash goes about 1.8 m): a fighter that moved
 /// further was put there (spawned, respawned, through a waygate), and is drawn there at once,
 /// never sliding over.
 pub const JUMP: f32 = 2.5;
 /// Body radius used for hits (projectiles and melee reach).
 pub const PLAYER_RADIUS: f32 = 0.5;
-/// The global cooldown (1 s): using an ability on it (`AbilityDef::global_cooldown`, the default)
-/// keeps every ability on it from being used again for this long, whatever their own cooldowns.
-pub const GLOBAL_COOLDOWN_TICKS: u32 = TICK_HZ as u32;
 /// How long a killed player is out of the fight before respawning (3 s).
 pub const RESPAWN_TICKS: u32 = 3 * TICK_HZ as u32;
 
