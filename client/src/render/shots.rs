@@ -31,9 +31,9 @@ const CONVERGE_METERS: f32 = 7.0;
 /// is already meters ahead of the hand. A spear never starts more than this far (meters) behind
 /// it; beyond that (a very high ping) the rest is skipped.
 const MAX_CATCH_UP: f32 = 8.0;
-/// Where a thrown spear's wake comes off it: its butt, this far back from its point (in its own
-/// drawn size).
-const WAKE_FROM: f32 = arena::SPEAR_LENGTH;
+/// Where a thrown spear's wake comes off it: just behind its point (in its own drawn size), so
+/// the line runs along it and, when it strikes home and is gone, reaches right to where it hit.
+const WAKE_FROM: f32 = 0.12;
 /// How long a piece of the wake stays where it was left (seconds), and how much of that it keeps
 /// its full width before thinning away to nothing.
 const WAKE_SECONDS: f32 = 0.32;
@@ -49,12 +49,12 @@ const WAKE_AFTER: f32 = 1.0;
 pub(super) struct Thrown {
     pub(super) launch: Option<Launch>,
     pub(super) wake: Handle<StandardMaterial>,
-    /// Where its butt was last frame, where the next piece of its wake starts.
-    pub(super) butt: Option<Vec3>,
+    /// Where its wake came off it last frame, where the next piece of its wake starts.
+    pub(super) wake_at: Option<Vec3>,
 }
 
-/// A piece of a thrown spear's wake: a thin, even line of wind from where its butt was one frame
-/// to where it was the next, left there in the world from `born` (seconds), `length` long. Piece
+/// A piece of a thrown spear's wake: a thin, even line of wind from where it came off the spear
+/// one frame to where it did the next, left there in the world from `born` (seconds), `length` long. Piece
 /// after piece, they make one smooth line along the spear's flight, holding a moment, then thinning
 /// away from the oldest end: the wind it parted, left behind (`fade_wakes`).
 #[derive(Component)]
@@ -192,18 +192,19 @@ pub(super) fn fly_shots(
         let flying = Quat::from_rotation_arc(forward_dir, heading) * along;
         let turned = 1.0 - left(SETTLE_SECONDS);
         transform.set_if_neq(Transform::from_translation(at).with_rotation(launch.held.slerp(flying, turned)).with_scale(launch.scale));
-        // A piece of wake from where its butt was to where it is now, left in the world.
-        let butt = transform.transform_point(Vec3::NEG_X * WAKE_FROM);
-        if let Some(from) = thrown.butt
+        // A piece of wake from where it came off the spear last frame to where it does now, left in
+        // the world.
+        let wake_at = transform.transform_point(Vec3::NEG_X * WAKE_FROM);
+        if let Some(from) = thrown.wake_at
             && at.distance(launch.from) >= WAKE_AFTER
-            && let Some(dir) = (butt - from).try_normalize()
+            && let Some(dir) = (wake_at - from).try_normalize()
         {
             // A touch longer than the gap, so the pieces meet without seams.
-            let length = from.distance(butt) * 1.05;
+            let length = from.distance(wake_at) * 1.05;
             let placed = Transform::from_translation(from).with_rotation(Quat::from_rotation_arc(Vec3::X, dir)).with_scale(Vec3::new(length, 1.0, 1.0));
             commands.spawn((Wake { born: now, length }, Mesh3d(visuals.wake.clone()), MeshMaterial3d(thrown.wake.clone()), placed, NotShadowCaster));
         }
-        thrown.butt = Some(butt);
+        thrown.wake_at = Some(wake_at);
     }
 }
 
