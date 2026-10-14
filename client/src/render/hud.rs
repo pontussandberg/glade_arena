@@ -26,11 +26,11 @@ pub(super) struct ControlsOpen(pub(super) bool);
 
 pub(super) const CONTROLS_KEY: &str = "arena.controls";
 
-/// "Controls", over the key hints: clicking it folds them away or out. Its chevron (a corner of a
-/// square, turned) points right while folded and down while open.
+/// "Controls", over the key hints: clicking it folds them away or out, its `fold_sign` saying
+/// which.
 #[derive(Component)]
 pub(super) struct ControlsHeader {
-    pub(super) chevron: Entity,
+    pub(super) sign: Entity,
 }
 
 /// A HUD control a left click is for: clicking it never attacks (`read_local_input`).
@@ -61,25 +61,55 @@ pub(crate) fn corner_panel(right: bool, gap: f32) -> impl Bundle {
     )
 }
 
-/// A disclosure's header (a chevron, then its label, as children): clicking it folds what's
+/// A disclosure's header (its `fold_sign`, then its label, as children): clicking it folds what's
 /// under it away or out.
 pub(crate) fn fold_header() -> impl Bundle {
     (HudButton, Interaction::default(), Node { column_gap: px(8.0), align_items: AlignItems::Center, ..default() })
 }
 
-/// A disclosure's chevron: a corner of a square, turned to point down while `open`, right while
-/// folded (`chevron_turn`).
-pub(crate) fn chevron(open: bool) -> impl Bundle {
+/// Every disclosure's sign, the one way the UI says "there's more here": + while folded (a click
+/// shows what's under it), - while open (a click folds it away). Two bars, not text, so it's crisp
+/// and centered at any size.
+#[derive(Component)]
+pub(crate) struct FoldSign;
+
+/// A fold sign's upright bar, shown only while folded: what makes the - a +.
+#[derive(Component)]
+pub(crate) struct FoldUpright;
+
+/// A fold sign `size` pixels square, in `color`, showing `open` (`turn_fold_sign` changes it).
+pub(crate) fn fold_sign(open: bool, size: f32, color: Color) -> impl Bundle {
+    let thick = (size / 5.0).round().max(2.0);
+    let middle = ((size - thick) / 2.0).round();
+    let bar = |left: f32, top: f32, width: f32, height: f32| Node {
+        position_type: PositionType::Absolute,
+        left: px(left),
+        top: px(top),
+        width: px(width),
+        height: px(height),
+        ..default()
+    };
     (
-        Node { width: px(5.0), height: px(5.0), border: UiRect { right: px(1.5), bottom: px(1.5), ..default() }, ..default() },
-        BorderColor::all(palette::ui::MUTED),
-        chevron_turn(open),
+        FoldSign,
+        Node { width: px(size), height: px(size), ..default() },
+        children![
+            (bar(0.0, middle, size, thick), BackgroundColor(color)),
+            (FoldUpright, bar(middle, 0.0, thick, size), BackgroundColor(color), shown(!open)),
+        ],
     )
 }
 
-pub(crate) fn chevron_turn(open: bool) -> UiTransform {
-    UiTransform::from_rotation(Rot2::degrees(if open { 45.0 } else { -45.0 }))
+/// Shows `open` on the fold sign `sign`.
+pub(crate) fn turn_fold_sign(sign: Entity, open: bool, uprights: &mut Query<(&ChildOf, &mut Visibility), With<FoldUpright>>) {
+    for (parent, mut visibility) in uprights {
+        if parent.parent() == sign {
+            visibility.set_if_neq(shown(!open));
+        }
+    }
 }
+
+/// How big a HUD disclosure's sign is.
+pub(crate) const HUD_FOLD_SIGN: f32 = 8.0;
 
 /// Text in the UI's font at `size` pixels.
 pub(crate) fn ui_text(value: impl Into<String>, size: f32, color: Color) -> impl Bundle {
@@ -233,7 +263,7 @@ pub(super) fn fold_controls(
     header: Single<(Ref<Interaction>, &ControlsHeader)>,
     mut open: ResMut<ControlsOpen>,
     mut hints: Single<&mut Node, With<KeyHints>>,
-    mut chevrons: Query<&mut UiTransform>,
+    mut uprights: Query<(&ChildOf, &mut Visibility), With<FoldUpright>>,
 ) {
     let (interaction, header) = header.into_inner();
     if clicked(interaction) {
@@ -244,9 +274,7 @@ pub(super) fn fold_controls(
         return;
     }
     hints.display = if open.0 { Display::Grid } else { Display::None };
-    if let Ok(mut chevron) = chevrons.get_mut(header.chevron) {
-        *chevron = chevron_turn(open.0);
-    }
+    turn_fold_sign(header.sign, open.0, &mut uprights);
 }
 
 pub(super) fn update_key_hints(

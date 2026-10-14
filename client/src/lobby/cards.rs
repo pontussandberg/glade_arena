@@ -4,7 +4,7 @@ use super::*;
 
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::palette;
-use crate::render::{button_fill, key_chip, ui_text};
+use crate::render::{button_fill, fold_sign, ui_text};
 
 /// The room around a card's content, and its fill.
 pub(crate) const CARD_PADDING: f32 = GAP * 2.0;
@@ -37,10 +37,15 @@ pub(crate) fn pane_header(open: bool) -> impl Bundle {
     )
 }
 
-/// Whether a click on a pane's header shows or hides the rest.
+/// Whether a click on a pane's header shows the rest (+, in the accent) or hides it (-): its
+/// `fold_sign`, boxed.
 pub(crate) fn fold_chip(open: bool) -> impl Bundle {
-    let (toggle, color) = if open { ("Hide", palette::ui::MUTED) } else { ("Show", ACCENT) };
-    key_chip(toggle, 11.0, color, color.with_alpha(0.5))
+    let color = if open { palette::ui::MUTED } else { ACCENT };
+    (
+        Node { padding: UiRect::all(px(5.0)), border: UiRect::all(px(1.0)), ..default() },
+        BorderColor::all(color.with_alpha(0.5)),
+        children![fold_sign(open, 10.0, color)],
+    )
 }
 
 /// A small caps label over a part of a card.
