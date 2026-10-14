@@ -84,6 +84,8 @@ pub(crate) enum Relation {
     You,
     Ally,
     Enemy,
+    /// A zombie: a foe to everyone, but no player.
+    Monster,
 }
 
 impl Relation {
@@ -101,6 +103,7 @@ impl Relation {
             Self::You => palette::YOU,
             Self::Ally => palette::ALLY,
             Self::Enemy => palette::ENEMY,
+            Self::Monster => palette::MONSTER,
         }
     }
 }
@@ -398,7 +401,8 @@ fn mark_relations(
     let my_team = me.single().ok().copied();
     for (player, is_me, team, relation) in &players {
         let allied = my_team.zip(team).is_some_and(|(mine, theirs)| mine.allied(*theirs));
-        let now = Relation::of(is_me, allied);
+        let monster = team.is_some_and(|team| team.0 == arena_shared::rooms::ZOMBIES);
+        let now = if monster { Relation::Monster } else { Relation::of(is_me, allied) };
         if relation != Some(&now) {
             commands.entity(player).insert(now);
         }
