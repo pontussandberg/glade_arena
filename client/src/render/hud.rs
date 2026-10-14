@@ -287,6 +287,7 @@ pub(super) fn update_key_hints(
             (&abilities.0, abilities.1),
             ("A", "show range"),
             ("Wheel", "zoom"),
+            ("Y", "lock / unlock camera"),
         ]
     };
     commands.entity(*hints).despawn_children().with_children(|grid| {

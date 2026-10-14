@@ -13,10 +13,11 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::Me;
-use crate::camera::CameraPlaced;
+use crate::camera::{CameraMode, CameraPlaced};
 use crate::feedback::AttackClock;
 use crate::arena::{self, palette};
-use crate::render::{Relation, ground_at, shown, ui_text};
+use crate::render::{HudButton, Relation, button_fill, clicked, ground_at, key_chip, pixel_art, shown, ui_text};
+use crate::tooltip::{Side, hover_shows, tip, tip_text, tip_title};
 use crate::rooms::CurrentMap;
 
 pub struct MinimapPlugin;
@@ -33,6 +34,7 @@ impl Plugin for MinimapPlugin {
                 (spawn_markers, update_markers).chain(),
                 (spawn_gate_marks, update_gate_marks).chain(),
                 frame_view.in_set(CameraPlaced),
+                (click_lock, show_lock).chain(),
             ),
         );
     }
@@ -61,6 +63,23 @@ struct Dot {
 /// What the camera sees.
 #[derive(Component)]
 struct ViewFrame;
+
+/// The camera's lock, just left of the minimap's bottom-left corner: clicking it (or Y) locks the
+/// camera on your fighter or unlocks it (`CameraMode::unlocked`). Its padlock is drawn in `art`.
+#[derive(Component)]
+struct CameraLock {
+    art: Entity,
+}
+
+/// The lock's size (as big as the passive's icon) and its gap from the minimap.
+const LOCK: f32 = 46.0;
+const LOCK_GAP: f32 = 8.0;
+/// The padlock, old-school pixel art: shut, and open (its shackle swung up off the right).
+const PADLOCK: [&[&str]; 2] = [
+    &["..###..", ".#...#.", ".#...#.", "#######", "###.###", "###.###", "#######"],
+    &["..###..", ".#...#.", ".#.....", "#######", "###.###", "###.###", "#######"],
+];
+const PADLOCK_PIXEL: f32 = 3.0;
 
 /// A pickup's marker (this entity, a round chip) and its text, and what it shows now: the
 /// pickup's icon (`None`: it's lying there), else the seconds until it's back.
@@ -131,7 +150,59 @@ fn spawn_minimap(mut commands: Commands) {
             ViewFrame,
             Node { position_type: PositionType::Absolute, border: UiRect::all(px(1.0)), ..default() },
             BorderColor::all(palette::ui::TEXT),
-        ));
+        ))
+        .with_children(|minimap| {
+            let tip = minimap
+                .spawn(tip(Side::Above, 0.0, 220.0))
+                .with_children(|tip| {
+                    tip.spawn(tip_title("Camera"));
+                    tip.spawn(tip_text("Locked, it follows you. Unlocked, it stays put: move the cursor to the screen's edges to look around."));
+                })
+                .id();
+            let art = minimap.spawn(Node { width: percent(100.0), height: percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }).id();
+            minimap
+                .spawn((
+                    CameraLock { art },
+                    HudButton,
+                    Button,
+                    button_fill(palette::ui::PANEL),
+                    hover_shows(tip),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(-(LOCK + LOCK_GAP)),
+                        bottom: px(0.0),
+                        width: px(LOCK),
+                        height: px(LOCK),
+                        border: UiRect::all(px(2.0)),
+                        ..default()
+                    },
+                    BorderColor::all(palette::ui::MUTED),
+                ))
+                .add_children(&[art, tip])
+                .with_child((
+                    Node { position_type: PositionType::Absolute, left: px(2.0), top: px(1.0), ..default() },
+                    children![key_chip("Y", 9.0, palette::ui::TEXT, Color::NONE)],
+                ));
+        });
+}
+
+/// A click on the lock locks or unlocks the camera.
+fn click_lock(lock: Single<Ref<Interaction>, With<CameraLock>>, mut mode: ResMut<CameraMode>) {
+    if clicked(lock.into_inner()) {
+        mode.unlocked = !mode.unlocked;
+    }
+}
+
+/// The lock shows the camera's: shut and plain while it follows you, open and lit while it's
+/// unlocked.
+fn show_lock(mut commands: Commands, mode: Res<CameraMode>, lock: Single<(Ref<CameraLock>, &mut BorderColor)>) {
+    let (lock, mut border) = lock.into_inner();
+    if !mode.is_changed() && !lock.is_added() {
+        return;
+    }
+    let color = if mode.unlocked { palette::ui::ACCENT } else { palette::ui::TEXT };
+    border.set_if_neq(BorderColor::all(if mode.unlocked { palette::ui::ACCENT } else { palette::ui::MUTED }));
+    commands.entity(lock.art).despawn_children().with_children(|art| pixel_art(art, PADLOCK[mode.unlocked as usize], PADLOCK_PIXEL, color));
 }
 
 /// The map, drawn in the minimap at the size it takes there.
