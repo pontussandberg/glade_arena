@@ -37,23 +37,25 @@ pub(super) fn show_room(
         panel.spawn(card()).with_children(|card| {
             card.spawn(label("Lobby"));
             card.spawn(ui_text(view.name.clone(), 24.0, palette::ui::TEXT));
-            let (line, color) = match (view.started, leading) {
-                (true, _) => ("Match in progress", ACCENT),
-                (false, true) => ("Start when you're ready", palette::ui::MUTED),
-                (false, false) => ("Waiting for the leader", palette::ui::MUTED),
+            // The leader needs no telling: the start button is theirs.
+            let status = match (view.started, leading) {
+                (true, _) => Some(("Match in progress", ACCENT)),
+                (false, true) => None,
+                (false, false) => Some(("Waiting for the leader", palette::ui::MUTED)),
             };
-            card.spawn(ui_text(line, 12.0, color));
+            if let Some((line, color)) = status {
+                card.spawn(ui_text(line, 12.0, color));
+            }
             let editing = view.may_edit(my_id);
             let modes = [Mode::Ffa, Mode::Teams].map(|mode| (mode, mode.label()));
             setting(card, "Mode", &modes, view.mode, editing, RoomRequest::SetMode);
             let maps = MapId::ALL.map(|map| (map, map.label()));
             setting(card, "Map", &maps, view.map, editing, RoomRequest::SetMap);
-            card.spawn(ui_text(view.map.blurb(), 11.0, palette::ui::MUTED));
         });
 
         panel.spawn(card()).with_children(|card| match view.mode {
             Mode::Ffa => {
-                card.spawn(label(&format!("Fighters  {}/{}", view.members.len(), view.mode.capacity())));
+                card.spawn(label(&format!("Players  {}/{}", view.members.len(), view.mode.capacity())));
                 for member in &view.members {
                     member_row(card, Node::default(), view, member, my_id);
                 }
