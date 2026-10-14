@@ -8,14 +8,30 @@ use arena_shared::sim;
 
 use crate::rooms::{InRoom, Lobby};
 
-/// What a hit does: damage, and crowd control on top. Only an auto-attack's `can_crit`; a
-/// primed one's (`AttackState::primed`) is a `sure_crit`.
+/// What a hit does: damage, and crowd control on top. Only an auto-attack can crit: its
+/// `crit_roll`, rolled once for the whole attack, so a swing that crits crits everyone it hits
+/// (each target still judged against its own odds: frozen or not). `empowered` by the attack's
+/// `follow_up`, its odds are better (`Crit::empowered`); primed (`AttackState::primed`), it's a
+/// `sure_crit`.
 #[derive(Clone, Copy)]
 pub(super) struct Blow {
     pub(super) amount: i32,
     pub(super) chill: Chill,
-    pub(super) can_crit: bool,
+    pub(super) crit_roll: Option<f32>,
+    pub(super) empowered: bool,
     pub(super) sure_crit: bool,
+}
+
+impl Blow {
+    /// An auto-attack's blow, its crit rolled (a `primed` one's sure).
+    pub(super) fn attack(amount: i32, chill: Chill, empowered: bool, primed: bool) -> Blow {
+        Blow { amount, chill, crit_roll: Some(fastrand::f32()), empowered, sure_crit: primed }
+    }
+
+    /// An ability's: never a crit.
+    pub(super) fn ability(amount: i32, chill: Chill) -> Blow {
+        Blow { amount, chill, crit_roll: None, empowered: false, sure_crit: false }
+    }
 }
 
 /// Who dealt a hit, of which class (whose crit odds it rolls), and `with` what (for the log).
@@ -45,7 +61,7 @@ pub(super) fn damage(
     if health.0 == 0 {
         return;
     }
-    let crit = blow.sure_crit || blow.can_crit && fastrand::f32() < class.def().crit.chance_against(chilled.rooted_at(now));
+    let crit = blow.sure_crit || blow.crit_roll.is_some_and(|roll| roll < class.def().crit.chance_against(chilled.rooted_at(now), blow.empowered));
     let amount = if crit { (blow.amount as f32 * common().crit_multiplier).round() as i32 } else { blow.amount };
     health.0 = (health.0 - amount).max(0);
     hits.push(amount, if crit { HitKind::Crit } else { HitKind::Damage });
@@ -127,7 +143,7 @@ pub(super) fn attack(
                 if let Some(rift) = sim::Rift::torn(id.0, *class, pos.0, &swing) {
                     rifts.0.push((*room, rift));
                 }
-                let blow = Blow { amount: class.def().attack.damage, chill: class.def().attack.chill, can_crit: true, sure_crit: primed };
+                let blow = Blow::attack(class.def().attack.damage, class.def().attack.chill, swing.empowered, primed);
                 let with = (id.0, *class, "auto-attack");
                 let landed = hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |_, at| {
                     sim::melee_hits(lobby.map(room), pos.0, swing.dir, swing.empowered, *class, at)

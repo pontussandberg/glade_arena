@@ -26,7 +26,7 @@ pub struct ActionBarPlugin;
 
 impl Plugin for ActionBarPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (spawn_icons, update_icons, update_frenzy).chain());
+        app.add_systems(Update, (spawn_icons, update_icons, update_passive, update_frenzy).chain());
     }
 }
 
@@ -222,8 +222,16 @@ fn spawn_icon(commands: &mut Commands, class: &ClassDef, slot: AbilitySlot, abil
         .add_children(&[picture, wipe, global_wipe, seconds_box, key, name, tip]);
 }
 
+/// The passive's icon (this entity), and the bar along its bottom: while the attack's
+/// `follow_up` empowers the next one, a timed buff, the bar draining until it runs out (or the
+/// empowered attack is used).
+#[derive(Component)]
+struct PassiveIcon {
+    bar: Entity,
+}
+
 /// The passive's icon, its left edge `from_center` pixels from the middle of the screen, bottoms
-/// lined up with the abilities': a gold diamond in a plain frame.
+/// lined up with the abilities': a gold diamond in a plain frame, over the empty bar.
 fn spawn_passive(commands: &mut Commands, blurb: Blurb, from_center: f32) {
     let tip = tooltip(commands, blurb, PASSIVE);
     let diamond = commands
@@ -235,9 +243,37 @@ fn spawn_passive(commands: &mut Commands, blurb: Blurb, from_center: f32) {
             UiTransform::from_rotation(Rot2::degrees(45.0)),
         ))
         .id();
+    let bar = commands.spawn((Node { height: percent(100.0), width: px(0.0), ..default() }, BackgroundColor(palette::TORCH_FLAME))).id();
+    let track = commands
+        .spawn(Node { position_type: PositionType::Absolute, left: px(0.0), right: px(0.0), bottom: px(0.0), height: px(4.0), ..default() })
+        .add_child(bar)
+        .id();
     commands
-        .spawn((ActionBarPart, GameUi, icon_frame(tip, PASSIVE, from_center, palette::ui::MUTED)))
-        .add_children(&[diamond, tip]);
+        .spawn((PassiveIcon { bar }, ActionBarPart, GameUi, icon_frame(tip, PASSIVE, from_center, palette::ui::MUTED)))
+        .add_children(&[diamond, track, tip]);
+}
+
+/// While our `follow_up` empowers the next attack, the passive's icon is lit and its bar drains
+/// with the time left to use it; a quick attack winding up keeps it lit until it goes off
+/// (`AttackState::armed_at`).
+fn update_passive(
+    clock: AttackClock,
+    me: Query<(&ClassId, &AttackState), With<Me>>,
+    mut icons: Query<(&PassiveIcon, &mut BorderColor)>,
+    mut nodes: Query<&mut Node>,
+) {
+    let (Ok((class, attack)), Ok((icon, mut border))) = (me.single(), icons.single_mut()) else { return };
+    let Some(follow_up) = class.def().attack.follow_up else { return };
+    let now = clock.now(true);
+    let left = match attack.quick_until {
+        Some(until) if attack.armed_at(now) => ((until as f32 - now) / follow_up.within_ticks as f32).clamp(0.0, 1.0),
+        _ => 0.0,
+    };
+    let lit = attack.armed_at(now);
+    border.set_if_neq(BorderColor::all(if lit { palette::TORCH_FLAME } else { palette::ui::MUTED }));
+    if let Ok(mut bar) = nodes.get_mut(icon.bar) {
+        set_fill(&mut bar, left);
+    }
 }
 
 /// An icon's square frame, `size` pixels, its left edge `from_center` pixels from the middle of

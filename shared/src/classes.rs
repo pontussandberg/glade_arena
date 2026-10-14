@@ -75,17 +75,21 @@ pub struct ClassDef {
 
 /// The odds that an auto-attack hit this class deals is critical (an ability's never is), for
 /// `Common::crit_multiplier` times its damage: `chance` normally, `vs_frozen` against a frozen (rooted) target.
+/// An attack empowered by its `follow_up` has `empowered` more on top.
 #[derive(Deserialize, Debug, Clone, Copy, Default, PartialEq)]
 #[serde(default)]
 pub struct Crit {
     pub chance: f32,
     pub vs_frozen: f32,
+    pub empowered: f32,
 }
 
 impl Crit {
-    /// The odds of a crit against a target that's `frozen` or not.
-    pub fn chance_against(&self, frozen: bool) -> f32 {
-        if frozen { self.chance.max(self.vs_frozen) } else { self.chance }
+    /// The odds of a crit against a target that's `frozen` or not, by an attack that's
+    /// `empowered` or not.
+    pub fn chance_against(&self, frozen: bool, empowered: bool) -> f32 {
+        let base = if frozen { self.chance.max(self.vs_frozen) } else { self.chance };
+        if empowered { (base + self.empowered).min(1.0) } else { base }
     }
 }
 
@@ -258,6 +262,7 @@ impl ClassDef {
             ("attack_slow_time", seconds(self.attack.chill.slow_ticks)),
             ("crit", percent(self.crit.chance)),
             ("crit_vs_frozen", percent(self.crit.vs_frozen)),
+            ("crit_empowered", percent(self.crit.empowered)),
             ("crit_multiplier", percent(common().crit_multiplier)),
         ];
         if let Some(rift) = self.attack.rift {
@@ -542,8 +547,9 @@ mod tests {
                 let filled = c.describe(&passive.description);
                 assert!(!filled.contains(['{', '}']), "{}: unknown placeholder in {filled:?}", c.id);
             }
-            let Crit { chance, vs_frozen } = c.crit;
-            assert!((0.0..=1.0).contains(&chance) && (0.0..=1.0).contains(&vs_frozen), "{}: crit odds", c.id);
+            let Crit { chance, vs_frozen, empowered } = c.crit;
+            assert!([chance, vs_frozen, empowered].iter().all(|odds| (0.0..=1.0).contains(odds)), "{}: crit odds", c.id);
+            assert!(empowered == 0.0 || c.attack.follow_up.is_some(), "{}: empowered crit odds without a follow_up", c.id);
         }
     }
 

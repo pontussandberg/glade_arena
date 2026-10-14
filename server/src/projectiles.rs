@@ -43,12 +43,8 @@ pub(super) fn resolve_projectile_hits(
                 continue;
             }
             commands.entity(projectile_entity).try_despawn();
-            let blow = Blow {
-                amount: sim::projectile_damage(projectile, now.0),
-                chill: sim::projectile_chill(projectile),
-                can_crit: projectile.ability.is_none(),
-                sure_crit: projectile.crit,
-            };
+            let (amount, chill) = (sim::projectile_damage(projectile, now.0), sim::projectile_chill(projectile));
+            let blow = if projectile.ability.is_none() { Blow::attack(amount, chill, false, projectile.crit) } else { Blow::ability(amount, chill) };
             let def = projectile.class.def();
             let with = projectile.ability.and_then(|slot| def.ability(slot)).map_or("auto-attack", |ability| ability.name.as_str());
             let hit = (&mut *health, &mut *chilled, &mut *recent);

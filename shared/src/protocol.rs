@@ -120,6 +120,12 @@ impl AttackState {
         self.quick_at(now) || self.swing.is_some_and(|swing| swing.quick)
     }
 
+    /// Is the `follow_up` still to be used at `now` (a fractional tick): armed, or its empowered
+    /// attack winding up? Not once that attack has gone off, hit or miss.
+    pub fn armed_at(&self, now: f32) -> bool {
+        self.quick_at(now) || self.winding_up().is_some_and(|swing| swing.quick)
+    }
+
     /// Has the attack in progress gone off yet?
     pub fn released(&self) -> bool {
         self.swing.is_some_and(|swing| self.released_at.is_some_and(|at| at >= swing.started_at))

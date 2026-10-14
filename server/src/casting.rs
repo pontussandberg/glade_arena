@@ -37,7 +37,7 @@ pub(super) fn use_abilities(
         // What a hit by `ability` does, and its name for the log.
         let blow = |ability: &'static AbilityDef| {
             let effect = ability.kind.effect();
-            (Blow { amount: effect.damage, chill: effect.chill, can_crit: false, sure_crit: false }, (id.0, *class, ability.name.as_str()))
+            (Blow::ability(effect.damage, effect.chill), (id.0, *class, ability.name.as_str()))
         };
         // Cut whoever this tick's dash step reached (`move_players` just made it). Checked before
         // the abilities step, which ends the dash on its last tick: so every step is checked, the
