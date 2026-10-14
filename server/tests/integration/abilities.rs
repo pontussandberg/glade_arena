@@ -174,6 +174,19 @@ fn frostbolts_slow_what_they_hit() {
 }
 
 #[test]
+fn deadeye_pressed_again_calls_it_off() {
+    let mut d = duel(5876, "javelinist", "revenant");
+    a_uses_q_at_b(&mut d);
+    d.until(Duration::from_secs(1), "primed", |d| attack_state(&mut d.server, A).primed.is_some());
+    d.run(Duration::from_millis(100));
+    a_uses_q_at_b(&mut d);
+    d.until(Duration::from_secs(1), "called off", |d| attack_state(&mut d.server, A).primed.is_none());
+    let cooldowns = player::<Cooldowns>(&mut d.server, A).unwrap();
+    assert_eq!(cooldowns.cooldown_over_at(Q), 0, "calling it off started its cooldown");
+    assert_eq!(cooldowns.global_ready_at, 0, "it's off the global cooldown");
+}
+
+#[test]
 fn deadeye_pressed_with_the_click_primes_that_attack() {
     let mut d = duel(5875, "javelinist", "revenant");
     let aim = sees(&mut d.a, B).unwrap() - sees(&mut d.a, A).unwrap();

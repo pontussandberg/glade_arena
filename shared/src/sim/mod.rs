@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn with_no_cooldown_an_ability_still_waits_for_the_global_cooldown() {
-        let class = primer();
+        let class = dasher();
         assert!(q(class).global_cooldown);
         let free = Kit { cooldowns: Cooldowns { free: true, ..default() }, ..default() };
         let (state, thrown) = step_kit(10, class, Vec2::ZERO, &press_q(Vec2::X), &default(), free);
