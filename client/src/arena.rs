@@ -1008,8 +1008,8 @@ fn revenant_wardrobe() -> Wardrobe {
         drapes: vec![tail(1.0), tail(-1.0), tabard],
         trim: palette::WISP,
         body: vec![
-            Column { center: Vec2::ZERO, half: Vec2::new(0.17, 0.205), from: 0.3, to: 0.9 },
-            Column { center: Vec2::ZERO, half: Vec2::new(0.2, 0.25), from: 0.9, to: 1.4 },
+            Column { center: Vec2::ZERO, half: Vec2::new(0.17, 0.205), from: 0.3, to: 0.9, round: 2.0 },
+            Column { center: Vec2::ZERO, half: Vec2::new(0.2, 0.25), from: 0.9, to: 1.4, round: 2.0 },
         ],
         leg_radius: 0.1,
         arm: None,
@@ -1471,8 +1471,8 @@ fn frost_mage_wardrobe() -> Wardrobe {
         drapes: vec![skirt, cape],
         trim: palette::FROST_GLOW,
         body: vec![
-            Column { center: Vec2::ZERO, half: Vec2::new(0.175, 0.215), from: 0.3, to: 1.0 },
-            Column { center: Vec2::new(-0.01, 0.0), half: Vec2::new(0.21, 0.28), from: 1.0, to: 1.3 },
+            Column { center: Vec2::ZERO, half: Vec2::new(0.175, 0.215), from: 0.3, to: 1.0, round: 2.0 },
+            Column { center: Vec2::new(-0.01, 0.0), half: Vec2::new(0.21, 0.28), from: 1.0, to: 1.3, round: 2.0 },
         ],
         leg_radius: 0.12,
         arm: None,
@@ -1688,10 +1688,10 @@ fn coat_point(u: f32, v: f32, ragged: bool) -> Vec3 {
 /// rest: just apart, so each side moves as its own (`javelinist_mantle`).
 const MANTLE_SLIT: f32 = 0.05;
 /// How thick the arm is to the cowl lying on it (`javelinist_mantle`).
-const MANTLE_ARM: f32 = 0.08;
+const MANTLE_ARM: f32 = 0.06;
 /// How far down the arm (from the shoulder) the cowl can lie on it: over the top of the arm, not
 /// up along it when it's raised.
-const MANTLE_ON_ARM: f32 = 0.2;
+const MANTLE_ON_ARM: f32 = 0.12;
 
 /// A point on the cowl over the executioner's shoulders, `u` (0..1) round it from one side of
 /// its slit under the right arm (`MANTLE_SLIT`) round the front and back to the other, `v`
@@ -1700,23 +1700,48 @@ const MANTLE_ON_ARM: f32 = 0.2;
 /// and closer still down over the empty left shoulder, in soft folds deepening toward the hem;
 /// `ragged` for the cloth itself (folds and its cut hem), not for the chains it hangs from.
 fn mantle_point(u: f32, v: f32, ragged: bool) -> Vec3 {
-    // (v, depth, width, height) down it: from round the neck, over the top of the shoulder, down
-    // past it to the hem; over the arm, and over the empty side.
-    type Profile = [(f32, f32, f32, f32); 4];
-    const OVER_ARM: Profile = [(0.0, 0.16, 0.19, 1.48), (0.3, 0.178, 0.29, 1.435), (0.6, 0.192, 0.385, 1.36), (1.0, 0.198, 0.405, 1.19)];
-    const EMPTY: Profile = [(0.0, 0.16, 0.19, 1.48), (0.3, 0.175, 0.26, 1.42), (0.6, 0.188, 0.295, 1.33), (1.0, 0.193, 0.315, 1.19)];
+    // (v, depth, width, height) down it: from round the neck, rounding over the top of the
+    // shoulder, then hanging down past it to the hem; over the arm, and over the empty side.
+    // Eased through smoothly from one to the next, so it's one curve over the shoulder.
+    type Profile = [(f32, f32, f32, f32); 6];
+    const OVER_ARM: Profile = [
+        (0.0, 0.16, 0.19, 1.49),
+        (0.18, 0.17, 0.245, 1.468),
+        (0.36, 0.182, 0.315, 1.43),
+        (0.52, 0.19, 0.355, 1.372),
+        (0.7, 0.195, 0.372, 1.3),
+        (1.0, 0.198, 0.378, 1.19),
+    ];
+    const EMPTY: Profile = [
+        (0.0, 0.16, 0.19, 1.49),
+        (0.18, 0.168, 0.228, 1.462),
+        (0.36, 0.178, 0.262, 1.42),
+        (0.52, 0.185, 0.285, 1.37),
+        (0.7, 0.19, 0.3, 1.3),
+        (1.0, 0.193, 0.312, 1.19),
+    ];
     let at = |profile: &Profile| {
         let i = profile.iter().rposition(|p| p.0 <= v).unwrap_or(0).min(profile.len() - 2);
-        let (a, b) = (profile[i], profile[i + 1]);
-        let t = ((v - a.0) / (b.0 - a.0)).clamp(0.0, 1.0);
-        Vec3::new(a.1 + (b.1 - a.1) * t, a.2 + (b.2 - a.2) * t, a.3 + (b.3 - a.3) * t)
+        let key = |k: usize| Vec3::new(profile[k].1, profile[k].2, profile[k].3);
+        let (a, b) = (profile[i].0, profile[i + 1].0);
+        // Through each point heading from the one before it to the one after (per unit of `v`).
+        let slope = |k: usize| {
+            let (lo, hi) = (k.saturating_sub(1), (k + 1).min(profile.len() - 1));
+            (key(hi) - key(lo)) / (profile[hi].0 - profile[lo].0)
+        };
+        let t = ((v - a) / (b - a)).clamp(0.0, 1.0);
+        let (t2, t3) = (t * t, t * t * t);
+        key(i) * (2.0 * t3 - 3.0 * t2 + 1.0)
+            + slope(i) * (b - a) * (t3 - 2.0 * t2 + t)
+            + key(i + 1) * (3.0 * t2 - 2.0 * t3)
+            + slope(i + 1) * (b - a) * (t3 - t2)
     };
     let angle = std::f32::consts::FRAC_PI_2 + MANTLE_SLIT + u * (std::f32::consts::TAU - 2.0 * MANTLE_SLIT);
     // Over the empty left shoulder (-Z), easing in across the front and back.
     let empty = (-angle.sin() / 0.5).clamp(0.0, 1.0);
     let Vec3 { x: depth, y: width, z: y } = at(&OVER_ARM).lerp(at(&EMPTY), empty * empty * (3.0 - 2.0 * empty));
     // Rounded over the shoulders, a little fuller than an ellipse.
-    let square = |c: f32| c.signum() * c.abs().powf(2.0 / 2.15);
+    let square = |c: f32| c.signum() * c.abs().powf(2.0 / 2.06);
     let (mut out, mut y) = (1.0, y);
     if ragged {
         out += 0.035 * v * (angle * 7.0 + 0.4).sin();
@@ -1738,7 +1763,7 @@ fn javelinist_mantle() -> Drape {
     let chains: Vec<Vec<Vec3>> = (0..=CHAINS).map(|c| [0.0, 0.14, 0.28, 0.42, 0.56, 0.7, 0.85, 1.0].map(|v| mantle_point(c as f32 / CHAINS as f32, v, false)).to_vec()).collect();
     // Thick cotton, snug round the shoulders: firm round the neck, falling free toward the hem
     // when the arm parts it, hardly swinging as the body turns, settling quickly.
-    Drape::new(cloth, None, chains, Weave { hold: (8.0, 2.5), damping: 8.0, air: 0.1, inertia: 0.05, gravity: 8.0, flutter: 0.05, joined: true, wisps: 0.0 })
+    Drape::new(cloth, None, chains, Weave { hold: (9.0, 3.5), damping: 10.0, air: 0.1, inertia: 0.05, gravity: 8.0, flutter: 0.03, joined: true, wisps: 0.0 })
 }
 
 /// All the executioner's moving cloth: the coat skirt and the cowl (`javelinist_mantle`).
@@ -1764,9 +1789,11 @@ fn javelinist_wardrobe() -> Wardrobe {
         drapes,
         trim: palette::SOUL,
         body: vec![
-            Column { center: Vec2::ZERO, half: Vec2::new(0.152, 0.192), from: 0.3, to: 1.05 },
-            // The chest and shoulders, under the cowl.
-            Column { center: Vec2::new(-0.01, 0.0), half: Vec2::new(0.15, 0.25), from: 1.05, to: 1.45 },
+            Column { center: Vec2::ZERO, half: Vec2::new(0.152, 0.192), from: 0.3, to: 1.05, round: 2.0 },
+            // The chest and shoulders, under the cowl, as squared off as the tunic there (and a
+            // little more, for the cowl's own thickness).
+            Column { center: Vec2::new(0.015, 0.0), half: Vec2::new(0.175, 0.24), from: 1.05, to: 1.22, round: 2.4 },
+            Column { center: Vec2::new(0.0, 0.0), half: Vec2::new(0.16, 0.26), from: 1.22, to: 1.45, round: 2.8 },
         ],
         leg_radius: 0.125,
         // The cowl lies on the top of the arm.

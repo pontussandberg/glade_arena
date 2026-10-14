@@ -66,7 +66,7 @@ pub struct Weave {
     pub wisps: f32,
 }
 
-/// Something cloth can't pass through, in the fighter's space: an upright elliptical column
+/// Something cloth can't pass through, in the fighter's space: an upright rounded column
 /// around `center` (x, z), `half` (depth, width) across, from height `from` to `to`.
 #[derive(Clone, Copy)]
 pub struct Column {
@@ -74,6 +74,9 @@ pub struct Column {
     pub half: Vec2,
     pub from: f32,
     pub to: f32,
+    /// How squared off it is round, as the body's own sections are (`sculpt::Section::round`):
+    /// 2 an ellipse, more for fuller corners.
+    pub round: f32,
 }
 
 /// What a class's cloth hangs off and moves around.
@@ -374,10 +377,16 @@ impl Body<'_> {
                 continue;
             }
             let off = (Vec2::new(local.x, local.z) - column.center) / column.half;
-            let d = off.length();
+            let d = if column.round == 2.0 { off.length() } else { (off.x.abs().powf(column.round) + off.y.abs().powf(column.round)).powf(1.0 / column.round) };
             if d < 1.0 {
+                // Out the nearer way: its side, or its top (cloth just under the top of the
+                // shoulders shoved out sideways would spring back and shiver there).
                 let out = column.center + if d > 1e-4 { off / d } else { Vec2::NEG_X } * column.half;
-                (local.x, local.z, pushed) = (out.x, out.y, true);
+                if column.to - local.y < Vec2::new(local.x, local.z).distance(out) {
+                    (local.y, pushed) = (column.to, true);
+                } else {
+                    (local.x, local.z, pushed) = (out.x, out.y, true);
+                }
             }
         }
         let arm = self.arm.as_ref().map(|(arm, radius)| (arm, *radius, true));
@@ -386,13 +395,15 @@ impl Body<'_> {
             let closest = limb.hip + along * ((local - limb.hip).dot(along) / along.length_squared()).clamp(0.0, 1.0);
             let mut off = local - closest;
             if off.length() < radius {
-                // An arm: always out on its own side (left or right), never caught between it and
-                // the body (cloth lies over an arm, not in under its pit). Its side, square to the
-                // arm, so the push stays square to it however it's turned.
+                // An arm: never caught in under its pit, between it and the body. Hanging down,
+                // cloth stays out on its own side (left or right); held out, on top of it; raised
+                // over the head there's no pit, and cloth lies either side of it as it falls.
+                // Each square to the arm, so the push stays square to it however it's turned.
                 let axis = along.normalize_or(Vec3::Y);
-                let outward = Vec3::Z * limb.hip.z.signum();
-                let side = (outward - axis * outward.dot(axis)).normalize_or_zero();
-                if arm && off.dot(side) < 0.0 {
+                let square = |v: Vec3| v - axis * v.dot(axis);
+                let outward = square(Vec3::Z * limb.hip.z.signum()).normalize_or_zero();
+                let side = outward * (-axis.y).max(0.0) + square(Vec3::Y) * (1.0 - axis.y).clamp(0.0, 1.0);
+                if arm && side.length() > 0.5 && off.dot(side) < 0.0 {
                     off -= side * 2.0 * off.dot(side);
                 }
                 // Out the way it's in from, or up if it's right on the line.
@@ -764,8 +775,11 @@ mod tests {
                         for (k, rest) in chain.iter().enumerate().skip(1) {
                             let local = inverse.transform_point3(h.at[c][k]);
                             worst = worst.max(local.distance(*rest));
+                            // Within it, not lying on its top or side.
                             let inside = wardrobe.body.iter().any(|col| {
-                                (col.from..=col.to).contains(&local.y) && ((Vec2::new(local.x, local.z) - col.center) / col.half).length() < 0.98
+                                let off = ((Vec2::new(local.x, local.z) - col.center) / col.half).abs();
+                                let d = (off.x.powf(col.round) + off.y.powf(col.round)).powf(1.0 / col.round);
+                                local.y > col.from && local.y < col.to - 1e-4 && d < 0.98
                             });
                             assert!(!inside, "{class}: cloth inside the body at {local}");
                         }
