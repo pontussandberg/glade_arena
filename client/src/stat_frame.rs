@@ -23,7 +23,7 @@ pub struct StatFramePlugin;
 impl Plugin for StatFramePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_corner);
-        app.add_systems(Update, (spawn_my_frame, update_health, update_range).chain());
+        app.add_systems(Update, (spawn_my_frame, update_health, update_live_stats).chain());
     }
 }
 
@@ -55,8 +55,11 @@ fn spawn_corner(mut commands: Commands) {
 pub struct HealthParts {
     pub frame: Entity,
     pub text: Entity,
-    /// The attack range's value, live in the arena (`update_range`).
+    /// The values live in the arena (`update_live_stats`): attack range, crit chance and attack
+    /// speed.
     pub range: Entity,
+    pub crit: Entity,
+    pub speed: Entity,
 }
 
 /// Where a stat frame is shown, which sets its look.
@@ -75,7 +78,8 @@ pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, style: Fra
         FrameStyle::Hud => (px(WIDTH), 12.0, 1.0, palette::ui::PANEL),
         FrameStyle::Card => (auto(), lobby::CARD_PADDING, 0.0, lobby::card_fill()),
     };
-    let mut parts = HealthParts { frame: Entity::PLACEHOLDER, text: Entity::PLACEHOLDER, range: Entity::PLACEHOLDER };
+    let placeholder = Entity::PLACEHOLDER;
+    let mut parts = HealthParts { frame: placeholder, text: placeholder, range: placeholder, crit: placeholder, speed: placeholder };
     parts.frame = parent
         .spawn((
             Node {
@@ -108,8 +112,11 @@ pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, style: Fra
                     .with_child(ui_text(label, 11.0, palette::ui::MUTED))
                     .id();
                 let shown = frame.commands().spawn(ui_text(value, 11.0, palette::ui::TEXT)).id();
-                if label == RANGE_LABEL {
-                    parts.range = shown;
+                match label {
+                    RANGE_LABEL => parts.range = shown,
+                    CRIT_LABEL => parts.crit = shown,
+                    SPEED_LABEL => parts.speed = shown,
+                    _ => {}
                 }
                 let mut row = frame.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() });
                 row.add_child(name).add_child(shown);
@@ -149,22 +156,32 @@ fn tooltip(text: String) -> impl Bundle {
 /// The frame's rows under health, what players compare: a label, a value, and for some what it
 /// means, shown on hover.
 fn stats(def: &ClassDef) -> [(&'static str, String, Option<String>); 5] {
-    // The base odds only: a better chance vs frozen targets is the passive's to tell.
-    let crit_text = def.describe("{crit}");
     let crit_tip = def.describe("The chance your auto-attacks land a critical strike, dealing {crit_multiplier} of normal damage.");
-    let attack = &def.attack;
-    let per_second = TICK_HZ as f32 / attack.period_ticks(1.0) as f32;
-    let range = range_text(def, false);
     [
         ("MOVE SPEED", format!("{} m/s", def.move_speed), None),
-        ("CRIT CHANCE", crit_text, Some(crit_tip)),
-        ("ATTACK DAMAGE", attack.damage.to_string(), None),
-        ("ATTACK SPEED", format!("{per_second:.1} hits/s"), None),
-        (RANGE_LABEL, range, None),
+        (CRIT_LABEL, crit_text(def, false), Some(crit_tip)),
+        ("ATTACK DAMAGE", def.attack.damage.to_string(), None),
+        (SPEED_LABEL, speed_text(def, false), None),
+        (RANGE_LABEL, range_text(def, false), None),
     ]
 }
 
 const RANGE_LABEL: &str = "ATTACK RANGE";
+const CRIT_LABEL: &str = "CRIT CHANCE";
+const SPEED_LABEL: &str = "ATTACK SPEED";
+
+/// The crit chance stat: the base odds (a better chance vs frozen targets is the passive's to
+/// tell), and while the `follow_up` empowers the next attack, its odds then.
+fn crit_text(def: &ClassDef, empowered: bool) -> String {
+    format!("{:.0}%", def.crit.chance_against(false, empowered) * 100.0)
+}
+
+/// The attack speed stat: attacks a second, as many as the `follow_up` makes it while it
+/// empowers the next.
+fn speed_text(def: &ClassDef, empowered: bool) -> String {
+    let per_second = TICK_HZ as f32 / def.attack.period_ticks(def.attack.speed(empowered)) as f32;
+    format!("{per_second:.1} hits/s")
+}
 
 /// Meters as players read them: "2.75", "1.1".
 fn meters(m: f32) -> String {
@@ -223,21 +240,29 @@ fn spawn_my_frame(
     });
 }
 
-/// Your attack range, as it is: plus its bonus, highlighted, while your `follow_up` empowers it.
-fn update_range(
+/// Your attack range, crit chance and attack speed, as they are: highlighted, each that your
+/// `follow_up` changes, while it empowers your next attack.
+fn update_live_stats(
     clock: crate::feedback::AttackClock,
     me: Query<(&ClassId, &AttackState), (With<Me>, With<PlayerId>)>,
     frame: Option<Single<&MyFrame>>,
     mut texts: Query<(&mut Text, &mut TextColor)>,
 ) {
     let (Some(frame), Ok((class, attack))) = (frame, me.single()) else { return };
-    let empowered = attack.empowered_at(clock.now(true));
-    let label = range_text(class.def(), empowered);
-    let Ok((mut text, mut color)) = texts.get_mut(frame.0.range) else { return };
-    if text.0 != label {
-        text.0 = label;
+    let def = class.def();
+    let empowered = attack.empowered_at(clock.now(true)) && def.attack.follow_up.is_some();
+    let shown = [
+        (frame.0.range, range_text(def, empowered), range_text(def, false)),
+        (frame.0.crit, crit_text(def, empowered), crit_text(def, false)),
+        (frame.0.speed, speed_text(def, empowered), speed_text(def, false)),
+    ];
+    for (entity, label, base) in shown {
+        let Ok((mut text, mut color)) = texts.get_mut(entity) else { continue };
+        color.set_if_neq(TextColor(if label != base { ACCENT } else { palette::ui::TEXT }));
+        if text.0 != label {
+            text.0 = label;
+        }
     }
-    color.set_if_neq(TextColor(if empowered && class.def().attack.follow_up.is_some() { ACCENT } else { palette::ui::TEXT }));
 }
 
 /// Your health, as it is.
