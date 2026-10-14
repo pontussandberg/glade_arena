@@ -10,7 +10,7 @@ use crate::swish::noise;
 /// long each lasts (seconds, least and most), how big (meters, least and most), how drawn out
 /// along their fall, and how bright.
 const DRIPS_PER_SECOND: f32 = 13.0;
-const DRIP_PULL: f32 = 1.4;
+const DRIP_PULL: f32 = 2.6;
 const DRIP_LIFE: (f32, f32) = (0.35, 0.65);
 const DRIP_SIZE: (f32, f32) = (0.012, 0.022);
 /// How drawn out a drop is as it forms and as it ends (its length to its width), and how thin.
