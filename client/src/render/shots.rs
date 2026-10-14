@@ -40,7 +40,7 @@ const WAKE_SECONDS: f32 = 0.32;
 const WAKE_HOLDS: f32 = 0.35;
 /// How far the spear's point gets from where it left the hand before it leaves any wake: none
 /// in the thrower's face.
-const WAKE_AFTER: f32 = 1.5;
+const WAKE_AFTER: f32 = 1.0;
 
 /// A thrown spear as drawn: it leaves the thrower's hand where the javelin was held, then eases
 /// onto its real path (`fly_shots`), leaving a wake of wind behind it (`Wake`), in `wake`'s
