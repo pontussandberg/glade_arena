@@ -1,0 +1,49 @@
+//! The lobby's cards and pane headers, as the side panel and the details pane are built from.
+
+use super::*;
+
+use crate::arena::palette::ui::ACCENT;
+use crate::arena::palette;
+use crate::render::{button_fill, key_chip, ui_text};
+
+/// The room around a card's content, and its fill.
+pub(crate) const CARD_PADDING: f32 = GAP * 2.0;
+pub(crate) fn card_fill() -> Color {
+    palette::ui::PANEL
+}
+
+/// A card in a pane: a block of its own, dark, with room around its content.
+pub(crate) fn card() -> impl Bundle {
+    (
+        Node { flex_direction: FlexDirection::Column, row_gap: px(GAP), padding: UiRect::all(px(CARD_PADDING)), ..default() },
+        BackgroundColor(card_fill()),
+    )
+}
+
+/// A fold-open pane's header, a button the whole width, its content spread to the ends (ending
+/// with `fold_chip`). Open, it joins the cards under it with an accent edge.
+pub(crate) fn pane_header(open: bool) -> impl Bundle {
+    let edge = if open { ACCENT } else { palette::ui::MUTED.with_alpha(0.3) };
+    (
+        button_fill(card_fill()),
+        Node {
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(px(GAP * 2.0), px(GAP * 1.5)),
+            border: UiRect::left(px(3.0)),
+            ..default()
+        },
+        BorderColor::all(edge),
+    )
+}
+
+/// Whether a click on a pane's header shows or hides the rest.
+pub(crate) fn fold_chip(open: bool) -> impl Bundle {
+    let (toggle, color) = if open { ("Hide", palette::ui::MUTED) } else { ("Show", ACCENT) };
+    key_chip(toggle, 11.0, color, color.with_alpha(0.5))
+}
+
+/// A small caps label over a part of a card.
+pub(crate) fn label(text: &str) -> impl Bundle {
+    ui_text(text.to_uppercase(), 11.0, palette::ui::MUTED)
+}

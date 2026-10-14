@@ -37,7 +37,7 @@ Auto-attacks work as in League. Each click is one attack (holding the button doe
 again), and the next may start once its attack timer (`attack_ticks`) has run out; once the attack
 has gone off, the cast bar under your health bar fills until then. A click before then is dropped,
 not queued. The attack goes
-off early in that time, after a short windup (`windup`, a part of the attack per class): the
+off part way through that time, after a windup (`windup`, a part of the attack per class): the
 spear leaving the hand, the blade reaching its target. You stand still with your aim locked
 during the windup, and an order to move (a right click, S, walking keys) cancels it: no attack,
 and you may attack again at once. After it has gone off, the rest is backswing: move whenever you
@@ -111,7 +111,7 @@ scripts/  build-web.sh, serve.mjs
 - The class files (`shared/assets/classes/`) are compiled into both sides, and their hash is
   part of the protocol id: a client built with different class numbers can't connect.
 
-Rule of thumb: gameplay rules go in `shared/src/sim.rs` as pure functions. Server-only
+Rule of thumb: gameplay rules go in `shared/src/sim/` as pure functions. Server-only
 decisions (damage, death) stay in `server/`.
 
 ## Running

@@ -5,8 +5,10 @@
 //! - "Map" switches practice to the next map, everyone starting over on it.
 //! - Switches (`Switch`), lit while on: "No cooldowns" (our Q's cooldown off: what the server
 //!   says, via our `Cooldowns`), "Hitboxes" (`hitboxes`: what hits are judged by, drawn on the
-//!   ground) and "Free camera" (`camera`: a camera to turn around fighters and look at them up
-//!   close).
+//!   ground), "3D hitboxes" (the same standing up, colored by height) and "Free camera"
+//!   (`camera`: a camera to turn around fighters and look at them up close).
+//! - "Fake ping" steps through extra latency on what we receive (`FakeLatency`), and back off, to
+//!   feel how the game plays at a higher ping.
 //! - "Target dummy" and "Moving dummy" place one (`dummies`).
 //!
 //! Outside practice every tool is off (`tools_off`).
@@ -20,13 +22,13 @@ use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
-use crate::Me;
+use crate::{FakeLatency, Me};
 use crate::arena::palette;
 use crate::camera::CameraMode;
 use crate::render::{HudButton, button_fill, chevron, chevron_turn, clicked, corner_panel, fold_header, shown, ui_text};
 use crate::rooms::{CurrentRoom, Screen, request};
 use dummies::Placing;
-use hitboxes::ShowHitboxes;
+use hitboxes::{ShowHitboxes, ShowHitboxes3d};
 
 pub struct PracticePlugin;
 
@@ -35,7 +37,7 @@ impl Plugin for PracticePlugin {
         app.add_plugins((dummies::DummiesPlugin, hitboxes::HitboxesPlugin));
         app.add_systems(
             Update,
-            (show_tools, fold_tools, use_switches, switch_map).chain().run_if(in_state(Screen::InGame)),
+            (show_tools, fold_tools, use_switches, step_fake_ping, switch_map).chain().run_if(in_state(Screen::InGame)),
         );
         app.add_systems(Update, tools_off.run_if(not(in_state(Screen::InGame)).or_else(not(practicing))));
         app.add_systems(OnExit(Screen::InGame), close_tools);
@@ -55,16 +57,18 @@ struct Tools;
 enum Switch {
     NoCooldowns,
     Hitboxes,
+    Hitboxes3d,
     FreeCamera,
 }
 
 impl Switch {
-    const ALL: [Switch; 3] = [Switch::NoCooldowns, Switch::Hitboxes, Switch::FreeCamera];
+    const ALL: [Switch; 4] = [Switch::NoCooldowns, Switch::Hitboxes, Switch::Hitboxes3d, Switch::FreeCamera];
 
     fn label(self) -> &'static str {
         match self {
             Switch::NoCooldowns => "No cooldowns",
             Switch::Hitboxes => "Hitboxes",
+            Switch::Hitboxes3d => "3D hitboxes",
             Switch::FreeCamera => "Free camera",
         }
     }
@@ -79,6 +83,7 @@ struct SwitchState(Switch);
 struct Switched<'w, 's> {
     me: Query<'w, 's, &'static Cooldowns, With<Me>>,
     hitboxes: ResMut<'w, ShowHitboxes>,
+    hitboxes_3d: ResMut<'w, ShowHitboxes3d>,
     camera: ResMut<'w, CameraMode>,
     sender: Single<'w, 's, &'static mut MessageSender<RoomRequest>, With<Client>>,
 }
@@ -88,6 +93,7 @@ impl Switched<'_, '_> {
         match switch {
             Switch::NoCooldowns => self.me.iter().next().is_some_and(|cooldowns| cooldowns.free),
             Switch::Hitboxes => self.hitboxes.0,
+            Switch::Hitboxes3d => self.hitboxes_3d.0,
             Switch::FreeCamera => self.camera.free,
         }
     }
@@ -99,10 +105,22 @@ impl Switched<'_, '_> {
         match switch {
             Switch::NoCooldowns => request(&mut self.sender, RoomRequest::NoCooldowns(!on)),
             Switch::Hitboxes => self.hitboxes.0 = !on,
+            Switch::Hitboxes3d => self.hitboxes_3d.0 = !on,
             Switch::FreeCamera => self.camera.free = !on,
         }
     }
 }
+
+/// Steps "Fake ping" to the next of `FAKE_PINGS`.
+#[derive(Component)]
+struct FakePingButton;
+
+/// How much "Fake ping" adds, shown on its button.
+#[derive(Component)]
+struct FakePingState;
+
+/// What "Fake ping" steps through, in ms: off first.
+const FAKE_PINGS: [u64; 3] = [0, 50, 100];
 
 /// Switches practice to the next map: everything starts over on it.
 #[derive(Component)]
@@ -157,6 +175,12 @@ fn show_tools(mut commands: Commands, room: Res<CurrentRoom>, tools: Query<Entit
                         );
                         row(tools, switch, switch.label(), state);
                     }
+                    // As wide as its widest value, so the panel keeps its width.
+                    let state = (
+                        Node { width: px(56.0), justify_content: JustifyContent::FlexEnd, ..default() },
+                        children![(FakePingState, ui_text("OFF", 13.0, palette::ui::MUTED))],
+                    );
+                    row(tools, FakePingButton, "Fake ping", state);
                     dummies::spawn_buttons(tools);
                 })
                 .id();
@@ -175,8 +199,16 @@ fn close_tools(mut commands: Commands, tools: Query<Entity, With<Tools>>) {
 }
 
 /// Outside practice, every tool is off: none of them carries over into a real fight.
-fn tools_off(mut hitboxes: ResMut<ShowHitboxes>, mut camera: ResMut<CameraMode>, mut placing: ResMut<Placing>) {
+fn tools_off(
+    mut hitboxes: ResMut<ShowHitboxes>,
+    mut hitboxes_3d: ResMut<ShowHitboxes3d>,
+    mut camera: ResMut<CameraMode>,
+    mut placing: ResMut<Placing>,
+    mut fake_ping: ResMut<FakeLatency>,
+) {
     hitboxes.set_if_neq(ShowHitboxes(false));
+    hitboxes_3d.set_if_neq(ShowHitboxes3d(false));
+    fake_ping.set_if_neq(FakeLatency::default());
     if camera.free {
         camera.free = false;
     }
@@ -239,6 +271,30 @@ fn use_switches(
         }
         color.set_if_neq(TextColor(tint));
     }
+}
+
+/// A click on "Fake ping" steps it to the next of `FAKE_PINGS` (after the last, off again); it
+/// shows how much it adds.
+fn step_fake_ping(
+    mut fake: ResMut<FakeLatency>,
+    button: Single<(Ref<Interaction>, &mut BorderColor), With<FakePingButton>>,
+    state: Single<(&mut Text, &mut TextColor), With<FakePingState>>,
+) {
+    let (interaction, mut border) = button.into_inner();
+    if clicked(interaction) {
+        let now = fake.0.as_millis() as u64;
+        let next = FAKE_PINGS.iter().position(|&ms| ms == now).map_or(0, |i| (i + 1) % FAKE_PINGS.len());
+        fake.0 = std::time::Duration::from_millis(FAKE_PINGS[next]);
+    }
+    let ms = fake.0.as_millis();
+    let (label, edge, tint) =
+        if ms > 0 { (format!("+{ms} ms"), palette::ui::ACCENT, palette::ui::ACCENT) } else { ("OFF".into(), palette::ui::MUTED.with_alpha(0.5), palette::ui::MUTED) };
+    border.set_if_neq(BorderColor::all(edge));
+    let (mut text, mut color) = state.into_inner();
+    if text.0 != label {
+        text.0 = label;
+    }
+    color.set_if_neq(TextColor(tint));
 }
 
 /// The map button asks the server for the next map (dummies placed go with the old one, so

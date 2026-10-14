@@ -8,7 +8,7 @@ mispredicting.
 
 The order of the classes is `CLASS_FILES` in `shared/src/classes.rs`: the class picker and its
 number keys, the default pick, and the order target dummies come in. A new class also needs its
-look in the client (`arena.rs` figure and parts, `rig.rs` moves).
+look in the client (`arena/` figure and parts, `rig/` moves).
 
 Every class file starts with `#![enable(unwrap_variant_newtypes)]`, so a kind is written
 `Dash(distance: 6.0, ...)` rather than `Dash((distance: 6.0, ...))`, and an optional value
@@ -54,7 +54,7 @@ Units: meters, meters per second, ticks (32 per second).
   - `kind`:
     - `Projectile(speed, radius, range, damage)`: thrown instantly: no windup, no root.
     - `Dash(distance, min_distance, ticks, damage)`: dash toward the aim, through fighters,
-      cutting each one crossed for `damage`; stops at walls. As far as the cursor, at least
+      cutting each one crossed for `damage`; stops at walls. Until your body reaches the cursor, at least
       `min_distance` (optional: without it, always all the way) and at most `distance`. Covers
       `distance` in `ticks` at normal speed (longer slowed, shorter hasted).
     - `Nova(radius, damage, chill)`: a burst around you, at once: everyone within `radius` (and

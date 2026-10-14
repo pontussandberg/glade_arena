@@ -32,7 +32,7 @@ pub(crate) struct MenuKey;
 #[derive(Component)]
 struct EscMenu;
 
-/// The HUD's button that opens the menu (`render.rs` puts it in the top-left panel).
+/// The HUD's button that opens the menu (`render/` puts it in the top-left panel).
 #[derive(Component)]
 pub(crate) struct HomeButton;
 

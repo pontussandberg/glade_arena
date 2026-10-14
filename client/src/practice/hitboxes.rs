@@ -3,7 +3,10 @@
 //! circle anything has to touch to hit it); a melee attack's blade lane (`sim::melee_hits`: a
 //! body touching it is hit), faint while the attack winds up and bright for a moment as it goes
 //! off; each projectile's body; a nova's burst, for a moment. A dash cuts the bodies it touches.
-//! Local only: nothing is sent.
+//! The 3D view (`ShowHitboxes3d`, a switch of its own) draws them standing up instead, every
+//! ring colored by its height off the floor (`height_color`): each fighter's body as a column
+//! of rings, each projectile's as a ball around it where it's drawn, so where a spear will cross
+//! a body shows in the matching color. Local only: nothing is sent.
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -22,15 +25,37 @@ pub struct HitboxesPlugin;
 impl Plugin for HitboxesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ShowHitboxes>();
+        app.init_resource::<ShowHitboxes3d>();
         app.init_resource::<Flashes>();
         app.add_systems(Startup, draw_on_top);
-        app.add_systems(Update, (note_attacks, draw_hitboxes.run_if(|show: Res<ShowHitboxes>| show.0)).chain().run_if(in_state(Screen::InGame)));
+        app.add_systems(
+            Update,
+            (note_attacks, draw_hitboxes.run_if(|show: Res<ShowHitboxes>| show.0), draw_hitboxes_3d.run_if(|show: Res<ShowHitboxes3d>| show.0))
+                .chain()
+                .run_if(in_state(Screen::InGame)),
+        );
     }
 }
 
 /// Whether the hitboxes are drawn (the practice tools' "Hitboxes" switch).
 #[derive(Resource, Default, PartialEq)]
 pub struct ShowHitboxes(pub bool);
+
+/// Whether they're drawn standing up, colored by height (the "3D hitboxes" switch).
+#[derive(Resource, Default, PartialEq)]
+pub struct ShowHitboxes3d(pub bool);
+
+/// How tall a fighter's body is drawn in the 3D view (meters; about as tall as they're drawn),
+/// and how far apart its rings are.
+const BODY_HEIGHT: f32 = 2.1;
+const RING_EVERY: f32 = 0.15;
+
+/// A hitbox's color in the 3D view at `height` (meters) off the floor: blue at the floor, through
+/// green and yellow, to red at the top of a body (`BODY_HEIGHT`).
+fn height_color(height: f32) -> Color {
+    let t = (height / BODY_HEIGHT).clamp(0.0, 1.0);
+    Color::hsl(240.0 * (1.0 - t), 0.95, 0.55)
+}
 
 /// How long (seconds) an attack's shape stays drawn after it goes off.
 const FLASH_SECONDS: f32 = 0.6;
@@ -123,6 +148,41 @@ fn draw_hitboxes(
     }
     for (shot, transform) in &shots {
         circle(&mut gizmos, transform.translation, shot.class.def().shot(shot.ability).unwrap_or_default().radius, SHOT);
+    }
+}
+
+/// Draws every fighter's body as a column of rings and every projectile's as a ball around it
+/// where it's drawn (around its point), each colored by its height (`height_color`).
+fn draw_hitboxes_3d(
+    mut gizmos: Gizmos,
+    fighters: Query<(&Pos, Option<&Health>), Without<Projectile>>,
+    shots: Query<(&Projectile, &Transform, &InheritedVisibility)>,
+) {
+    let flat = Quat::from_rotation_x(FRAC_PI_2);
+    // The rings' heights and colors, the same for every fighter.
+    let rings: Vec<(f32, Color)> = (0..=(BODY_HEIGHT / RING_EVERY).round() as usize)
+        .map(|i| i as f32 * RING_EVERY)
+        .map(|height| (height, height_color(height)))
+        .collect();
+    let (floor, top) = (height_color(0.0), height_color(BODY_HEIGHT));
+    for (pos, health) in &fighters {
+        if health.is_some_and(|h| !h.alive()) {
+            continue;
+        }
+        let at = to_world(pos.0, 0.0);
+        for &(height, color) in &rings {
+            gizmos.circle(Isometry3d::new(at.with_y(height), flat), PLAYER_RADIUS, color);
+        }
+        // Its sides, so it reads as a column.
+        for k in 0..4 {
+            let side = Quat::from_rotation_y(k as f32 * FRAC_PI_2) * Vec3::X * PLAYER_RADIUS;
+            gizmos.line_gradient(at + side, at + side + Vec3::Y * BODY_HEIGHT, floor, top);
+        }
+    }
+    // Only one that's shown: a thrown spear still in the hand isn't anywhere yet.
+    for (shot, transform, _) in shots.iter().filter(|(_, _, shown)| shown.get()) {
+        let radius = shot.class.def().shot(shot.ability).unwrap_or_default().radius;
+        gizmos.sphere(Isometry3d::from_translation(transform.translation), radius, height_color(transform.translation.y)).resolution(16);
     }
 }
 
