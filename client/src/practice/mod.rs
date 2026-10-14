@@ -5,8 +5,8 @@
 //! - "Map" switches practice to the next map, everyone starting over on it.
 //! - Switches (`Switch`), lit while on: "No cooldowns" (our Q's cooldown off: what the server
 //!   says, via our `Cooldowns`), "Hitboxes" (`hitboxes`: what hits are judged by, drawn on the
-//!   ground) and "Free camera" (`camera`: a camera to turn around fighters and look at them up
-//!   close).
+//!   ground), "3D hitboxes" (the same standing up, colored by height) and "Free camera"
+//!   (`camera`: a camera to turn around fighters and look at them up close).
 //! - "Fake ping" steps through extra latency on what we receive (`FakeLatency`), and back off, to
 //!   feel how the game plays at a higher ping.
 //! - "Target dummy" and "Moving dummy" place one (`dummies`).
@@ -28,7 +28,7 @@ use crate::camera::CameraMode;
 use crate::render::{HudButton, button_fill, chevron, chevron_turn, clicked, corner_panel, fold_header, shown, ui_text};
 use crate::rooms::{CurrentRoom, Screen, request};
 use dummies::Placing;
-use hitboxes::ShowHitboxes;
+use hitboxes::{ShowHitboxes, ShowHitboxes3d};
 
 pub struct PracticePlugin;
 
@@ -57,16 +57,18 @@ struct Tools;
 enum Switch {
     NoCooldowns,
     Hitboxes,
+    Hitboxes3d,
     FreeCamera,
 }
 
 impl Switch {
-    const ALL: [Switch; 3] = [Switch::NoCooldowns, Switch::Hitboxes, Switch::FreeCamera];
+    const ALL: [Switch; 4] = [Switch::NoCooldowns, Switch::Hitboxes, Switch::Hitboxes3d, Switch::FreeCamera];
 
     fn label(self) -> &'static str {
         match self {
             Switch::NoCooldowns => "No cooldowns",
             Switch::Hitboxes => "Hitboxes",
+            Switch::Hitboxes3d => "3D hitboxes",
             Switch::FreeCamera => "Free camera",
         }
     }
@@ -81,6 +83,7 @@ struct SwitchState(Switch);
 struct Switched<'w, 's> {
     me: Query<'w, 's, &'static Cooldowns, With<Me>>,
     hitboxes: ResMut<'w, ShowHitboxes>,
+    hitboxes_3d: ResMut<'w, ShowHitboxes3d>,
     camera: ResMut<'w, CameraMode>,
     sender: Single<'w, 's, &'static mut MessageSender<RoomRequest>, With<Client>>,
 }
@@ -90,6 +93,7 @@ impl Switched<'_, '_> {
         match switch {
             Switch::NoCooldowns => self.me.iter().next().is_some_and(|cooldowns| cooldowns.free),
             Switch::Hitboxes => self.hitboxes.0,
+            Switch::Hitboxes3d => self.hitboxes_3d.0,
             Switch::FreeCamera => self.camera.free,
         }
     }
@@ -101,6 +105,7 @@ impl Switched<'_, '_> {
         match switch {
             Switch::NoCooldowns => request(&mut self.sender, RoomRequest::NoCooldowns(!on)),
             Switch::Hitboxes => self.hitboxes.0 = !on,
+            Switch::Hitboxes3d => self.hitboxes_3d.0 = !on,
             Switch::FreeCamera => self.camera.free = !on,
         }
     }
@@ -196,11 +201,13 @@ fn close_tools(mut commands: Commands, tools: Query<Entity, With<Tools>>) {
 /// Outside practice, every tool is off: none of them carries over into a real fight.
 fn tools_off(
     mut hitboxes: ResMut<ShowHitboxes>,
+    mut hitboxes_3d: ResMut<ShowHitboxes3d>,
     mut camera: ResMut<CameraMode>,
     mut placing: ResMut<Placing>,
     mut fake_ping: ResMut<FakeLatency>,
 ) {
     hitboxes.set_if_neq(ShowHitboxes(false));
+    hitboxes_3d.set_if_neq(ShowHitboxes3d(false));
     fake_ping.set_if_neq(FakeLatency::default());
     if camera.free {
         camera.free = false;
