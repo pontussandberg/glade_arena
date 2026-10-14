@@ -147,7 +147,7 @@ fn open_lobby(
 ) {
     **shadows = arena::sun_shadows(VISTA_SHADOWS);
     // The fighter we last went in as.
-    let selected = chosen.0.unwrap_or_else(|| ClassId::all().next().expect("at least one class"));
+    let selected = chosen.0.unwrap_or_else(|| ClassId::playable().next().expect("at least one class"));
     let front = FRONT + stage_turn();
     let view = Orbit { yaw: front, pitch: STAGE_RISE.atan2(STAGE_BACK), distance: STAGE_BACK.hypot(STAGE_RISE) };
     // The fighter stands at `STAGE` under the lift, facing +x as every fighter starts out: the
@@ -255,7 +255,7 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
             screen.spawn(Node { align_items: AlignItems::FlexEnd, ..default() }).with_children(|bottom| {
                 bottom.spawn(side(JustifyContent::FlexStart));
                 bottom.spawn(Node { column_gap: px(GAP * 1.5), ..default() }).with_children(|tiles| {
-                    for (n, id) in ClassId::all().enumerate() {
+                    for (n, id) in ClassId::playable().enumerate() {
                         spawn_tile(tiles, n + 1, id);
                     }
                 });

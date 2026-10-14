@@ -1,6 +1,7 @@
 //! Rooms: what the server browser lists and a room's lobby shows. A room is a private arena a
 //! guest creates and leads: the leader picks free-for-all or two teams and starts the match,
-//! which then runs (endlessly, for now) until the last member leaves. Anyone can join from the
+//! which runs until a fighter (or a team) has `KILLS_TO_WIN` kills, zombies roaming the arena
+//! meanwhile; then everyone is back in the lobby, to start another. Anyone can join from the
 //! browser, before or during the match.
 
 use core::time::Duration;
@@ -54,6 +55,20 @@ pub const NO_TEAM: u8 = 0;
 pub const TEAM_A: u8 = 1;
 pub const TEAM_B: u8 = 2;
 pub const TEAMS: [u8; 2] = [TEAM_A, TEAM_B];
+/// The zombies' side: foes to every player, in either mode.
+pub const ZOMBIES: u8 = 3;
+
+/// How many kills win a lobby match: a fighter's own in free-for-all, a team's together in teams.
+/// Only players count: a zombie's kill, or killing one, scores nothing.
+pub const KILLS_TO_WIN: u32 = 5;
+
+/// Who won a match.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Winner {
+    /// This member (`Member::guest_id`), in free-for-all.
+    Guest(u32),
+    Team(u8),
+}
 
 /// A line in the server browser.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -86,6 +101,13 @@ pub struct RoomView {
     pub leader: u32,
     /// In the order they joined.
     pub members: Vec<Member>,
+    /// Kills that win its match (`KILLS_TO_WIN`); `None` if it never ends (practice).
+    pub goal: Option<u32>,
+    /// Each team's kills this match (`TEAMS` order), in teams.
+    pub team_kills: [u32; 2],
+    /// Who won the match: set the moment it's won, and kept, with everyone's kills, until the
+    /// next one starts.
+    pub winner: Option<Winner>,
 }
 
 impl RoomView {
@@ -101,6 +123,22 @@ impl RoomView {
     pub fn on_team(&self, team: u8) -> usize {
         self.members.iter().filter(|m| m.team == team).count()
     }
+
+    /// A team's kills this match.
+    pub fn kills_of(&self, team: u8) -> u32 {
+        TEAMS.iter().position(|&t| t == team).map_or(0, |i| self.team_kills[i])
+    }
+
+    /// Who won, as players read it: "Bjorn Ironside", or a team as `guest_id` sees it ("Your
+    /// team", "The other team").
+    pub fn winner_name(&self, guest_id: u32) -> Option<String> {
+        Some(match self.winner? {
+            Winner::Guest(id) if id == guest_id => "You".into(),
+            Winner::Guest(id) => self.member(id).map_or("Someone who left".into(), |m| m.name.clone()),
+            Winner::Team(team) if self.member(guest_id).is_some_and(|m| m.team == team) => "Your team".into(),
+            Winner::Team(_) => "The other team".into(),
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -113,6 +151,8 @@ pub struct Member {
     pub class: Option<ClassId>,
     /// Their fighter is in the arena (else they're in the lobby, picking).
     pub in_arena: bool,
+    /// Players they killed this match (or the last one, until the next starts).
+    pub kills: u32,
 }
 
 /// Why we're no longer in a room.

@@ -20,12 +20,13 @@ fn replicated_player(owner: PeerId) -> impl Bundle {
 #[derive(Component)]
 pub(crate) struct NeedsSpawnPoint;
 
-/// Server-only: killed; out of the fight until `respawn_at` (its `Health` is 0 meanwhile, which
-/// is what clients see).
+/// Server-only: killed (by `killer`); out of the fight until `respawn_at` (its `Health` is 0
+/// meanwhile, which is what clients see).
 #[derive(Component)]
-pub(super) struct Dead {
-    pub(super) respawn_at: u32,
+pub(crate) struct Dead {
+    pub(crate) respawn_at: u32,
     pub(super) placed: bool,
+    pub(crate) killer: PeerId,
 }
 
 /// A respawning player is moved to its spawn point this long before it comes back to life:
@@ -34,7 +35,7 @@ pub(super) struct Dead {
 const PLACE_BEFORE_RESPAWN_TICKS: u32 = TICK_HZ as u32 / 4;
 
 /// Players who can move, attack and be hit: placed and alive.
-pub(super) type InPlay = (Without<NeedsSpawnPoint>, Without<Dead>);
+pub(crate) type InPlay = (Without<NeedsSpawnPoint>, Without<Dead>);
 
 /// Every new link needs a `ReplicationSender` before we can replicate anything to it.
 pub(super) fn on_new_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
@@ -103,8 +104,8 @@ pub(super) fn place_players(
 pub(super) fn respawn(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    // Dummies come back on the spot instead (`restore_dummies`).
-    mut dead: Query<(Entity, &ClassId, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, (&mut Cooldowns, &mut Dashing), &mut Dead), Without<Dummy>>,
+    // Dummies come back on the spot instead (`restore_dummies`); zombies don't (`bury_zombies`).
+    mut dead: Query<(Entity, &ClassId, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, (&mut Cooldowns, &mut Dashing), &mut Dead), (Without<Dummy>, Without<Zombie>)>,
 ) {
     let now = timeline.tick().0;
     for (player, class, mut health, (mut chilled, mut hasted), mut attack, (mut cooldowns, mut dashing), mut dead) in &mut dead {

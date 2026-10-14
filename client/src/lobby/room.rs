@@ -5,7 +5,7 @@ use super::*;
 
 use arena_shared::protocol::RoomRequest;
 use arena_shared::map::MapId;
-use arena_shared::rooms::{MAX_PER_TEAM, Member, Mode, NO_TEAM, RoomView, TEAMS};
+use arena_shared::rooms::{KILLS_TO_WIN, MAX_PER_TEAM, Member, Mode, NO_TEAM, RoomView, TEAMS};
 
 use crate::browser::LobbiesButton;
 use crate::arena::palette::ui::ACCENT;
@@ -43,6 +43,15 @@ pub(super) fn show_room(
                 (false, false) => ("Waiting for the leader", palette::ui::MUTED),
             };
             card.spawn(ui_text(line, 12.0, color));
+            if !view.started
+                && let Some(winner) = view.winner_name(my_id)
+            {
+                let won = if winner == "You" { "You won the last match".to_string() } else { format!("{winner} won the last match") };
+                card.spawn(ui_text(won, 12.0, palette::TORCH_FLAME));
+            }
+            if let Some(goal) = view.goal.or((!view.practice).then_some(KILLS_TO_WIN)) {
+                card.spawn(ui_text(format!("First to {goal} kills. Zombies roam the arena."), 11.0, palette::ui::MUTED));
+            }
             let editing = view.may_edit(my_id);
             let modes = [Mode::Ffa, Mode::Teams].map(|mode| (mode, mode.label()));
             setting(card, "Mode", &modes, view.mode, editing, RoomRequest::SetMode);
@@ -191,6 +200,10 @@ fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, me
             line.spawn(ui_text(fighter, 11.0, palette::ui::MUTED));
             if member.in_arena {
                 line.spawn(ui_text("in arena", 11.0, ACCENT));
+            }
+            if view.goal.is_some() && (view.started || view.winner.is_some()) {
+                let kills = if member.kills == 1 { "1 kill".to_string() } else { format!("{} kills", member.kills) };
+                line.spawn(ui_text(kills, 11.0, palette::ui::TEXT));
             }
         });
     });

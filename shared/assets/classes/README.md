@@ -1,6 +1,7 @@
 # Classes
 
-One file per playable class (`revenant.ron`, `javelinist.ron`, `frost_mage.ron`), and
+One file per class (`revenant.ron`, `javelinist.ron`, `frost_mage.ron`, and `zombie.ron`, which
+no one picks: the server fields zombies in lobby matches), and
 `common.ron` for the values every class shares. Edit freely: everything gameplay-related about a
 class lives in its file. Server and client both compile these files in, and their hash is part of
 the protocol id, so a client built from different numbers is refused at connect instead of
@@ -19,6 +20,8 @@ Every class file starts with `#![enable(unwrap_variant_newtypes)]`, so a kind is
 Units: meters, meters per second, ticks (32 per second).
 
 - `id`: stable key (also picks the class's look in the client)
+- `playable` (optional, true by default): false keeps it out of the class picker, for what only
+  the server fields (zombies). Such a class may have no abilities, and goes after the playable ones
 - `max_hp`: health at spawn and respawn
 - `move_speed`: walking speed
 - `attack`: the left-click auto-attack, aimed at the cursor (skillshot)
@@ -49,7 +52,7 @@ Units: meters, meters per second, ticks (32 per second).
     times as far, its start (optional) `near` times as far (`reach` unless given). Used up as an
     attack goes off (cancelling one first leaves it armed): a miss loses it, an empowered one that
     lands arms the next.
-- `abilities`: one to four, on Q, W, E and R in this order, each aimed at the cursor: `name`,
+- `abilities`: one to four (none is fine for an unplayable class), on Q, W, E and R in this order, each aimed at the cursor: `name`,
   `description`, `cooldown_ticks`, and
   - `kind`:
     - `Projectile(speed, radius, range, damage)`: thrown instantly: no windup, no root.

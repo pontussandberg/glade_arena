@@ -16,11 +16,12 @@ use crate::config::{PLAYER_RADIUS, TICK_HZ};
 
 /// The class files, compiled into both server and client so they can't disagree. Their order is
 /// the classes' order everywhere: the class picker and its number keys, the default pick, and the
-/// order target dummies come in.
-const CLASS_FILES: [&str; 3] = [
+/// order target dummies come in. The ones no one picks (`ClassDef::playable`) go last.
+const CLASS_FILES: [&str; 4] = [
     include_str!("../assets/classes/revenant.ron"),
     include_str!("../assets/classes/javelinist.ron"),
     include_str!("../assets/classes/frost_mage.ron"),
+    include_str!("../assets/classes/zombie.ron"),
 ];
 
 /// What every class shares.
@@ -56,10 +57,13 @@ pub struct ClassDef {
     pub name: String,
     pub role: String,
     pub blurb: String,
+    /// Players pick it (else only the server fields it: zombies). True by default.
+    #[serde(default = "yes")]
+    pub playable: bool,
     pub max_hp: i32,
     pub move_speed: f32,
     pub attack: AttackDef,
-    /// On Q, W, E and R, in that order (`AbilitySlot`).
+    /// On Q, W, E and R, in that order (`AbilitySlot`). A playable class has at least one.
     pub abilities: Vec<AbilityDef>,
     /// What the class always has going for it, nothing to press (none by default).
     #[serde(default)]
@@ -137,6 +141,10 @@ pub struct FollowUp {
 
 fn one() -> f32 {
     1.0
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Crowd control a hit applies on top of its damage: a slow (`slow` is the fraction of speed
@@ -385,8 +393,19 @@ impl ClassId {
         classes().iter().position(|c| c.id == key).map(|i| ClassId(i as u8))
     }
 
+    /// Every class, the ones no one picks too: everything that may be fielded, and so drawn.
     pub fn all() -> impl Iterator<Item = ClassId> {
         (0..classes().len() as u8).map(ClassId)
+    }
+
+    /// The classes players pick from, in order.
+    pub fn playable() -> impl Iterator<Item = ClassId> {
+        Self::all().filter(|c| c.def().playable)
+    }
+
+    /// `None` unless players may pick it (e.g. a zombie, from a hacked client).
+    pub fn pickable(self) -> Option<Self> {
+        self.checked().filter(|c| c.def().playable)
     }
 }
 
@@ -395,8 +414,9 @@ impl ClassId {
 static CLASSES: LazyLock<Vec<ClassDef>> = LazyLock::new(|| {
     let load = |file: &str| -> Result<ClassDef, String> {
         let class: ClassDef = ron::from_str(file).map_err(|e| e.to_string())?;
-        if !(1..=MAX_ABILITIES).contains(&class.abilities.len()) {
-            return Err(format!("{}: one to {MAX_ABILITIES} abilities, not {}", class.id, class.abilities.len()));
+        let fewest = if class.playable { 1 } else { 0 };
+        if !(fewest..=MAX_ABILITIES).contains(&class.abilities.len()) {
+            return Err(format!("{}: {fewest} to {MAX_ABILITIES} abilities, not {}", class.id, class.abilities.len()));
         }
         Ok(class)
     };
@@ -472,7 +492,9 @@ mod tests {
                     assert!((1.0..=30.0).contains(&range), "{}: projectile range", c.id);
                 }
             }
-            assert!((1..=MAX_ABILITIES).contains(&c.abilities.len()), "{}: one to {MAX_ABILITIES} abilities", c.id);
+            let fewest = if c.playable { 1 } else { 0 };
+            assert!((fewest..=MAX_ABILITIES).contains(&c.abilities.len()), "{}: {fewest} to {MAX_ABILITIES} abilities", c.id);
+            assert!(c.playable || all[i..].iter().all(|o| !o.playable), "{}: unplayable classes go last", c.id);
             for (_, ability) in c.abilities() {
                 let what = format!("{}: {}", c.id, ability.name);
                 assert!(ability.cooldown_ticks > 0, "{what}: cooldown");
@@ -540,6 +562,10 @@ mod tests {
             assert_eq!(ClassId::by_key(&id.def().id), Some(id));
         }
         assert_eq!(ClassId(200).checked(), None);
+        assert!(ClassId::playable().count() > 0);
+        let zombie = ClassId::by_key("zombie").unwrap();
+        assert_eq!(zombie.pickable(), None);
+        assert!(!ClassId::playable().any(|c| c == zombie));
     }
 
     #[test]

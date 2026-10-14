@@ -53,6 +53,8 @@ pub mod render;
 #[cfg(feature = "render")]
 pub mod rig;
 pub mod rooms;
+#[cfg(feature = "render")]
+pub mod scoreboard;
 #[cfg(all(test, feature = "render"))]
 mod preview;
 #[cfg(feature = "render")]

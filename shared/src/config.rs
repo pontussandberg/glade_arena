@@ -11,7 +11,7 @@ pub const SEND_INTERVAL: Duration = TICK_DURATION;
 
 pub const SERVER_PORT: u16 = 5888;
 /// Includes the class file's hash: clients built with different class numbers can't connect.
-pub const PROTOCOL_ID: u64 = 0xA4E7_0008 ^ crate::classes::classes_hash();
+pub const PROTOCOL_ID: u64 = 0xA4E7_0009 ^ crate::classes::classes_hash();
 /// Netcode key shared by server and client. Fine for local dev; real auth will have the
 /// account service mint connect tokens instead (see README).
 pub const DEV_PRIVATE_KEY: [u8; 32] = [0; 32];

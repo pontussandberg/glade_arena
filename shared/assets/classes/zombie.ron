@@ -1,0 +1,20 @@
+#![enable(unwrap_variant_newtypes)]
+// The Zombie (field reference: README.md): not a class anyone picks. The server spawns them in
+// lobby matches; they shamble toward the nearest fighter and claw at it.
+(
+    id: "zombie",
+    name: "Zombie",
+    role: "Monster",
+    blurb: "Slow, rotten and hungry. Never stops coming.",
+    playable: false,
+    max_hp: 60,
+    move_speed: 2.0,
+    attack: (
+        damage: 14,
+        attack_ticks: 48,
+        // A long, readable windup: step out of its reach and the swipe misses.
+        windup: 0.55,
+        kind: Melee(range: 1.4, width: 0.9),
+    ),
+    abilities: [],
+)

@@ -48,7 +48,7 @@ pub(super) fn damage(
     debug!(target: "arena_server", attacker = ?by, victim = ?id, with, amount, crit, health = health.0, "hit");
     if health.0 == 0 {
         info!(target: "arena_server", killer = ?by, victim = ?id, with, "kill");
-        commands.entity(player).insert(Dead { respawn_at: now + RESPAWN_TICKS, placed: false });
+        commands.entity(player).insert(Dead { respawn_at: now + RESPAWN_TICKS, placed: false, killer: by });
     }
 }
 

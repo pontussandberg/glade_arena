@@ -50,7 +50,7 @@ impl Plugin for RenderPlugin {
             crate::tooltip::TooltipPlugin,
             crate::practice::PracticePlugin,
         ));
-        app.add_plugins(crate::waygates::WaygatesPlugin);
+        app.add_plugins((crate::waygates::WaygatesPlugin, crate::scoreboard::ScoreboardPlugin));
         app.insert_resource(ControlsOpen(load_setting(CONTROLS_KEY).as_deref() == Some("open")));
         app.add_systems(Startup, setup_scene);
         // Right after the network's updates are in, before anything this frame reads positions.

@@ -59,7 +59,7 @@ pub(super) fn pick_fighter(
     mut tiles: Query<(&FighterTile, &Interaction, &mut BorderColor, &mut BackgroundColor)>,
 ) {
     if !typing.0
-        && let Some((_, id)) = NUMBER_KEYS.iter().zip(ClassId::all()).find(|(key, _)| keys.just_pressed(**key))
+        && let Some((_, id)) = NUMBER_KEYS.iter().zip(ClassId::playable()).find(|(key, _)| keys.just_pressed(**key))
     {
         lobby.selected = id;
     }

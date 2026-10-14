@@ -21,6 +21,8 @@ mod revenant;
 pub use revenant::*;
 mod frost_mage;
 pub use frost_mage::*;
+mod zombie;
+use zombie::*;
 mod shots;
 pub use shots::*;
 mod scene;
@@ -91,6 +93,11 @@ pub mod palette {
     /// Eyes burning a cold, spectral white.
     pub const SOUL: Color = Color::srgb_u8(0xF2, 0xFA, 0xFF);
     pub const HAZE: Color = Color::srgb_u8(0xA9, 0xB8, 0xB6);
+    /// A zombie's rotting grey-green skin, its darker rot and wounds, and the dirty linen it
+    /// died in.
+    pub const ROT: Color = Color::srgb_u8(0x7E, 0x8A, 0x66);
+    pub const ROT_DARK: Color = Color::srgb_u8(0x4A, 0x52, 0x3B);
+    pub const RAGS: Color = Color::srgb_u8(0x6E, 0x63, 0x50);
     /// HUD text.
     pub const INK: Color = Color::srgb_u8(0x1E, 0x2A, 0x23);
 
@@ -179,7 +186,7 @@ pub fn faceted(mesh: Mesh) -> Mesh {
 /// Class ids that have their own figure in `fighter_mesh`. Every class in `assets/classes/` needs
 /// one (and its parts in `fighter_rig` and its moves in `rig/`): the client won't start
 /// without them, and a test checks every class has one.
-pub const FIGHTER_LOOKS: [&str; 3] = ["javelinist", "revenant", "frost_mage"];
+pub const FIGHTER_LOOKS: [&str; 4] = ["javelinist", "revenant", "frost_mage", "zombie"];
 
 /// Class ids whose shots have their own look in `shot_look` (the rest throw round bolts).
 pub const SHOT_LOOKS: [&str; 2] = ["javelinist", "frost_mage"];
@@ -289,6 +296,22 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             held_glint: None,
             wardrobe: Some(frost_mage_wardrobe()),
         },
+        "zombie" => RigMeshes {
+            head: zombie_head(),
+            arm: zombie_arm(),
+            forearm: None,
+            shin: None,
+            lead_arm: None,
+            leg: booted_leg(palette::RAGS.darker(0.15), palette::ROT_DARK, 0.085, 0.07),
+            held: zombie_claws(),
+            eyes: slit_eyes(ZOMBIE_EYES),
+            glow: palette::WISP,
+            held_glow: None,
+            body_glow: None,
+            held_aura: None,
+            held_glint: None,
+            wardrobe: None,
+        },
         _ => unreachable!("no rig for class {class_key:?} (add it to FIGHTER_LOOKS)"),
     }
 }
@@ -313,6 +336,9 @@ pub fn fighter_mesh(class_key: &str) -> Mesh {
         // ice-crowned hood), arms, legs, cape and staff are separate, animated parts
         // (`fighter_rig`).
         "frost_mage" => frost_mage_body(),
+        // Monster (no one picks it): a hunched, rotting villager in a torn shirt. Head, bare
+        // arms, legs and claws are separate, animated parts (`fighter_rig`).
+        "zombie" => zombie_body(),
         _ => unreachable!("no figure for class {class_key:?} (add it to FIGHTER_LOOKS)"),
     }
 }
