@@ -363,10 +363,7 @@ mod tests {
         class.def().ability(Q).unwrap()
     }
 
-    /// The first class whose Q is a thrown projectile (none, for now) / a prime / a dash.
-    fn thrower() -> Option<ClassId> {
-        ClassId::playable().find(|c| matches!(q(*c).kind, AbilityKind::Projectile(_)))
-    }
+    /// The first class whose Q is a prime / a dash.
     fn primer() -> ClassId {
         ClassId::playable().find(|c| matches!(q(*c).kind, AbilityKind::Prime(_))).unwrap()
     }
@@ -416,21 +413,6 @@ mod tests {
         assert!((dash_to(between + PLAYER_RADIUS) - between).abs() < 1e-4, "the body didn't stop at the cursor");
         assert!((dash_to(min * 0.2) - min).abs() < 1e-4, "shorter than its least");
         assert!((dash_to(distance * 3.0) - distance).abs() < 1e-4, "further than its most");
-    }
-
-    #[test]
-    fn thrown_ability_goes_off_at_once_then_waits_for_its_cooldown() {
-        let Some(class) = thrower() else { return };
-        let (state, thrown) = step_kit(10, class, Vec2::ZERO, &press_q(Vec2::X), &default(), default());
-        let Some(Cast::Throw(projectile)) = thrown else { panic!("thrown the tick Q is pressed") };
-        assert!(projectile.ability == Some(Q) && projectile.spawn_tick == 10);
-        assert_eq!(state.cooldowns.used_at(Q), Some(10));
-        let cooldown = q(class).cooldown_ticks;
-        let again = |tick| step_kit(tick, class, Vec2::ZERO, &press_q(Vec2::X), &default(), state).1;
-        assert!(again(10 + cooldown - 1).is_none(), "used again during its cooldown");
-        assert!(again(10 + cooldown).is_some());
-        // Its own speed, separate from the auto-attack's.
-        assert_ne!(class.def().shot(Some(Q)), class.def().shot(None));
     }
 
     #[test]

@@ -56,9 +56,6 @@ pub fn shot_look(class: &ClassDef, shot: Shot, ability: bool) -> ShotLook {
             thrown: true,
             ..plain(carried_javelin().rotated_by(ALONG_X), ShotGlow::Weapon)
         },
-        ("javelinist", true) => {
-            ShotLook { thrown: true, ..plain(javelin(Color::WHITE, Color::WHITE, Color::WHITE, Color::WHITE, Color::WHITE).rotated_by(ALONG_X), ShotGlow::Spirit) }
-        }
         ("frost_mage", false) => ShotLook {
             aura: Some(frost_aura(shot.radius)),
             spin: FROSTBOLT_SPIN,

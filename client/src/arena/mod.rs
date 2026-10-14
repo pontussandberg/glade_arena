@@ -108,7 +108,7 @@ pub mod palette {
     pub const ENEMY: Color = Color::srgb_u8(0xD9, 0x45, 0x3B);
     pub const ALLY: Color = Color::srgb_u8(0x5C, 0xC4, 0x6A);
     pub const MONSTER: Color = Color::srgb_u8(0xF0, 0xB4, 0x2A);
-    /// Spectral blue: spirit spears (whoever throws them) and rift-step streaks glow with it.
+    /// Spectral blue: abilities' glow (rift-step streaks, a nova's wave).
     pub const SPIRIT: Color = Color::srgb_u8(0x8F, 0xD8, 0xFF);
     /// Ice: the frost mage's crystals, its nova, and the ice that freezes a fighter in place.
     /// Paler and whiter than spirit.

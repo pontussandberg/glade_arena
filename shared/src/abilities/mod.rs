@@ -222,23 +222,20 @@ pub fn step(
         if tick < cooldowns.usable_at(slot, ability) {
             continue;
         }
-        if let AbilityKind::Prime(prime) = ability.kind {
-            casts.push(Cast::Prime(prime));
-            cooldowns.start(slot, ability, tick);
-            continue;
-        }
-        let Some(dir) = aim.try_normalize() else { continue };
-        casts.push(match ability.kind {
-            AbilityKind::Projectile(throw) => Cast::Throw(throw.projectile(owner, class, slot, pos, dir, tick)),
+        // Every kind but a prime goes toward its aim, and needs one.
+        let dir = aim.try_normalize();
+        casts.push(match (ability.kind, dir) {
+            (AbilityKind::Prime(prime), _) => Cast::Prime(prime),
+            (_, None) => continue,
+            (AbilityKind::Projectile(throw), Some(dir)) => Cast::Throw(throw.projectile(owner, class, slot, pos, dir, tick)),
             // Mid-windup too: the windup goes on, and the attack still goes off when it's over,
             // from wherever the dash took you (still aimed where it was locked).
-            AbilityKind::Dash(def) if !rooted => {
+            (AbilityKind::Dash(def), Some(dir)) if !rooted => {
                 dashing.0 = Some(def.start(slot, dir, aim, tick));
                 Cast::Dash
             }
-            AbilityKind::Dash(_) => continue,
-            AbilityKind::Nova(nova) => Cast::Nova { ability, nova },
-            AbilityKind::Prime(_) => unreachable!("cast above"),
+            (AbilityKind::Dash(_), _) => continue,
+            (AbilityKind::Nova(nova), _) => Cast::Nova { ability, nova },
         });
         cooldowns.start(slot, ability, tick);
     }

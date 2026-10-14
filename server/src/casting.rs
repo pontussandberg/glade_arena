@@ -2,7 +2,7 @@
 
 use super::*;
 
-use arena_shared::abilities::{self, AbilityDef, Cast, dash};
+use arena_shared::abilities::{self, AbilityDef, AbilityKind, Cast, CastOrder, dash};
 
 use crate::rooms::{InRoom, Lobby};
 
@@ -59,7 +59,14 @@ pub(super) fn use_abilities(
             });
         }
         let (mut next_cooldowns, mut next_dashing) = (*cooldowns, *dashing);
-        let casts = abilities::step(now.0, id.0, *class, pos.0, &input, &chilled, &mut next_cooldowns, &mut next_dashing);
+        // While an attack is primed, pressing the prime again does nothing (its cooldown doesn't
+        // start over).
+        let mut orders = *input;
+        if attack.primed.is_some() {
+            let primes = |order: &CastOrder| matches!(class.def().ability(order.slot).map(|ability| ability.kind), Some(AbilityKind::Prime(_)));
+            orders.casts = orders.casts.map(|order| order.filter(|order| !primes(order)));
+        }
+        let casts = abilities::step(now.0, id.0, *class, pos.0, &orders, &chilled, &mut next_cooldowns, &mut next_dashing);
         // Only on change: both are replicated.
         cooldowns.set_if_neq(next_cooldowns);
         dashing.set_if_neq(next_dashing);
@@ -67,7 +74,15 @@ pub(super) fn use_abilities(
             match cast {
                 Cast::Throw(projectile) => spawn_projectile(&mut commands, projectile, side),
                 Cast::Dash => input.move_to = None,
-                Cast::Prime(prime) => attack.primed = Some(prime.attack_speed),
+                Cast::Prime(prime) => {
+                    attack.primed = Some(prime.attack_speed);
+                    // Pressed with the click that started an attack this tick (`attack` runs
+                    // first): that's the attack it primes.
+                    if let Some(swing) = attack.swing.as_mut().filter(|swing| swing.started_at == now.0 && !swing.primed) {
+                        swing.primed = true;
+                        swing.haste += prime.attack_speed;
+                    }
+                }
                 Cast::Nova { ability, nova } => {
                     let (blow, with) = blow(ability);
                     hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |_, at| nova.hits(map, pos.0, at));

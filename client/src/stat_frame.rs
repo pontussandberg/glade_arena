@@ -159,9 +159,9 @@ fn stats(def: &ClassDef) -> [(&'static str, String, Option<String>); 5] {
     let crit_tip = def.describe("The chance your auto-attacks land a critical strike, dealing {crit_multiplier} of normal damage.");
     [
         ("MOVE SPEED", format!("{} m/s", def.move_speed), None),
-        (CRIT_LABEL, crit_text(def, false), Some(crit_tip)),
+        (CRIT_LABEL, crit_text(def, false, false), Some(crit_tip)),
         ("ATTACK DAMAGE", def.attack.damage.to_string(), None),
-        (SPEED_LABEL, speed_text(def, false), None),
+        (SPEED_LABEL, speed_text(def, false, 0.0), None),
         (RANGE_LABEL, range_text(def, false), None),
     ]
 }
@@ -172,14 +172,16 @@ const SPEED_LABEL: &str = "ATTACK SPEED";
 
 /// The crit chance stat: the base odds (a better chance vs frozen targets is the passive's to
 /// tell), and while the `follow_up` empowers the next attack, its odds then.
-fn crit_text(def: &ClassDef, empowered: bool) -> String {
-    format!("{:.0}%", def.crit.chance_against(false, empowered) * 100.0)
+/// A primed attack (`AttackState::primed`) is sure to.
+fn crit_text(def: &ClassDef, empowered: bool, primed: bool) -> String {
+    let chance = if primed { 1.0 } else { def.crit.chance_against(false, empowered) };
+    format!("{:.0}%", chance * 100.0)
 }
 
 /// The attack speed stat: attacks a second, as many as the `follow_up` makes it while it
-/// empowers the next.
-fn speed_text(def: &ClassDef, empowered: bool) -> String {
-    let per_second = TICK_HZ as f32 / def.attack.period_ticks(def.attack.speed(empowered)) as f32;
+/// empowers the next, with `haste` more on top (a prime's, a frenzy's: `Swing::haste`).
+fn speed_text(def: &ClassDef, empowered: bool, haste: f32) -> String {
+    let per_second = TICK_HZ as f32 / def.attack.period_ticks(def.attack.speed(empowered) + haste) as f32;
     format!("{per_second:.1} hits/s")
 }
 
@@ -240,21 +242,24 @@ fn spawn_my_frame(
     });
 }
 
-/// Your attack range, crit chance and attack speed, as they are: highlighted, each that your
-/// `follow_up` changes, while it empowers your next attack.
+/// Your attack range, crit chance and attack speed, as your next attack will have them:
+/// highlighted, each that's changed, while your `follow_up` empowers it, a prime readies it or a
+/// frenzy speeds it up.
 fn update_live_stats(
     clock: crate::feedback::AttackClock,
-    me: Query<(&ClassId, &AttackState), (With<Me>, With<PlayerId>)>,
+    me: Query<(&ClassId, &AttackState, Option<&Frenzy>), (With<Me>, With<PlayerId>)>,
     frame: Option<Single<&MyFrame>>,
     mut texts: Query<(&mut Text, &mut TextColor)>,
 ) {
-    let (Some(frame), Ok((class, attack))) = (frame, me.single()) else { return };
+    let (Some(frame), Ok((class, attack, frenzy))) = (frame, me.single()) else { return };
     let def = class.def();
-    let empowered = attack.armed_at(clock.now(true)) && def.attack.follow_up.is_some();
+    let now = clock.now(true);
+    let empowered = attack.armed_at(now) && def.attack.follow_up.is_some();
+    let haste = attack.primed.unwrap_or(0.0) + frenzy.map_or(0.0, |frenzy| frenzy.at(now));
     let shown = [
         (frame.0.range, range_text(def, empowered), range_text(def, false)),
-        (frame.0.crit, crit_text(def, empowered), crit_text(def, false)),
-        (frame.0.speed, speed_text(def, empowered), speed_text(def, false)),
+        (frame.0.crit, crit_text(def, empowered, attack.primed.is_some()), crit_text(def, false, false)),
+        (frame.0.speed, speed_text(def, empowered, haste), speed_text(def, false, 0.0)),
     ];
     for (entity, label, base) in shown {
         let Ok((mut text, mut color)) = texts.get_mut(entity) else { continue };

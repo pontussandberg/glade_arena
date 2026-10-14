@@ -167,3 +167,14 @@ fn frostbolts_slow_what_they_hit() {
     assert_eq!((slowed.slow, slowed.slowed.until - slowed.slowed.from), (attack.chill.slow, attack.chill.slow_ticks));
     assert_eq!(slowed.rooted, Span::default(), "a frostbolt shouldn't root");
 }
+
+#[test]
+fn deadeye_pressed_with_the_click_primes_that_attack() {
+    let mut d = duel(5875, "javelinist", "revenant");
+    let aim = sees(&mut d.a, B).unwrap() - sees(&mut d.a, A).unwrap();
+    let mut input = PlayerInput { aim, fire: true, ..default() };
+    input.order_cast(Q, aim);
+    set_input(&mut d.a, input);
+    d.until(Duration::from_secs(1), "the attack starts", |d| attack_state(&mut d.server, A).swing.is_some());
+    assert!(attack_state(&mut d.server, A).swing.unwrap().primed, "the attack started with Q isn't primed");
+}
