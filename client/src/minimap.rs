@@ -46,6 +46,8 @@ const ROOM: Vec2 = Vec2::new(384.0, 264.0);
 /// waygate end's ring.
 const MARGIN: f32 = 12.0;
 const DOT: f32 = 12.0;
+/// The frame round the picture.
+const FRAME: f32 = 2.0;
 const MARKER: f32 = 22.0;
 const MARKER_TEXT: f32 = 14.0;
 const GATE_MARK: f32 = 14.0;
@@ -143,7 +145,7 @@ fn spawn_minimap(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 right: px(MARGIN),
                 bottom: px(MARGIN),
-                border: UiRect::all(px(2.0)),
+                border: UiRect::all(px(FRAME)),
                 ..default()
             },
             BorderColor::all(palette::ui::PANEL),
@@ -182,13 +184,15 @@ fn show_destination(
     }
 }
 
-/// The map, drawn in the minimap at the size it takes there.
+/// The map, drawn in the minimap at the size it takes there: the node is that and its frame (a
+/// node's size takes its border in), so the picture is drawn at exactly `picture_size`, as dots,
+/// marks and clicks (`ground_on_minimap`) count on.
 fn draw_map(current: Res<CurrentMap>, mut images: ResMut<Assets<Image>>, minimap: Single<(&mut Node, &mut ImageNode), With<Minimap>>) {
     let map = current.map();
     let (mut node, mut image) = minimap.into_inner();
     let size = picture_size(map);
-    node.width = px(size.x);
-    node.height = px(size.y);
+    node.width = px(size.x + 2.0 * FRAME);
+    node.height = px(size.y + 2.0 * FRAME);
     image.image = images.add(picture(map));
 }
 
