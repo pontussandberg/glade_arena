@@ -20,8 +20,10 @@ use crate::arena;
 /// Camera direction and distance at zoom 1.0: 28 m up, 19 m back from the point it looks at
 /// (about 56° down).
 pub(crate) const OFFSET: Vec3 = Vec3::new(0.0, 28.2, 19.0);
-/// How far in and out the MOBA camera zooms.
-const ZOOM_RANGE: (f32, f32) = (0.3, 0.91);
+/// How far in and out the MOBA camera zooms, and how far out it may with its zoom uncapped
+/// (practice's tool, `CameraMode::uncapped`).
+const ZOOM_RANGE: (f32, f32) = (0.3, 0.728);
+const ZOOM_UNCAPPED: f32 = 1.6;
 
 /// The free camera: how far it stays (meters), the height it looks at on a fighter, the pitch it
 /// can turn between (radians above the horizon), how fast dragging turns it (radians per pixel)
@@ -76,6 +78,8 @@ impl Orbit {
 #[derive(Resource)]
 pub struct CameraMode {
     pub free: bool,
+    /// The MOBA camera zooms out past `ZOOM_RANGE`, to `ZOOM_UNCAPPED` (practice only).
+    pub uncapped: bool,
     orbit: Orbit,
     /// Whom the free camera follows instead of you (Tab), if anyone.
     watching: Option<Entity>,
@@ -87,7 +91,7 @@ pub struct CameraMode {
 
 impl Default for CameraMode {
     fn default() -> Self {
-        CameraMode { free: false, orbit: Orbit { yaw: 0.0, pitch: 0.45, distance: 9.0 }, watching: None, dragged: 0.0, grabbed_at: None }
+        CameraMode { free: false, uncapped: false, orbit: Orbit { yaw: 0.0, pitch: 0.45, distance: 9.0 }, watching: None, dragged: 0.0, grabbed_at: None }
     }
 }
 
@@ -280,6 +284,7 @@ fn follow_camera(
 /// wheel.
 fn move_camera(
     scroll: Res<AccumulatedMouseScroll>,
+    mode: Res<CameraMode>,
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     camera: Single<(&mut Transform, &mut CameraRig)>,
 ) {
@@ -289,7 +294,8 @@ fn move_camera(
     }
 
     let notches = wheel_notches(&scroll);
-    rig.zoom = (rig.zoom - notches * 0.08).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
+    let farthest = if mode.uncapped { ZOOM_UNCAPPED } else { ZOOM_RANGE.1 };
+    rig.zoom = (rig.zoom - notches * 0.08).clamp(ZOOM_RANGE.0, farthest);
 
     *transform = Transform::from_translation(rig.focus + OFFSET * rig.zoom).looking_at(rig.focus, Vec3::Y);
 }
