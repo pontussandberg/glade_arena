@@ -7,7 +7,7 @@ use arena_shared::protocol::RoomRequest;
 use arena_shared::map::MapId;
 use arena_shared::rooms::{MAX_PER_TEAM, Member, Mode, NO_TEAM, RoomView, TEAMS};
 
-use crate::browser::LobbiesButton;
+use crate::browser::{HeaderFlash, LobbiesOpen};
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::palette;
 use crate::render::{button, clicked, shown, ui_text};
@@ -227,11 +227,11 @@ pub(super) fn show_status(
 /// How often the start button breathes, per second.
 const START_PULSE_HZ: f32 = 0.9;
 
-/// What the way in does: at home, practice; in a room, into the arena once the match is on, the
-/// start for the leader, or nothing while waiting for the leader.
+/// What the big button does: at home, open the lobbies; in a room, into the arena once the match
+/// is on, the start for the leader, or nothing while waiting for the leader.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WayIn {
-    Practice,
+    Lobbies,
     Enter,
     Start,
     Wait,
@@ -239,16 +239,17 @@ enum WayIn {
 
 fn way_in(screen: Screen, view: Option<&RoomView>, me: Option<&Me>) -> WayIn {
     match view {
-        _ if screen == Screen::Home => WayIn::Practice,
+        _ if screen == Screen::Home => WayIn::Lobbies,
         Some(view) if view.started => WayIn::Enter,
         Some(view) if me.is_some_and(|me| me.guest_id == view.leader) => WayIn::Start,
         _ => WayIn::Wait,
     }
 }
 
-/// The button: at home, practice as the selected fighter on the picked map; in a room, the leader starts
-/// the match (everyone goes in as what they picked), and once it's on, in we go. We're taken to
-/// the arena when our fighter appears. "Create / join lobby" is there at home only.
+/// The big button: at home, it opens the lobbies (flashing their header, if they're open already);
+/// in a room, the leader starts the match (everyone goes in as what they picked), and once it's
+/// on, in we go. The small one over it, at home only, practices as the selected fighter on the
+/// picked map. We're taken to the arena when our fighter appears.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn enter_arena(
     mut mouse: ResMut<ButtonInput<MouseButton>>,
@@ -259,15 +260,21 @@ pub(super) fn enter_arena(
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
     button: Single<(Ref<Interaction>, &mut BackgroundColor), With<EnterButton>>,
     mut label: Single<&mut Text, With<EnterLabel>>,
-    mut lobbies: Single<&mut Visibility, With<LobbiesButton>>,
-    time: Res<Time<Real>>,
+    practice: Single<(Ref<Interaction>, &mut Visibility), With<PracticeButton>>,
+    time: Res<Time>,
     mut size: Single<&mut UiTransform, With<EnterButton>>,
+    (mut lobbies_open, mut flash): (ResMut<LobbiesOpen>, ResMut<HeaderFlash>),
 ) {
     let way = way_in(*screen.get(), room.0.as_ref(), me.as_deref());
-    // Its look is `browser.rs`'s, where it opens the lobbies.
-    lobbies.set_if_neq(shown(way == WayIn::Practice));
+    let (practice_click, mut practice_shown) = practice.into_inner();
+    practice_shown.set_if_neq(shown(way == WayIn::Lobbies));
+    if way == WayIn::Lobbies && clicked(practice_click) {
+        // In on the press, as the big button goes: forget the held button.
+        mouse.reset(MouseButton::Left);
+        request(&mut sender, RoomRequest::Practice(map.0));
+    }
     let text = match way {
-        WayIn::Practice => "PRACTICE",
+        WayIn::Lobbies => "CREATE / JOIN LOBBY",
         WayIn::Enter => "ENTER THE ARENA",
         WayIn::Start => "START THE MATCH",
         WayIn::Wait => "WAITING FOR THE LEADER",
@@ -293,7 +300,7 @@ pub(super) fn enter_arena(
     // it's still down and take the click for an attack.
     mouse.reset(MouseButton::Left);
     match way {
-        WayIn::Practice => request(&mut sender, RoomRequest::Practice(map.0)),
+        WayIn::Lobbies => crate::browser::open_lobbies(&mut lobbies_open, &mut flash, time.elapsed_secs()),
         WayIn::Enter => request(&mut sender, RoomRequest::EnterArena),
         WayIn::Start => request(&mut sender, RoomRequest::Start),
         WayIn::Wait => {}
