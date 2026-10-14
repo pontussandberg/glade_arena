@@ -3,7 +3,7 @@
 
 use super::*;
 
-use arena_shared::classes::{Chill, common};
+use arena_shared::classes::{AbilityKind, Chill, common};
 use arena_shared::sim;
 
 use crate::rooms::{InRoom, Lobby};
@@ -122,19 +122,26 @@ pub(super) fn attack(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut attackers: Query<
-        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), &Frenzy),
+        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), &Frenzy, &mut Cooldowns),
         InPlay,
     >,
     mut targets: Targets,
     mut rifts: ResMut<Rifts>,
 ) {
     let now = timeline.tick();
-    for (id, class, pos, mut input, mut state, mut last_swing, (room, team), frenzy) in &mut attackers {
+    for (id, class, pos, mut input, mut state, mut last_swing, (room, team), frenzy, mut cooldowns) in &mut attackers {
         let side = (*room, *team);
         // A primed attack going off this tick is a sure crit.
         let primed = state.winding_up().is_some_and(|swing| swing.primed);
         // In two halves (`sim::step_attack`): a swing that lands arms a quick attack in between.
         let (mut next, released) = sim::release_attack(now.0, id.0, *class, pos.0, *state);
+        // The prime that readied it is used up now: its cooldown starts.
+        if primed
+            && released.is_some()
+            && let Some((slot, ability)) = class.def().abilities().find(|(_, ability)| matches!(ability.kind, AbilityKind::Prime(_)))
+        {
+            cooldowns.start_own(slot, ability, now.0);
+        }
         match released {
             None => {}
             Some(sim::Attack::Projectile(projectile)) => spawn_projectile(&mut commands, Projectile { crit: primed, ..projectile }, side),

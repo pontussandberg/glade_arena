@@ -173,8 +173,19 @@ impl Cooldowns {
     /// The ability in `slot` used at `tick`: its cooldown starts, and the global one if it's on
     /// it.
     fn start(&mut self, slot: AbilitySlot, ability: &AbilityDef, tick: u32) {
+        self.start_own(slot, ability, tick);
+        self.start_global(ability, tick);
+    }
+
+    /// The ability in `slot`'s own cooldown starts at `tick` (a prime's, as the attack it readied
+    /// goes off).
+    pub fn start_own(&mut self, slot: AbilitySlot, ability: &AbilityDef, tick: u32) {
         let Some(cooldown) = self.slots.get_mut(slot.index()) else { return };
         *cooldown = SlotCooldown { ready_at: if self.free { tick } else { tick + ability.cooldown_ticks }, used_at: Some(tick) };
+    }
+
+    /// The global cooldown starts at `tick`, if `ability` is on it.
+    fn start_global(&mut self, ability: &AbilityDef, tick: u32) {
         if ability.global_cooldown {
             self.global_ready_at = tick + common().global_cooldown_ticks;
         }
@@ -237,7 +248,12 @@ pub fn step(
             (AbilityKind::Dash(_), _) => continue,
             (AbilityKind::Nova(nova), _) => Cast::Nova { ability, nova },
         });
-        cooldowns.start(slot, ability, tick);
+        // A prime's own cooldown waits for the attack it readies (`Cooldowns::start_own`).
+        if matches!(ability.kind, AbilityKind::Prime(_)) {
+            cooldowns.start_global(ability, tick);
+        } else {
+            cooldowns.start(slot, ability, tick);
+        }
     }
     casts
 }
