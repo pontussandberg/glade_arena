@@ -34,6 +34,7 @@ pub struct RenderPlugin;
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(forget_body);
+        app.add_observer(strike_home);
         app.add_plugins((
             arena::ArenaPlugin,
             crate::camera::CameraPlugin,
@@ -65,7 +66,7 @@ impl Plugin for RenderPlugin {
             (
                 (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
                 (add_visuals, sync_transforms).chain().before(crate::rig::Posing),
-                (fly_shots, fade_wakes, crate::rig::empty_hands).chain().after(crate::rig::Posing),
+                (fly_shots, fade_wakes, fly_impacts, crate::rig::empty_hands).chain().after(crate::rig::Posing),
                 (show_novas, grow_bursts, end_fleeting, show_frost),
                 align_to_world.after(crate::rig::Posing).after(fly_shots),
                 toggle_range_circle,
@@ -130,6 +131,8 @@ pub(crate) struct Visuals {
     /// Deadeye's light on a primed javelin in flight.
     primed_aura: Handle<Mesh>,
     spear_shadow: Handle<Mesh>,
+    /// A bit of a spear's impact: its flash, a splinter.
+    impact: Handle<Mesh>,
     /// Per owner (`None` for looks that are the same for everyone: all but bodies, so a hit
     /// flashes just that fighter) and look.
     materials: HashMap<(Option<PeerId>, Look), Handle<StandardMaterial>>,
@@ -263,6 +266,7 @@ fn setup_scene(
         wake: meshes.add(arena::wake_mesh()),
         primed_aura: meshes.add(arena::primed_spear_aura()),
         spear_shadow: meshes.add(arena::spear_shadow_mesh()),
+        impact: meshes.add(Sphere::new(1.0).mesh().ico(1).unwrap()),
         materials: HashMap::default(),
     });
     commands

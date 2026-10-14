@@ -33,7 +33,7 @@ const CONVERGE_METERS: f32 = 7.0;
 const MAX_CATCH_UP: f32 = 8.0;
 /// Where a thrown spear's wake comes off it: just behind its point (in its own drawn size), so
 /// the line runs along it and, when it strikes home and is gone, reaches right to where it hit.
-const WAKE_FROM: f32 = 0.25;
+const WAKE_FROM: f32 = 0.15;
 /// How long a piece of the wake stays where it was left (seconds), and how much of that it keeps
 /// its full width before thinning away to nothing.
 const WAKE_SECONDS: f32 = 0.32;
@@ -205,6 +205,91 @@ pub(super) fn fly_shots(
             commands.spawn((Wake { born: now, length }, Mesh3d(visuals.wake.clone()), MeshMaterial3d(thrown.wake.clone()), placed, NotShadowCaster));
         }
         thrown.wake_at = Some(wake_at);
+    }
+}
+
+/// A thrown spear striking home: a flash at its point and splinters of light thrown back out of
+/// it, so it doesn't just vanish. How long the flash lasts and how big it gets (seconds, meters);
+/// how many splinters, how fast they fly back and up (m/s), how long they last, how big, how drawn
+/// out along their flight, and how hard they fall (m/s²).
+const FLASH_SECONDS: f32 = 0.12;
+const FLASH_SIZE: f32 = 0.16;
+const SPLINTERS: u32 = 7;
+const SPLINTER_SPEED: (f32, f32) = (2.2, 4.2);
+const SPLINTER_RISE: f32 = 1.4;
+const SPLINTER_LIFE: (f32, f32) = (0.18, 0.34);
+const SPLINTER_SIZE: (f32, f32) = (0.012, 0.022);
+const SPLINTER_STRETCH: f32 = 4.0;
+const SPLINTER_FALL: f32 = 9.0;
+/// A spear gone this much short of its range (meters) was stopped by something, not spent.
+const STOPPED_SHORT: f32 = 0.4;
+
+/// A piece of a spear's impact (`strike_home`), from `started`: the flash, or a splinter flying
+/// at `velocity`.
+#[derive(Component)]
+pub(super) struct Impact {
+    started: f32,
+    life: f32,
+    size: f32,
+    velocity: Option<Vec3>,
+}
+
+/// A thrown spear gone short of its range hit something (a fighter, a wall, a rock, a tree): a
+/// flash where its point was, and splinters thrown back the way it came, out and up. One that flew
+/// its whole range just ends.
+pub(super) fn strike_home(
+    trigger: On<Remove, Projectile>,
+    mut commands: Commands,
+    time: Res<Time>,
+    mut visuals: ResMut<Visuals>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    shots: Query<(&Projectile, &Transform, &Thrown, &InheritedVisibility)>,
+) {
+    let Ok((projectile, transform, thrown, visible)) = shots.get(trigger.entity) else { return };
+    let Some(range) = projectile.class.def().shot(projectile.ability).map(|shot| shot.range) else { return };
+    let point = transform.translation;
+    let flown = arena::to_gameplay(point).distance(projectile.origin);
+    if thrown.launch.is_none() || !visible.get() || flown > range - STOPPED_SHORT {
+        return;
+    }
+    let now = time.elapsed_secs();
+    let light = visuals.material(&mut materials, projectile.owner, Look::Spark);
+    let bit = || (Mesh3d(visuals.impact.clone()), MeshMaterial3d(light.clone()), Transform::from_translation(point).with_scale(Vec3::ZERO), NotShadowCaster);
+    commands.spawn((Impact { started: now, life: FLASH_SECONDS, size: FLASH_SIZE, velocity: None }, bit()));
+    let back = -(transform.rotation * Vec3::X).with_y(0.0).normalize_or(Vec3::X);
+    let across = Vec3::new(-back.z, 0.0, back.x);
+    let seed = trigger.entity.index().index();
+    for k in 0..SPLINTERS {
+        let r = |i: u32| crate::swish::noise(seed, k * 8 + i);
+        let speed = SPLINTER_SPEED.0 + (SPLINTER_SPEED.1 - SPLINTER_SPEED.0) * r(0);
+        let velocity = (back + across * (r(1) * 2.0 - 1.0) * 1.1).normalize() * speed + Vec3::Y * SPLINTER_RISE * (0.4 + r(2));
+        let size = SPLINTER_SIZE.0 + (SPLINTER_SIZE.1 - SPLINTER_SIZE.0) * r(3);
+        let life = SPLINTER_LIFE.0 + (SPLINTER_LIFE.1 - SPLINTER_LIFE.0) * r(4);
+        commands.spawn((Impact { started: now, life, size, velocity: Some(velocity) }, bit()));
+    }
+}
+
+/// The flash swells and is gone; splinters fly, fall, and wink out.
+pub(super) fn fly_impacts(mut commands: Commands, time: Res<Time>, mut impacts: Query<(Entity, &mut Impact, &mut Transform)>) {
+    let (now, dt) = (time.elapsed_secs(), time.delta_secs().min(0.05));
+    for (entity, mut impact, mut transform) in &mut impacts {
+        let t = (now - impact.started) / impact.life;
+        if t >= 1.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let size = impact.size;
+        match impact.velocity.as_mut() {
+            None => transform.scale = Vec3::splat(size * (t * std::f32::consts::PI).sin()),
+            Some(velocity) => {
+                velocity.y -= SPLINTER_FALL * dt;
+                transform.translation += *velocity * dt;
+                transform.translation.y = transform.translation.y.max(0.02);
+                let size = size * (1.0 - t * t);
+                transform.rotation = Quat::from_rotation_arc(Vec3::Y, velocity.normalize_or(Vec3::Y));
+                transform.scale = Vec3::new(size, size * SPLINTER_STRETCH, size);
+            }
+        }
     }
 }
 
