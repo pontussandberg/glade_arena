@@ -16,8 +16,8 @@
         kind: Melee(range: 3.08, width: 0.5, from: 1.6),
         // The ground it hits tears open for a while; inside it the revenant walks faster.
         rift: Some(ticks: 96, haste: 0.3),
-        // Empowered: the lane starts a little further out, and reaches further and wider.
-        follow_up: Some(within_ticks: 96, attack_speed: 0.0, reach: 1.5, near: Some(1.25)),
+        // Empowered: quicker, the lane starting a little further out and reaching further and wider.
+        follow_up: Some(within_ticks: 96, attack_speed: 0.2, reach: 1.5, near: Some(1.25)),
     ),
     abilities: [
         (
@@ -29,7 +29,7 @@
     ],
     passive: Some(
         name: "Follow Through",
-        description: "Your auto-attacks tear the ground open for {rift_time}: inside the tear you move {rift_haste} faster. After landing a hit, your glaive is empowered for {follow_up_time}: your next auto-attack reaches {follow_up_reach} further and wider. An empowered hit renews it.",
+        description: "Your auto-attacks tear the ground open for {rift_time}: inside the tear you move {rift_haste} faster. After landing a hit, your glaive is empowered for {follow_up_time}: your next auto-attack reaches {follow_up_reach} further and wider, with {follow_up_speed} more attack speed and a {crit_empowered} crit chance. An empowered hit renews it.",
     ),
-    crit: (chance: 0.1),
+    crit: (empowered: 0.5),
 )

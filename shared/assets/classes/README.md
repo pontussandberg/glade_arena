@@ -65,7 +65,9 @@ Units: meters, meters per second, ticks (32 per second).
   lives in the numbers it describes (`far_scale`, `chill`, `crit`...).
 - `crit` (optional): odds (0 to 1) that an auto-attack hit you deal is critical, for
   `crit_multiplier` (`common.ron`) times the damage (an ability never crits): `chance` normally,
-  `vs_frozen` against a frozen (rooted) target. None by default.
+  `vs_frozen` against a frozen (rooted) target, and `empowered` more on top for an attack empowered
+  by its `follow_up`. Rolled once per attack: a swing that crits crits everyone it hits. None by
+  default.
 
 ## Placeholders
 
@@ -77,7 +79,7 @@ retune:
   seconds), `{rift_time}` / `{rift_haste}` (how long a strike's rift lasts / how much faster its
   striker walks in it), `{follow_up_time}` / `{follow_up_speed}` / `{follow_up_reach}` (the
   follow-up's window, in seconds / its attack speed / how much further its lane reaches, as
-  percents), `{crit}`, `{crit_vs_frozen}`, `{crit_multiplier}` (as percents).
+  percents), `{crit}`, `{crit_vs_frozen}`, `{crit_empowered}`, `{crit_multiplier}` (as percents).
 - In an ability's description, about that ability: `{ability_damage}`, `{ability_reach}` (a
   thrown ability's range, a dash's distance, a nova's radius, in meters), `{ability_root}` (a
   nova's root, in seconds). An ability that deals damage must name `{ability_damage}`.
