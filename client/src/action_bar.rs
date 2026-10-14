@@ -148,7 +148,7 @@ fn spawn_frenzy(commands: &mut Commands, class: &ClassDef, from_center: f32) {
         .id();
     let skull = commands.spawn(centered()).with_children(|art| pixel_art(art, SKULL, SKULL_PIXEL, palette::ROT)).id();
     let eyes = commands.spawn(centered()).with_children(|art| pixel_art(art, SKULL_EYES, SKULL_PIXEL, palette::ENEMY)).id();
-    let kills = commands.spawn(ui_text("0", 10.0, palette::ui::TEXT)).id();
+    let kills = commands.spawn(ui_text("0", 10.0, Color::WHITE)).id();
     let number = commands.spawn(Node { position_type: PositionType::Absolute, right: px(1.0), top: px(-2.0), ..default() }).add_child(kills).id();
     let bar = commands.spawn((Node { height: percent(100.0), width: px(0.0), ..default() }, BackgroundColor(palette::TORCH_FLAME))).id();
     let track = commands
