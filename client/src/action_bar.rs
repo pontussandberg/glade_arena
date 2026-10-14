@@ -158,7 +158,8 @@ fn spawn_passive(commands: &mut Commands, blurb: Blurb, from_center: f32) {
 }
 
 /// While our `follow_up` empowers the next attack, the passive's icon is lit and its bar drains
-/// with the time left to use it; a quick attack under way keeps it lit until it goes off.
+/// with the time left to use it; a quick attack winding up keeps it lit until it goes off
+/// (`AttackState::armed_at`).
 fn update_passive(
     clock: AttackClock,
     me: Query<(&ClassId, &AttackState), With<Me>>,
@@ -169,10 +170,10 @@ fn update_passive(
     let Some(follow_up) = class.def().attack.follow_up else { return };
     let now = clock.now(true);
     let left = match attack.quick_until {
-        Some(until) if attack.empowered_at(now) => ((until as f32 - now) / follow_up.within_ticks as f32).clamp(0.0, 1.0),
+        Some(until) if attack.armed_at(now) => ((until as f32 - now) / follow_up.within_ticks as f32).clamp(0.0, 1.0),
         _ => 0.0,
     };
-    let lit = attack.empowered_at(now);
+    let lit = attack.armed_at(now);
     border.set_if_neq(BorderColor::all(if lit { palette::TORCH_FLAME } else { palette::ui::MUTED }));
     if let Ok(mut bar) = nodes.get_mut(icon.bar) {
         set_fill(&mut bar, left);

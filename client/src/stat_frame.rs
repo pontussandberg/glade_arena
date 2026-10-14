@@ -250,7 +250,7 @@ fn update_live_stats(
 ) {
     let (Some(frame), Ok((class, attack))) = (frame, me.single()) else { return };
     let def = class.def();
-    let empowered = attack.empowered_at(clock.now(true)) && def.attack.follow_up.is_some();
+    let empowered = attack.armed_at(clock.now(true)) && def.attack.follow_up.is_some();
     let shown = [
         (frame.0.range, range_text(def, empowered), range_text(def, false)),
         (frame.0.crit, crit_text(def, empowered), crit_text(def, false)),
