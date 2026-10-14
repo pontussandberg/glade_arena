@@ -1,7 +1,9 @@
 //! Shots in flight: where each is drawn every frame (`fly_shots`), and a thrown spear's hand-off
-//! from the hand, its curve onto its real path and its wind.
+//! from the hand, its curve onto its real path and the wake of wind it leaves behind.
 
 use super::*;
+
+use bevy::light::NotShadowCaster;
 
 use arena_shared::sim;
 
@@ -29,16 +31,33 @@ const CONVERGE_METERS: f32 = 7.0;
 /// is already meters ahead of the hand. A spear never starts more than this far (meters) behind
 /// it; beyond that (a very high ping) the rest is skipped.
 const MAX_CATCH_UP: f32 = 8.0;
-/// Where a thrown spear's wind starts (just behind its butt) and how long it gets.
-pub(super) const WIND_FRONT: f32 = arena::SPEAR_LENGTH;
-const WIND_LENGTH: f32 = 1.8;
+/// Where a thrown spear's wake comes off it: its butt, this far back from its point (in its own
+/// drawn size).
+const WAKE_FROM: f32 = arena::SPEAR_LENGTH;
+/// How long a piece of the wake stays where it was left (seconds), and how much of that it keeps
+/// its full width before thinning away to nothing.
+const WAKE_SECONDS: f32 = 0.32;
+const WAKE_HOLDS: f32 = 0.35;
 
 /// A thrown spear as drawn: it leaves the thrower's hand where the javelin was held, then eases
-/// onto its real path (`fly_shots`), trailing its wind (a child entity).
+/// onto its real path (`fly_shots`), leaving a wake of wind behind it (`Wake`), in `wake`'s
+/// material.
 #[derive(Component)]
 pub(super) struct Thrown {
-    pub(super) wind: Entity,
     pub(super) launch: Option<Launch>,
+    pub(super) wake: Handle<StandardMaterial>,
+    /// Where its butt was last frame, where the next piece of its wake starts.
+    pub(super) butt: Option<Vec3>,
+}
+
+/// A piece of a thrown spear's wake: a thin, even line of wind from where its butt was one frame
+/// to where it was the next, left there in the world from `born` (seconds), `length` long. Piece
+/// after piece, they make one smooth line along the spear's flight, holding a moment, then thinning
+/// away from the oldest end: the wind it parted, left behind (`fade_wakes`).
+#[derive(Component)]
+pub(super) struct Wake {
+    born: f32,
+    length: f32,
 }
 
 /// A shot that turns about its flight this fast (radians per second): a frostbolt.
@@ -82,15 +101,16 @@ pub(crate) fn leaving_hand(held: &Transform) -> Transform {
 /// A hand ahead of the real path is given back more slowly, so the spear never seems to slow
 /// below 3/4 speed; one behind it is caught up within `SETTLE_SECONDS` however far behind it is,
 /// so others' spears (which reach us late, already meters down their path) shoot out of the hand
-/// fast and are where they really are almost at once. Its wind stretches back to where it left
-/// the hand, up to `WIND_LENGTH`. A thrown Q isn't the held javelin (that stays in the hand): it
+/// fast and are where they really are almost at once. It leaves its wake behind it as it goes
+/// (`Wake`). A thrown Q isn't the held javelin (that stays in the hand): it
 /// shoots straight out from where the sim threw it, already pointing the way it flies.
 pub(super) fn fly_shots(
+    mut commands: Commands,
     time: Res<Time>,
     clock: AttackClock,
+    visuals: Res<Visuals>,
     mut holders: Query<(&PlayerId, &mut HeldAt)>,
     mut shots: Query<(&Projectile, &mut Transform, &mut Visibility, Option<&mut Thrown>, Option<&Spin>), With<Mesh3d>>,
-    mut winds: Query<&mut Transform, Without<Projectile>>,
 ) {
     let now = time.elapsed_secs();
     let tick = clock.now(true);
@@ -169,15 +189,30 @@ pub(super) fn fly_shots(
         let flying = Quat::from_rotation_arc(forward_dir, heading) * along;
         let turned = 1.0 - left(SETTLE_SECONDS);
         transform.set_if_neq(Transform::from_translation(at).with_rotation(launch.held.slerp(flying, turned)).with_scale(launch.scale));
-        // The wind: as long as the spear has flown (up to `WIND_LENGTH`), steady, so it reads as
-        // the air it parts and not as a flame.
-        let length = (at.distance(launch.from) - WIND_FRONT).clamp(0.0, WIND_LENGTH);
-        if let Ok(mut wind) = winds.get_mut(thrown.wind) {
-            // In meters: undoing the spear's own drawn size (`Launch::scale`).
-            let scale = Vec3::new(length / launch.scale.x, 1.0, 1.0);
-            if wind.scale != scale {
-                wind.scale = scale;
-            }
+        // A piece of wake from where its butt was to where it is now, left in the world.
+        let butt = transform.transform_point(Vec3::NEG_X * WAKE_FROM);
+        if let Some(from) = thrown.butt
+            && let Some(dir) = (butt - from).try_normalize()
+        {
+            // A touch longer than the gap, so the pieces meet without seams.
+            let length = from.distance(butt) * 1.05;
+            let placed = Transform::from_translation(from).with_rotation(Quat::from_rotation_arc(Vec3::X, dir)).with_scale(Vec3::new(length, 1.0, 1.0));
+            commands.spawn((Wake { born: now, length }, Mesh3d(visuals.wake.clone()), MeshMaterial3d(thrown.wake.clone()), placed, NotShadowCaster));
         }
+        thrown.butt = Some(butt);
+    }
+}
+
+/// Each piece of wake keeps its width a moment, then thins away to nothing, and is gone.
+pub(super) fn fade_wakes(mut commands: Commands, time: Res<Time>, mut wakes: Query<(Entity, &Wake, &mut Transform)>) {
+    let now = time.elapsed_secs();
+    for (entity, wake, mut transform) in &mut wakes {
+        let age = (now - wake.born) / WAKE_SECONDS;
+        if age >= 1.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let width = (1.0 - (age - WAKE_HOLDS).max(0.0) / (1.0 - WAKE_HOLDS)).powi(2);
+        transform.scale = Vec3::new(wake.length, width, width);
     }
 }

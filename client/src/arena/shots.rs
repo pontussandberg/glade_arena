@@ -71,23 +71,15 @@ pub fn shot_tip_mesh() -> Mesh {
     ball(0.04).scaled_by(Vec3::new(3.0, 1.0, 1.0))
 }
 
-/// The wind behind a thrown spear: one hairline streak, 1 m long along -X from the origin
-/// (stretched to length as it flies), two crossed ribbons so it shows from any angle. It fades in
-/// just behind the butt and tapers away to nothing at the back: a wake, not an exhaust.
-pub fn wind_mesh() -> Mesh {
+/// A piece of a thrown spear's wake: a thin line of wind 1 m long along +X from the origin, even
+/// all along (stretched to each piece's length; pieces thin away as they age), two crossed
+/// ribbons so it shows from any angle.
+pub fn wake_mesh() -> Mesh {
     let mut b = FlatMesh::default();
-    // Stations down the streak: how far along it (0..1), its width and opacity there.
-    let stations = [(0.0, 1.0, 0.0), (0.1, 1.0, 0.9), (0.45, 0.6, 0.4), (1.0, 0.0, 0.0)];
     for side in [Vec3::Z, Vec3::Y] {
-        let at = |(t, w, a): (f32, f32, f32)| (Vec3::X * -t, side * 0.008 * w, a);
-        for pair in stations.windows(2) {
-            let ((near, near_half, near_alpha), (far, far_half, far_alpha)) = (at(pair[0]), at(pair[1]));
-            b.tri_faded([near - near_half, far - far_half, near + near_half], [near_alpha, far_alpha, near_alpha]);
-            b.tri_faded([near + near_half, far - far_half, far + far_half], [near_alpha, far_alpha, far_alpha]);
-            // Both faces: it's seen from either side.
-            b.tri_faded([near + near_half, far - far_half, near - near_half], [near_alpha, far_alpha, near_alpha]);
-            b.tri_faded([near + near_half, far + far_half, far - far_half], [near_alpha, far_alpha, far_alpha]);
-        }
+        let half = side * 0.012;
+        b.tri_faded_both([-half, Vec3::X - half, half], [1.0; 3]);
+        b.tri_faded_both([half, Vec3::X - half, Vec3::X + half], [1.0; 3]);
     }
     b.build()
 }
