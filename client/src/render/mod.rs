@@ -254,9 +254,9 @@ fn setup_scene(
                 .spawn((crate::esc_menu::HomeButton, HudButton, button_fill(palette::ui::PANEL), home, BorderColor::all(palette::ui::MUTED.with_alpha(0.5))))
                 .with_children(|button| pixel_art(button, HOUSE, 2.0, palette::ui::TEXT));
             corner.spawn((Status, ui_text("connecting...", 12.0, palette::ui::TEXT)));
-            let chevron = corner.spawn(chevron(false)).id();
+            let sign = corner.spawn(fold_sign(false, HUD_FOLD_SIGN, palette::ui::MUTED)).id();
             let label = corner.spawn(ui_text("Controls", 12.0, palette::ui::MUTED)).id();
-            corner.spawn((ControlsHeader { chevron }, fold_header())).add_children(&[chevron, label]);
+            corner.spawn((ControlsHeader { sign }, fold_header())).add_children(&[sign, label]);
             // Two columns: the keys, as wide as the widest, then what they do, all left-aligned.
             corner.spawn((
                 KeyHints,

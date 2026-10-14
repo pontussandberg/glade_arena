@@ -25,7 +25,7 @@ use lightyear::prelude::*;
 use crate::{FakeLatency, Me};
 use crate::arena::palette;
 use crate::camera::CameraMode;
-use crate::render::{HudButton, button_fill, chevron, chevron_turn, clicked, corner_panel, fold_header, shown, ui_text};
+use crate::render::{FoldUpright, HUD_FOLD_SIGN, HudButton, button_fill, clicked, corner_panel, fold_header, fold_sign, shown, turn_fold_sign, ui_text};
 use crate::rooms::{CurrentRoom, Screen, request};
 use dummies::Placing;
 use hitboxes::{ShowHitboxes, ShowHitboxes3d};
@@ -133,7 +133,7 @@ struct MapName;
 /// "Practice", over the tools: clicking it folds them away or out (`render::fold_header`).
 #[derive(Component)]
 struct ToolsHeader {
-    chevron: Entity,
+    sign: Entity,
     tools: Entity,
     open: bool,
 }
@@ -161,7 +161,7 @@ fn show_tools(mut commands: Commands, room: Res<CurrentRoom>, tools: Query<Entit
     match (practicing, tools.single().ok()) {
         (true, None) => {
             let panel = commands.spawn((Tools, corner_panel(true, 0.0))).id();
-            let chevron = commands.spawn(chevron(true)).id();
+            let sign = commands.spawn(fold_sign(true, HUD_FOLD_SIGN, palette::ui::MUTED)).id();
             let label = commands.spawn(ui_text("Practice", 12.0, palette::ui::MUTED)).id();
             let tools = commands
                 .spawn(tools_node(true))
@@ -184,7 +184,7 @@ fn show_tools(mut commands: Commands, room: Res<CurrentRoom>, tools: Query<Entit
                     dummies::spawn_buttons(tools);
                 })
                 .id();
-            let header = commands.spawn((ToolsHeader { chevron, tools, open: true }, fold_header())).add_children(&[chevron, label]).id();
+            let header = commands.spawn((ToolsHeader { sign, tools, open: true }, fold_header())).add_children(&[sign, label]).id();
             commands.entity(panel).add_children(&[header, tools]);
         }
         (false, Some(tools)) => commands.entity(tools).despawn(),
@@ -233,8 +233,8 @@ fn tools_node(open: bool) -> Node {
 /// Folded, the tools are hidden too, so they can't be clicked where they'd be.
 fn fold_tools(
     mut headers: Query<(Ref<Interaction>, &mut ToolsHeader)>,
-    mut tools: Query<(&mut Node, &mut Visibility)>,
-    mut chevrons: Query<&mut UiTransform>,
+    mut tools: Query<(&mut Node, &mut Visibility), Without<FoldUpright>>,
+    mut uprights: Query<(&ChildOf, &mut Visibility), With<FoldUpright>>,
 ) {
     for (interaction, mut header) in &mut headers {
         if !clicked(interaction) {
@@ -245,9 +245,7 @@ fn fold_tools(
             *node = tools_node(header.open);
             *visibility = shown(header.open);
         }
-        if let Ok(mut chevron) = chevrons.get_mut(header.chevron) {
-            *chevron = chevron_turn(header.open);
-        }
+        turn_fold_sign(header.sign, header.open, &mut uprights);
     }
 }
 
