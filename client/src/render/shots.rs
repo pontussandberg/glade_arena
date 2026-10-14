@@ -38,6 +38,9 @@ const WAKE_FROM: f32 = arena::SPEAR_LENGTH;
 /// its full width before thinning away to nothing.
 const WAKE_SECONDS: f32 = 0.32;
 const WAKE_HOLDS: f32 = 0.35;
+/// How far the spear's point gets from where it left the hand before it leaves any wake: none
+/// in the thrower's face.
+const WAKE_AFTER: f32 = 1.5;
 
 /// A thrown spear as drawn: it leaves the thrower's hand where the javelin was held, then eases
 /// onto its real path (`fly_shots`), leaving a wake of wind behind it (`Wake`), in `wake`'s
@@ -192,6 +195,7 @@ pub(super) fn fly_shots(
         // A piece of wake from where its butt was to where it is now, left in the world.
         let butt = transform.transform_point(Vec3::NEG_X * WAKE_FROM);
         if let Some(from) = thrown.butt
+            && at.distance(launch.from) >= WAKE_AFTER
             && let Some(dir) = (butt - from).try_normalize()
         {
             // A touch longer than the gap, so the pieces meet without seams.
