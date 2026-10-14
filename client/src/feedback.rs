@@ -44,7 +44,7 @@ impl Plugin for FeedbackPlugin {
 /// Bar size in pixels, and how high above a fighter's feet it floats.
 const BAR_SIZE: Vec2 = Vec2::new(76.0, 10.0);
 /// A monster's (a zombie's): shorter and thinner, so it never reads as a player's.
-const MONSTER_BAR_SIZE: Vec2 = Vec2::new(46.0, 6.0);
+const MONSTER_BAR_SIZE: Vec2 = Vec2::new(38.0, 5.0);
 
 /// The size of `class`'s health bar: a player's, or a monster's (a class no one picks).
 fn bar_size(class: ClassId) -> Vec2 {
