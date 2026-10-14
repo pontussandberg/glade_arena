@@ -266,6 +266,14 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                             column.spawn((Status, ui_text("", 12.0, palette::ui::MUTED), Node { align_self: AlignSelf::FlexEnd, ..default() }));
                             column
                                 .spawn((
+                                    EnterButton,
+                                    Button,
+                                    Node { padding: UiRect::axes(px(36.0), px(16.0)), justify_content: JustifyContent::Center, ..default() },
+                                    BackgroundColor(ACCENT),
+                                ))
+                                .with_child((EnterLabel, ui_text("PRACTICE", 18.0, palette::ui::PANEL)));
+                            column
+                                .spawn((
                                     LobbiesButton,
                                     Button,
                                     Node {
@@ -278,14 +286,6 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                                     BackgroundColor(palette::ui::PANEL),
                                 ))
                                 .with_child(ui_text("CREATE / JOIN LOBBY", 14.0, palette::ui::TEXT));
-                            column
-                                .spawn((
-                                    EnterButton,
-                                    Button,
-                                    Node { padding: UiRect::axes(px(36.0), px(16.0)), justify_content: JustifyContent::Center, ..default() },
-                                    BackgroundColor(ACCENT),
-                                ))
-                                .with_child((EnterLabel, ui_text("PRACTICE", 18.0, palette::ui::PANEL)));
                         });
                 });
             });

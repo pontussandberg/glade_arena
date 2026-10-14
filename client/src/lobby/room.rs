@@ -237,6 +237,9 @@ pub(super) fn show_status(
     }
 }
 
+/// How often the start button breathes, per second.
+const START_PULSE_HZ: f32 = 0.9;
+
 /// What the way in does: at home, practice; in a room, into the arena once the match is on, the
 /// start for the leader, or nothing while waiting for the leader.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -270,6 +273,8 @@ pub(super) fn enter_arena(
     button: Single<(Ref<Interaction>, &mut BackgroundColor), With<EnterButton>>,
     mut label: Single<&mut Text, With<EnterLabel>>,
     mut lobbies: Single<&mut Visibility, With<LobbiesButton>>,
+    time: Res<Time<Real>>,
+    mut size: Single<&mut UiTransform, With<EnterButton>>,
 ) {
     let way = way_in(*screen.get(), room.0.as_ref(), me.as_deref());
     // Its look is `browser.rs`'s, where it opens the lobbies.
@@ -284,12 +289,16 @@ pub(super) fn enter_arena(
         label.0 = text.to_string();
     }
     let (interaction, mut background) = button.into_inner();
+    // Starting the match is what the leader is here for: the button breathes, brighter and a
+    // little bigger, until it's pressed.
+    let breath = if way == WayIn::Start { 0.5 + 0.5 * (time.elapsed_secs() * START_PULSE_HZ * std::f32::consts::TAU).sin() } else { 0.0 };
     let fill = match (way, *interaction) {
         (WayIn::Wait, _) => palette::ui::MUTED.with_alpha(0.5),
-        (_, Interaction::None) => ACCENT,
-        _ => ACCENT.lighter(0.08),
+        (_, Interaction::None) => ACCENT.lighter(0.12 * breath),
+        _ => ACCENT.lighter(0.16),
     };
     background.set_if_neq(BackgroundColor(fill));
+    size.set_if_neq(UiTransform { scale: Vec2::splat(1.0 + 0.05 * breath), ..default() });
     if !clicked(interaction) {
         return;
     }
