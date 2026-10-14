@@ -150,8 +150,8 @@ pub(super) fn revenant_wardrobe() -> Wardrobe {
         drapes: vec![tail(1.0), tail(-1.0), tabard],
         trim: palette::WISP,
         body: vec![
-            Column { center: Vec2::ZERO, half: Vec2::new(0.17, 0.205), from: 0.3, to: 0.9 },
-            Column { center: Vec2::ZERO, half: Vec2::new(0.2, 0.25), from: 0.9, to: 1.4 },
+            Column { center: Vec2::ZERO, half: Vec2::new(0.17, 0.205), from: 0.3, to: 0.9, round: 2.0 },
+            Column { center: Vec2::ZERO, half: Vec2::new(0.2, 0.25), from: 0.9, to: 1.4, round: 2.0 },
         ],
         leg_radius: 0.1,
         arm: None,

@@ -353,13 +353,12 @@ pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, 
 fn strike_at(ticks: f32, strike_ticks: f32, contact: f32, heavy: bool, throws: bool) -> (f32, f32) {
     if throws {
         // The rest of it whipped through quickly after letting go, slowing into place.
-        let after = WHIP_TICKS;
         let strike = if ticks < strike_ticks {
             contact * (ticks / strike_ticks).clamp(0.0, 1.0).powi(2)
         } else {
-            contact + (1.0 - contact) * (1.0 - (1.0 - ((ticks - strike_ticks) / after.max(1e-3)).min(1.0)).powi(2))
+            contact + (1.0 - contact) * (1.0 - (1.0 - ((ticks - strike_ticks) / WHIP_TICKS).min(1.0)).powi(2))
         };
-        return (strike, after);
+        return (strike, WHIP_TICKS);
     }
     // Where on the ease the contact falls.
     let at_contact = if heavy { contact.cbrt() } else { 1.0 - (1.0 - contact).cbrt() };

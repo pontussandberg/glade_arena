@@ -241,7 +241,7 @@ fn add_rigs(
             aura: handles.held_aura.as_ref().map(|(mesh, material)| part(mesh, material, Vec3::ZERO)),
             gleam: handles.held_glint.as_ref().map(|(mesh, material, edge)| (part(mesh, material, Vec3::ZERO), *edge)),
             gleaming: Gleaming { seed: player.index().index(), ..default() },
-            moves: moves(&class.def().id),
+            moves: class_moves,
             stride: 0.0,
             walking: 0.0,
             cut: None,
@@ -458,11 +458,12 @@ fn pose_rigs(
         let rearm = (def.attack.period_ticks(1.0) - def.attack.windup_ticks(1.0)) as f32;
         // The latest throw the pose has let go of: ours as our clock gets to it (the state says
         // so a moment early), another's as soon as its spear is seen (it's released then).
-        let let_go = attack.released_at.filter(|&at| now >= at as f32).max(seen.and_then(|seen| seen.attack).filter(|_| !is_me));
+        let seen_throw = seen.and_then(|seen| seen.attack).filter(|_| !is_me);
+        let let_go = attack.released_at.filter(|&at| now >= at as f32).max(seen_throw);
         // Empty once the flying spear has left the hand (or it's late: `empty_hands`).
-        let throw = attack.released_at.max(seen.and_then(|seen| seen.attack).filter(|_| !is_me));
-        let rearming = throw.filter(|_| moves.throws && matches!(def.attack.kind, AttackKind::Projectile { .. }) && released.is_some_and(|s| s < rearm));
-        let late = throw.is_some_and(|at| present > at as f32 + MAX_HOLD_TICKS);
+        let thrown = attack.released_at.max(seen_throw);
+        let rearming = thrown.filter(|_| moves.throws && matches!(def.attack.kind, AttackKind::Projectile { .. }) && released.is_some_and(|s| s < rearm));
+        let late = thrown.is_some_and(|at| present > at as f32 + MAX_HOLD_TICKS);
         // Our own hand letting go this frame: just how it was posed as it did, between frames.
         let frame_ticks = dt * TICK_HZ as f32;
         let released_from = match let_go {
@@ -491,22 +492,22 @@ fn pose_rigs(
         // good until it's late (it may never come: a shot that hit or ended at once), when it's
         // back in the hand, hidden till the next attack's ready (`empty_hands`).
         let mut held = posed.held;
-        let ahead_of_news = released_from.filter(|_| let_go.is_some() && held_at.launched < let_go && !late);
-        let at = match (ahead_of_news, let_go, def.attack.kind.shot()) {
-            (Some(from), Some(at), Some(shot)) => {
-                let flown = (now - at as f32).max(0.0) / TICK_HZ as f32 * shot.speed;
-                let flying = Transform { translation: from.translation + arena::to_world(facing.look, 0.0) * flown, ..from };
-                // What it hangs from: the fighter, its weapon arm and elbow (see `add_rigs`).
-                let elbow = Transform::from_translation(placed.translation.with_y(0.0))
-                    * posed.body
-                    * Transform::from_translation(RIG_SHOULDER).with_rotation(posed.arms[0])
-                    * Transform::from_translation(moves.elbow_at).with_rotation(posed.elbows[0]);
-                held = Transform::from_matrix(Mat4::from(elbow.compute_affine().inverse() * flying.compute_affine()));
-                flying
-            }
-            _ => held_in_world(&placed, &posed),
-        };
         if moves.throws {
+            let ahead_of_news = released_from.filter(|_| held_at.launched < let_go && !late);
+            let at = match (ahead_of_news, let_go, def.attack.kind.shot()) {
+                (Some(from), Some(at), Some(shot)) => {
+                    let flown = (now - at as f32).max(0.0) / TICK_HZ as f32 * shot.speed;
+                    let flying = Transform { translation: from.translation + arena::to_world(facing.look, 0.0) * flown, ..from };
+                    // What it hangs from: the fighter, its weapon arm and elbow (see `add_rigs`).
+                    let elbow = Transform::from_translation(placed.translation.with_y(0.0))
+                        * posed.body
+                        * Transform::from_translation(RIG_SHOULDER).with_rotation(posed.arms[0])
+                        * Transform::from_translation(moves.elbow_at).with_rotation(posed.elbows[0]);
+                    held = Transform::from_matrix(Mat4::from(elbow.compute_affine().inverse() * flying.compute_affine()));
+                    flying
+                }
+                _ => held_in_world(&placed, &posed),
+            };
             let launched = held_at.launched;
             held_at.set_if_neq(HeldAt { at, let_go, launched, released_from, rearming, late });
         }

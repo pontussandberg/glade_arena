@@ -24,6 +24,10 @@ impl Spring {
         // so it moves the same at any frame rate; damped at least critically (no overshoot)
         // above 1. Chasing a target moving at `rate`, it trails `lag` behind it; how far it is
         // off that swings out and settles.
+        if self.target == Some(target) && self.at == target && self.speed == 0.0 {
+            // Already settled on it: still, as solving it would leave it.
+            return target;
+        }
         let from = self.target.filter(|from| (target - from).abs() < jump && dt > 0.0).unwrap_or(target);
         let rate = if dt > 0.0 { (target - from) / dt } else { 0.0 };
         let (w, z) = (stiffness, damping);

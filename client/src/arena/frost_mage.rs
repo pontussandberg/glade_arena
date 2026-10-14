@@ -263,8 +263,8 @@ pub(super) fn frost_mage_wardrobe() -> Wardrobe {
         drapes: vec![skirt, cape],
         trim: palette::FROST_GLOW,
         body: vec![
-            Column { center: Vec2::ZERO, half: Vec2::new(0.175, 0.215), from: 0.3, to: 1.0 },
-            Column { center: Vec2::new(-0.01, 0.0), half: Vec2::new(0.21, 0.28), from: 1.0, to: 1.3 },
+            Column { center: Vec2::ZERO, half: Vec2::new(0.175, 0.215), from: 0.3, to: 1.0, round: 2.0 },
+            Column { center: Vec2::new(-0.01, 0.0), half: Vec2::new(0.21, 0.28), from: 1.0, to: 1.3, round: 2.0 },
         ],
         leg_radius: 0.12,
         arm: None,

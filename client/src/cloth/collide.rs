@@ -10,8 +10,6 @@ use crate::arena::{self, RIG_HIP};
 /// How long a leg is, hip to sole (just off the ground), and how low cloth can go.
 const LEG_LENGTH: f32 = RIG_HIP.y - 0.02;
 pub(super) const FLOOR: f32 = 0.015;
-/// How far over the shoulder joint an arm's capsule starts (`Wardrobe::arm`).
-pub(super) const ARM_TOP: f32 = 0.0;
 
 /// How the body moved in a step: `shift`ed, and `turn`ed about where it is now (`pivot`).
 #[derive(Clone, Copy)]
@@ -25,6 +23,20 @@ pub(super) struct Motion {
 pub(super) struct Leg {
     pub(super) hip: Vec3,
     pub(super) sole: Vec3,
+}
+
+impl Leg {
+    /// The point along it nearest `p`.
+    pub(super) fn closest(&self, p: Vec3) -> Vec3 {
+        let along = self.sole - self.hip;
+        self.hip + along * ((p - self.hip).dot(along) / along.length_squared()).clamp(0.0, 1.0)
+    }
+}
+
+/// An arm cloth lies on (`Wardrobe::arm`), as a capsule `length` down it from the shoulder at
+/// `shoulder`, turned `turn`.
+pub(super) fn arm_at(shoulder: Vec3, turn: Quat, length: f32) -> Leg {
+    Leg { hip: shoulder, sole: shoulder + turn * Vec3::NEG_Y * length }
 }
 
 /// Both legs as capsules, each a thigh down to its knee and a shin from there, hanging from the
@@ -58,25 +70,33 @@ impl Body<'_> {
                 continue;
             }
             let off = (Vec2::new(local.x, local.z) - column.center) / column.half;
-            let d = off.length();
+            let d = column.reach(off);
             if d < 1.0 {
+                // Out the nearer way: its side, or its top (cloth just under the top of the
+                // shoulders shoved out sideways would spring back and shiver there).
                 let out = column.center + if d > 1e-4 { off / d } else { Vec2::NEG_X } * column.half;
-                (local.x, local.z, pushed) = (out.x, out.y, true);
+                if column.to - local.y < Vec2::new(local.x, local.z).distance(out) {
+                    (local.y, pushed) = (column.to, true);
+                } else {
+                    (local.x, local.z, pushed) = (out.x, out.y, true);
+                }
             }
         }
         let arm = self.arm.as_ref().map(|(arm, radius)| (arm, *radius, true));
         for (limb, radius, arm) in self.legs.iter().map(|leg| (leg, self.leg_radius, false)).chain(arm) {
             let along = limb.sole - limb.hip;
-            let closest = limb.hip + along * ((local - limb.hip).dot(along) / along.length_squared()).clamp(0.0, 1.0);
+            let closest = limb.closest(local);
             let mut off = local - closest;
             if off.length() < radius {
-                // An arm: always out on its own side (left or right), never caught between it and
-                // the body (cloth lies over an arm, not in under its pit). Its side, square to the
-                // arm, so the push stays square to it however it's turned.
+                // An arm: never caught in under its pit, between it and the body. Hanging down,
+                // cloth stays out on its own side (left or right); held out, on top of it; raised
+                // over the head there's no pit, and cloth lies either side of it as it falls.
+                // Each square to the arm, so the push stays square to it however it's turned.
                 let axis = along.normalize_or(Vec3::Y);
-                let outward = Vec3::Z * limb.hip.z.signum();
-                let side = (outward - axis * outward.dot(axis)).normalize_or_zero();
-                if arm && off.dot(side) < 0.0 {
+                let square = |v: Vec3| v - axis * v.dot(axis);
+                let outward = square(Vec3::Z * limb.hip.z.signum()).normalize_or_zero();
+                let side = outward * (-axis.y).max(0.0) + square(Vec3::Y) * (1.0 - axis.y).clamp(0.0, 1.0);
+                if arm && side.length() > 0.5 && off.dot(side) < 0.0 {
                     off -= side * 2.0 * off.dot(side);
                 }
                 // Out the way it's in from, or up if it's right on the line.

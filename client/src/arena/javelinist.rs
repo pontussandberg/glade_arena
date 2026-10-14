@@ -17,9 +17,8 @@ use crate::sculpt::{Section, bevel_box, grid, hemmed, sheet, smoothed, sweep, tu
 /// gripped between two rings; and a heavy butt spike.
 pub(super) fn javelin(shaft: Color, metal: Color, dark: Color, wrap: Color, rag: Color) -> Mesh {
     const LENGTH: f32 = SPEAR_LENGTH;
-    const HEAD: f32 = 0.62;
-    // The blade: (how far back from the point, half its thickness, half its breadth).
-    let blade = [(HEAD, 0.016, 0.028), (0.58, 0.018, 0.062), (0.5, 0.018, 0.084), (0.36, 0.017, 0.08), (0.2, 0.014, 0.06), (0.07, 0.008, 0.03), (0.0, 0.0, 0.0)];
+    const HEAD: f32 = SPEAR_BLADE[0].0;
+    let blade = SPEAR_BLADE;
     let edges = faceted(tube(
         &smoothed(&blade.map(|(back, depth, width)| Section::new(Vec3::Y * -back, Vec2::new(depth, width), metal).squared(1.0).exact()), 2),
         4,
@@ -96,16 +95,20 @@ pub(super) fn carried_javelin() -> Mesh {
     javelin(palette::HUNTER_DARK, palette::SILVER, palette::BLACK_STEEL, palette::DARK_LEATHER, palette::OXBLOOD)
 }
 
+/// The javelin's blade (`javelin`): how far back from the point, half its thickness and half
+/// its breadth there, from where it narrows into the socket to the point.
+const SPEAR_BLADE: [(f32, f32, f32); 7] = [(0.62, 0.016, 0.028), (0.58, 0.018, 0.062), (0.5, 0.018, 0.084), (0.36, 0.017, 0.08), (0.2, 0.014, 0.06), (0.07, 0.008, 0.03), (0.0, 0.0, 0.0)];
+
 /// A point `t` (0..1, from the base of its blade to its point) along an edge of the javelin
 /// held (`held_spear`), in the spear's space: its right one (the left mirrors it across Z).
 pub fn spear_edge(t: f32) -> Vec3 {
-    // How far back from the point along the blade, and how broad it is there (`javelin`).
-    const EDGE: [(f32, f32); 6] = [(0.58, 0.062), (0.5, 0.084), (0.36, 0.08), (0.2, 0.06), (0.07, 0.03), (0.0, 0.0)];
-    let back = EDGE[0].0 * (1.0 - t.clamp(0.0, 1.0));
-    let k = EDGE.windows(2).position(|w| back >= w[1].0).unwrap_or(EDGE.len() - 2);
-    let (a, b) = (EDGE[k], EDGE[k + 1]);
+    // The blade's edge, from its broad base (past where it narrows into the socket).
+    let edge = &SPEAR_BLADE[1..];
+    let back = edge[0].0 * (1.0 - t.clamp(0.0, 1.0));
+    let k = edge.windows(2).position(|w| back >= w[1].0).unwrap_or(edge.len() - 2);
+    let (a, b) = (edge[k], edge[k + 1]);
     let u = ((a.0 - back) / (a.0 - b.0)).clamp(0.0, 1.0);
-    Vec3::new(0.0, GRIP_TO_TIP - back, a.1 + (b.1 - a.1) * u)
+    Vec3::new(0.0, GRIP_TO_TIP - back, a.2 + (b.2 - a.2) * u)
 }
 
 /// The executioner's body, under its moving cloth (`javelinist_wardrobe`): upright and squared,
@@ -248,10 +251,10 @@ fn coat_point(u: f32, v: f32, ragged: bool) -> Vec3 {
 /// rest: just apart, so each side moves as its own (`javelinist_mantle`).
 const MANTLE_SLIT: f32 = 0.05;
 /// How thick the arm is to the cowl lying on it (`javelinist_mantle`).
-const MANTLE_ARM: f32 = 0.08;
+const MANTLE_ARM: f32 = 0.06;
 /// How far down the arm (from the shoulder) the cowl can lie on it: over the top of the arm, not
 /// up along it when it's raised.
-const MANTLE_ON_ARM: f32 = 0.2;
+const MANTLE_ON_ARM: f32 = 0.12;
 
 /// A point on the cowl over the executioner's shoulders, `u` (0..1) round it from one side of
 /// its slit under the right arm (`MANTLE_SLIT`) round the front and back to the other, `v`
@@ -260,23 +263,48 @@ const MANTLE_ON_ARM: f32 = 0.2;
 /// and closer still down over the empty left shoulder, in soft folds deepening toward the hem;
 /// `ragged` for the cloth itself (folds and its cut hem), not for the chains it hangs from.
 fn mantle_point(u: f32, v: f32, ragged: bool) -> Vec3 {
-    // (v, depth, width, height) down it: from round the neck, over the top of the shoulder, down
-    // past it to the hem; over the arm, and over the empty side.
-    type Profile = [(f32, f32, f32, f32); 4];
-    const OVER_ARM: Profile = [(0.0, 0.16, 0.19, 1.48), (0.3, 0.178, 0.29, 1.435), (0.6, 0.192, 0.385, 1.36), (1.0, 0.198, 0.405, 1.19)];
-    const EMPTY: Profile = [(0.0, 0.16, 0.19, 1.48), (0.3, 0.175, 0.26, 1.42), (0.6, 0.188, 0.295, 1.33), (1.0, 0.193, 0.315, 1.19)];
+    // (v, depth, width, height) down it: from round the neck, rounding over the top of the
+    // shoulder, then hanging down past it to the hem; over the arm, and over the empty side.
+    // Eased through smoothly from one to the next, so it's one curve over the shoulder.
+    type Profile = [(f32, f32, f32, f32); 6];
+    const OVER_ARM: Profile = [
+        (0.0, 0.16, 0.19, 1.49),
+        (0.18, 0.17, 0.245, 1.468),
+        (0.36, 0.182, 0.315, 1.43),
+        (0.52, 0.19, 0.355, 1.372),
+        (0.7, 0.195, 0.372, 1.3),
+        (1.0, 0.198, 0.378, 1.19),
+    ];
+    const EMPTY: Profile = [
+        (0.0, 0.16, 0.19, 1.49),
+        (0.18, 0.168, 0.228, 1.462),
+        (0.36, 0.178, 0.262, 1.42),
+        (0.52, 0.185, 0.285, 1.37),
+        (0.7, 0.19, 0.3, 1.3),
+        (1.0, 0.193, 0.312, 1.19),
+    ];
     let at = |profile: &Profile| {
         let i = profile.iter().rposition(|p| p.0 <= v).unwrap_or(0).min(profile.len() - 2);
-        let (a, b) = (profile[i], profile[i + 1]);
-        let t = ((v - a.0) / (b.0 - a.0)).clamp(0.0, 1.0);
-        Vec3::new(a.1 + (b.1 - a.1) * t, a.2 + (b.2 - a.2) * t, a.3 + (b.3 - a.3) * t)
+        let key = |k: usize| Vec3::new(profile[k].1, profile[k].2, profile[k].3);
+        let (a, b) = (profile[i].0, profile[i + 1].0);
+        // Through each point heading from the one before it to the one after (per unit of `v`).
+        let slope = |k: usize| {
+            let (lo, hi) = (k.saturating_sub(1), (k + 1).min(profile.len() - 1));
+            (key(hi) - key(lo)) / (profile[hi].0 - profile[lo].0)
+        };
+        let t = ((v - a) / (b - a)).clamp(0.0, 1.0);
+        let (t2, t3) = (t * t, t * t * t);
+        key(i) * (2.0 * t3 - 3.0 * t2 + 1.0)
+            + slope(i) * (b - a) * (t3 - 2.0 * t2 + t)
+            + key(i + 1) * (3.0 * t2 - 2.0 * t3)
+            + slope(i + 1) * (b - a) * (t3 - t2)
     };
     let angle = std::f32::consts::FRAC_PI_2 + MANTLE_SLIT + u * (std::f32::consts::TAU - 2.0 * MANTLE_SLIT);
     // Over the empty left shoulder (-Z), easing in across the front and back.
     let empty = crate::ease::ease(0.0, 0.5, -angle.sin());
     let Vec3 { x: depth, y: width, z: y } = at(&OVER_ARM).lerp(at(&EMPTY), empty);
     // Rounded over the shoulders, a little fuller than an ellipse.
-    let square = |c: f32| c.signum() * c.abs().powf(2.0 / 2.15);
+    let square = |c: f32| c.signum() * c.abs().powf(2.0 / 2.06);
     let (mut out, mut y) = (1.0, y);
     if ragged {
         out += 0.035 * v * (angle * 7.0 + 0.4).sin();
@@ -298,7 +326,7 @@ fn javelinist_mantle() -> Drape {
     let chains: Vec<Vec<Vec3>> = (0..=CHAINS).map(|c| [0.0, 0.14, 0.28, 0.42, 0.56, 0.7, 0.85, 1.0].map(|v| mantle_point(c as f32 / CHAINS as f32, v, false)).to_vec()).collect();
     // Thick cotton, snug round the shoulders: firm round the neck, falling free toward the hem
     // when the arm parts it, hardly swinging as the body turns, settling quickly.
-    Drape::new(cloth, None, chains, Weave { hold: (8.0, 2.5), damping: 8.0, air: 0.1, inertia: 0.05, gravity: 8.0, flutter: 0.05, joined: true, wisps: 0.0 })
+    Drape::new(cloth, None, chains, Weave { hold: (9.0, 3.5), damping: 10.0, air: 0.1, inertia: 0.05, gravity: 8.0, flutter: 0.03, joined: true, wisps: 0.0 })
 }
 
 /// All the executioner's moving cloth: the coat skirt and the cowl (`javelinist_mantle`).
@@ -324,9 +352,11 @@ pub(super) fn javelinist_wardrobe() -> Wardrobe {
         drapes,
         trim: palette::SOUL,
         body: vec![
-            Column { center: Vec2::ZERO, half: Vec2::new(0.152, 0.192), from: 0.3, to: 1.05 },
-            // The chest and shoulders, under the cowl.
-            Column { center: Vec2::new(-0.01, 0.0), half: Vec2::new(0.15, 0.25), from: 1.05, to: 1.45 },
+            Column { center: Vec2::ZERO, half: Vec2::new(0.152, 0.192), from: 0.3, to: 1.05, round: 2.0 },
+            // The chest and shoulders, under the cowl, as squared off as the tunic there (and a
+            // little more, for the cowl's own thickness).
+            Column { center: Vec2::new(0.015, 0.0), half: Vec2::new(0.175, 0.24), from: 1.05, to: 1.22, round: 2.4 },
+            Column { center: Vec2::new(0.0, 0.0), half: Vec2::new(0.16, 0.26), from: 1.22, to: 1.45, round: 2.8 },
         ],
         leg_radius: 0.125,
         // The cowl lies on the top of the arm.
@@ -485,13 +515,18 @@ fn hood_open(phi: f32) -> f32 {
 const HOOD_JAW: f32 = 0.78;
 const HOOD_PHI: (f32, f32) = (std::f32::consts::FRAC_PI_2, -0.8);
 
+/// How far up the skull (`HOOD_PHI`) the hood is at `v` down it (`hood_point`): down from the
+/// crown to the jaw, then on down into the cowl.
+fn hood_phi(v: f32) -> f32 {
+    HOOD_PHI.0 + (HOOD_PHI.1 - HOOD_PHI.0) * (v / HOOD_JAW).min(1.0)
+}
+
 /// A point on the death hunter's hood, `u` (-1..1) round the head from the left side of its
 /// opening, round the back, to the right side, `v` (0..1) from the crown down into the coat's
 /// cowl: close over the skull, softly creased, a short point at the back of the crown, its brow
 /// pulled forward over the eyes.
 fn hood_point(u: f32, v: f32) -> Vec3 {
-    let jaw = (v / HOOD_JAW).min(1.0);
-    let phi = HOOD_PHI.0 + (HOOD_PHI.1 - HOOD_PHI.0) * jaw;
+    let phi = hood_phi(v);
     let open = hood_open(phi);
     let theta = std::f32::consts::PI + u * (std::f32::consts::PI - open);
     let edge = ((u.abs() - 0.8) / 0.2).clamp(0.0, 1.0);
@@ -538,7 +573,7 @@ pub(super) fn javelinist_hood() -> Mesh {
     let side = |u: f32| -> Vec<Vec3> {
         (0..=rows)
             .map(|i| HOOD_JAW * 1.08 * i as f32 / rows as f32)
-            .filter(|&v| hood_open(HOOD_PHI.0 + (HOOD_PHI.1 - HOOD_PHI.0) * (v / HOOD_JAW).min(1.0)) > 0.02)
+            .filter(|&v| hood_open(hood_phi(v)) > 0.02)
             .map(|v| hood_point(u, v))
             .collect()
     };
@@ -599,7 +634,8 @@ fn hunter_bandana() -> Mesh {
     let jitter = |i: f32| (i * 12.9898).sin() * 0.5 + 0.5;
     // The seam: almost ear to ear, its corners pulled up.
     let mouth = 0.112;
-    let seam = |u: f32| on_bandana(u, mouth + 0.02 * (u / 0.72).powi(2) - 0.002 * (u * 9.0).sin());
+    let seam_y = |u: f32| mouth + 0.02 * (u / 0.72).powi(2);
+    let seam = |u: f32| on_bandana(u, seam_y(u) - 0.002 * (u * 9.0).sin());
     let line: Vec<Vec3> = (0..=24).map(|i| seam(-0.72 + 1.44 * i as f32 / 24.0)).collect();
     parts.push(sweep(&line, &[0.0032; 25], 4, thread));
     // Stitches across it, crude: uneven lengths, slanting this way and that.
@@ -607,12 +643,11 @@ fn hunter_bandana() -> Mesh {
         let u = -0.66 + 1.32 * i as f32 / 14.0 + 0.015 * (jitter(i as f32) - 0.5);
         let (up, down) = (0.01 + 0.012 * jitter(i as f32 + 3.1), 0.01 + 0.012 * jitter(i as f32 + 7.7));
         let slant = 0.05 * (jitter(i as f32 + 1.3) - 0.5);
-        let y = |u: f32| mouth + 0.02 * (u / 0.72).powi(2);
-        parts.push(sweep(&[on_bandana(u - slant, y(u) + up), on_bandana(u + slant, y(u) - down)], &[0.0026, 0.0026], 4, thread));
+        parts.push(sweep(&[on_bandana(u - slant, seam_y(u) + up), on_bandana(u + slant, seam_y(u) - down)], &[0.0026, 0.0026], 4, thread));
     }
     // Old stains run down from it in drips, of different lengths.
     for (u, length) in [(-0.42, 0.035), (-0.12, 0.06), (0.05, 0.028), (0.3, 0.05), (0.55, 0.03)] {
-        let top = mouth + 0.02 * (u / 0.72f32).powi(2) - 0.004;
+        let top = seam_y(u) - 0.004;
         let drip: Vec<Vec3> = (0..=4).map(|k| on_bandana(u + 0.006 * (k as f32 * 1.7).sin(), top - length * k as f32 / 4.0)).collect();
         parts.push(sweep(&drip, &[0.007, 0.006, 0.005, 0.004, 0.0], 5, stain));
     }
