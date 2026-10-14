@@ -22,7 +22,7 @@ use crate::arena;
 pub(crate) const OFFSET: Vec3 = Vec3::new(0.0, 28.2, 19.0);
 /// How far in and out the MOBA camera zooms, and how far out it may with its zoom uncapped
 /// (practice's tool, `CameraMode::uncapped`).
-const ZOOM_RANGE: (f32, f32) = (0.3, 0.728);
+const ZOOM_RANGE: (f32, f32) = (0.3, 0.819);
 const ZOOM_UNCAPPED: f32 = 1.6;
 
 /// The free camera: how far it stays (meters), the height it looks at on a fighter, the pitch it
