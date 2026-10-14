@@ -31,9 +31,6 @@ const CONVERGE_METERS: f32 = 7.0;
 /// is already meters ahead of the hand. A spear never starts more than this far (meters) behind
 /// it; beyond that (a very high ping) the rest is skipped.
 const MAX_CATCH_UP: f32 = 8.0;
-/// Where a thrown spear's wake comes off it: just behind its point (in its own drawn size), so
-/// the line runs along it and, when it strikes home and is gone, reaches right to where it hit.
-const WAKE_FROM: f32 = 0.15;
 /// How long a piece of the wake stays where it was left (seconds), and how much of that it keeps
 /// its full width before thinning away to nothing.
 const WAKE_SECONDS: f32 = 0.32;
@@ -194,7 +191,8 @@ pub(super) fn fly_shots(
         transform.set_if_neq(Transform::from_translation(at).with_rotation(launch.held.slerp(flying, turned)).with_scale(launch.scale));
         // A piece of wake from where it came off the spear last frame to where it does now, left in
         // the world.
-        let wake_at = transform.transform_point(Vec3::NEG_X * WAKE_FROM);
+        // Off its point: the line runs along it, and when it strikes home it reaches right there.
+        let wake_at = transform.translation;
         if let Some(from) = thrown.wake_at
             && at.distance(launch.from) >= WAKE_AFTER
             && let Some(dir) = (wake_at - from).try_normalize()
