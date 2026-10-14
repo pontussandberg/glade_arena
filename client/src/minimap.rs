@@ -48,9 +48,10 @@ const MARKER: f32 = 22.0;
 const MARKER_TEXT: f32 = 14.0;
 const GATE_MARK: f32 = 14.0;
 
-/// The minimap's picture; dots and the view frame are its children.
+/// The minimap's picture; dots and the view frame are its children. A right click on it walks
+/// there (`render::read_local_input`).
 #[derive(Component)]
-struct Minimap;
+pub(crate) struct Minimap;
 
 /// A fighter's dot.
 #[derive(Component)]
@@ -81,6 +82,18 @@ fn scale(map: &Map) -> f32 {
 fn on_minimap(map: &Map, p: Vec2) -> Vec2 {
     let half = map.half_extents();
     (Vec2::new(p.x + half.x, half.y - p.y) * scale(map)).round()
+}
+
+/// Where on `map` the screen point `at` (physical pixels) is, if it's on the minimap's picture
+/// (`node`, at `transform`): `on_minimap` the other way.
+pub(crate) fn ground_on_minimap(node: &ComputedNode, transform: UiGlobalTransform, map: &Map, at: Vec2) -> Option<Vec2> {
+    let from_corner = (node.normalize_point(transform, at)? + 0.5) * node.size() - node.border().min_inset;
+    let on_picture = from_corner * node.inverse_scale_factor;
+    if on_picture.cmplt(Vec2::ZERO).any() || on_picture.cmpgt(picture_size(map)).any() {
+        return None;
+    }
+    let (half, tiles) = (map.half_extents(), on_picture / scale(map));
+    Some(Vec2::new(tiles.x - half.x, half.y - tiles.y))
 }
 
 /// The minimap's size in pixels.
