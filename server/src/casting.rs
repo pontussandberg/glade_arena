@@ -59,11 +59,19 @@ pub(super) fn use_abilities(
             });
         }
         let (mut next_cooldowns, mut next_dashing) = (*cooldowns, *dashing);
-        // While an attack is primed, pressing the prime again does nothing (its cooldown doesn't
-        // start over).
+        // Pressing the prime again while an attack is primed calls it off: the next attack (or the
+        // one winding up) is plain again, and no cooldown starts.
         let mut orders = *input;
-        if attack.primed.is_some() {
+        if let Some(speed) = attack.primed {
             let primes = |order: &CastOrder| matches!(class.def().ability(order.slot).map(|ability| ability.kind), Some(AbilityKind::Prime(_)));
+            if orders.casts().any(|order| primes(&order)) {
+                let winding_up = !attack.released();
+                attack.primed = None;
+                if let Some(swing) = attack.swing.as_mut().filter(|swing| swing.primed && winding_up) {
+                    swing.primed = false;
+                    swing.haste -= speed;
+                }
+            }
             orders.casts = orders.casts.map(|order| order.filter(|order| !primes(order)));
         }
         let casts = abilities::step(now.0, id.0, *class, pos.0, &orders, &chilled, &mut next_cooldowns, &mut next_dashing);
