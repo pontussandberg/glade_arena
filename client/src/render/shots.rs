@@ -1,5 +1,5 @@
 //! Shots in flight: where each is drawn every frame (`fly_shots`), and a thrown spear's hand-off
-//! from the hand, its curve onto its real path and its rubbery wind.
+//! from the hand, its curve onto its real path and its wind.
 
 use super::*;
 
@@ -31,13 +31,7 @@ const CONVERGE_METERS: f32 = 7.0;
 const MAX_CATCH_UP: f32 = 8.0;
 /// Where a thrown spear's wind starts (just behind its butt) and how long it gets.
 pub(super) const WIND_FRONT: f32 = arena::SPEAR_LENGTH;
-const WIND_LENGTH: f32 = 2.4;
-/// The wind's rubber: its spring (stiffness rad/s, damping; loose, so it overshoots), and how
-/// much and how often (per second) it pulses.
-const RUBBER_STIFFNESS: f32 = 14.0;
-const RUBBER_DAMPING: f32 = 0.3;
-const RUBBER_PULSE: f32 = 0.18;
-const RUBBER_RATE: f32 = 3.5;
+const WIND_LENGTH: f32 = 1.8;
 
 /// A thrown spear as drawn: it leaves the thrower's hand where the javelin was held, then eases
 /// onto its real path (`fly_shots`), trailing its wind (a child entity).
@@ -45,8 +39,6 @@ const RUBBER_RATE: f32 = 3.5;
 pub(super) struct Thrown {
     pub(super) wind: Entity,
     pub(super) launch: Option<Launch>,
-    /// The wind's length, on a loose spring.
-    pub(super) length: crate::spring::Spring,
 }
 
 /// A shot that turns about its flight this fast (radians per second): a frostbolt.
@@ -177,12 +169,9 @@ pub(super) fn fly_shots(
         let flying = Quat::from_rotation_arc(forward_dir, heading) * along;
         let turned = 1.0 - left(SETTLE_SECONDS);
         transform.set_if_neq(Transform::from_translation(at).with_rotation(launch.held.slerp(flying, turned)).with_scale(launch.scale));
-        // The wind, rubbery like a sprint's: its length chases how far the spear has flown (up to
-        // `WIND_LENGTH`), pulsing, on a loose spring, so it stretches out past that and snaps back.
-        let flown = (at.distance(launch.from) - WIND_FRONT).clamp(0.0, WIND_LENGTH);
-        let wanted = flown * (1.0 + RUBBER_PULSE * (since * RUBBER_RATE * std::f32::consts::TAU).sin());
-        let dt = time.delta_secs();
-        let length = thrown.length.follow(wanted, dt, RUBBER_STIFFNESS, RUBBER_DAMPING, f32::INFINITY).max(0.0);
+        // The wind: as long as the spear has flown (up to `WIND_LENGTH`), steady, so it reads as
+        // the air it parts and not as a flame.
+        let length = (at.distance(launch.from) - WIND_FRONT).clamp(0.0, WIND_LENGTH);
         if let Ok(mut wind) = winds.get_mut(thrown.wind) {
             // In meters: undoing the spear's own drawn size (`Launch::scale`).
             let scale = Vec3::new(length / launch.scale.x, 1.0, 1.0);

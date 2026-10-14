@@ -183,7 +183,7 @@ impl Visuals {
                     Look::Aura => arena::translucent(palette::FROST_GLOW, 0.35, 2.0),
                     Look::Spirit => arena::glow(palette::SPIRIT, 6.0),
                     Look::Plain => arena::matte(Color::WHITE),
-                    Look::Wind => arena::translucent(Color::WHITE, 0.6, 1.5),
+                    Look::Wind => arena::translucent(Color::WHITE, 0.4, 1.0),
                     Look::Spark => arena::glow(Color::WHITE, 5.0),
                     Look::Shadow => arena::translucent(palette::INK, 0.4, 0.0),
                     Look::Range => arena::translucent(Color::WHITE, 0.2, 1.0),
@@ -374,7 +374,7 @@ fn add_visuals(
             // No length yet: it grows as the spear flies.
             let wind = Transform::from_xyz(-WIND_FRONT, 0.0, 0.0).with_scale(Vec3::new(0.0, 1.0, 1.0));
             let wind = shot.commands().spawn((Mesh3d(visuals.wind.clone()), MeshMaterial3d(material), wind, NotShadowCaster)).id();
-            shot.add_child(wind).insert(Thrown { wind, launch: None, length: default() });
+            shot.add_child(wind).insert(Thrown { wind, launch: None });
             // Its only shadow is the one straight under it, on its line: where it really is (the
             // sun's would fall meters off to the side), so none of it casts one, its point's spark
             // and its wind neither.
