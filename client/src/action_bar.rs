@@ -56,6 +56,8 @@ const SKULL: &[&str] = &[
 ];
 const SKULL_EYES: &[&str] = &[".........", ".........", ".........", ".##...##.", ".#.....#.", ".........", ".........", ".........", "........."];
 const SKULL_PIXEL: f32 = 2.0;
+/// How often a primed ability's icon brightens and dims, per second.
+const PRIMED_PULSE_HZ: f32 = 1.2;
 /// A tooltip's width (pixels).
 const TIP_WIDTH: f32 = 280.0;
 
@@ -349,18 +351,21 @@ const WIPE_STEPS: f32 = 256.0;
 fn update_icons(
     clock: AttackClock,
     me: Query<(&ClassId, &Cooldowns, &AttackState), With<Me>>,
-    mut icons: Query<(&AbilityIcon, &mut IconShown, &mut BorderColor)>,
+    mut icons: Query<(&AbilityIcon, &mut IconShown, &mut BorderColor, &mut BackgroundColor)>,
     mut wipes: Query<(&mut BackgroundGradient, &mut Visibility)>,
     mut texts: Query<&mut Text>,
 ) {
     let Ok((class, cooldowns, attack)) = me.single() else { return };
     let now = clock.now(true);
-    for (icon, shown, mut border) in &mut icons {
+    for (icon, shown, mut border, mut fill) in &mut icons {
         let Some(ability) = class.def().ability(icon.slot) else { continue };
         let primed = attack.primed.is_some() && matches!(ability.kind, AbilityKind::Prime(_));
         update_icon(icon, shown.into_inner(), border.reborrow(), (now, cooldowns, ability), &mut wipes, &mut texts);
+        // Primed: filled gold, its edge slowly brightening and dimming, until the attack goes off.
+        fill.set_if_neq(BackgroundColor(if primed { palette::TORCH_FLAME.with_alpha(0.3) } else { palette::ui::PANEL }));
         if primed {
-            border.set_if_neq(BorderColor::all(palette::TORCH_FLAME));
+            let breath = 0.5 + 0.5 * (now / TICK_HZ as f32 * PRIMED_PULSE_HZ * TAU).sin();
+            border.set_if_neq(BorderColor::all(palette::TORCH_FLAME.lighter(0.2 * breath)));
         }
     }
 }

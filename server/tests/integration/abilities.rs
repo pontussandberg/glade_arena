@@ -51,6 +51,8 @@ fn deadeye_primes_one_quicker_sure_crit() {
     println!("primed on A after {:?}", t0.elapsed());
     assert_eq!(attack_state(&mut d.a, A).primed, Some(attack_speed));
     assert!(attack_state(&mut d.a, A).swing.is_none(), "priming shouldn't start an attack");
+    let cooldowns = |d: &mut Duel| player::<Cooldowns>(&mut d.server, A).unwrap();
+    assert_eq!(cooldowns(&mut d).cooldown_over_at(Q), 0, "its cooldown started before the attack it readied");
 
     let aim = sees(&mut d.a, B).unwrap() - sees(&mut d.a, A).unwrap();
     set_input(&mut d.a, PlayerInput { aim, fire: true, ..default() });
@@ -61,6 +63,9 @@ fn deadeye_primes_one_quicker_sure_crit() {
         last_hit(&mut d.server, B).is_some_and(|hit| hit.kind == HitKind::Crit)
     });
     assert!(attack_state(&mut d.server, A).primed.is_none(), "still primed after it went off");
+    // Its cooldown runs from the throw.
+    let released = attack_state(&mut d.server, A).released_at.unwrap();
+    assert_eq!(cooldowns(&mut d).used_at(Q), Some(released));
 }
 
 #[test]

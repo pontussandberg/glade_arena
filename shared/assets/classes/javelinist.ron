@@ -16,7 +16,7 @@
     abilities: [
         (
             name: "Deadeye",
-            description: "Your next auto-attack gains +{ability_attack_speed} attack speed and will critically strike.",
+            description: "Your next auto-attack gains +{ability_attack_speed} attack speed and will critically strike. The cooldown starts once it's thrown.",
             cooldown_ticks: 480,
             kind: Prime(attack_speed: 0.5),
         ),

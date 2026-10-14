@@ -72,9 +72,9 @@ pub(super) fn gleam_blades(time: Res<Time>, mut rigs: Query<&mut Rig>, mut parts
     }
 }
 
-/// A weapon's aura (cracks of light through a blade) shows while the attack's `follow_up` is
-/// armed or quickening the windup in progress, embers flaking off a blade's edge
-/// (`swish::shed_embers`).
+/// A weapon's aura (cracks of light through a blade, a spearhead's glow) shows while the attack's
+/// `follow_up` is armed or quickening the windup in progress, or the next attack is primed
+/// (Deadeye), embers flaking off a blade's edge (`swish::shed_embers`).
 /// A blade's trail brightens with them (`swish::Blade::quickened`).
 pub(super) fn show_auras(
     clock: Option<AttackClock>,
@@ -83,7 +83,7 @@ pub(super) fn show_auras(
 ) {
     for (rig, attack, is_me, blade) in &mut fighters {
         // Hidden without a synced clock (e.g. after a disconnect): no telling when the window ends.
-        let on = clock.as_ref().is_some_and(|clock| attack.empowered_at(clock.now(is_me)));
+        let on = attack.primed.is_some() || clock.as_ref().is_some_and(|clock| attack.empowered_at(clock.now(is_me)));
         if let Some(mut blade) = blade
             && blade.quickened != on
         {
