@@ -262,7 +262,6 @@ pub(super) fn enter_arena(
     mut label: Single<&mut Text, With<EnterLabel>>,
     practice: Single<(Ref<Interaction>, &mut Visibility), With<PracticeButton>>,
     time: Res<Time>,
-    mut size: Single<&mut UiTransform, With<EnterButton>>,
     (mut lobbies_open, mut flash): (ResMut<LobbiesOpen>, ResMut<HeaderFlash>),
 ) {
     let way = way_in(*screen.get(), room.0.as_ref(), me.as_deref());
@@ -283,8 +282,8 @@ pub(super) fn enter_arena(
         label.0 = text.to_string();
     }
     let (interaction, mut background) = button.into_inner();
-    // Starting the match is what the leader is here for: the button breathes, brighter and a
-    // little bigger, until it's pressed.
+    // Starting the match is what the leader is here for: the button slowly brightens and dims
+    // until it's pressed.
     let breath = if way == WayIn::Start { 0.5 + 0.5 * (time.elapsed_secs() * START_PULSE_HZ * std::f32::consts::TAU).sin() } else { 0.0 };
     let fill = match (way, *interaction) {
         (WayIn::Wait, _) => palette::ui::MUTED.with_alpha(0.5),
@@ -292,7 +291,6 @@ pub(super) fn enter_arena(
         _ => ACCENT.lighter(0.16),
     };
     background.set_if_neq(BackgroundColor(fill));
-    size.set_if_neq(UiTransform { scale: Vec2::splat(1.0 + 0.05 * breath), ..default() });
     if !clicked(interaction) {
         return;
     }
