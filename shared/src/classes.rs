@@ -284,10 +284,10 @@ fn fill(text: &str, placeholders: impl IntoIterator<Item = (&'static str, String
     placeholders.into_iter().fold(text.to_string(), |text, (key, value)| text.replace(&format!("{{{key}}}"), &value))
 }
 
-/// Ticks as players read them: "6 s", "2.5 s".
+/// Ticks as players read them: "6s", "2.5s".
 pub fn seconds(ticks: u32) -> String {
     let seconds = ticks as f32 / TICK_HZ as f32;
-    if seconds.fract() == 0.0 { format!("{seconds} s") } else { format!("{seconds:.1} s") }
+    if seconds.fract() == 0.0 { format!("{seconds}s") } else { format!("{seconds:.1}s") }
 }
 
 impl AttackDef {
