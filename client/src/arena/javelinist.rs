@@ -99,16 +99,26 @@ pub(super) fn carried_javelin() -> Mesh {
 /// its breadth there, from where it narrows into the socket to the point.
 const SPEAR_BLADE: [(f32, f32, f32); 7] = [(0.62, 0.016, 0.028), (0.58, 0.018, 0.062), (0.5, 0.018, 0.084), (0.36, 0.017, 0.08), (0.2, 0.014, 0.06), (0.07, 0.008, 0.03), (0.0, 0.0, 0.0)];
 
-/// What glows on the held javelin while its next throw is primed (Deadeye): a shell of light
-/// round its blade, a little bigger than it, in the spear's space (`held_spear`).
+/// What glows on the held javelin while its next throw is primed (Deadeye): a thin, sharp shell
+/// of light hugging its blade, running on a little past the point to a finer one, in the
+/// spear's space (`held_spear`).
 pub(super) fn spear_aura() -> Mesh {
-    faceted(tube(
-        &SPEAR_BLADE.map(|(back, depth, width)| {
-            Section::new(Vec3::Y * (GRIP_TO_TIP - back + 0.015), Vec2::new(depth * 1.6 + 0.008, width * 1.3 + 0.012), Color::WHITE).squared(1.0).exact()
-        }),
-        4,
-        (true, false),
-    ))
+    /// How far past the blade's point the light's own point reaches.
+    const PAST_POINT: f32 = 0.06;
+    let point = SPEAR_BLADE.len() - 1;
+    let sections: Vec<Section> = SPEAR_BLADE
+        .iter()
+        .enumerate()
+        .map(|(i, &(back, depth, width))| {
+            let (y, half) = if i == point {
+                (GRIP_TO_TIP + PAST_POINT, Vec2::ZERO)
+            } else {
+                (GRIP_TO_TIP - back, Vec2::new(depth * 1.15 + 0.002, width * 1.1 + 0.003))
+            };
+            Section::new(Vec3::Y * y, half, Color::WHITE).squared(1.0).exact()
+        })
+        .collect();
+    faceted(tube(&sections, 4, (true, false)))
 }
 
 /// A point `t` (0..1, from the base of its blade to its point) along an edge of the javelin

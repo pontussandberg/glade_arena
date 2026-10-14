@@ -108,6 +108,8 @@ pub mod palette {
     pub const ENEMY: Color = Color::srgb_u8(0xD9, 0x45, 0x3B);
     pub const ALLY: Color = Color::srgb_u8(0x5C, 0xC4, 0x6A);
     pub const MONSTER: Color = Color::srgb_u8(0xF0, 0xB4, 0x2A);
+    /// Deadeye's light on a primed spearhead: a pale yellow, almost white.
+    pub const DEADEYE: Color = Color::srgb_u8(0xFF, 0xF6, 0xD2);
     /// Spectral blue: abilities' glow (rift-step streaks, a nova's wave).
     pub const SPIRIT: Color = Color::srgb_u8(0x8F, 0xD8, 0xFF);
     /// Ice: the frost mage's crystals, its nova, and the ice that freezes a fighter in place.
@@ -258,7 +260,7 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             leg: javelinist_leg(),
             held: held_spear(),
             eyes: slit_eyes(HUNTER_EYES),
-            glow: palette::TORCH_FLAME,
+            glow: palette::DEADEYE,
             held_glow: None,
             body_glow: None,
             held_aura: Some(spear_aura()),
