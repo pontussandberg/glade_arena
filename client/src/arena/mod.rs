@@ -103,11 +103,11 @@ pub mod palette {
 
     // Who a fighter is to you, in what marks it (health bar, ground ring, minimap dot):
     // never in its model, its shots or its swings. You are blue, enemies red and
-    // allies (once there are teams) green, monsters (zombies) a sickly violet.
+    // allies (once there are teams) green, monsters (zombies) amber.
     pub const YOU: Color = Color::srgb_u8(0x4C, 0x9E, 0xE0);
     pub const ENEMY: Color = Color::srgb_u8(0xD9, 0x45, 0x3B);
     pub const ALLY: Color = Color::srgb_u8(0x5C, 0xC4, 0x6A);
-    pub const MONSTER: Color = Color::srgb_u8(0x9B, 0x6B, 0xC8);
+    pub const MONSTER: Color = Color::srgb_u8(0xF0, 0xB4, 0x2A);
     /// Spectral blue: spirit spears (whoever throws them) and rift-step streaks glow with it.
     pub const SPIRIT: Color = Color::srgb_u8(0x8F, 0xD8, 0xFF);
     /// Ice: the frost mage's crystals, its nova, and the ice that freezes a fighter in place.

@@ -44,6 +44,8 @@ const ROOM: Vec2 = Vec2::new(384.0, 264.0);
 /// waygate end's ring.
 const MARGIN: f32 = 12.0;
 const DOT: f32 = 12.0;
+/// A monster's (a zombie's) dot: smaller, so players stand out.
+const MONSTER_DOT: f32 = 7.0;
 const MARKER: f32 = 22.0;
 const MARKER_TEXT: f32 = 14.0;
 const GATE_MARK: f32 = 14.0;
@@ -52,10 +54,11 @@ const GATE_MARK: f32 = 14.0;
 #[derive(Component)]
 struct Minimap;
 
-/// A fighter's dot.
+/// A fighter's dot, `size` across (a monster's smaller).
 #[derive(Component)]
 struct Dot {
     player: Entity,
+    size: f32,
 }
 
 /// What the camera sees.
@@ -160,16 +163,17 @@ fn place(node: &mut Node, map: &Map, at: Vec2, size: f32) {
 fn spawn_dots(
     mut commands: Commands,
     minimap: Single<Entity, With<Minimap>>,
-    new: Query<(Entity, Has<Me>), (With<PlayerId>, Added<Mesh3d>)>,
+    new: Query<(Entity, &ClassId, Has<Me>), (With<PlayerId>, Added<Mesh3d>)>,
 ) {
-    for (player, is_me) in &new {
+    for (player, class, is_me) in &new {
+        let size = if class.def().playable { DOT } else { MONSTER_DOT };
         let dot = commands
             .spawn((
-                Dot { player },
+                Dot { player, size },
                 Node {
                     position_type: PositionType::Absolute,
-                    width: px(DOT),
-                    height: px(DOT),
+                    width: px(size),
+                    height: px(size),
                     border: UiRect::all(px(1.0)),
                     border_radius: BorderRadius::MAX,
                     ..default()
@@ -182,7 +186,7 @@ fn spawn_dots(
     }
 }
 
-/// A dot is in its fighter's `Relation` color: ours, an ally's or an enemy's.
+/// A dot is in its fighter's `Relation` color: ours, an ally's, an enemy's or a monster's.
 fn color_dots(
     players: Query<&Relation>,
     changed: Query<(), Changed<Relation>>,
@@ -212,7 +216,7 @@ fn place_dots(
             continue;
         };
         visibility.set_if_neq(shown(health.is_none_or(Health::alive)));
-        place(&mut node, current.map(), pos.0, DOT);
+        place(&mut node, current.map(), pos.0, owner.size);
     }
 }
 

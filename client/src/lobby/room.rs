@@ -5,7 +5,7 @@ use super::*;
 
 use arena_shared::protocol::RoomRequest;
 use arena_shared::map::MapId;
-use arena_shared::rooms::{KILLS_TO_WIN, MAX_PER_TEAM, Member, Mode, NO_TEAM, RoomView, TEAMS};
+use arena_shared::rooms::{MAX_PER_TEAM, Member, Mode, NO_TEAM, RoomView, TEAMS};
 
 use crate::browser::LobbiesButton;
 use crate::arena::palette::ui::ACCENT;
@@ -49,7 +49,7 @@ pub(super) fn show_room(
                 let won = if winner == "You" { "You won the last match".to_string() } else { format!("{winner} won the last match") };
                 card.spawn(ui_text(won, 12.0, palette::TORCH_FLAME));
             }
-            if let Some(goal) = view.goal.or((!view.practice).then_some(KILLS_TO_WIN)) {
+            if let Some(goal) = view.goal {
                 card.spawn(ui_text(format!("First to {goal} kills. Zombies roam the arena."), 11.0, palette::ui::MUTED));
             }
             let editing = view.may_edit(my_id);

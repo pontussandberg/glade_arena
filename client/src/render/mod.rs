@@ -33,6 +33,7 @@ pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
+        app.add_observer(forget_body);
         app.add_plugins((
             arena::ArenaPlugin,
             crate::camera::CameraPlugin,
@@ -191,6 +192,14 @@ impl Visuals {
                 })
             })
             .clone()
+    }
+}
+
+/// A fighter gone: its body's material goes from `Visuals` too (fighters no client controls, such
+/// as zombies, come and go with new ids all match long). One still in use stays alive in its user.
+fn forget_body(trigger: On<Remove, PlayerId>, players: Query<&PlayerId>, mut visuals: ResMut<Visuals>) {
+    if let Ok(id) = players.get(trigger.entity) {
+        visuals.materials.remove(&(Some(id.0), Look::Body));
     }
 }
 
