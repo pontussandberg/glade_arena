@@ -3,8 +3,12 @@
 
 use super::*;
 
+use arena_shared::sim;
+
+use crate::rooms::{InRoom, Lobby};
+
 /// Replicated to everyone; interpolated by all but the owner, who shows it as last received.
-pub(super) fn replicated_player(owner: PeerId) -> impl Bundle {
+fn replicated_player(owner: PeerId) -> impl Bundle {
     (
         Replicate::to_clients(NetworkTarget::All),
         InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(owner)),
@@ -27,7 +31,7 @@ pub(super) struct Dead {
 /// A respawning player is moved to its spawn point this long before it comes back to life:
 /// longer than other clients' interpolation delay, so they never see it slide from where it
 /// died to where it respawns (it's still hidden while that happens).
-pub(super) const PLACE_BEFORE_RESPAWN_TICKS: u32 = TICK_HZ as u32 / 4;
+const PLACE_BEFORE_RESPAWN_TICKS: u32 = TICK_HZ as u32 / 4;
 
 /// Players who can move, attack and be hit: placed and alive.
 pub(super) type InPlay = (Without<NeedsSpawnPoint>, Without<Dead>);
@@ -117,7 +121,7 @@ pub(super) fn respawn(
             *cooldowns = Cooldowns { free: cooldowns.free, ..default() };
             *dashing = Dashing::default();
             commands.entity(player).remove::<Dead>();
-            debug!(?player, "respawned");
+            debug!(target: "arena_server", ?player, "respawned");
         }
     }
 }

@@ -2,6 +2,10 @@
 
 use super::*;
 
+use crate::arena::palette::ui::ACCENT;
+use crate::arena::palette;
+use crate::render::{button_fill, key_chip, ui_text};
+
 /// The room around a card's content, and its fill.
 pub(crate) const CARD_PADDING: f32 = GAP * 2.0;
 pub(crate) fn card_fill() -> Color {

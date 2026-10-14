@@ -3,8 +3,12 @@
 
 use super::*;
 
+use bevy::math::Affine3A;
+
+use crate::arena::{self, RIG_HIP};
+
 /// How long a leg is, hip to sole (just off the ground), and how low cloth can go.
-pub(super) const LEG_LENGTH: f32 = RIG_HIP.y - 0.02;
+const LEG_LENGTH: f32 = RIG_HIP.y - 0.02;
 pub(super) const FLOOR: f32 = 0.015;
 /// How far over the shoulder joint an arm's capsule starts (`Wardrobe::arm`).
 pub(super) const ARM_TOP: f32 = 0.0;

@@ -3,6 +3,11 @@
 
 use super::*;
 
+use bevy::color::Mix;
+
+use crate::cloth::{Column, Drape, Wardrobe, Weave};
+use crate::sculpt::{Section, bevel_box, grid, hemmed, sheet, smoothed, sweep, tube};
+
 /// The executioner's spear, standing along +Y with its point at the origin, carried and thrown
 /// alike: a headsman's blade on a pole. A long, broad, straight blade narrowing to a cruel point,
 /// flat in Z (so it shows from above as it flies), its edges ground bright (`metal`) either side
@@ -173,7 +178,7 @@ pub(super) fn javelinist_body() -> Mesh {
 /// A long knife sheathed in dark leather, hung straight down from the executioner's belt at the
 /// left front on a short loop: an iron throat and tip on the sheath, a leather-bound grip over a
 /// short iron guard, an iron pommel.
-pub(super) fn hip_knife() -> Mesh {
+fn hip_knife() -> Mesh {
     // Built hanging down (-Y) from the top of its sheath, flat across X, thin through Z.
     let (leather, iron) = (palette::DARK_LEATHER, palette::IRON);
     let sheath = tube(
@@ -212,12 +217,12 @@ pub(super) fn hip_knife() -> Mesh {
 }
 
 /// How high the coat's skirt starts, up under the belt.
-pub(super) const COAT_TOP: f32 = 0.94;
+const COAT_TOP: f32 = 0.94;
 
 /// Where the coat's skirt is, at `u` (0..1) round it from its right front edge, round the back, to
 /// its left front edge, and `v` (0..1) from the belt down to the hem; `ragged` for the cloth
 /// itself (folds, unevenness and the torn hem), not for the chains it hangs from.
-pub(super) fn coat_point(u: f32, v: f32, ragged: bool) -> Vec3 {
+fn coat_point(u: f32, v: f32, ragged: bool) -> Vec3 {
     // Open at the front, this far (radians) either side of it.
     const OPEN: f32 = 0.45;
     let a = OPEN + u * (std::f32::consts::TAU - 2.0 * OPEN);
@@ -241,12 +246,12 @@ pub(super) fn coat_point(u: f32, v: f32, ragged: bool) -> Vec3 {
 
 /// How far apart (radians, round the cowl) the two sides of its slit under the right arm are at
 /// rest: just apart, so each side moves as its own (`javelinist_mantle`).
-pub(super) const MANTLE_SLIT: f32 = 0.05;
+const MANTLE_SLIT: f32 = 0.05;
 /// How thick the arm is to the cowl lying on it (`javelinist_mantle`).
-pub(super) const MANTLE_ARM: f32 = 0.08;
+const MANTLE_ARM: f32 = 0.08;
 /// How far down the arm (from the shoulder) the cowl can lie on it: over the top of the arm, not
 /// up along it when it's raised.
-pub(super) const MANTLE_ON_ARM: f32 = 0.2;
+const MANTLE_ON_ARM: f32 = 0.2;
 
 /// A point on the cowl over the executioner's shoulders, `u` (0..1) round it from one side of
 /// its slit under the right arm (`MANTLE_SLIT`) round the front and back to the other, `v`
@@ -254,7 +259,7 @@ pub(super) const MANTLE_ON_ARM: f32 = 0.2;
 /// close to the shoulders, just clear of the arm (`MANTLE_ARM`) on the right, rounded over it,
 /// and closer still down over the empty left shoulder, in soft folds deepening toward the hem;
 /// `ragged` for the cloth itself (folds and its cut hem), not for the chains it hangs from.
-pub(super) fn mantle_point(u: f32, v: f32, ragged: bool) -> Vec3 {
+fn mantle_point(u: f32, v: f32, ragged: bool) -> Vec3 {
     // (v, depth, width, height) down it: from round the neck, over the top of the shoulder, down
     // past it to the hem; over the arm, and over the empty side.
     type Profile = [(f32, f32, f32, f32); 4];
@@ -268,8 +273,8 @@ pub(super) fn mantle_point(u: f32, v: f32, ragged: bool) -> Vec3 {
     };
     let angle = std::f32::consts::FRAC_PI_2 + MANTLE_SLIT + u * (std::f32::consts::TAU - 2.0 * MANTLE_SLIT);
     // Over the empty left shoulder (-Z), easing in across the front and back.
-    let empty = (-angle.sin() / 0.5).clamp(0.0, 1.0);
-    let Vec3 { x: depth, y: width, z: y } = at(&OVER_ARM).lerp(at(&EMPTY), crate::ease::smooth(empty));
+    let empty = crate::ease::ease(0.0, 0.5, -angle.sin());
+    let Vec3 { x: depth, y: width, z: y } = at(&OVER_ARM).lerp(at(&EMPTY), empty);
     // Rounded over the shoulders, a little fuller than an ellipse.
     let square = |c: f32| c.signum() * c.abs().powf(2.0 / 2.15);
     let (mut out, mut y) = (1.0, y);
@@ -283,7 +288,7 @@ pub(super) fn mantle_point(u: f32, v: f32, ragged: bool) -> Vec3 {
 /// The hood's cowl lying over the executioner's shoulders, as moving cloth: heavy, lying on the
 /// throwing arm (`Wardrobe::arm`), slit under it from the shoulder down, so raised it parts the
 /// cloth, falling in front of and behind it.
-pub(super) fn javelinist_mantle() -> Drape {
+fn javelinist_mantle() -> Drape {
     const ROWS: usize = 18;
     const COLS: usize = 96;
     // As many as a skin can have joints (`cloth::MAX_JOINTS`), one per chain point.
@@ -384,7 +389,7 @@ pub(super) fn javelinist_forearm() -> Mesh {
 }
 
 /// How far in toward the body the empty left sleeve hangs from where a shoulder would be.
-pub(super) const STUMP_IN: f32 = 0.06;
+const STUMP_IN: f32 = 0.06;
 
 /// The empty left sleeve of a one-armed man: no shoulder in it, hanging limp and flattened out
 /// from under the coat's cowl, gathered in and tied off in a knot, its two ends hanging.
@@ -454,14 +459,14 @@ pub(super) fn javelinist_shin() -> Mesh {
 
 /// The middle of the death hunter's head (in the head's space, the neck at the origin, facing
 /// +X), and its half sizes: how deep, how tall, how wide.
-pub(super) const SKULL: Vec3 = Vec3::new(0.0, 0.2, 0.0);
-pub(super) const SKULL_HALF: Vec3 = Vec3::new(0.135, 0.165, 0.11);
+const SKULL: Vec3 = Vec3::new(0.0, 0.2, 0.0);
+const SKULL_HALF: Vec3 = Vec3::new(0.135, 0.165, 0.11);
 /// Where its eyes are, on the face, in shadow under the hood's brow.
 pub(super) const HUNTER_EYES: Vec3 = Vec3::new(0.128, 0.198, 0.043);
 
 /// A point `out` off the skull, `theta` round it from the front (radians, toward +Z), `phi` up
 /// from its middle: rounder behind, swelling at the back of the crown.
-pub(super) fn on_skull(theta: f32, phi: f32, out: f32) -> Vec3 {
+fn on_skull(theta: f32, phi: f32, out: f32) -> Vec3 {
     let back = (-theta.cos()).max(0.0) * phi.cos();
     let half = SKULL_HALF + Vec3::new(0.012, 0.0, 0.004) * back;
     SKULL + Vec3::new((half.x + out) * phi.cos() * theta.cos(), (half.y + out) * phi.sin(), (half.z + out) * phi.cos() * theta.sin())
@@ -469,22 +474,22 @@ pub(super) fn on_skull(theta: f32, phi: f32, out: f32) -> Vec3 {
 
 /// How far (radians either side of the front) the hood is open at `phi` up the skull: shut over
 /// the crown, round the face from the brow down to the jaw, then closing in under the bandana.
-pub(super) fn hood_open(phi: f32) -> f32 {
-    let brow = 1.0 - ((phi - 0.32) / 0.22).clamp(0.0, 1.0);
+fn hood_open(phi: f32) -> f32 {
+    let brow = 1.0 - (phi - 0.32) / 0.22;
     let chin = ((phi + 1.15) / 0.4).clamp(0.0, 1.0);
     0.95 * crate::ease::smooth(brow) * (0.55 + 0.45 * chin)
 }
 
 /// How far up the skull (`phi`) the hood is at `v` (0..1) down it: over the crown and down to the
 /// jaw (`v` up to `HOOD_JAW`), below that tucked down into the coat's cowl.
-pub(super) const HOOD_JAW: f32 = 0.78;
-pub(super) const HOOD_PHI: (f32, f32) = (std::f32::consts::FRAC_PI_2, -0.8);
+const HOOD_JAW: f32 = 0.78;
+const HOOD_PHI: (f32, f32) = (std::f32::consts::FRAC_PI_2, -0.8);
 
 /// A point on the death hunter's hood, `u` (-1..1) round the head from the left side of its
 /// opening, round the back, to the right side, `v` (0..1) from the crown down into the coat's
 /// cowl: close over the skull, softly creased, a short point at the back of the crown, its brow
 /// pulled forward over the eyes.
-pub(super) fn hood_point(u: f32, v: f32) -> Vec3 {
+fn hood_point(u: f32, v: f32) -> Vec3 {
     let jaw = (v / HOOD_JAW).min(1.0);
     let phi = HOOD_PHI.0 + (HOOD_PHI.1 - HOOD_PHI.0) * jaw;
     let open = hood_open(phi);
@@ -545,10 +550,10 @@ pub(super) fn javelinist_hood() -> Mesh {
 
 /// The bandana's front (in the head's space): its middle, how far it reaches forward and out to
 /// either side round the face, and the height of its top edge, just under the eyes.
-pub(super) const BANDANA: (f32, f32, f32, f32) = (0.02, 0.13, 0.105, 0.162);
+const BANDANA: (f32, f32, f32, f32) = (0.02, 0.13, 0.105, 0.162);
 
 /// How far down the bandana hangs at `u` (-1..1, across the face): a short point in the middle.
-pub(super) fn bandana_drop(u: f32) -> f32 {
+fn bandana_drop(u: f32) -> f32 {
     0.07 + 0.025 * (1.0 - u.abs()).powf(1.8)
 }
 
@@ -556,7 +561,7 @@ pub(super) fn bandana_drop(u: f32) -> f32 {
 /// from its top edge: drawn up over the bridge of the nose, round the face, falling from the nose
 /// in soft folds that deepen as they hang, its lower edge drawn back under the chin, tucked in
 /// behind the hood's cowl.
-pub(super) fn bandana_point(u: f32, v: f32) -> Vec3 {
+fn bandana_point(u: f32, v: f32) -> Vec3 {
     let (middle, forward, out, top) = BANDANA;
     let a = u * 1.35;
     let nose = (-(u / 0.3).powi(2)).exp();
@@ -568,7 +573,7 @@ pub(super) fn bandana_point(u: f32, v: f32) -> Vec3 {
 }
 
 /// Just off the front of the bandana at `u` across it and height `y`: where its stitches go.
-pub(super) fn on_bandana(u: f32, y: f32) -> Vec3 {
+fn on_bandana(u: f32, y: f32) -> Vec3 {
     let (middle, _, _, top) = BANDANA;
     let v = ((top - y) / bandana_drop(u)).clamp(0.0, 1.0);
     let p = bandana_point(u, v);
@@ -580,7 +585,7 @@ pub(super) fn on_bandana(u: f32, y: f32) -> Vec3 {
 /// stretched almost from ear to ear, its corners pulled up into a smile too wide, crossed by
 /// uneven slanting stitches, old dark stains run down from it in drips; over it the nose two
 /// small dark slits.
-pub(super) fn hunter_bandana() -> Mesh {
+fn hunter_bandana() -> Mesh {
     const ROWS: usize = 16;
     const COLS: usize = 40;
     let cloth = palette::BONE.darker(0.3).mix(&palette::ASH, 0.25);

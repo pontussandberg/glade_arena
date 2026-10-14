@@ -3,6 +3,9 @@
 
 use super::*;
 
+use crate::cloth::{Column, Drape, Wardrobe, Weave};
+use crate::sculpt::{Section, bevel_box, grid, hemmed, sheet, smoothed, sweep, tube};
+
 /// The revenant's body, a fallen paladin's, lean and quick, under its moving cloth
 /// (`revenant_wardrobe`): a fitted long coat, its bodice closed down the front with iron clasps
 /// between dark lapels, a high collar flaring open at the throat, a wide belt (the coat's tails
@@ -61,7 +64,7 @@ pub(super) fn revenant_body() -> Mesh {
 /// Small plates of blackened steel over the `side` (±1, +Z the right) shoulder: a broad cap and
 /// two lames below it, each curving from the front of the shoulder over it to the back,
 /// overlapping down the arm.
-pub(super) fn shoulder_plates(side: f32) -> Mesh {
+fn shoulder_plates(side: f32) -> Mesh {
     let mut parts = Vec::new();
     // Each plate (from, to: how far out along the shoulder), sloping down with the shoulder and
     // overlapping the next, the cap the broadest.
@@ -102,7 +105,7 @@ pub(super) fn revenant_glow() -> Mesh {
 /// edge round to the split down the back, `v` (0..1) from the waist down to the hem (at the knee in
 /// front, sweeping down to the ground behind); `ragged` for the cloth itself (folds and the torn
 /// hem), not for the chains it hangs from.
-pub(super) fn coat_tail_point(side: f32, u: f32, v: f32, ragged: bool) -> Vec3 {
+fn coat_tail_point(side: f32, u: f32, v: f32, ragged: bool) -> Vec3 {
     // Open wide at the front, this far (radians) either side of it, and split down the back.
     const OPEN: f32 = 0.55;
     const SPLIT: f32 = 0.05;
@@ -157,7 +160,7 @@ pub(super) fn revenant_wardrobe() -> Wardrobe {
 
 /// The revenant's skull, from the neck up (in the head's space): (height, forward, half depth,
 /// half width).
-pub(super) const REVENANT_SKULL: [(f32, f32, f32, f32); 9] = [
+const REVENANT_SKULL: [(f32, f32, f32, f32); 9] = [
     (-0.04, 0.0, 0.05, 0.048),
     (0.04, 0.005, 0.058, 0.052),
     (0.09, 0.02, 0.085, 0.07),
@@ -170,7 +173,7 @@ pub(super) const REVENANT_SKULL: [(f32, f32, f32, f32); 9] = [
 ];
 
 /// The skull's section at height `y`: (forward, half depth, half width).
-pub(super) fn revenant_skull_at(y: f32) -> (f32, f32, f32) {
+fn revenant_skull_at(y: f32) -> (f32, f32, f32) {
     let s = REVENANT_SKULL;
     let k = s.windows(2).position(|w| y <= w[1].0).unwrap_or(s.len() - 2);
     let (a, b) = (s[k], s[k + 1]);
@@ -180,7 +183,7 @@ pub(super) fn revenant_skull_at(y: f32) -> (f32, f32, f32) {
 
 /// A band of cloth wrapped once round the head: centered `height(t)` and `half(t)` high at `t`
 /// radians round from the front, `grow` times the skull's size there.
-pub(super) fn head_wrap(height: impl Fn(f32) -> f32, half: impl Fn(f32) -> f32, grow: f32, color: Color) -> Mesh {
+fn head_wrap(height: impl Fn(f32) -> f32, half: impl Fn(f32) -> f32, grow: f32, color: Color) -> Mesh {
     let band: Vec<Section> = (0..=36)
         .map(|i| i as f32 / 36.0 * std::f32::consts::TAU)
         .map(|t| {
@@ -345,7 +348,7 @@ pub(super) fn glaive() -> Mesh {
 }
 
 /// Where the glaive's butt ends (below the hand), before its spike.
-pub(super) const GLAIVE_BUTT: f32 = -0.3;
+const GLAIVE_BUTT: f32 = -0.3;
 /// Where the glaive's blade starts, above the hand.
 pub const BLADE_START: f32 = 0.72;
 
@@ -354,7 +357,7 @@ pub const BLADE_START: f32 = 0.72;
 /// cleaver's: stepping out from the collar to a straight spine and a straight edge running side
 /// by side, squared off at its end (`GLAIVE_TOP`), where a horn rises from each corner, the
 /// edge's taller: a top hollowed between them.
-pub(super) const GLAIVE: [(f32, f32, f32, f32); 8] = [
+const GLAIVE: [(f32, f32, f32, f32); 8] = [
     (BLADE_START, 0.0, 0.034, 0.017),
     (0.78, 0.048, 0.082, 0.015),
     (0.95, 0.052, 0.086, 0.014),
@@ -366,7 +369,7 @@ pub(super) const GLAIVE: [(f32, f32, f32, f32); 8] = [
 ];
 
 /// Where the glaive's blade is squared off, between the horns at its corners (`glaive`).
-pub(super) const GLAIVE_TOP: f32 = 1.79;
+const GLAIVE_TOP: f32 = 1.79;
 
 /// A point on the glaive's edge, `t` of the way (0..1) from the root of its blade to its point,
 /// in the glaive's own space (as `glaive`).
@@ -454,12 +457,12 @@ pub(super) fn glaive_cracks() -> Mesh {
 
 /// How many cracks split the empowered glaive's blade (`glaive_cracks`), and how wide each is
 /// where it opens at the edge (meters).
-pub(super) const GLAIVE_CRACKS: u32 = 7;
-pub(super) const CRACK_WIDTH: f32 = 0.024;
+const GLAIVE_CRACKS: u32 = 7;
+const CRACK_WIDTH: f32 = 0.024;
 
 /// The glaive's blade at height `y` (`GLAIVE`, between its sections): where its edge and its
 /// spine are (x) and half its thickness.
-pub(super) fn blade_at(y: f32) -> (f32, f32, f32) {
+fn blade_at(y: f32) -> (f32, f32, f32) {
     let k = GLAIVE.windows(2).position(|w| y <= w[1].0).unwrap_or(GLAIVE.len() - 2);
     let (a, b) = (GLAIVE[k], GLAIVE[k + 1]);
     let t = ((y - a.0) / (b.0 - a.0)).clamp(0.0, 1.0);

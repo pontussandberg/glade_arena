@@ -3,6 +3,10 @@
 
 use super::*;
 
+use arena_shared::map::Map;
+
+use crate::rooms::InRoom;
+
 /// Server-only: a target dummy, for practice: a fighter of `class` standing at a spot, never
 /// moving or attacking, hit like anyone else, and back to full health instead of dying. `home`
 /// is where it was placed, where it comes back to.

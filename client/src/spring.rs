@@ -1,26 +1,33 @@
 //! A value on a damped spring, solved exactly: the same motion at any frame rate. What the
 //! fighters' joints move on (`rig::Joints`), and a thrown spear's rubbery wind.
 
-use std::f32::consts::PI;
-
 /// A value on a damped spring: chases its target with a little lag and overshoot, then settles.
 #[derive(Default, Clone)]
 pub(crate) struct Spring {
     pub(crate) at: f32,
-    pub(crate) speed: f32,
+    speed: f32,
     /// Its target last step: it moves on from there to the next one steadily through the step.
-    pub(crate) target: Option<f32>,
+    target: Option<f32>,
 }
 
 impl Spring {
-    pub(crate) fn follow(&mut self, target: f32, dt: f32, stiffness: f32, damping: f32) -> f32 {
-        // Solved exactly over the step, its target moving steadily from where it was last step
-        // (unless that's a jump right round), so it moves the same at any frame rate; damped at
-        // least critically (no overshoot) above 1. Chasing a target moving at `rate`, it trails
-        // `lag` behind it; how far it is off that swings out and settles.
-        let from = self.target.filter(|from| (target - from).abs() < PI && dt > 0.0).unwrap_or(target);
+    /// How long (seconds) it trails behind a target moving steadily: as far as the target moves
+    /// in that time.
+    pub(crate) fn lag(stiffness: f32, damping: f32) -> f32 {
+        2.0 * damping.min(1.0) / stiffness
+    }
+
+    /// A step of `dt` (seconds) closer to `target`. A target that moved `jump` or more since the
+    /// last step jumped there, rather than moving steadily through the step.
+    pub(crate) fn follow(&mut self, target: f32, dt: f32, stiffness: f32, damping: f32, jump: f32) -> f32 {
+        // Solved exactly over the step, its target moving steadily from where it was last step,
+        // so it moves the same at any frame rate; damped at least critically (no overshoot)
+        // above 1. Chasing a target moving at `rate`, it trails `lag` behind it; how far it is
+        // off that swings out and settles.
+        let from = self.target.filter(|from| (target - from).abs() < jump && dt > 0.0).unwrap_or(target);
         let rate = if dt > 0.0 { (target - from) / dt } else { 0.0 };
         let (w, z) = (stiffness, damping);
+        // Trailing by `Spring::lag`, worked out inline: rounding it another way shifts poses.
         let lag = -2.0 * z.min(1.0) * rate / w;
         let (off, v) = (self.at - from - lag, self.speed - rate);
         let (off, v) = if z < 1.0 {

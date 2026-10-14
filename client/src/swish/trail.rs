@@ -3,17 +3,25 @@
 
 use super::*;
 
+use std::collections::VecDeque;
+
+use bevy::camera::visibility::NoFrustumCulling;
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
+
+use crate::arena::{self, FlatMesh};
+use crate::render::shown;
+
 /// How long the trail lingers (seconds), how fast the blade's tip must move for it to show
 /// (m/s: it fades in from the first to the second), and the stretch of the blade it follows
 /// (from its base, through where it's brightest, to its tip, as fractions of its length).
-pub(super) const TRAIL_LIFE: f32 = 0.16;
-pub(super) const TRAIL_SPEED: (f32, f32) = (6.0, 13.0);
-pub(super) const TRAIL_BLADE: [f32; 3] = [BLADE_FROM, (BLADE_FROM + 1.0) / 2.0, 1.0];
+const TRAIL_LIFE: f32 = 0.16;
+const TRAIL_SPEED: (f32, f32) = (6.0, 13.0);
+const TRAIL_BLADE: [f32; 3] = [BLADE_FROM, (BLADE_FROM + 1.0) / 2.0, 1.0];
 /// Where the blade starts along the weapon (a fraction of its length): a glaive's is its outer
 /// half, past the shaft.
 pub(super) const BLADE_FROM: f32 = arena::BLADE_START / arena::BLADE_LENGTH;
 /// How bright the trail is when the blade isn't quickened (`Blade::quickened`; it's 1 when it is).
-pub(super) const TRAIL_DIM: f32 = 0.5;
+const TRAIL_DIM: f32 = 0.5;
 
 /// A blade's trail: where the blade has lately been (in the world), drawn by `entity` (a mesh in
 /// world space, rebuilt each frame it shows).
@@ -61,7 +69,7 @@ pub(super) fn add_trails(
 
 /// A ribbon through the blade's recent places (`(alpha, [base, middle, tip])`, oldest first):
 /// clear at the blade's base, brightest toward its tip. Both faces.
-pub(super) fn trail_mesh(places: &[(f32, [Vec3; 3])]) -> Mesh {
+fn trail_mesh(places: &[(f32, [Vec3; 3])]) -> Mesh {
     let shade = [0.0, 0.6, 1.0];
     let mut b = FlatMesh::default();
     for pair in places.windows(2) {

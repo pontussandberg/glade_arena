@@ -7,19 +7,9 @@
 //! Flat-shaded, untextured, one color per face. The world stays in a calm middle band of
 //! saturation; only fighters, projectiles and torch flames go above it.
 
-use arena_shared::classes::{ClassDef, Shot};
-use arena_shared::map::{Map, MapId, Tile};
-use bevy::asset::RenderAssetUsages;
-use bevy::color::Mix;
-use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
-use bevy::mesh::PrimitiveTopology;
-use bevy::pbr::{DistanceFog, FogFalloff};
-use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
-use crate::cloth::{Column, Drape, Wardrobe, Weave};
-use crate::rooms::CurrentMap;
-use crate::sculpt::{Section, bevel_box, grid, hemmed, sheet, smoothed, sweep, tube};
+use crate::cloth::Wardrobe;
 
 mod theme;
 pub use theme::*;
@@ -326,6 +316,8 @@ pub fn fighter_mesh(class_key: &str) -> Mesh {
         _ => unreachable!("no figure for class {class_key:?} (add it to FIGHTER_LOOKS)"),
     }
 }
+
+/// How far the point of a held javelin is ahead of the hand.
 pub const GRIP_TO_TIP: f32 = 1.2;
 
 #[cfg(test)]

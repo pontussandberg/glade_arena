@@ -2,6 +2,11 @@
 
 use super::*;
 
+use arena_shared::map::Map;
+use arena_shared::sim;
+
+use crate::rooms::InRoom;
+
 /// A room's pickups, lying at `map`'s spots for everyone in it to see.
 pub(super) fn spawn_pickups(commands: &mut Commands, room: InRoom, map: &Map) -> Vec<Entity> {
     map.pickups
@@ -51,6 +56,6 @@ pub(super) fn take_pickups(
         };
         pickup.back_at = Some(now + respawn);
         pickup.taken_by = Some(id.0);
-        debug!(player = ?id.0, kind = ?pickup.kind, health = health.0, "took a pickup");
+        debug!(target: "arena_server", player = ?id.0, kind = ?pickup.kind, health = health.0, "took a pickup");
     }
 }

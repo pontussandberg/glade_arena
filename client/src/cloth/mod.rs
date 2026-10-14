@@ -13,11 +13,10 @@ use std::f32::consts::TAU;
 
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::math::Affine3A;
-use bevy::mesh::VertexAttributeValues;
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::prelude::*;
 
-use crate::arena::{self, RIG_HIP};
+use crate::arena;
 use crate::rig::Posing;
 
 mod skin;
@@ -474,6 +473,8 @@ fn drape(
 /// each drape's mesh as it came to hang, in the fighter's space (for previews).
 #[cfg(test)]
 pub(crate) fn settled(wardrobe: &Wardrobe, posed: &crate::rig::Posed, seconds: f32) -> Vec<Mesh> {
+    use bevy::mesh::VertexAttributeValues;
+
     let mut hangings: Vec<Hanging> = wardrobe.drapes.iter().map(|d| Hanging::new(&d.chains, d.weave, Vec::new())).collect();
     let body = Transform { translation: Vec3::ZERO, ..posed.body };
     let (m, inverse) = (body.compute_affine(), body.compute_affine().inverse());

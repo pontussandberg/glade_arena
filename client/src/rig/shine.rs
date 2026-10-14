@@ -3,17 +3,21 @@
 
 use super::*;
 
+use crate::Me;
+use crate::feedback::AttackClock;
+use crate::render::shown;
+
 /// A blade's gleam: how long between gleams (seconds, at least and at most), how long one lasts,
 /// how big it gets (at its least and most, of the glint's size), and how far it turns (radians):
 /// quickest coming in and going out, settling still as it shines its brightest.
-pub(super) const GLEAM_EVERY: (f32, f32) = (1.6, 2.4);
-pub(super) const GLEAM_SECONDS: f32 = 0.7;
-pub(super) const GLEAM_SIZE: (f32, f32) = (0.25, 0.75);
-pub(super) const GLEAM_SPIN: f32 = 2.4;
+const GLEAM_EVERY: (f32, f32) = (1.6, 2.4);
+const GLEAM_SECONDS: f32 = 0.7;
+const GLEAM_SIZE: (f32, f32) = (0.25, 0.75);
+const GLEAM_SPIN: f32 = 2.4;
 /// Where in a gleam (0..1) it reaches its height and leaves it, and how much it squishes while
 /// it's there (a fraction of its size).
-pub(super) const GLEAM_HOLD: (f32, f32) = (0.35, 0.65);
-pub(super) const GLEAM_SQUISH: f32 = 0.3;
+const GLEAM_HOLD: (f32, f32) = (0.35, 0.65);
+const GLEAM_SQUISH: f32 = 0.3;
 
 /// When a blade gleams next, and the gleam under way: from when, where on the blade (in its own
 /// space), how bright; `seed` picks the next.

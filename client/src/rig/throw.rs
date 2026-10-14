@@ -4,6 +4,11 @@
 
 use super::*;
 
+use arena_shared::abilities::MAX_ABILITIES;
+
+use crate::Me;
+use crate::render::shown;
+
 /// The spawn ticks of another fighter's latest auto-attack and Q throws, noted as their spears
 /// appear. Spears fly on our own clock (where they really are), but the thrower is drawn a round
 /// trip or so in the past: its body only gets to a throw after the spear is already flying. What

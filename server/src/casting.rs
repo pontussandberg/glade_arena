@@ -2,6 +2,10 @@
 
 use super::*;
 
+use arena_shared::abilities::{self, AbilityDef, Cast, dash};
+
+use crate::rooms::{InRoom, Lobby};
+
 /// Server-only: who the current dash (started at `.0`) has already cut, so each target is cut
 /// once per dash.
 #[derive(Component, Default)]

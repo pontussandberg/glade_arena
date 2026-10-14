@@ -1,6 +1,8 @@
 //! The maps' looks: each theme's ground, wilds and light.
 
 use super::*;
+
+use arena_shared::map::MapId;
 use super::palette::*;
 
 /// What a map's world is made of and lit by: the scene's colors, the sun, the sky's fill and the
@@ -55,8 +57,8 @@ impl Theme {
     }
 }
 
-/// River Crossing: a green forest glade at dusk, the world's palette above.
-pub(super) const GLADE: Theme = Theme {
+/// River Crossing: a green forest glade at dusk, the world's palette (`palette`).
+const GLADE: Theme = Theme {
     grass: MOSS,
     meadow: MEADOW,
     fern: FERN,
@@ -84,7 +86,7 @@ pub(super) const GLADE: Theme = Theme {
 /// Sunken Keep: a drowned fen by moonlight. Sea-green tussocks in black water, dead snags and
 /// dark willows under a cold, dim moon and blue mist, so the torches on the keep carry the
 /// scene; pale bog cotton for flowers.
-pub(super) const FEN: Theme = Theme {
+const FEN: Theme = Theme {
     grass: Color::srgb_u8(0x5A, 0x72, 0x62),
     meadow: Color::srgb_u8(0x6C, 0x80, 0x6E),
     fern: Color::srgb_u8(0x3D, 0x5C, 0x54),
@@ -112,7 +114,7 @@ pub(super) const FEN: Theme = Theme {
 /// Riven Gorge: autumn highlands at sunset. Dry golden grass rising in terraces of red
 /// sandstone, scrub and round trees in brown and rust, a gorge falling to plum shadow, under a
 /// deep orange sun and dusty amber haze.
-pub(super) const HIGHLANDS: Theme = Theme {
+const HIGHLANDS: Theme = Theme {
     grass: Color::srgb_u8(0x8A, 0x84, 0x50),
     meadow: Color::srgb_u8(0xA0, 0x90, 0x5A),
     fern: Color::srgb_u8(0x78, 0x5E, 0x3E),

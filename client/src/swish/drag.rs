@@ -3,23 +3,27 @@
 
 use super::*;
 
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
+
+use crate::arena::FlatMesh;
+
 /// A point dragging on the ground: how low it has to be (meters), how far it goes between scuffs,
 /// how wide a scuff is, how long they last (seconds) and how see-through at most.
-pub(super) const DRAG_HEIGHT: f32 = 0.06;
-pub(super) const SCUFF_STEP: f32 = 0.1;
-pub(super) const SCUFF_WIDTH: f32 = 0.035;
-pub(super) const SCUFF_LIFE: f32 = 1.6;
+const DRAG_HEIGHT: f32 = 0.06;
+const SCUFF_STEP: f32 = 0.1;
+const SCUFF_WIDTH: f32 = 0.035;
+const SCUFF_LIFE: f32 = 1.6;
 pub(super) const SCUFF_ALPHA: f32 = 0.5;
 /// The rasp of spectral sparks a dragging blade gives off: the odds a scuff throws any (one, now
 /// and then two), how hard (m/s up, and back), how thin (meters) and how long they are drawn
 /// (times as long as thin), how long they last (seconds), and the odds one is a dark mote of
 /// the void instead of light.
-pub(super) const SPARK_ODDS: f32 = 0.55;
-pub(super) const SPARK_THROW: (f32, f32) = (1.6, 0.9);
-pub(super) const SPARK_SIZE: (f32, f32) = (0.004, 0.009);
-pub(super) const SPARK_STRETCH: f32 = 4.5;
-pub(super) const SPARK_LIFE: f32 = 0.45;
-pub(super) const SPARK_DARK: f32 = 0.35;
+const SPARK_ODDS: f32 = 0.55;
+const SPARK_THROW: (f32, f32) = (1.6, 0.9);
+const SPARK_SIZE: (f32, f32) = (0.004, 0.009);
+const SPARK_STRETCH: f32 = 4.5;
+const SPARK_LIFE: f32 = 0.45;
+const SPARK_DARK: f32 = 0.35;
 
 /// A scuff: flat, along +X from 0 to 1 (a little past, to meet the next), 1 across, solid down
 /// its middle and clear at its sides.
@@ -137,7 +141,7 @@ pub(super) fn fade_scuffs(mut commands: Commands, time: Res<Time>, assets: Res<S
             commands.entity(entity).despawn();
             continue;
         }
-        let faded = &assets.scuff_fades[((t * MARK_FADES as f32) as usize).min(MARK_FADES - 1)];
+        let faded = faded(&assets.scuff_fades, t);
         if material.0 != *faded {
             material.0 = faded.clone();
         }

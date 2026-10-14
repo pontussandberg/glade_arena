@@ -3,6 +3,14 @@
 
 use super::*;
 
+use std::fmt::Write;
+
+use crate::Me;
+use crate::camera::CameraMode;
+use crate::casting::{CastMode, key_casts, key_label};
+use crate::rooms::save_setting;
+use crate::arena::palette;
+
 /// Top left: the connection (ping, or connecting / disconnected) and whether you're dead, with
 /// the keys under it (`KeyHints`).
 #[derive(Component)]

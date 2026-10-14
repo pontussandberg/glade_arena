@@ -11,21 +11,14 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use arena_shared::abilities::{self, AbilityDef, Cast, dash};
-use arena_shared::classes::{Chill, common};
 use arena_shared::config::*;
-use arena_shared::map::Map;
 use arena_shared::protocol::*;
-use arena_shared::sim;
 use bevy::prelude::*;
 use lightyear::netcode::NetcodeServer;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
-use crate::rooms::{InRoom, Lobby};
-
 mod certs;
-use certs::*;
 mod spawning;
 use spawning::*;
 mod orders;
@@ -78,15 +71,7 @@ pub fn build_server_app(settings: ServerSettings) -> App {
 }
 
 fn spawn_server_entity(app: &mut App, settings: ServerSettings) {
-    let identity = match settings.certificate {
-        Certificate::SelfSigned { digest_out } => self_signed(digest_out),
-        Certificate::Pem { cert, key } => {
-            let identity = load_pem(&cert, &key);
-            app.insert_resource(CertificateFile { loaded: modified(&cert), path: cert });
-            app.add_systems(Update, restart_on_renewal);
-            identity
-        }
-    };
+    let identity = certs::identity(app, settings.certificate);
 
     let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), settings.port);
     info!(

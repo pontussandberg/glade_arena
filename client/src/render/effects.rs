@@ -3,14 +3,21 @@
 
 use super::*;
 
+use arena_shared::abilities::AbilityKind;
+
+use crate::Me;
+use crate::abilities::SeenCasts;
+use crate::feedback::AttackClock;
+use crate::arena::{self, palette, to_world};
+
 /// A nova: its shockwave races out to the edge in `NOVA_WAVE_SECONDS`, raising shards as it
 /// passes (each takes `NOVA_GROW_SECONDS` to burst up); the frost on the ground and the shards
 /// stay until `NOVA_SECONDS`, then sink.
-pub(super) const NOVA_WAVE_SECONDS: f32 = 0.22;
-pub(super) const NOVA_GROW_SECONDS: f32 = 0.1;
-pub(super) const NOVA_SECONDS: f32 = 0.75;
+const NOVA_WAVE_SECONDS: f32 = 0.22;
+const NOVA_GROW_SECONDS: f32 = 0.1;
+const NOVA_SECONDS: f32 = 0.75;
 /// How fast (radians per second) the frost under a slowed fighter turns.
-pub(super) const RUNE_TURN_RATE: f32 = 0.8;
+const RUNE_TURN_RATE: f32 = 0.8;
 
 /// A nova's part; despawned `until` (seconds).
 #[derive(Component)]
@@ -60,7 +67,7 @@ pub(super) fn show_novas(
 
 /// One nova's burst of ice, `radius` around `at`, cast by `owner`.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn burst_nova(
+fn burst_nova(
     commands: &mut Commands,
     time: &Time,
     visuals: &mut Visuals,
@@ -104,8 +111,7 @@ pub(super) fn burst_nova(
 pub(super) fn grow_bursts(time: Res<Time>, mut bursts: Query<(&Burst, &Fleeting, &mut Transform)>) {
     let now = time.elapsed_secs();
     for (burst, fx, mut transform) in &mut bursts {
-        let grown = ((now - burst.started) / burst.grow).clamp(0.0, 1.0);
-        let grown = 1.0 - (1.0 - grown).powi(3);
+        let grown = crate::ease::ease_out(0.0, burst.grow, now - burst.started);
         let sinking = ((fx.until - now) / NOVA_GROW_SECONDS).clamp(0.0, 1.0);
         let scale = (burst.size * Vec3::new(grown, grown * sinking, grown)).max(Vec3::splat(1e-3));
         if transform.scale != scale {

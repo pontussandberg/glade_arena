@@ -3,6 +3,8 @@
 
 use super::*;
 
+use arena_shared::classes::{ClassDef, Shot};
+
 /// A flat strip along world +X from `from` to `to`, `width` wide: the lane a shot will fly down.
 pub fn lane_mesh(from: f32, to: f32, width: f32) -> Mesh {
     let mut b = FlatMesh::default();
@@ -40,7 +42,6 @@ pub enum ShotGlow {
     Pale,
 }
 
-/// How far the point of a held javelin is ahead of the hand.
 /// Turns a mesh pointing up (+Y) to point along +X: how a shot flies.
 pub(super) const ALONG_X: Quat = Quat::from_xyzw(0.0, 0.0, -std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2);
 

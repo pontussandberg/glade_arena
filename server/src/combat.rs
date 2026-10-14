@@ -3,6 +3,11 @@
 
 use super::*;
 
+use arena_shared::classes::{Chill, common};
+use arena_shared::sim;
+
+use crate::rooms::{InRoom, Lobby};
+
 /// What a hit does: damage, and crowd control on top. Only an auto-attack's `can_crit`.
 #[derive(Clone, Copy)]
 pub(super) struct Blow {
@@ -12,7 +17,7 @@ pub(super) struct Blow {
 }
 
 /// Who dealt a hit, of which class (whose crit odds it rolls), and `with` what (for the log).
-pub(super) type Attacker<'a> = (PeerId, ClassId, &'a str);
+type Attacker<'a> = (PeerId, ClassId, &'a str);
 
 /// Where a fighter (or a projectile) fights: which room, which side.
 pub(super) type Side = (InRoom, Team);
@@ -40,9 +45,9 @@ pub(super) fn damage(
     if !blow.chill.is_none() {
         chilled.apply(blow.chill, now);
     }
-    debug!(attacker = ?by, target = ?id, with, amount, crit, health = health.0, "hit");
+    debug!(target: "arena_server", attacker = ?by, victim = ?id, with, amount, crit, health = health.0, "hit");
     if health.0 == 0 {
-        info!(killer = ?by, victim = ?id, with, "kill");
+        info!(target: "arena_server", killer = ?by, victim = ?id, with, "kill");
         commands.entity(player).insert(Dead { respawn_at: now + RESPAWN_TICKS, placed: false });
     }
 }

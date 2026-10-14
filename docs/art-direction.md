@@ -13,7 +13,7 @@ what blocks movement and shots.
 
 Live reference with a 3D preview (still shows the earlier square arena in afternoon light):
 https://claude.ai/artifact/WgUKXJpxy2GkzWjWRVUfXY
-Code: `client/src/arena.rs` (palette, map themes, scene, mesh helpers), used by `client/src/render.rs`.
+Code: `client/src/arena/` (palette, map themes, scene, mesh helpers), used by `client/src/render/`.
 
 ## Map themes
 
@@ -61,7 +61,7 @@ exception to "no autumn oranges" below, kept dull enough that Enemy red still st
    eyes, the hood's opening framed by a fold of cloth turned back over it, dipping to a point over
    the face. Layered medieval cloth (undertunic, coat, mantle, tabard) that really moves:
    it trails, swings and settles, pushed aside by the legs, and drifts a little even standing
-   still, lighter than real cloth (`client/src/cloth.rs`). Energy only at the edges: a thin
+   still, lighter than real cloth (`client/src/cloth/`). Energy only at the edges: a thin
    glowing hem, ends that burn away into light, motes rising off them, in the class's own light
    (the javelinist's white, the revenant's wisp green). The rest stays dark.
 

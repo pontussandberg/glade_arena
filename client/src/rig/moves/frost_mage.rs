@@ -2,6 +2,8 @@
 
 use super::*;
 
+use crate::arena::{RIG_ELBOW, RIG_HAND};
+
 pub(super) const FROST_MAGE: Moves = Moves {
     weapon_arm: [0.3, 1.9, 1.25, 0.75],
     weapon_arm_untwist: 0.0,

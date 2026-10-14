@@ -2,6 +2,11 @@
 
 use super::*;
 
+use arena_shared::map::Map;
+use arena_shared::sim;
+
+use crate::rooms::InRoom;
+
 /// A room's waygates, open, on `map`.
 pub(super) fn spawn_gates(commands: &mut Commands, room: InRoom, map: &Map) -> Vec<Entity> {
     map.gates
@@ -43,6 +48,6 @@ pub(super) fn use_gates(
         input.move_to = None;
         dashing.set_if_neq(Dashing::default());
         gate.back_at = Some(now + GATE_CLOSED_TICKS);
-        debug!(player = ?id.0, from = ?gate.ends[end], "through a waygate");
+        debug!(target: "arena_server", player = ?id.0, from = ?gate.ends[end], "through a waygate");
     }
 }

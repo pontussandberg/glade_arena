@@ -3,32 +3,41 @@
 
 use super::*;
 
+use std::f32::consts::FRAC_PI_2;
+
+use bevy::input::mouse::AccumulatedMouseMotion;
+use bevy::light::NotShadowCaster;
+use bevy::pbr::{DistanceFog, FogFalloff};
+
+use crate::arena::{self, palette, to_world};
+use crate::rooms::CurrentMap;
+
 /// Where the stage is, on the gameplay plane: out in the wilds off the map's east side, the
 /// fighter on it with its back to the map's middle (`stage_turn`), so the map lies behind it;
 /// and how high its crag stands, so the camera looking down at the fighter sees the map below
 /// and beyond.
 pub(super) const STAGE: Vec2 = Vec2::new(48.0 * 0.921, -48.0 * 0.389);
-pub(super) const STAGE_HEIGHT: f32 = 10.0;
+const STAGE_HEIGHT: f32 = 10.0;
 /// The haze from the stage (where it starts and where it hides everything): looking toward the
 /// map, farther out than in the arena so the map shows through it; turned right away from it,
 /// close in, hiding where the forest ends a little way behind the stage.
-pub(super) const VISTA_HAZE: (f32, f32) = (50.0, 140.0);
-pub(super) const AWAY_HAZE: (f32, f32) = (8.0, 24.0);
+const VISTA_HAZE: (f32, f32) = (50.0, 140.0);
+const AWAY_HAZE: (f32, f32) = (8.0, 24.0);
 /// How far from the camera the sun casts shadows from the stage: over the map below.
 pub(super) const VISTA_SHADOWS: f32 = 140.0;
 /// The stage camera: how high it looks at the fighter, how far back it stands (along the
 /// ground) and how far above that point it is, which way it looks from (a three-quarter view of
 /// the front, from the fighter's facing), how far and fast it sways on its own, and how fast
 /// dragging turns it (radians per pixel).
-pub(super) const STAGE_AIM_HEIGHT: f32 = 1.2;
+const STAGE_AIM_HEIGHT: f32 = 1.2;
 pub(super) const STAGE_BACK: f32 = 8.0;
 pub(super) const STAGE_RISE: f32 = 4.6;
 pub(super) const FRONT: f32 = FRAC_PI_2 - 0.4;
 pub(super) const SWAY: (f32, f32) = (0.25, 0.35);
-pub(super) const STAGE_DRAG: f32 = 0.008;
+const STAGE_DRAG: f32 = 0.008;
 /// How high over the stage the name badge's bottom edge sits: over the tallest fighter (the
 /// frost mage's staff reaches past its head), so it stays put whichever is picked.
-pub(super) const TAG_HEIGHT: f32 = 2.75;
+const TAG_HEIGHT: f32 = 2.75;
 
 /// The stage: a dais on a crag (`raise_crag`), a flickering warm key light, a cold rim light and
 /// fireflies drifting about.
@@ -65,7 +74,7 @@ pub(super) fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, ma
 /// The stage's key light's strength, before it flickers.
 pub(super) const TORCH_INTENSITY: f32 = 260_000.0;
 /// How many fireflies drift around the stage.
-pub(super) const MOTES: usize = 48;
+const MOTES: usize = 48;
 
 /// How far the fighter on the stage is turned from facing +x: straight away from the map's
 /// middle (the origin), its back to it.

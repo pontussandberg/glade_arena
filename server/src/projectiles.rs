@@ -2,6 +2,10 @@
 
 use super::*;
 
+use arena_shared::sim;
+
+use crate::rooms::{InRoom, Lobby};
+
 /// Projectiles are only replicated: clients draw them from where and when they were thrown.
 pub(super) fn spawn_projectile(commands: &mut Commands, projectile: Projectile, (room, team): Side) {
     commands.spawn((projectile.bundle(), room, room.rooms(), team, Replicate::to_clients(NetworkTarget::All)));

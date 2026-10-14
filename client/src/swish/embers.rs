@@ -2,15 +2,19 @@
 
 use super::*;
 
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
+
+use crate::arena;
+
 /// Embers flaking off a quickened blade's edge (`Blade::quickened`): how many a second, how fast
 /// they rise (m/s, least and most) and drift aside, how long each lasts (seconds, least and
 /// most), how big (meters, least and most), how drawn out along their flight, and how bright.
-pub(super) const EMBERS_PER_SECOND: f32 = 22.0;
-pub(super) const EMBER_RISE: (f32, f32) = (0.35, 0.8);
-pub(super) const EMBER_DRIFT: f32 = 0.25;
-pub(super) const EMBER_LIFE: (f32, f32) = (0.35, 0.75);
-pub(super) const EMBER_SIZE: (f32, f32) = (0.018, 0.035);
-pub(super) const EMBER_STRETCH: f32 = 3.0;
+const EMBERS_PER_SECOND: f32 = 22.0;
+const EMBER_RISE: (f32, f32) = (0.35, 0.8);
+const EMBER_DRIFT: f32 = 0.25;
+const EMBER_LIFE: (f32, f32) = (0.35, 0.75);
+const EMBER_SIZE: (f32, f32) = (0.018, 0.035);
+const EMBER_STRETCH: f32 = 3.0;
 pub(super) const EMBER_GLOW: f32 = 7.0;
 
 /// A quickened blade sheds sharp embers off its edge, one after another, from anywhere along it.

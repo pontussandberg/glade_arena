@@ -23,26 +23,20 @@
 //! stage instead of over the arena. The fighter on it is posed by the same rig as in the fight
 //! (`rig/`), so it looks exactly as it will.
 
-use std::f32::consts::FRAC_PI_2;
-
-use arena_shared::protocol::{AttackState, ClassId, Cooldowns, Dashing, Pos, RoomRequest};
-use arena_shared::map::MapId;
-use arena_shared::rooms::{MAX_PER_TEAM, Member, Mode, NO_TEAM, RoomView, TEAMS};
-use bevy::input::mouse::AccumulatedMouseMotion;
-use bevy::light::{CascadeShadowConfig, NotShadowCaster};
-use bevy::pbr::{DistanceFog, FogFalloff};
+use arena_shared::protocol::{ClassId, RoomRequest};
+use bevy::light::CascadeShadowConfig;
+use bevy::pbr::DistanceFog;
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use crate::ChosenClass;
-use crate::browser::{LobbiesButton, Typing};
+use crate::browser::LobbiesButton;
 use crate::camera::{CameraControl, CameraMoves, Orbit};
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::{self, palette, to_world};
-use crate::render::{GameUi, Visuals, button, button_fill, clicked, key_chip, shown, ui_text};
-use crate::rooms::{CurrentMap, CurrentRoom, Me, Notice, Picking, Screen, request};
-use crate::stat_frame;
+use crate::render::{GameUi, ui_text};
+use crate::rooms::{Me, Picking, Screen};
 
 mod stage;
 use stage::*;

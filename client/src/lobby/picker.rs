@@ -3,6 +3,15 @@
 
 use super::*;
 
+use arena_shared::protocol::{AttackState, ClassId, Cooldowns, Dashing, Pos};
+
+use crate::ChosenClass;
+use crate::browser::Typing;
+use crate::arena::palette::ui::ACCENT;
+use crate::arena::{self, palette, to_world};
+use crate::render::{Visuals, clicked, key_chip, ui_text};
+use crate::stat_frame;
+
 /// A fighter to pick: its number, name and role.
 pub(super) fn spawn_tile(tiles: &mut ChildSpawnerCommands, number: usize, class: ClassId) {
     let def = class.def();
@@ -28,7 +37,7 @@ pub(super) fn spawn_tile(tiles: &mut ChildSpawnerCommands, number: usize, class:
         });
 }
 
-pub(super) const NUMBER_KEYS: [KeyCode; 9] = [
+const NUMBER_KEYS: [KeyCode; 9] = [
     KeyCode::Digit1,
     KeyCode::Digit2,
     KeyCode::Digit3,

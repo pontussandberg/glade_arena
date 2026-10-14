@@ -3,6 +3,8 @@
 
 use super::*;
 
+use bevy::mesh::VertexAttributeValues;
+
 /// The joint of point `k` of chain `c` (joint 0 is the body itself).
 pub(super) fn joint(chains: &[Vec<Vec3>], c: usize, k: usize) -> u16 {
     (1 + chains[..c].iter().map(Vec::len).sum::<usize>() + k) as u16

@@ -3,6 +3,12 @@
 
 use super::*;
 
+use lightyear::prelude::PeerId;
+
+use crate::classes::{AbilityKind, ClassId};
+use crate::map::Map;
+use crate::protocol::{AttackState, Chilled, Dashing, Hasted, LastSwing, PlayerInput, Waygate};
+
 /// Advance a player one tick on `map`: straight the way its keys walk it, or else toward the
 /// point it was told to walk to (point-and-click), pathfinding there. Unreachable or missing
 /// targets mean standing still. Marsh slows the step by the ground it starts on.
@@ -20,7 +26,7 @@ pub fn step_player(map: &Map, pos: Vec2, input: &PlayerInput, speed: f32) -> Vec
 
 /// One step straight by `step`, sliding along whatever blocks it (just its free axis), or
 /// standing if both are blocked.
-pub(super) fn walk_step(map: &Map, pos: Vec2, step: Vec2) -> Vec2 {
+fn walk_step(map: &Map, pos: Vec2, step: Vec2) -> Vec2 {
     [step, step.with_y(0.0), step.with_x(0.0)]
         .into_iter()
         .map(|s| pos + s)

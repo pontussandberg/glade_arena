@@ -2,7 +2,16 @@
 //! torches, and the plugin that builds it.
 
 use super::*;
+
+use arena_shared::map::{Map, Tile};
+use bevy::color::Mix;
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
+use bevy::pbr::{DistanceFog, FogFalloff};
+use bevy::platform::collections::HashMap;
 use super::palette::*;
+
+use crate::rooms::CurrentMap;
+use crate::sculpt::bevel_box;
 
 /// A tile's color on the minimap: the palette of the scene, flattened.
 pub fn tile_color(theme: &Theme, tile: Tile) -> Color {
@@ -44,10 +53,10 @@ impl Plugin for ArenaPlugin {
     }
 }
 
-pub(super) const WATER_LEVEL: f32 = -0.3;
-pub(super) const RIVERBED_LEVEL: f32 = -0.65;
+const WATER_LEVEL: f32 = -0.3;
+const RIVERBED_LEVEL: f32 = -0.65;
 /// The bottom of a chasm.
-pub(super) const CHASM_FLOOR: f32 = -6.0;
+const CHASM_FLOOR: f32 = -6.0;
 
 /// The lobby's dais, on top of its crag.
 pub const DAIS_RADIUS: f32 = 1.3;
@@ -96,17 +105,17 @@ pub fn crag_mesh(theme: &'static Theme, height: f32) -> Mesh {
 }
 
 /// The crag's top's radius: a little past the dais.
-pub(super) const CRAG_TOP: f32 = DAIS_RADIUS + 0.6;
+const CRAG_TOP: f32 = DAIS_RADIUS + 0.6;
 
 /// A torch flame; flickers its light.
 #[derive(Component)]
-pub(super) struct Torch {
+struct Torch {
     pub(super) phase: f32,
 }
 
 pub(super) const TORCH_INTENSITY: f32 = 170_000.0;
 
-pub(super) fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight, &Children)>, mut flames: Query<&mut Transform>) {
+fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight, &Children)>, mut flames: Query<&mut Transform>) {
     let t = time.elapsed_secs();
     for (torch, mut light, children) in &mut torches {
         let f = 1.0 + 0.12 * (t * 7.3 + torch.phase).sin() * (t * 12.1 + torch.phase * 1.7).sin();
@@ -120,7 +129,7 @@ pub(super) fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut 
 }
 
 /// The low sun, from the same side over every map (its color and strength are the map's).
-pub(super) fn spawn_sun(mut commands: Commands) {
+fn spawn_sun(mut commands: Commands) {
     commands.spawn((
         DirectionalLight { color: SUN, illuminance: 3_600.0, shadow_maps_enabled: true, ..default() },
         // Low dusk sun from the upper left, so shadows are long and fall toward the camera's right.
@@ -140,7 +149,7 @@ pub fn sun_shadows(reach: f32) -> CascadeShadowConfig {
 
 /// The map's light and air: the sun's color and strength, the sky's fill, and the haze (and the
 /// clear color behind it, the same).
-pub(super) fn light_scene(
+fn light_scene(
     current: Res<CurrentMap>,
     mut clear: ResMut<ClearColor>,
     mut ambient: ResMut<GlobalAmbientLight>,
@@ -162,9 +171,9 @@ pub(super) fn light_scene(
 
 /// Everything built from the map: despawned when it changes, for the new map's.
 #[derive(Component)]
-pub(super) struct ArenaScene;
+struct ArenaScene;
 
-pub(super) fn build_arena(
+fn build_arena(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -247,8 +256,8 @@ pub(super) fn build_arena(
 /// The land of the whole scene (`Map::scene_tile`) out to `extent` tiles each way from the
 /// middle: the map and a ring of forest around it, out to where the haze hides everything.
 /// Worked out once, as building the scene asks for each tile many times over.
-pub(super) struct SceneTiles {
-    pub(super) extent: IVec2,
+struct SceneTiles {
+    extent: IVec2,
     pub(super) tiles: Vec<Tile>,
 }
 
@@ -271,15 +280,15 @@ impl SceneTiles {
 }
 
 /// The four directions, in tiles.
-pub(super) const SIDES: [IVec2; 4] = [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y];
+const SIDES: [IVec2; 4] = [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y];
 
 /// Water or a chasm: what bridges cross, and banks or cliffs drop into.
-pub(super) fn is_gap(tile: Tile) -> bool {
+fn is_gap(tile: Tile) -> bool {
     matches!(tile, Tile::Water | Tile::Ford | Tile::Chasm)
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum Shape {
+enum Shape {
     Rock,
     Trunk,
     Cone(usize),
@@ -293,16 +302,16 @@ pub(super) enum Shape {
 }
 
 /// Builds every static prop into one vertex-colored mesh.
-pub(super) struct Props {
+struct Props {
     pub(super) theme: &'static Theme,
     pub(super) rock: Mesh,
-    pub(super) trunk: Mesh,
-    pub(super) cones: [Mesh; 3],
+    trunk: Mesh,
+    cones: [Mesh; 3],
     pub(super) flower: Mesh,
     pub(super) reed: Mesh,
-    pub(super) puddle: Mesh,
+    puddle: Mesh,
     pub(super) ball: Mesh,
-    pub(super) stick: Mesh,
+    stick: Mesh,
     pub(super) out: Option<Mesh>,
 }
 
@@ -352,7 +361,7 @@ impl Props {
         }
     }
 
-    pub(super) fn into_mesh(self) -> Mesh {
+    fn into_mesh(self) -> Mesh {
         self.out.expect("the arena has props")
     }
 
@@ -433,7 +442,7 @@ impl Props {
 
     /// Rope bridges over a chasm, tile by tile: planks laid across the way over, two beams
     /// under them, rope rails along the sides, on posts where they meet the rock.
-    pub(super) fn rope_bridges(&mut self, m: &Map, rng: &mut Lcg) {
+    fn rope_bridges(&mut self, m: &Map, rng: &mut Lcg) {
         let planks = |t: IVec2| m.get(t) == Tile::Planks;
         for (t, tile) in m.tiles() {
             if tile != Tile::Planks {
@@ -477,7 +486,7 @@ impl Props {
     }
 
     /// Stepping stones across the fords.
-    pub(super) fn fords(&mut self, m: &Map, rng: &mut Lcg) {
+    fn fords(&mut self, m: &Map, rng: &mut Lcg) {
         for (t, tile) in m.tiles() {
             if tile != Tile::Ford {
                 continue;
@@ -508,7 +517,7 @@ impl Props {
     }
 
     /// A tuft of reeds at `p`, below the knee, each one or the other color.
-    pub(super) fn bog_reeds(&mut self, rng: &mut Lcg, p: Vec2, one: Color, other: Color) {
+    fn bog_reeds(&mut self, rng: &mut Lcg, p: Vec2, one: Color, other: Color) {
         for _ in 0..4 {
             let at = p + Vec2::new(rng.range(-0.12, 0.12), rng.range(-0.12, 0.12));
             let h = rng.range(0.25, 0.48);
@@ -518,14 +527,14 @@ impl Props {
         }
     }
 
-    pub(super) fn boulder(&mut self, rng: &mut Lcg, c: Vec2) {
+    fn boulder(&mut self, rng: &mut Lcg, c: Vec2) {
         let t = Transform::from_translation(to_world(c, 0.25))
             .with_rotation(Quat::from_euler(EulerRot::XYZ, rng.range(0.0, 3.0), rng.range(0.0, 3.0), 0.0))
             .with_scale(Vec3::new(rng.range(1.2, 1.5), rng.range(0.9, 1.3), rng.range(1.2, 1.5)));
         self.add(Shape::Rock, self.theme.slate, t);
     }
 
-    pub(super) fn tree(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
+    fn tree(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
         self.add(Shape::Trunk, self.theme.bark, Transform::from_translation(to_world(p, ground + 0.6 * s)).with_scale(Vec3::splat(s)));
         let tiers = 2 + (rng.next() * 2.0) as usize;
         for k in 0..tiers {
@@ -542,7 +551,7 @@ impl Props {
     }
 
     /// A map's tree (a `Tile::Tree`), as its wilds grow them.
-    pub(super) fn map_tree(&mut self, rng: &mut Lcg, c: Vec2) {
+    fn map_tree(&mut self, rng: &mut Lcg, c: Vec2) {
         match self.theme.wilds {
             Wilds::Forest => self.tree(rng, c, 0.0, 1.25),
             Wilds::Fen => self.willow(rng, c, 0.0, 1.1),
@@ -551,7 +560,7 @@ impl Props {
     }
 
     /// Something out in the wilds at `p`, on land `ground` high.
-    pub(super) fn wild(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+    fn wild(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
         let pick = rng.next();
         let s = rng.range(0.9, 1.8);
         match self.theme.wilds {
@@ -576,7 +585,7 @@ impl Props {
     }
 
     /// A dead tree: a grey, bare trunk with a few crooked branches.
-    pub(super) fn snag(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
+    fn snag(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
         let wood = self.theme.bark.mix(&self.theme.slate, 0.5);
         let tall = 2.0 * s;
         let lean = Quat::from_euler(EulerRot::XYZ, rng.range(-0.12, 0.12), 0.0, rng.range(-0.12, 0.12));
@@ -591,7 +600,7 @@ impl Props {
     }
 
     /// A low, wide willow: a short trunk under a heap of dark, drooping foliage.
-    pub(super) fn willow(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
+    fn willow(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
         self.add(Shape::Trunk, self.theme.bark, Transform::from_translation(to_world(p, ground + 0.6 * s)).with_scale(Vec3::new(1.2 * s, s, 1.2 * s)));
         for k in 0..3 {
             let off = Vec2::from_angle(k as f32 * 2.1 + rng.range(0.0, 1.0)) * 0.5 * s;
@@ -603,7 +612,7 @@ impl Props {
     }
 
     /// A clump of tall reeds standing in the shallows.
-    pub(super) fn reed_bed(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+    fn reed_bed(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
         for _ in 0..3 + (rng.next() * 4.0) as usize {
             let c = p + Vec2::new(rng.range(-0.9, 0.9), rng.range(-0.9, 0.9));
             for _ in 0..5 {
@@ -617,7 +626,7 @@ impl Props {
     }
 
     /// A round broadleaf in autumn: a trunk under a few faceted balls of brown, rust and gold.
-    pub(super) fn round_tree(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
+    fn round_tree(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
         self.add(Shape::Trunk, self.theme.bark, Transform::from_translation(to_world(p, ground + 0.9 * s)).with_scale(Vec3::new(0.8 * s, 1.5 * s, 0.8 * s)));
         let leaves = [self.theme.fern, self.theme.bloom, self.theme.meadow.mix(&self.theme.bloom, 0.35)];
         for k in 0..3 {
@@ -630,14 +639,14 @@ impl Props {
     }
 
     /// A low bush of dry scrub.
-    pub(super) fn shrub(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+    fn shrub(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
         let s = rng.range(0.35, 0.6);
         let t = Transform::from_translation(to_world(p, ground + 0.15)).with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0))).with_scale(Vec3::new(s, s * 0.7, s));
         self.add(Shape::Ball, self.theme.fern.mix(&self.theme.grass, rng.next() * 0.5), t);
     }
 
     /// A hoodoo: boulders stacked, narrowing and jostled, in bands of color, under a wider cap.
-    pub(super) fn pillar(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+    fn pillar(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
         let count = 3 + (rng.next() * 3.0) as usize;
         let first = (rng.next() * 4.0) as usize;
         let mut at = p;
@@ -656,7 +665,7 @@ impl Props {
     }
 
     /// A tall, thin needle of rock, leaning a little.
-    pub(super) fn spire(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+    fn spire(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
         let tall = rng.range(4.0, 6.5);
         let lean = Quat::from_euler(EulerRot::XYZ, rng.range(-0.1, 0.1), rng.range(0.0, 3.0), rng.range(-0.1, 0.1));
         let first = (rng.next() * 4.0) as usize;
@@ -687,14 +696,14 @@ impl Props {
     }
 
     /// A slab of rock stood on end, tipped over to one side.
-    pub(super) fn slab(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+    fn slab(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
         let tilt = Quat::from_euler(EulerRot::YXZ, rng.range(0.0, 3.0), rng.range(-0.35, 0.35), rng.range(-0.2, 0.2));
         let t = Transform::from_translation(to_world(p, ground + 1.3)).with_rotation(tilt).with_scale(Vec3::new(0.7, rng.range(3.5, 4.8), rng.range(2.4, 3.2)));
         self.add(Shape::Rock, rock_band(self.theme, (rng.next() * 4.0) as usize), t);
     }
 
     /// A squat butte: a wide, flat-topped heap of banded rock with dry grass on top.
-    pub(super) fn butte(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+    fn butte(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
         let w = rng.range(3.5, 5.0);
         for k in 0..3 {
             let t = Transform::from_translation(to_world(p, ground + 0.5 + k as f32 * 0.9))
@@ -734,7 +743,7 @@ impl Props {
 
     /// What grows on the fen's fight floor here and there: tufts of sedge, bog cotton and pads of
     /// moss, all below the ankle.
-    pub(super) fn fen_grass(&mut self, rng: &mut Lcg, c: Vec2) {
+    fn fen_grass(&mut self, rng: &mut Lcg, c: Vec2) {
         let pick = rng.next();
         let p = c + Vec2::new(rng.range(-0.3, 0.3), rng.range(-0.3, 0.3));
         if pick < 0.06 {
@@ -750,7 +759,7 @@ impl Props {
 
     /// Worn paving on the fen's path tiles: each tile two to four slabs, uneven, some sunk or
     /// gone, moss showing between them.
-    pub(super) fn flagstones(&mut self, m: &Map, rng: &mut Lcg) {
+    fn flagstones(&mut self, m: &Map, rng: &mut Lcg) {
         for (t, tile) in m.tiles() {
             if tile != Tile::Path {
                 continue;
@@ -777,7 +786,7 @@ impl Props {
 /// Height of the land outside the clearing (0 at its edge), before roughness: the forest rolls
 /// up into low hills, a fen sinks under the water with tussocks breaking it, highlands climb in
 /// terraces.
-pub(super) fn wild_height(theme: &Theme, m: &Map, p: Vec2) -> f32 {
+fn wild_height(theme: &Theme, m: &Map, p: Vec2) -> f32 {
     let out = -m.edge_margin(p);
     match theme.wilds {
         Wilds::Forest => (out * 0.3).clamp(0.0, 3.0),
@@ -796,16 +805,16 @@ pub(super) fn wild_height(theme: &Theme, m: &Map, p: Vec2) -> f32 {
 }
 
 /// The bands of color the highlands' rock is laid down in, from `k` up.
-pub(super) fn rock_band(theme: &Theme, k: usize) -> Color {
+fn rock_band(theme: &Theme, k: usize) -> Color {
     [theme.wall, theme.slate, theme.stone, theme.bank][k % 4]
 }
 
 /// How high each of the highlands' terraces climbs.
-pub(super) const TERRACE: f32 = 3.0;
+const TERRACE: f32 = 3.0;
 
 /// The color of a facet of the wilds `height` high, `flat` (its normal's upward part: 1 flat, 0
 /// sheer), `pick` a random number for variety.
-pub(super) fn wild_color(theme: &Theme, height: f32, flat: f32, pick: f32) -> Color {
+fn wild_color(theme: &Theme, height: f32, flat: f32, pick: f32) -> Color {
     match theme.wilds {
         Wilds::Forest if height > 1.4 => {
             if pick < 0.5 { theme.fern } else { theme.pine }
@@ -826,14 +835,14 @@ pub(super) fn wild_color(theme: &Theme, height: f32, flat: f32, pick: f32) -> Co
 
 /// Meters between the terrain's vertices. Twice a tile: faceted like low-poly land, not like
 /// the tile grid.
-pub(super) const TERRAIN_CELL: i32 = 2;
+const TERRAIN_CELL: i32 = 2;
 
 /// The land under and around the map, on a grid of `TERRAIN_CELL` meters, its vertices on tile
 /// corners: flat just under the ground tiles, down to the riverbed under water and to the floor
 /// under a chasm (a vertex goes down if any tile around it within a cell does, so the whole of
 /// every water or chasm tile is low), and out into the wilds around it (`wild_height`), its
 /// vertices jostled where there's nothing but wilds around them.
-pub(super) fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut Lcg) -> Mesh {
+fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut Lcg) -> Mesh {
     let cells = scene.extent / TERRAIN_CELL;
     let width = (2 * cells.x + 1) as usize;
     let mut grid = Vec::with_capacity(width * (2 * cells.y + 1) as usize);
@@ -891,7 +900,7 @@ pub(super) fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut
 }
 
 /// 0 to 1 over the ground in broad, wandering patches.
-pub(super) fn patches(p: Vec2) -> f32 {
+fn patches(p: Vec2) -> f32 {
     (waves(p, [0.37, 0.41, 0.23, 0.29], [1.1, 0.4, 0.0, 2.3]) / 2.0 + 0.5).clamp(0.0, 1.0)
 }
 
@@ -905,7 +914,7 @@ pub(super) fn waves(p: Vec2, freq: [f32; 4], phase: [f32; 4]) -> f32 {
 /// The walkable ground of the clearing: one quad per tile, one color per tile (a faint checker
 /// keeps the grid readable), plus earthen banks down to the water, and cliffs down a chasm in
 /// bands of rock.
-pub(super) fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
+fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
     let mut b = FlatMesh::default();
     for (t, tile) in m.tiles() {
         if matches!(tile, Tile::Water | Tile::Bridge | Tile::Planks | Tile::Ford | Tile::Chasm | Tile::Forest) {
@@ -961,7 +970,7 @@ pub(super) fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
 /// and over the wilds within a terrain cell of those too, so where the land rises out of it the
 /// water runs in under its slope; if the wilds are `flooded`, one sheet over the whole scene (the
 /// land rises out of it). `None` if there's no water.
-pub(super) fn water_mesh(scene: &SceneTiles, flooded: bool) -> Option<Mesh> {
+fn water_mesh(scene: &SceneTiles, flooded: bool) -> Option<Mesh> {
     let covers = |tile: Tile| matches!(tile, Tile::Water | Tile::Ford);
     let extent = scene.extent;
     let mut b = FlatMesh::default();

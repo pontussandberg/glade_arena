@@ -3,8 +3,14 @@
 
 use super::*;
 
+use arena_shared::sim;
+
+use crate::feedback::AttackClock;
+use crate::arena::{self, to_world};
+use crate::rig::{HeldAt, MAX_HOLD_TICKS};
+
 /// Shots fly at chest height; fighters stand on the floor (their feet are at the mesh origin).
-pub(super) const PROJECTILE_HEIGHT: f32 = 0.9;
+const PROJECTILE_HEIGHT: f32 = 0.9;
 /// Thrown spears fly a little higher, at the height the throw lets go of them (`rig/` times the
 /// release to it), so they leave the hand straight down their line instead of sinking onto it.
 pub(crate) const THROWN_HEIGHT: f32 = 1.2;
@@ -15,23 +21,23 @@ pub(super) fn shot_height(thrown: bool) -> f32 {
 }
 /// How long a thrown spear takes to turn from how it was held to the way it flies, and to catch
 /// up its real path from a hand behind it (seconds).
-pub(super) const SETTLE_SECONDS: f32 = 0.2;
+const SETTLE_SECONDS: f32 = 0.2;
 /// How far (meters) a thrown spear flies before it has come in from where it left the hand (to
 /// the side and above) onto its real path at `THROWN_HEIGHT`: one long, gentle curve, no dive.
-pub(super) const CONVERGE_METERS: f32 = 7.0;
+const CONVERGE_METERS: f32 = 7.0;
 /// Others' spears reach us a round trip (and a bit) after they're thrown, when their real path
 /// is already meters ahead of the hand. A spear never starts more than this far (meters) behind
 /// it; beyond that (a very high ping) the rest is skipped.
-pub(super) const MAX_CATCH_UP: f32 = 8.0;
+const MAX_CATCH_UP: f32 = 8.0;
 /// Where a thrown spear's wind starts (just behind its butt) and how long it gets.
 pub(super) const WIND_FRONT: f32 = arena::SPEAR_LENGTH;
-pub(super) const WIND_LENGTH: f32 = 2.4;
+const WIND_LENGTH: f32 = 2.4;
 /// The wind's rubber: its spring (stiffness rad/s, damping; loose, so it overshoots), and how
 /// much and how often (per second) it pulses.
-pub(super) const RUBBER_STIFFNESS: f32 = 14.0;
-pub(super) const RUBBER_DAMPING: f32 = 0.3;
-pub(super) const RUBBER_PULSE: f32 = 0.18;
-pub(super) const RUBBER_RATE: f32 = 3.5;
+const RUBBER_STIFFNESS: f32 = 14.0;
+const RUBBER_DAMPING: f32 = 0.3;
+const RUBBER_PULSE: f32 = 0.18;
+const RUBBER_RATE: f32 = 3.5;
 
 /// A thrown spear as drawn: it leaves the thrower's hand where the javelin was held, then eases
 /// onto its real path (`fly_shots`), trailing its wind (a child entity).
@@ -175,8 +181,8 @@ pub(super) fn fly_shots(
         // `WIND_LENGTH`), pulsing, on a loose spring, so it stretches out past that and snaps back.
         let flown = (at.distance(launch.from) - WIND_FRONT).clamp(0.0, WIND_LENGTH);
         let wanted = flown * (1.0 + RUBBER_PULSE * (since * RUBBER_RATE * std::f32::consts::TAU).sin());
-        let dt = time.delta_secs().min(0.05);
-        let length = thrown.length.follow(wanted, dt, RUBBER_STIFFNESS, RUBBER_DAMPING).max(0.0);
+        let dt = time.delta_secs();
+        let length = thrown.length.follow(wanted, dt, RUBBER_STIFFNESS, RUBBER_DAMPING, f32::INFINITY).max(0.0);
         if let Ok(mut wind) = winds.get_mut(thrown.wind) {
             // In meters: undoing the spear's own drawn size (`Launch::scale`).
             let scale = Vec3::new(length / launch.scale.x, 1.0, 1.0);

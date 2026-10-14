@@ -3,6 +3,10 @@
 
 use super::*;
 
+use crate::Me;
+use crate::feedback::AttackClock;
+use crate::arena::to_world;
+
 /// Our own fighter, drawn smoothly: each position from the server is noted with the server tick
 /// it's from, and the fighter is drawn on our clock (`AttackClock`, a tick behind the latest
 /// state), in between those. Updates come 32 times a second, unevenly; drawn as they arrive it

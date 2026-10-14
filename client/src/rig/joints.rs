@@ -2,6 +2,9 @@
 //! pose moves the same at any frame rate.
 
 use super::*;
+
+use std::f32::consts::{PI, TAU};
+
 use crate::spring::Spring;
 
 /// The joints' springs: how stiff (natural frequency, rad/s) and how damped (1 = no overshoot).
@@ -27,7 +30,7 @@ pub(crate) struct Joints {
     pub(super) arm_yaw: Spring,
     /// The held weapon's tip (`Held::Upright`) or wrist (`Held::Gripped`): an
     /// angle, which may come right round, so it takes the nearest way to its target.
-    pub(super) held_tip: Spring,
+    held_tip: Spring,
     /// The forearm's roll (`Held::Gripped`).
     pub(super) roll: Spring,
 }
@@ -37,7 +40,7 @@ impl Joints {
     /// say; a windmilling weapon arm (`Moves::windmill`), like the held weapon's tip, the nearest
     /// way round.
     pub(crate) fn follow(&mut self, to: &Angles, dt: f32, moves: &Moves) -> Angles {
-        let spring = |joint: &mut Spring, target: f32| joint.follow(target, dt, moves.stiffness, moves.damping);
+        let spring = |joint: &mut Spring, target: f32| joint.follow(target, dt, moves.stiffness, moves.damping, PI);
         self.held_tip.at += TAU * ((to.tip - self.held_tip.at) / TAU).round();
         if moves.windmill {
             self.weapon_arm.at += TAU * ((to.weapon_arm - self.weapon_arm.at) / TAU).round();

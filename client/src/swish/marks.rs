@@ -3,13 +3,17 @@
 
 use super::*;
 
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
+
+use crate::arena::{FlatMesh, palette, to_world};
+
 /// The mark a strike leaves: how long it lasts (seconds), where along the blade it starts (a
 /// fraction of its length; it runs to the tip), and how many steps it fades in (one shared
 /// material each).
-pub(super) const MARK_LIFE: f32 = 0.32;
-pub(super) const MARK_FROM: f32 = BLADE_FROM;
+const MARK_LIFE: f32 = 0.32;
+const MARK_FROM: f32 = BLADE_FROM;
 /// How high over the ground a mark lies along its strike's lane (meters): over the tear.
-pub(super) const MARK_HEIGHT: f32 = 0.05;
+const MARK_HEIGHT: f32 = 0.05;
 pub(super) const MARK_FADES: usize = 8;
 /// The air's color, and how see-through the mark is at its brightest.
 pub(super) const AIR: Color = palette::SILVER;
@@ -121,7 +125,7 @@ pub(super) fn drive_marks(
             continue;
         }
         *transform = mark.transform(t);
-        let fade = &assets.fades[((t * MARK_FADES as f32) as usize).min(MARK_FADES - 1)];
+        let fade = faded(&assets.fades, t);
         if material.0 != *fade {
             material.0 = fade.clone();
         }

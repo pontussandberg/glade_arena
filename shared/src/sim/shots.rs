@@ -3,6 +3,10 @@
 
 use super::*;
 
+use crate::classes::{Chill, Shot};
+use crate::map::Map;
+use crate::protocol::Projectile;
+
 /// Where a shot starts: at the edge of the shooter, so it doesn't start inside them.
 pub(crate) fn shot_spawn(pos: Vec2, dir: Vec2, radius: f32) -> Vec2 {
     pos + dir * (PLAYER_RADIUS + radius)

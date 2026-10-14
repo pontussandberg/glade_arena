@@ -4,15 +4,21 @@
 
 use super::*;
 
+use std::f32::consts::TAU;
+
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
+
+use crate::arena::{FlatMesh, to_world};
+
 /// A strike's impact: how long the rift lasts and when it starts fading (seconds), how long the
 /// dust takes to burst out, how far out (meters) past the blade, and how see-through the rift's
 /// ink and rim are at most.
-pub(super) const RIFT_LIFE: (f32, f32) = (2.2, 3.4);
+const RIFT_LIFE: (f32, f32) = (2.2, 3.4);
 /// How far into a tear's life (0..1) it starts to close, when its class says how long it lasts
 /// (`RiftDef`): it's drawn as long as its rift is open.
-pub(super) const RIFT_CLOSES: f32 = 0.65;
-pub(super) const DUST_LIFE: f32 = 0.45;
-pub(super) const DUST_OUT: f32 = 0.9;
+const RIFT_CLOSES: f32 = 0.65;
+const DUST_LIFE: f32 = 0.45;
+const DUST_OUT: f32 = 0.9;
 pub(crate) const RIFT_ALPHA: f32 = 0.9;
 pub(crate) const RIM_ALPHA: f32 = 1.0;
 /// The spectral light in the cracks: how thick its core is (a fraction of the cracks' ink), how
@@ -25,19 +31,19 @@ pub(super) const CORE_GLOW: f32 = 3.5;
 /// How bright (opaque) the light in the cracks is at most.
 pub(super) const CORE_ALPHA: f32 = 0.85;
 /// How many steps the cracks close in, each line narrowing onto its own spine as the tear fades.
-pub(super) const CLOSE_STEPS: usize = 8;
+const CLOSE_STEPS: usize = 8;
 /// Through a tear's going (from when it starts closing to when it's gone, 0..1): when its cracks
 /// have closed, and when the mark starts fading out.
-pub(super) const CLOSED_BY: f32 = 0.8;
-pub(super) const FADES_FROM: f32 = 0.75;
-pub(super) const FLARE_SECONDS: f32 = 0.18;
-pub(super) const BREATH: (f32, f32) = (0.18, 5.5);
+const CLOSED_BY: f32 = 0.8;
+const FADES_FROM: f32 = 0.75;
+const FLARE_SECONDS: f32 = 0.18;
+const BREATH: (f32, f32) = (0.18, 5.5);
 /// The chunks of earth thrown up: how many per meter of blade, how big (meters, smallest and
 /// largest), how hard they're thrown (m/s up, and out), and how long they last (seconds).
-pub(super) const CHUNKS_PER_METER: f32 = 5.0;
-pub(super) const CHUNK_SIZE: (f32, f32) = (0.035, 0.09);
-pub(super) const CHUNK_THROW: (f32, f32) = (3.2, 1.6);
-pub(super) const CHUNK_LIFE: f32 = 0.9;
+const CHUNKS_PER_METER: f32 = 5.0;
+const CHUNK_SIZE: (f32, f32) = (0.035, 0.09);
+const CHUNK_THROW: (f32, f32) = (3.2, 1.6);
+const CHUNK_LIFE: f32 = 0.9;
 pub(super) const GRAVITY: f32 = 14.0;
 
 /// Cracks through ground broken over a rectangle `length` by `width`, flat, along +X from the
@@ -115,15 +121,15 @@ pub(crate) fn rubble_mesh(length: f32, width: f32, seed: u32) -> Mesh {
 
 /// How many points the ragged outline of broken ground has, and how far past it (meters) it
 /// fades out: a crisp edge.
-pub(super) const RAGGED_POINTS: usize = 48;
-pub(super) const RAGGED_SOFT: f32 = 0.012;
+const RAGGED_POINTS: usize = 48;
+const RAGGED_SOFT: f32 = 0.012;
 /// The ink bleeding out round it: how far (meters, shortest and longest) and how wide at the edge.
-pub(super) const BLEED_REACH: (f32, f32) = (0.04, 0.32);
-pub(super) const BLEED_WIDTH: f32 = 0.035;
+const BLEED_REACH: (f32, f32) = (0.04, 0.32);
+const BLEED_WIDTH: f32 = 0.035;
 
 /// The `i`th point round the ragged outline of ground broken over a rectangle `length` by
 /// `width` (as `rubble_mesh`), `out` further out. Broken by `seed`.
-pub(super) fn ragged_edge(length: f32, width: f32, seed: u32, i: usize, out: f32) -> Vec3 {
+fn ragged_edge(length: f32, width: f32, seed: u32, i: usize, out: f32) -> Vec3 {
     let t = (i % RAGGED_POINTS) as f32 / RAGGED_POINTS as f32 * std::f32::consts::TAU;
     // A rounded rectangle's outline, by angle from its middle.
     let (c, s) = (t.cos(), t.sin());
@@ -185,7 +191,7 @@ pub(super) struct Impact {
     pub(super) started: f32,
     pub(super) rim: Entity,
     /// The ink bleeding out round it.
-    pub(super) bleed: Entity,
+    bleed: Entity,
     pub(super) dust: Entity,
     /// The spectral light in the cracks.
     pub(super) core: Entity,
@@ -299,7 +305,7 @@ pub(super) fn drive_impacts(
     mut core_meshes: Query<&mut Mesh3d, Without<Impact>>,
 ) {
     let now = time.elapsed_secs();
-    let fade = |fades: &[Handle<StandardMaterial>], t: f32| fades[((t * MARK_FADES as f32) as usize).min(MARK_FADES - 1)].clone();
+    let fade = |fades: &[Handle<StandardMaterial>], t: f32| faded(fades, t).clone();
     for (entity, impact, mut transform, mut ink_mesh, mut material) in &mut impacts {
         let age = now - impact.started;
         if age >= impact.life.1 {
@@ -309,7 +315,7 @@ pub(super) fn drive_impacts(
             continue;
         }
         // Splitting open fast, from the middle out, then still.
-        let open = 1.0 - (1.0 - (age / 0.07).min(1.0)).powi(3);
+        let open = crate::ease::ease_out(0.0, 0.07, age);
         transform.scale = Vec3::new(0.6 + 0.4 * open, 1.0, open) * impact.grown.extend(1.0).xzy();
         // As it goes: the cracks closing in first, done a little before the end; the mark
         // fading out later, slow at first and quicker and quicker, gone at the end.
@@ -360,7 +366,7 @@ pub(super) fn drive_impacts(
         }
         if let Ok((mut dust, mut dust_material)) = parts.get_mut(impact.dust) {
             let t = (age / DUST_LIFE).min(1.0);
-            let burst = (1.0 - (1.0 - t).powi(3)) * (t < 1.0) as u8 as f32;
+            let burst = crate::ease::ease_out(0.0, DUST_LIFE, age) * (t < 1.0) as u8 as f32;
             dust.scale = Vec3::new(impact.length + DUST_OUT, 1.0, impact.width + DUST_OUT) * (0.6 + 0.6 * burst) * (t < 1.0) as u8 as f32;
             dust.translation.y = 0.04 + 0.25 * burst;
             let faded = fade(&assets.dust_fades, t);

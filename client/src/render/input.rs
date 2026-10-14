@@ -3,6 +3,16 @@
 
 use super::*;
 
+use arena_shared::sim;
+
+use crate::Me;
+use crate::{DesiredInput, StopWalking};
+use crate::action_bar::AbilityIcon;
+use crate::camera::{CameraMode, key_axis};
+use crate::casting::{Aiming, CastMode, ability_key, key_casts};
+use crate::feedback::AttackClock;
+use crate::arena::{to_gameplay, to_world};
+
 /// How wide (meters) the circle at the edge of your auto-attack's range is.
 pub(super) const RANGE_CIRCLE_WIDTH: f32 = 0.05;
 
@@ -60,7 +70,7 @@ pub(super) fn read_local_input(
 
     let mut move_to = desired.0.move_to;
     // A jump (respawn or server correction) cancels the old destination. (So does attacking:
-    // see `cancel_walk_on_attack`.)
+    // see `forget_walk_on_attack`.)
     if let (Some(now), Some(before)) = (me, *last_pos)
         && now.distance(before) > JUMP
     {

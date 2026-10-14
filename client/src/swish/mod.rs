@@ -14,17 +14,11 @@
 //! scrapes. The same whoever swung (who it was shows in the
 //! health bar).
 
-use std::collections::VecDeque;
-use std::f32::consts::TAU;
-
 use arena_shared::protocol::*;
-use bevy::camera::visibility::NoFrustumCulling;
-use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
-use crate::arena::{self, FlatMesh, palette, to_world};
-use crate::render::shown;
+use crate::arena::{self, palette};
 
 mod trail;
 pub(crate) use trail::*;
@@ -114,7 +108,7 @@ struct SwishAssets {
 fn load_swish(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     commands.insert_resource(SwishAssets {
         mark: meshes.add(mark_mesh()),
-        fades: (0..MARK_FADES).map(|i| materials.add(arena::translucent(AIR, MARK_ALPHA * (1.0 - i as f32 / MARK_FADES as f32), 2.0))).collect(),
+        fades: fades(&mut materials, AIR, MARK_ALPHA, 2.0),
         trail: materials.add(arena::translucent(AIR, 0.47, 1.8)),
         dust: meshes.add(dust_mesh()),
         chunk: meshes.add(Cuboid::new(1.0, 0.7, 0.85)),
@@ -136,6 +130,11 @@ fn load_swish(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mate
 /// A see-through `color` at `alpha`, fading out in `MARK_FADES` steps (one shared material each).
 fn fades(materials: &mut Assets<StandardMaterial>, color: Color, alpha: f32, glow: f32) -> Vec<Handle<StandardMaterial>> {
     layered(materials, color, alpha, glow, 0)
+}
+
+/// The step of `fades` (from `fades` or `layered`) for `t` (0 to 1) of the way faded out.
+fn faded(fades: &[Handle<StandardMaterial>], t: f32) -> &Handle<StandardMaterial> {
+    &fades[((t * MARK_FADES as f32) as usize).min(MARK_FADES - 1)]
 }
 
 /// `fades`, drawn over the see-through layers below it in the same place (a higher `layer`):

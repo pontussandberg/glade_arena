@@ -4,6 +4,13 @@
 
 use super::*;
 
+use bevy::asset::RenderAssetUsages;
+use bevy::color::Mix;
+use bevy::mesh::PrimitiveTopology;
+
+use crate::cloth::{Drape, Weave};
+use crate::sculpt::{Section, grid, sheet, smoothed, sweep, tube};
+
 /// `part` merged into `all`, either of them indexed or not: `Mesh::merge` alone drops or
 /// scrambles triangles when one side is indexed and the other isn't.
 pub(super) fn merge_into(all: &mut Mesh, part: &Mesh) {
@@ -64,7 +71,7 @@ pub(super) fn tinted(mut mesh: Mesh, color: Color) -> Mesh {
 }
 
 /// Where the eyes sit in a `deep_hood`'s opening (and ±z, the other one).
-pub(super) const HOOD_EYES: Vec3 = Vec3::new(0.165, 0.2, 0.055);
+const HOOD_EYES: Vec3 = Vec3::new(0.165, 0.2, 0.055);
 
 /// Small, narrow, slanted eyes burning deep in a `deep_hood` drawn `hood` times its size (width,
 /// height).
@@ -100,7 +107,7 @@ pub(super) fn belt(x: f32, y: (f32, f32), half: (f32, f32), color: Color) -> Mes
 }
 
 /// How a tabard moves: heavier than the rest, held close.
-pub(super) const TABARD_WEAVE: Weave = Weave { hold: (9.0, 2.0), damping: 5.0, air: 0.3, inertia: 0.3, gravity: 8.0, flutter: 0.4, joined: false, wisps: 0.0 };
+const TABARD_WEAVE: Weave = Weave { hold: (9.0, 2.0), damping: 5.0, air: 0.3, inertia: 0.3, gravity: 8.0, flutter: 0.4, joined: false, wisps: 0.0 };
 
 /// A tabard: a narrow panel hanging from `top` (at the belt, in front) down by `drop`, `half` wide
 /// at the top and at the bottom, curving back round the legs (`curve`), its end torn up to
@@ -135,7 +142,7 @@ pub(super) fn deep_hood(cloth: Color, rim: Color, void: Color, top: &[Section]) 
 /// The cloth framing a `deep_hood`'s opening: a band folded back over the hood round it, deeper
 /// over the brow, where it dips to a point hanging over the face, gathered in uneven creases,
 /// rolled along its edge in `edge`. `layer` 1 is the outer fold; -1 the lining just inside it, narrower and set back.
-pub(super) fn hood_brim(cloth: Color, edge: Color, layer: f32) -> Mesh {
+fn hood_brim(cloth: Color, edge: Color, layer: f32) -> Mesh {
     const STEPS: usize = 28;
     let outer = layer > 0.0;
     let sections: Vec<Section> = (0..=STEPS)

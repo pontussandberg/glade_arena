@@ -5,12 +5,8 @@
 //! from `ClassDef`.
 
 use bevy::prelude::*;
-use lightyear::prelude::PeerId;
 
-use crate::classes::{AbilityKind, AttackKind, Chill, ClassId, Shot};
 use crate::config::*;
-use crate::map::Map;
-use crate::protocol::{AttackState, Chilled, Dashing, Hasted, LastSwing, PlayerInput, Projectile, Swing, Waygate};
 
 mod movement;
 pub use movement::*;
@@ -24,8 +20,10 @@ mod tests {
     use super::*;
     use crate::abilities::dash::DashDef;
     use crate::abilities::{self, AbilityDef, AbilitySlot, Cast, CastOrder, Cooldowns};
-    use crate::classes::{AttackDef, FollowUp, common};
-    use crate::protocol::PlayerCommand;
+    use crate::classes::{AbilityKind, AttackDef, AttackKind, Chill, ClassId, FollowUp, common};
+    use crate::map::Map;
+    use crate::protocol::{AttackState, Chilled, Dashing, Hasted, LastSwing, PlayerCommand, PlayerInput, Projectile, Swing, Waygate};
+    use lightyear::prelude::PeerId;
 
     /// The tests walk and fight on the first map.
     fn map() -> &'static Map {

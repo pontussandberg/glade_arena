@@ -39,9 +39,9 @@
 //!
 //! Transforms are only written when they change, so a fighter standing still costs nothing.
 
-use std::f32::consts::{FRAC_PI_2, PI, TAU};
+use std::f32::consts::TAU;
 
-use arena_shared::abilities::{AbilityKind, MAX_ABILITIES};
+use arena_shared::abilities::AbilityKind;
 use arena_shared::classes::AttackKind;
 use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
@@ -53,9 +53,8 @@ use bevy::prelude::*;
 use crate::Me;
 use crate::cloth::WardrobeAssets;
 use crate::feedback::AttackClock;
-use crate::arena::{self, RIG_ELBOW, RIG_HAND, RIG_HIP, RIG_KNEE, RIG_NECK, RIG_SHOULDER};
+use crate::arena::{self, RIG_HIP, RIG_KNEE, RIG_NECK, RIG_SHOULDER};
 use crate::ease::*;
-use crate::render::shown;
 
 mod joints;
 pub(crate) use joints::*;
@@ -82,8 +81,7 @@ impl Plugin for RigPlugin {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Posing;
 
-/// Walk cycles per meter walked, how far limbs swing (radians), how high the body bobs (meters)
-/// and how far it sways side to side (radians).
+/// Walk cycles per meter walked (the swing and bob: `pose`).
 const STRIDES_PER_METER: f32 = 0.4;
 /// An empowered weapon (`follow_up`): how much bigger it grows, how quickly (per second,
 /// exponential), and how much further its strike smears out, so it reaches its lane's far end

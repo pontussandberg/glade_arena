@@ -2,6 +2,10 @@
 
 use super::*;
 
+use std::f32::consts::{FRAC_PI_2, PI};
+
+use crate::arena::{RIG_ELBOW, RIG_HAND};
+
 pub(super) const REVENANT: Moves = Moves {
     // A windmill: the arm swings back and up behind (the blade lifted off the ground behind it)
     // to over the head, then on over the top, down ahead into the ground, and round past the leg

@@ -3,12 +3,9 @@
 //! The scene itself is in `arena/`, the camera in `camera.rs`, the server browser in
 //! `browser.rs`, a room's lobby in `lobby/` and the ESC menu in `esc_menu.rs`.
 
-use std::fmt::Write;
-
 use arena_shared::abilities::AbilityKind;
 use arena_shared::config::*;
 use arena_shared::protocol::*;
-use arena_shared::sim;
 use bevy::platform::collections::HashMap;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
@@ -16,15 +13,10 @@ use lightyear::prelude::*;
 
 use crate::Me;
 
-use crate::{DesiredInput, StopWalking};
 use crate::abilities::SeenCasts;
-use crate::action_bar::AbilityIcon;
-use crate::camera::{CameraMode, CameraPlaced, key_axis};
-use crate::casting::{Aiming, CastMode, ability_key, key_casts, key_label};
-use crate::rooms::{load_setting, save_setting};
-use crate::feedback::AttackClock;
-use crate::arena::{self, palette, to_gameplay, to_world};
-use crate::rig::{HeldAt, MAX_HOLD_TICKS};
+use crate::camera::CameraPlaced;
+use crate::rooms::load_setting;
+use crate::arena::{self, palette, to_world};
 
 mod shots;
 pub(crate) use shots::*;

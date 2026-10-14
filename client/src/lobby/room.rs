@@ -3,6 +3,16 @@
 
 use super::*;
 
+use arena_shared::protocol::RoomRequest;
+use arena_shared::map::MapId;
+use arena_shared::rooms::{MAX_PER_TEAM, Member, Mode, NO_TEAM, RoomView, TEAMS};
+
+use crate::browser::LobbiesButton;
+use crate::arena::palette::ui::ACCENT;
+use crate::arena::palette;
+use crate::render::{button, clicked, shown, ui_text};
+use crate::rooms::{CurrentMap, CurrentRoom, Me, Notice, Screen, request};
+
 /// The room column, two cards. The room: name, whether it's on, its mode and map (for the leader,
 /// switches). Who's in it: in free-for-all a list; in teams the two side by side, with the way to
 /// switch sides under ours. Then the way out. Rebuilt when the room changes, or we come to it.
@@ -59,7 +69,7 @@ pub(super) fn show_room(
 /// One of the room's settings under its `title`: for its leader before the start
 /// (`editing`), a row of switches, one per option (`current` lit), each asking for its `pick`;
 /// for everyone else, just what it is.
-pub(super) fn setting<T: Copy + PartialEq>(
+fn setting<T: Copy + PartialEq>(
     card: &mut ChildSpawnerCommands,
     title: &str,
     options: &[(T, &str)],
@@ -88,7 +98,7 @@ pub(super) fn setting<T: Copy + PartialEq>(
 
 /// Places each team shows at least, taken or open: room for the first few to join without the
 /// teams growing.
-pub(super) const MIN_PLACES: usize = 4;
+const MIN_PLACES: usize = 4;
 
 /// The two teams side by side, each in its own column, as one grid: a row for the
 /// headers, one for each place on a team (at least `MIN_PLACES`; open ones drawn faintly), and
@@ -97,7 +107,7 @@ pub(super) const MIN_PLACES: usize = 4;
 /// however names wrap, and how many are on each shows at a glance. Each side is a block behind
 /// its whole column. The sides have no names or colors: our own highlighted row tells us which is
 /// ours, and the way to switch sides sits under it (each team keeps its column, so we move across).
-pub(super) fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
+fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
     let my_team = view.member(my_id).map_or(NO_TEAM, |m| m.team);
     let sides = TEAMS.map(|team| view.members.iter().filter(|m| m.team == team).collect::<Vec<_>>());
     let places = sides.iter().map(Vec::len).max().unwrap_or(0).max(MIN_PLACES);
@@ -159,7 +169,7 @@ pub(super) fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_i
 /// A member, in `node`'s place, in one column however narrow the side: the leader's tag if they
 /// lead, their name, then their fighter and whether they're in the arena (both wrapping as they
 /// need). Our own row is tinted.
-pub(super) fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, member: &Member, my_id: u32) {
+fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, member: &Member, my_id: u32) {
     let is_me = member.guest_id == my_id;
     // Bottom-aligned, so in rows of one height names and fighters line up, the leader's tag above.
     let row = Node {
@@ -215,14 +225,14 @@ pub(super) fn show_status(
 /// What the way in does: at home, practice; in a room, into the arena once the match is on, the
 /// start for the leader, or nothing while waiting for the leader.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum WayIn {
+enum WayIn {
     Practice,
     Enter,
     Start,
     Wait,
 }
 
-pub(super) fn way_in(screen: Screen, view: Option<&RoomView>, me: Option<&Me>) -> WayIn {
+fn way_in(screen: Screen, view: Option<&RoomView>, me: Option<&Me>) -> WayIn {
     match view {
         _ if screen == Screen::Home => WayIn::Practice,
         Some(view) if view.started => WayIn::Enter,

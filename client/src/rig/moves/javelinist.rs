@@ -2,6 +2,10 @@
 
 use super::*;
 
+use std::f32::consts::FRAC_PI_2;
+
+use crate::arena;
+
 pub(super) const JAVELINIST: Moves = Moves {
     // Overhand: carried straight up, cocked up behind the shoulder (the hand over it, the spear
     // over the shoulder, the arm under it), the spear let go just as the arm starts forward

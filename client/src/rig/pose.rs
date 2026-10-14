@@ -4,31 +4,41 @@
 
 use super::*;
 
+use std::f32::consts::{FRAC_PI_2, TAU};
+
+use arena_shared::classes::AttackKind;
+use arena_shared::config::TICK_HZ;
+
+use crate::arena::{self, RIG_HIP, RIG_KNEE, RIG_SHOULDER};
+
+/// Walking: how far the limbs swing (radians), how high the body bobs (meters) and how far it
+/// sways side to side (radians).
 pub(super) const LEG_SWING: f32 = 0.6;
-pub(super) const ARM_SWING: f32 = 0.4;
+const ARM_SWING: f32 = 0.4;
 pub(super) const BOB: f32 = 0.025;
 /// A weapon resting its point on the ground (`Moves::rests`): how high its lowest point is kept
 /// (meters), and how far at most the wrist bends to keep it there (radians).
-pub(super) const REST_HEIGHT: f32 = 0.0;
-pub(super) const REST_BEND: f32 = 0.6;
+const REST_HEIGHT: f32 = 0.0;
+const REST_BEND: f32 = 0.6;
 pub(super) const SWAY: f32 = 0.02;
 /// How far apart (meters) the feet's heights are where the body still stands partly on both.
-pub(super) const FOOT_BLEND: f32 = 0.03;
-/// How long (ticks) a strike's smear takes to snap back once the strike is done
-/// (`Moves::stretch`), and how much further down the arm the hand is pushed with it (a fraction
-/// of the stretch).
-pub(super) const STRETCH_TICKS: f32 = 3.0;
-pub(super) const SMEAR_REACH: f32 = 0.4;
-/// How long (ticks) a throw's arm takes to whip through after letting go (`strike_at`).
+const FOOT_BLEND: f32 = 0.03;
+/// How long (ticks, at normal attack speed: a quicker attack plays them faster) a strike's
+/// smear takes to snap back once the strike is done (`Moves::stretch`), and how much further
+/// down the arm the hand is pushed with it (a fraction of the stretch).
+const STRETCH_TICKS: f32 = 3.0;
+const SMEAR_REACH: f32 = 0.4;
+/// How long (ticks, at normal attack speed) a throw's arm takes to whip through after letting
+/// go (`strike_at`).
 pub(super) const WHIP_TICKS: f32 = 4.0;
 /// Where what moves only after the strike has gone off starts: this far (0 to 1) on from the
 /// contact pose through the rest of the strike.
-pub(super) const AFTER_CONTACT: f32 = 0.6;
+const AFTER_CONTACT: f32 = 0.6;
 /// How much a gripped blade grown to twice its size is tipped up (radians, in proportion).
-pub(super) const BIG_BLADE_LIFT: f32 = 0.09;
+const BIG_BLADE_LIFT: f32 = 0.09;
 /// A melee windup started during the last strike's follow-through: how long (a fraction of the
 /// windup) what's left of the strike is still held before the blade comes back into the draw.
-pub(super) const CHAIN_HOLD: f32 = 0.15;
+const CHAIN_HOLD: f32 = 0.15;
 
 /// How far into each of its poses a rig is (0 to 1 each, layered in this order): drawn back,
 /// struck (released), and its Q pose.
@@ -83,7 +93,7 @@ pub(crate) fn targets(moves: &Moves, phase: Phase, step: f32, walking: f32) -> A
     // the last of the strike: the joints' springs lag their targets, so it starts a little
     // after the contact pose, or they'd already be on their way as it goes off.
     let from = moves.contact + (1.0 - moves.contact) * AFTER_CONTACT;
-    let gone = ((phase.throw - from) / (1.0 - from).max(1e-3)).clamp(0.0, 1.0);
+    let gone = (phase.throw - from) / (1.0 - from).max(1e-3);
     let after = Phase { throw: smooth(gone), ..phase };
     // Standing still while carrying: leaning as it stands rather than as it walks, the arms
     // turned back by as much so they hang (and what they hold lies) just as they did.
@@ -259,7 +269,7 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
 /// The lower of two heights, rounded off where they cross (by about `FOOT_BLEND`): standing on
 /// the lower foot, the body passing smoothly from one to the other as they swap, rather than
 /// jolting.
-pub(super) fn soft_min(a: f32, b: f32) -> f32 {
+fn soft_min(a: f32, b: f32) -> f32 {
     let m = a.min(b);
     m - FOOT_BLEND * ((-(a - m) / FOOT_BLEND).exp() + (-(b - m) / FOOT_BLEND).exp()).ln()
 }
@@ -273,7 +283,7 @@ pub(crate) fn ahead_of_springs(class: ClassId, moves: &Moves, windup: Option<Swi
     let attack = &class.def().attack;
     // A thrower's hand needn't be at the contact pose as it goes off: the spear leaves from
     // wherever the hand is then (`pose_releasing`).
-    let lead = if moves.throws { 0.0 } else { 2.0 * moves.damping / moves.stiffness * TICK_HZ as f32 };
+    let lead = if moves.throws { 0.0 } else { crate::spring::Spring::lag(moves.stiffness, moves.damping) * TICK_HZ as f32 };
     let ahead = now + lead;
     match windup {
         Some(swing) if ahead >= swing.releases_at(attack) as f32 => (None, Some((ahead - swing.releases_at(attack) as f32) * swing.speed(attack)), ahead),
@@ -340,7 +350,7 @@ pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, 
 /// out and slowing into place, or (`heavy`) gathering speed all the way into its end, or
 /// (`throws`) gathering speed up to letting go, then whipped through the rest in `WHIP_TICKS`,
 /// slowing into place. Also how many ticks after it went off the strike is done.
-pub(super) fn strike_at(ticks: f32, strike_ticks: f32, contact: f32, heavy: bool, throws: bool) -> (f32, f32) {
+fn strike_at(ticks: f32, strike_ticks: f32, contact: f32, heavy: bool, throws: bool) -> (f32, f32) {
     if throws {
         // The rest of it whipped through quickly after letting go, slowing into place.
         let after = WHIP_TICKS;

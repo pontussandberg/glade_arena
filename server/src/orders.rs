@@ -3,6 +3,10 @@
 
 use super::*;
 
+use arena_shared::sim;
+
+use crate::rooms::{InRoom, Lobby};
+
 /// Each client's commands change its own fighter's intent, the moment they arrive. A link only
 /// ever drives the fighter it controls; commands while it has none (still picking a class) are
 /// dropped. An order to move cancels an attack still winding up, right away, so the fighter

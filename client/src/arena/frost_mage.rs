@@ -3,24 +3,27 @@
 
 use super::*;
 
+use crate::cloth::{Column, Drape, Wardrobe, Weave};
+use crate::sculpt::{Section, grid, hemmed, sheet, smoothed, sweep, tube};
+
 /// A long crystal standing on Y, base at the origin: a narrow prism ending in a point.
-pub(super) fn ice_shard(radius: f32, height: f32) -> Mesh {
+fn ice_shard(radius: f32, height: f32) -> Mesh {
     let body = cylinder(radius, height * 0.7, 5).translated_by(Vec3::Y * height * 0.35);
     let point = cone(radius, height * 0.3, 5).translated_by(Vec3::Y * height * 0.85);
     faceted(sculpted(vec![body, point]))
 }
 
 /// The middle of the staff's head (above the grip), and how far its crescents reach out.
-pub(super) const STAFF_HEAD: f32 = 1.32;
-pub(super) const STAFF_REACH: f32 = 0.17;
+const STAFF_HEAD: f32 = 1.32;
+const STAFF_REACH: f32 = 0.17;
 /// How far around (radians from the bottom of the head) each crescent half curls up.
-pub(super) const STAFF_CURL: f32 = 2.5;
+const STAFF_CURL: f32 = 2.5;
 /// The sides the staff's crescent halves curl up on.
-pub(super) const CRESCENTS: [Vec3; 4] = [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z];
+const CRESCENTS: [Vec3; 4] = [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z];
 
 /// A point `t` (0..1) of the way along a crescent half, from the bottom of the staff's head up
 /// around `side` to its tip.
-pub(super) fn crescent(side: Vec3, t: f32) -> Vec3 {
+fn crescent(side: Vec3, t: f32) -> Vec3 {
     let angle = STAFF_CURL * t;
     Vec3::Y * STAFF_HEAD + (side * angle.sin() - Vec3::Y * angle.cos()) * STAFF_REACH
 }
@@ -183,7 +186,7 @@ pub(super) fn frost_mage_body() -> Mesh {
 
 /// Where the frost mage's skirt is at `a` (radians round from the front) and `v` (0..1) from the
 /// sash down to its hem on the ground, flaring as it falls.
-pub(super) fn frost_skirt_point(a: f32, v: f32) -> Vec3 {
+fn frost_skirt_point(a: f32, v: f32) -> Vec3 {
     let flare = v.powf(1.4);
     let (depth, width) = (0.192 + 0.16 * flare, 0.232 + 0.18 * flare);
     Vec3::new(a.cos() * depth, 0.88 - 0.85 * v, a.sin() * width)
@@ -339,7 +342,7 @@ pub(super) fn ice_staff() -> Mesh {
 
 /// A frostbolt's crystal is this many times as long as the shot's radius, and turns this fast
 /// (radians per second) as it flies.
-pub(super) const FROSTBOLT_LENGTH: f32 = 3.6;
+const FROSTBOLT_LENGTH: f32 = 3.6;
 pub(super) const FROSTBOLT_SPIN: f32 = 5.0;
 
 /// A frostbolt, point first along +X (its point at the origin), sized by the shot's radius: a long

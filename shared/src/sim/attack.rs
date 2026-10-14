@@ -3,6 +3,12 @@
 
 use super::*;
 
+use lightyear::prelude::PeerId;
+
+use crate::classes::{AttackKind, ClassId};
+use crate::map::Map;
+use crate::protocol::{AttackState, LastSwing, PlayerInput, Projectile, Swing};
+
 /// What an auto-attack produces.
 pub enum Attack {
     /// Spawn this projectile.
