@@ -59,10 +59,11 @@ enum Switch {
     Hitboxes,
     Hitboxes3d,
     FreeCamera,
+    UncappedZoom,
 }
 
 impl Switch {
-    const ALL: [Switch; 4] = [Switch::NoCooldowns, Switch::Hitboxes, Switch::Hitboxes3d, Switch::FreeCamera];
+    const ALL: [Switch; 5] = [Switch::NoCooldowns, Switch::Hitboxes, Switch::Hitboxes3d, Switch::FreeCamera, Switch::UncappedZoom];
 
     fn label(self) -> &'static str {
         match self {
@@ -70,6 +71,7 @@ impl Switch {
             Switch::Hitboxes => "Hitboxes",
             Switch::Hitboxes3d => "3D hitboxes",
             Switch::FreeCamera => "Free camera",
+            Switch::UncappedZoom => "Uncapped zoom",
         }
     }
 }
@@ -95,6 +97,7 @@ impl Switched<'_, '_> {
             Switch::Hitboxes => self.hitboxes.0,
             Switch::Hitboxes3d => self.hitboxes_3d.0,
             Switch::FreeCamera => self.camera.free,
+            Switch::UncappedZoom => self.camera.uncapped,
         }
     }
 
@@ -107,6 +110,7 @@ impl Switched<'_, '_> {
             Switch::Hitboxes => self.hitboxes.0 = !on,
             Switch::Hitboxes3d => self.hitboxes_3d.0 = !on,
             Switch::FreeCamera => self.camera.free = !on,
+            Switch::UncappedZoom => self.camera.uncapped = !on,
         }
     }
 }
@@ -209,8 +213,9 @@ fn tools_off(
     hitboxes.set_if_neq(ShowHitboxes(false));
     hitboxes_3d.set_if_neq(ShowHitboxes3d(false));
     fake_ping.set_if_neq(FakeLatency::default());
-    if camera.free {
+    if camera.free || camera.uncapped {
         camera.free = false;
+        camera.uncapped = false;
     }
     placing.set_if_neq(Placing::default());
 }
