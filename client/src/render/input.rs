@@ -42,6 +42,7 @@ pub(super) fn read_local_input(
         (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&AbilityIcon>),
         Or<(With<HudButton>, With<AbilityIcon>)>,
     >,
+    minimap: Option<Single<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility), With<crate::minimap::Minimap>>>,
     mut aiming: ResMut<Aiming>,
     mut held_click: Local<bool>,
     mut last_pos: Local<Option<Vec2>>,
@@ -64,7 +65,11 @@ pub(super) fn read_local_input(
     let under_cursor = |(node, transform, visible, _): &(&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&AbilityIcon>)| {
         visible.get() && screen.is_some_and(|at| node.contains_point(**transform, at))
     };
-    let on_control = hud.iter().filter(|part| part.3.is_none()).any(|part| under_cursor(&part));
+    // The point on the map under the cursor on the minimap, if it's there.
+    let on_minimap = minimap
+        .filter(|minimap| minimap.2.get())
+        .and_then(|minimap| crate::minimap::ground_on_minimap(minimap.0, *minimap.1, map.map(), screen?));
+    let on_control = on_minimap.is_some() || hud.iter().filter(|part| part.3.is_none()).any(|part| under_cursor(&part));
     let on_icon = hud.iter().filter(under_cursor).find_map(|(.., icon)| icon.map(|icon| icon.slot));
     let cursor = window.and_then(|w| w.cursor_position()).and_then(|c| ground_at(camera, camera_transform, c));
 
@@ -81,10 +86,11 @@ pub(super) fn read_local_input(
     let right_click = !mode.free && mouse.just_pressed(MouseButton::Right);
     let drops_aim = right_click && aiming.0.is_some();
     // Once per click: holding the button doesn't keep re-targeting. Not with the free camera:
-    // there the right button turns the camera, and WASD walks.
+    // there the right button turns the camera, and WASD walks. A click on the minimap walks to
+    // where it is there.
     if right_click
         && !drops_aim
-        && let Some(cursor) = cursor
+        && let Some(cursor) = on_minimap.or(cursor)
         && let Some(point) = map.map().walk_target(cursor, 4)
     {
         move_to = Some(point);

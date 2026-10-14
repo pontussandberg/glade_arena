@@ -1,7 +1,8 @@
 //! The minimap in the bottom-right corner: our room's map drawn tile by tile from the shared map
 //! (so it's exactly what blocks movement), every fighter as a dot in its ring color, every
 //! pickup as its icon while it's lying there or the seconds until it's back, every waygate end
-//! as a ring (dim while it's closed), and a frame showing what the camera sees. Drawn again when
+//! as a ring (dim while it's closed), where we're walking to as a small ring in our color, and
+//! a frame showing what the camera sees. Drawn again when
 //! the map changes.
 
 use arena_shared::config::TICK_HZ;
@@ -30,6 +31,7 @@ impl Plugin for MinimapPlugin {
                 draw_map.run_if(resource_changed::<CurrentMap>),
                 (spawn_dots, color_dots).chain(),
                 place_dots,
+                show_destination,
                 (spawn_markers, update_markers).chain(),
                 (spawn_gate_marks, update_gate_marks).chain(),
                 frame_view.in_set(CameraPlaced),
@@ -46,13 +48,16 @@ const MARGIN: f32 = 12.0;
 const DOT: f32 = 12.0;
 /// A monster's (a zombie's) dot: smaller, so players stand out.
 const MONSTER_DOT: f32 = 7.0;
+/// The frame round the picture.
+const FRAME: f32 = 2.0;
 const MARKER: f32 = 22.0;
 const MARKER_TEXT: f32 = 14.0;
 const GATE_MARK: f32 = 14.0;
 
-/// The minimap's picture; dots and the view frame are its children.
+/// The minimap's picture; dots and the view frame are its children. A right click on it walks
+/// there (`render::read_local_input`).
 #[derive(Component)]
-struct Minimap;
+pub(crate) struct Minimap;
 
 /// A fighter's dot, `size` across (a monster's smaller).
 #[derive(Component)]
@@ -64,6 +69,13 @@ struct Dot {
 /// What the camera sees.
 #[derive(Component)]
 struct ViewFrame;
+
+/// Where we're walking to (`DesiredInput::move_to`).
+#[derive(Component)]
+struct DestinationDot;
+
+/// The destination's ring's size.
+const DESTINATION: f32 = 9.0;
 
 /// A pickup's marker (this entity, a round chip) and its text, and what it shows now: the
 /// pickup's icon (`None`: it's lying there), else the seconds until it's back.
@@ -84,6 +96,18 @@ fn scale(map: &Map) -> f32 {
 fn on_minimap(map: &Map, p: Vec2) -> Vec2 {
     let half = map.half_extents();
     (Vec2::new(p.x + half.x, half.y - p.y) * scale(map)).round()
+}
+
+/// Where on `map` the screen point `at` (physical pixels) is, if it's on the minimap's picture
+/// (`node`, at `transform`): `on_minimap` the other way.
+pub(crate) fn ground_on_minimap(node: &ComputedNode, transform: UiGlobalTransform, map: &Map, at: Vec2) -> Option<Vec2> {
+    let from_corner = (node.normalize_point(transform, at)? + 0.5) * node.size() - node.border().min_inset;
+    let on_picture = from_corner * node.inverse_scale_factor;
+    if on_picture.cmplt(Vec2::ZERO).any() || on_picture.cmpgt(picture_size(map)).any() {
+        return None;
+    }
+    let (half, tiles) = (map.half_extents(), on_picture / scale(map));
+    Some(Vec2::new(tiles.x - half.x, half.y - tiles.y))
 }
 
 /// The minimap's size in pixels.
@@ -124,7 +148,7 @@ fn spawn_minimap(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 right: px(MARGIN),
                 bottom: px(MARGIN),
-                border: UiRect::all(px(2.0)),
+                border: UiRect::all(px(FRAME)),
                 ..default()
             },
             BorderColor::all(palette::ui::PANEL),
@@ -134,16 +158,44 @@ fn spawn_minimap(mut commands: Commands) {
             ViewFrame,
             Node { position_type: PositionType::Absolute, border: UiRect::all(px(1.0)), ..default() },
             BorderColor::all(palette::ui::TEXT),
+        ))
+        .with_child((
+            DestinationDot,
+            Node {
+                position_type: PositionType::Absolute,
+                width: px(DESTINATION),
+                height: px(DESTINATION),
+                border: UiRect::all(px(2.0)),
+                border_radius: BorderRadius::MAX,
+                ..default()
+            },
+            BorderColor::all(palette::YOU),
+            Visibility::Hidden,
         ));
 }
 
-/// The map, drawn in the minimap at the size it takes there.
+/// Where we're walking to, on the minimap, while we are.
+fn show_destination(
+    current: Res<CurrentMap>,
+    desired: Res<crate::DesiredInput>,
+    dot: Single<(&mut Node, &mut Visibility), With<DestinationDot>>,
+) {
+    let (mut node, mut visibility) = dot.into_inner();
+    visibility.set_if_neq(shown(desired.0.move_to.is_some()));
+    if let Some(to) = desired.0.move_to {
+        place(&mut node, current.map(), to, DESTINATION);
+    }
+}
+
+/// The map, drawn in the minimap at the size it takes there: the node is that and its frame (a
+/// node's size takes its border in), so the picture is drawn at exactly `picture_size`, as dots,
+/// marks and clicks (`ground_on_minimap`) count on.
 fn draw_map(current: Res<CurrentMap>, mut images: ResMut<Assets<Image>>, minimap: Single<(&mut Node, &mut ImageNode), With<Minimap>>) {
     let map = current.map();
     let (mut node, mut image) = minimap.into_inner();
     let size = picture_size(map);
-    node.width = px(size.x);
-    node.height = px(size.y);
+    node.width = px(size.x + 2.0 * FRAME);
+    node.height = px(size.y + 2.0 * FRAME);
     image.image = images.add(picture(map));
 }
 
