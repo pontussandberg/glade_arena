@@ -33,7 +33,7 @@ const CONVERGE_METERS: f32 = 7.0;
 const MAX_CATCH_UP: f32 = 8.0;
 /// Where a thrown spear's wake comes off it: just behind its point (in its own drawn size), so
 /// the line runs along it and, when it strikes home and is gone, reaches right to where it hit.
-const WAKE_FROM: f32 = 0.12;
+const WAKE_FROM: f32 = 0.25;
 /// How long a piece of the wake stays where it was left (seconds), and how much of that it keeps
 /// its full width before thinning away to nothing.
 const WAKE_SECONDS: f32 = 0.32;
