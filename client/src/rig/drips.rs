@@ -9,15 +9,15 @@ use crate::swish::noise;
 /// Drops dripping off a primed blade: how many a second, how hard they're pulled down (m/s²), how
 /// long each lasts (seconds, least and most), how big (meters, least and most), how drawn out
 /// along their fall, and how bright.
-const DRIPS_PER_SECOND: f32 = 10.0;
+const DRIPS_PER_SECOND: f32 = 13.0;
 const DRIP_PULL: f32 = 1.4;
-const DRIP_LIFE: (f32, f32) = (0.45, 0.8);
+const DRIP_LIFE: (f32, f32) = (0.35, 0.65);
 const DRIP_SIZE: (f32, f32) = (0.012, 0.022);
 /// How drawn out a drop is as it forms and as it ends (its length to its width), and how thin.
 const DRIP_STRETCH: (f32, f32) = (3.0, 5.5);
 const DRIP_THIN: f32 = 0.55;
 /// A primed javelin in flight drips faster, so its drops don't fall meters apart.
-const FLYING_DRIPS_PER_SECOND: f32 = 45.0;
+const FLYING_DRIPS_PER_SECOND: f32 = 58.0;
 const DRIP_GLOW: f32 = 5.0;
 
 /// The drops' shape and light.
