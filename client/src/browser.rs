@@ -1,7 +1,7 @@
 //! Home's lobbies: a pane beside the character select that folds open and shut. Its header is
 //! always there (how many lobbies are open, how many live), and a click on it opens or folds it.
-//! "Create / join lobby" only ever opens it: while it's open, that button is marked as where we
-//! are, and a click on it flashes the header. Open, it shows every lobby there is (name, mode,
+//! "Create / join lobby" (the character select's big button, at home) only ever opens it: a click
+//! on it while it's open flashes the header. Open, it shows every lobby there is (name, mode,
 //! how full, whether its match is on), each with a way in, and below them a form to create one:
 //! a name (click it to type) and the mode. Before home, while connecting, a plain screen saying
 //! so.
@@ -33,7 +33,7 @@ impl Plugin for BrowserPlugin {
         app.add_systems(OnExit(Screen::Home), close_home);
         app.add_systems(
             Update,
-            (focus_name, type_name, lobby_buttons, show_lobbies, show_form, mark_lobbies_button, flash_header)
+            (focus_name, type_name, lobby_buttons, show_lobbies, show_form, flash_header)
                 .chain()
                 .run_if(in_state(Screen::Home)),
         );
@@ -111,19 +111,24 @@ fn show_connecting(client: Query<Has<Disconnected>, With<Client>>, mut text: Sin
     }
 }
 
-/// The button that opens the lobbies pane; the character select puts it by the way in, shown at
-/// home only.
-#[derive(Component)]
-pub struct LobbiesButton;
-
 /// Whether the lobbies pane is open; it stays as it was left, coming home again.
 #[derive(Resource, Default)]
-struct LobbiesOpen(bool);
+pub(crate) struct LobbiesOpen(bool);
 
 /// When the header last flashed (`Time` seconds), to say "it's here" to a click on the button that
 /// opens the pane, while it's open.
 #[derive(Resource, Default)]
-struct HeaderFlash(Option<f32>);
+pub(crate) struct HeaderFlash(Option<f32>);
+
+/// "Create / join lobby" clicked at `now` (`Time` seconds): the pane opens, or, open already, its
+/// header flashes.
+pub(crate) fn open_lobbies(open: &mut LobbiesOpen, flash: &mut HeaderFlash, now: f32) {
+    if open.0 {
+        flash.0 = Some(now);
+    } else {
+        open.0 = true;
+    }
+}
 
 /// How long the header's flash takes to fade.
 const FLASH_SECS: f32 = 0.45;
@@ -226,7 +231,6 @@ fn create(home: &Home, map: MapId, sender: &mut MessageSender<RoomRequest>) {
 
 #[allow(clippy::too_many_arguments)]
 fn lobby_buttons(
-    lobbies: Query<Ref<Interaction>, With<LobbiesButton>>,
     header: Query<Ref<Interaction>, With<PaneHeader>>,
     joins: Query<(Ref<Interaction>, &JoinButton)>,
     modes: Query<(Ref<Interaction>, &ModeButton)>,
@@ -234,19 +238,10 @@ fn lobby_buttons(
     mut home: ResMut<Home>,
     map: Res<CurrentMap>,
     mut open: ResMut<LobbiesOpen>,
-    mut flash: ResMut<HeaderFlash>,
-    time: Res<Time>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
     if header.iter().any(clicked) {
         open.0 = !open.0;
-    }
-    if lobbies.iter().any(clicked) {
-        if open.0 {
-            flash.0 = Some(time.elapsed_secs());
-        } else {
-            open.0 = true;
-        }
     }
     for (interaction, join) in &joins {
         if clicked(interaction) {
@@ -340,22 +335,6 @@ fn show_lobbies(
             card.spawn((CreateButton, button("CREATE LOBBY", 14.0, ACCENT, palette::ui::PANEL, ACCENT)));
         });
     });
-}
-
-/// "Create / join lobby" is lit while the pane is open, as the tab we're on; else plain, lit
-/// under the mouse.
-fn mark_lobbies_button(
-    open: Res<LobbiesOpen>,
-    button: Single<(&Interaction, &mut BackgroundColor, &mut BorderColor), With<LobbiesButton>>,
-) {
-    let (interaction, mut fill, mut border) = button.into_inner();
-    let (color, edge) = match (open.0, interaction) {
-        (true, _) => (palette::ui::SELECTED, ACCENT),
-        (false, Interaction::None) => (palette::ui::PANEL, palette::ui::MUTED.with_alpha(0.5)),
-        (false, _) => (palette::ui::SELECTED, palette::ui::MUTED.with_alpha(0.5)),
-    };
-    fill.set_if_neq(BackgroundColor(color));
-    border.set_if_neq(BorderColor::all(edge));
 }
 
 /// The header's flash: lit, fading back to its own fill.

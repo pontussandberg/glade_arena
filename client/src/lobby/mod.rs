@@ -31,11 +31,10 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use crate::ChosenClass;
-use crate::browser::LobbiesButton;
 use crate::camera::{CameraControl, CameraMoves, Orbit};
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::{self, palette, to_world};
-use crate::render::{GameUi, ui_text};
+use crate::render::{ButtonFill, GameUi, ui_text};
 use crate::rooms::{Me, Picking, Screen};
 
 mod stage;
@@ -106,8 +105,13 @@ struct FighterTile(ClassId);
 #[derive(Component)]
 struct NameTag;
 
+/// The big button: at home it opens the lobbies; in a room it's the way into the match.
 #[derive(Component)]
 struct EnterButton;
+
+/// The small button over it, at home only: practice.
+#[derive(Component)]
+struct PracticeButton;
 
 /// The way in's text, and the hint under it.
 #[derive(Component)]
@@ -266,16 +270,9 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                             column.spawn((Status, ui_text("", 12.0, palette::ui::MUTED), Node { align_self: AlignSelf::FlexEnd, ..default() }));
                             column
                                 .spawn((
-                                    EnterButton,
+                                    PracticeButton,
                                     Button,
-                                    Node { padding: UiRect::axes(px(36.0), px(16.0)), justify_content: JustifyContent::Center, ..default() },
-                                    BackgroundColor(ACCENT),
-                                ))
-                                .with_child((EnterLabel, ui_text("PRACTICE", 18.0, palette::ui::PANEL)));
-                            column
-                                .spawn((
-                                    LobbiesButton,
-                                    Button,
+                                    ButtonFill(palette::ui::PANEL),
                                     Node {
                                         padding: UiRect::axes(px(36.0), px(12.0)),
                                         justify_content: JustifyContent::Center,
@@ -285,7 +282,15 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                                     BorderColor::all(palette::ui::MUTED.with_alpha(0.5)),
                                     BackgroundColor(palette::ui::PANEL),
                                 ))
-                                .with_child(ui_text("CREATE / JOIN LOBBY", 14.0, palette::ui::TEXT));
+                                .with_child(ui_text("PRACTICE", 14.0, palette::ui::TEXT));
+                            column
+                                .spawn((
+                                    EnterButton,
+                                    Button,
+                                    Node { padding: UiRect::axes(px(36.0), px(16.0)), justify_content: JustifyContent::Center, ..default() },
+                                    BackgroundColor(ACCENT),
+                                ))
+                                .with_child((EnterLabel, ui_text("CREATE / JOIN LOBBY", 18.0, palette::ui::PANEL)));
                         });
                 });
             });
