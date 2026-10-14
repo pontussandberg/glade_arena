@@ -17,7 +17,7 @@ use crate::Me;
 use crate::feedback::AttackClock;
 use crate::arena::palette;
 use crate::casting::key_label;
-use crate::render::{GameUi, set_fill, shown, ui_text};
+use crate::render::{GameUi, pixel_art, set_fill, shown, ui_text};
 use crate::rooms::CurrentRoom;
 use crate::stat_frame::{self, Blurb};
 use crate::tooltip::{Side, hover_shows, tip, tip_note, tip_text, tip_title};
@@ -37,8 +37,25 @@ const BOTTOM: f32 = 18.0;
 /// The passive's icon size, and its gap from the first ability's.
 const PASSIVE: f32 = 46.0;
 const PASSIVE_GAP: f32 = 10.0;
-/// The frenzy's icon size (left of the passive's, as far from it).
-const FRENZY: f32 = 32.0;
+/// The frenzy's icon size, and its gap from the passive's: set apart, not part of the class's
+/// kit.
+const FRENZY: f32 = 26.0;
+const FRENZY_GAP: f32 = 28.0;
+
+/// The frenzy's picture, old-school pixel art: a rotting skull, and its eyes burning red.
+const SKULL: &[&str] = &[
+    "..#####..",
+    ".#######.",
+    "#########",
+    "#..###..#",
+    "#..###..#",
+    "####.####",
+    ".#######.",
+    "..#.#.#..",
+    "..#####..",
+];
+const SKULL_EYES: &[&str] = &[".........", ".........", ".........", ".##...##.", ".#.....#.", ".........", ".........", ".........", "........."];
+const SKULL_PIXEL: f32 = 2.0;
 /// A tooltip's width (pixels).
 const TIP_WIDTH: f32 = 280.0;
 
@@ -94,7 +111,7 @@ fn spawn_icons(mut commands: Commands, me: Query<&ClassId, Added<Me>>, parts: Qu
         left_edge -= PASSIVE_GAP + PASSIVE;
         spawn_passive(&mut commands, blurb, left_edge);
     }
-    spawn_frenzy(&mut commands, class.def(), left_edge - PASSIVE_GAP - FRENZY);
+    spawn_frenzy(&mut commands, class.def(), left_edge - FRENZY_GAP - FRENZY);
 }
 
 /// The frenzy's icon (this entity), shown in a match with zombies, and its parts that change: the
@@ -105,9 +122,9 @@ struct FrenzyIcon {
     bar: Entity,
 }
 
-/// The frenzy's icon, its left edge `from_center` pixels from the middle of the screen: the
-/// number of zombies we've killed over a bar along its bottom, full as a kill sends us into a
-/// frenzy and draining as it fades.
+/// The frenzy's icon, its left edge `from_center` pixels from the middle of the screen: a pixel
+/// skull, the number of zombies we've killed in its corner, and a bar along its bottom, full as a
+/// kill sends us into a frenzy and draining as it fades.
 fn spawn_frenzy(commands: &mut Commands, class: &ClassDef, from_center: f32) {
     let melee = matches!(class.attack.kind, AttackKind::Melee { .. });
     let fades = seconds(if melee { FRENZY_MELEE_TICKS } else { FRENZY_RANGED_TICKS });
@@ -123,15 +140,17 @@ fn spawn_frenzy(commands: &mut Commands, class: &ClassDef, from_center: f32) {
             children![tip_title("Frenzy"), tip_note("Zombies killed"), tip_text(description)],
         ))
         .id();
-    let kills = commands.spawn(ui_text("0", 14.0, palette::ui::TEXT)).id();
-    let number = commands.spawn(centered()).add_child(kills).id();
+    let skull = commands.spawn(centered()).with_children(|art| pixel_art(art, SKULL, SKULL_PIXEL, palette::ROT)).id();
+    let eyes = commands.spawn(centered()).with_children(|art| pixel_art(art, SKULL_EYES, SKULL_PIXEL, palette::ENEMY)).id();
+    let kills = commands.spawn(ui_text("0", 10.0, palette::ui::TEXT)).id();
+    let number = commands.spawn(Node { position_type: PositionType::Absolute, right: px(1.0), top: px(-2.0), ..default() }).add_child(kills).id();
     let bar = commands.spawn((Node { height: percent(100.0), width: px(0.0), ..default() }, BackgroundColor(palette::TORCH_FLAME))).id();
     let track = commands
         .spawn(Node { position_type: PositionType::Absolute, left: px(0.0), right: px(0.0), bottom: px(0.0), height: px(4.0), ..default() })
         .add_child(bar)
         .id();
     let mut icon = commands.spawn((FrenzyIcon { kills, bar }, ActionBarPart, GameUi, icon_frame(tip, FRENZY, from_center, palette::ui::MUTED)));
-    icon.add_children(&[number, track, tip]);
+    icon.add_children(&[skull, eyes, number, track, tip]);
     // Shown in a match with zombies only (`update_frenzy`).
     icon.entry::<Node>().and_modify(|mut node| node.display = Display::None);
 }
