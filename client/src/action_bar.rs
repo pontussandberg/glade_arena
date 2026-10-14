@@ -120,6 +120,8 @@ fn spawn_icons(mut commands: Commands, me: Query<&ClassId, Added<Me>>, parts: Qu
 struct FrenzyIcon {
     kills: Entity,
     bar: Entity,
+    /// The stack (the zombies killed) again, in the tooltip.
+    stack: Entity,
 }
 
 /// The frenzy's icon, its left edge `from_center` pixels from the middle of the screen: a pixel
@@ -134,11 +136,15 @@ fn spawn_frenzy(commands: &mut Commands, class: &ClassDef, from_center: f32) {
         share(FRENZY_BASE),
         share(FRENZY_PER_KILL),
     );
+    // The stack, a number of its own under the name, unlabeled.
+    let stack = commands.spawn(ui_text("0", 22.0, palette::TORCH_FLAME)).id();
     let tip = commands
-        .spawn((
-            tip(Side::Above, (FRENZY - TIP_WIDTH) / 2.0, TIP_WIDTH),
-            children![tip_title("Frenzy"), tip_note("Zombies killed"), tip_text(description)],
-        ))
+        .spawn((tip(Side::Above, (FRENZY - TIP_WIDTH) / 2.0, TIP_WIDTH), children![tip_title("Frenzy")]))
+        .add_child(stack)
+        .with_children(|tip| {
+            tip.spawn(tip_note("Buff"));
+            tip.spawn(tip_text(description));
+        })
         .id();
     let skull = commands.spawn(centered()).with_children(|art| pixel_art(art, SKULL, SKULL_PIXEL, palette::ROT)).id();
     let eyes = commands.spawn(centered()).with_children(|art| pixel_art(art, SKULL_EYES, SKULL_PIXEL, palette::ENEMY)).id();
@@ -149,7 +155,7 @@ fn spawn_frenzy(commands: &mut Commands, class: &ClassDef, from_center: f32) {
         .spawn(Node { position_type: PositionType::Absolute, left: px(0.0), right: px(0.0), bottom: px(0.0), height: px(4.0), ..default() })
         .add_child(bar)
         .id();
-    let mut icon = commands.spawn((FrenzyIcon { kills, bar }, ActionBarPart, GameUi, icon_frame(tip, FRENZY, from_center, palette::ui::MUTED)));
+    let mut icon = commands.spawn((FrenzyIcon { kills, bar, stack }, ActionBarPart, GameUi, icon_frame(tip, FRENZY, from_center, palette::ui::MUTED)));
     icon.add_children(&[skull, eyes, number, track, tip]);
     // Shown in a match with zombies only (`update_frenzy`).
     icon.entry::<Node>().and_modify(|mut node| node.display = Display::None);
@@ -178,10 +184,12 @@ fn update_frenzy(
         set_fill(&mut bar, left);
     }
     let kills = frenzy.kills.to_string();
-    if let Ok(mut text) = texts.get_mut(icon.kills)
-        && text.0 != kills
-    {
-        text.0 = kills;
+    for shown in [icon.kills, icon.stack] {
+        if let Ok(mut text) = texts.get_mut(shown)
+            && text.0 != kills
+        {
+            text.0.clone_from(&kills);
+        }
     }
 }
 
