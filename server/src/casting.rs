@@ -13,7 +13,7 @@ pub(super) struct DashHits(pub(super) u32, pub(super) Vec<PeerId>);
 
 /// Abilities (`abilities::step`). Thrown ones are spawned. Dashes cut whoever the dasher passes
 /// through, each target once per dash; a rooted dasher cuts no one (its dash stops). Novas hit
-/// everyone around the caster. A key press is used up after the tick, whether or not the
+/// everyone around the caster. A prime readies the next auto-attack. A key press is used up after the tick, whether or not the
 /// ability was ready (`use_up_clicks`, as in League); a dash drops the destination like an
 /// attack does.
 pub(super) fn use_abilities(
@@ -21,7 +21,7 @@ pub(super) fn use_abilities(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut users: Query<
-        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, (&mut Cooldowns, &mut Dashing), &mut DashHits, (&InRoom, &Team)),
+        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, (&mut Cooldowns, &mut Dashing), &mut DashHits, (&InRoom, &Team), &mut AttackState),
         InPlay,
     >,
     mut targets: Targets,
@@ -30,14 +30,14 @@ pub(super) fn use_abilities(
     // Read up front: `targets` holds every player's `Chilled` mutably. A root or slow landing
     // during this loop starts next tick anyway.
     let chills: Vec<(PeerId, Chilled)> = targets.iter().map(|(_, id, .., chilled, _)| (id.0, *chilled)).collect();
-    for (id, class, pos, mut input, (mut cooldowns, mut dashing), mut hits, (room, team)) in &mut users {
+    for (id, class, pos, mut input, (mut cooldowns, mut dashing), mut hits, (room, team), mut attack) in &mut users {
         let side = (*room, *team);
         let map = lobby.map(room);
         let chilled = chills.iter().find(|(p, _)| *p == id.0).map(|(_, c)| *c).unwrap_or_default();
         // What a hit by `ability` does, and its name for the log.
         let blow = |ability: &'static AbilityDef| {
             let effect = ability.kind.effect();
-            (Blow { amount: effect.damage, chill: effect.chill, can_crit: false }, (id.0, *class, ability.name.as_str()))
+            (Blow { amount: effect.damage, chill: effect.chill, can_crit: false, sure_crit: false }, (id.0, *class, ability.name.as_str()))
         };
         // Cut whoever this tick's dash step reached (`move_players` just made it). Checked before
         // the abilities step, which ends the dash on its last tick: so every step is checked, the
@@ -67,6 +67,7 @@ pub(super) fn use_abilities(
             match cast {
                 Cast::Throw(projectile) => spawn_projectile(&mut commands, projectile, side),
                 Cast::Dash => input.move_to = None,
+                Cast::Prime(prime) => attack.primed = Some(prime.attack_speed),
                 Cast::Nova { ability, nova } => {
                     let (blow, with) = blow(ability);
                     hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |_, at| nova.hits(map, pos.0, at));

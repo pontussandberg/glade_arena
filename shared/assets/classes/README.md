@@ -62,6 +62,9 @@ Units: meters, meters per second, ticks (32 per second).
       `distance` in `ticks` at normal speed (longer slowed, shorter hasted).
     - `Nova(radius, damage, chill)`: a burst around you, at once: everyone within `radius` (and
       not behind a wall) takes `damage` and `chill`.
+    - `Prime(attack_speed)`: at once, no aim: your next auto-attack is sure to crit and has
+      `attack_speed` more attack speed (0.5 = 50%). It stays ready until that attack goes off
+      (cancelling it first keeps it). `{ability_attack_speed}` names it in the description.
   - `global_cooldown` (optional, true by default): using it starts the global cooldown
     (`common.ron`), and it waits for it, like every other ability on it; false opts out.
 - `passive` (optional): shown to players, nothing more: `Some(name: ..., description: ...)`. Its effect

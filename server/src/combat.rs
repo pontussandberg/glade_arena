@@ -8,12 +8,14 @@ use arena_shared::sim;
 
 use crate::rooms::{InRoom, Lobby};
 
-/// What a hit does: damage, and crowd control on top. Only an auto-attack's `can_crit`.
+/// What a hit does: damage, and crowd control on top. Only an auto-attack's `can_crit`; a
+/// primed one's (`AttackState::primed`) is a `sure_crit`.
 #[derive(Clone, Copy)]
 pub(super) struct Blow {
     pub(super) amount: i32,
     pub(super) chill: Chill,
     pub(super) can_crit: bool,
+    pub(super) sure_crit: bool,
 }
 
 /// Who dealt a hit, of which class (whose crit odds it rolls), and `with` what (for the log).
@@ -38,7 +40,7 @@ pub(super) fn damage(
     blow: Blow,
     (by, class, with): Attacker,
 ) {
-    let crit = blow.can_crit && fastrand::f32() < class.def().crit.chance_against(chilled.rooted_at(now));
+    let crit = blow.sure_crit || blow.can_crit && fastrand::f32() < class.def().crit.chance_against(chilled.rooted_at(now));
     let amount = if crit { (blow.amount as f32 * common().crit_multiplier).round() as i32 } else { blow.amount };
     health.0 = (health.0 - amount).max(0);
     hits.push(amount, if crit { HitKind::Crit } else { HitKind::Damage });
@@ -108,17 +110,19 @@ pub(super) fn attack(
     let now = timeline.tick();
     for (id, class, pos, mut input, mut state, mut last_swing, (room, team), frenzy) in &mut attackers {
         let side = (*room, *team);
+        // A primed attack going off this tick is a sure crit.
+        let primed = state.winding_up().is_some_and(|swing| swing.primed);
         // In two halves (`sim::step_attack`): a swing that lands arms a quick attack in between.
         let (mut next, released) = sim::release_attack(now.0, id.0, *class, pos.0, *state);
         match released {
             None => {}
-            Some(sim::Attack::Projectile(projectile)) => spawn_projectile(&mut commands, projectile, side),
+            Some(sim::Attack::Projectile(projectile)) => spawn_projectile(&mut commands, Projectile { crit: primed, ..projectile }, side),
             Some(sim::Attack::Melee(swing)) => {
                 *last_swing = swing;
                 if let Some(rift) = sim::Rift::torn(id.0, *class, pos.0, &swing) {
                     rifts.0.push((*room, rift));
                 }
-                let blow = Blow { amount: class.def().attack.damage, chill: class.def().attack.chill, can_crit: true };
+                let blow = Blow { amount: class.def().attack.damage, chill: class.def().attack.chill, can_crit: true, sure_crit: primed };
                 let with = (id.0, *class, "auto-attack");
                 let landed = hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |_, at| {
                     sim::melee_hits(lobby.map(room), pos.0, swing.dir, swing.empowered, *class, at)

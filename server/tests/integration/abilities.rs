@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use arena_shared::abilities::AbilityKind;
 use arena_shared::abilities::dash::DashDef;
 use arena_shared::abilities::nova::NovaDef;
-use arena_shared::abilities::throw::Throw;
+use arena_shared::abilities::prime::PrimeDef;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use crate::common::*;
@@ -34,28 +34,33 @@ fn q_kind(class: &str) -> AbilityKind {
     class_id(class).def().ability(Q).expect("no Q").kind
 }
 
-fn spirit_spears(app: &mut App) -> usize {
-    let mut q = app.world_mut().query::<&Projectile>();
-    q.iter(app.world()).filter(|p| p.ability.is_some()).count()
+/// The last hit player `id` took, as `app` has it.
+fn last_hit(app: &mut App, id: u64) -> Option<Hit> {
+    let mut q = app.world_mut().query::<(&PlayerId, &RecentHits)>();
+    q.iter(app.world()).find(|(p, _)| p.0 == peer(id)).and_then(|(_, hits)| hits.0.last().copied())
 }
 
 #[test]
-fn spirit_spear_flies_and_hits() {
+fn deadeye_primes_one_quicker_sure_crit() {
     let mut d = duel(5892, "javelinist", "revenant");
-    let AbilityKind::Projectile(Throw { damage, .. }) = q_kind("javelinist") else { panic!("not a throw") };
-    let full = server_player(&mut d.server, B).1;
+    let AbilityKind::Prime(PrimeDef { attack_speed }) = q_kind("javelinist") else { panic!("not a prime") };
 
     a_uses_q_at_b(&mut d);
     let t0 = Instant::now();
-    d.until(Duration::from_secs(1), "the spear appears on A", |d| spirit_spears(&mut d.a) > 0);
-    println!("spirit spear appeared on A after {:?}", t0.elapsed());
-    assert!(t0.elapsed() < COMMAND_SHOWS_WITHIN, "no windup: the spear should be thrown at once");
-    assert!(attack_state(&mut d.a, A).swing.is_none(), "throwing it shouldn't start an attack");
+    d.until(Duration::from_secs(1), "A sees its attack primed", |d| attack_state(&mut d.a, A).primed.is_some());
+    println!("primed on A after {:?}", t0.elapsed());
+    assert_eq!(attack_state(&mut d.a, A).primed, Some(attack_speed));
+    assert!(attack_state(&mut d.a, A).swing.is_none(), "priming shouldn't start an attack");
 
-    d.until(Duration::from_secs(2), "the spear hits", |d| server_player(&mut d.server, B).1 == full - damage);
-    // One press, one spear: its cooldown holds.
-    d.run(Duration::from_millis(1000));
-    assert_eq!(server_player(&mut d.server, B).1, full - damage);
+    let aim = sees(&mut d.a, B).unwrap() - sees(&mut d.a, A).unwrap();
+    set_input(&mut d.a, PlayerInput { aim, fire: true, ..default() });
+    d.until(Duration::from_secs(1), "the primed attack starts", |d| attack_state(&mut d.server, A).swing.is_some());
+    let swing = attack_state(&mut d.server, A).swing.unwrap();
+    assert!(swing.primed && (swing.haste - attack_speed).abs() < 1e-6, "the attack isn't primed: {swing:?}");
+    d.until(Duration::from_secs(3), "the javelin hits, a crit", |d| {
+        last_hit(&mut d.server, B).is_some_and(|hit| hit.kind == HitKind::Crit)
+    });
+    assert!(attack_state(&mut d.server, A).primed.is_none(), "still primed after it went off");
 }
 
 #[test]

@@ -47,6 +47,7 @@ pub(super) fn resolve_projectile_hits(
                 amount: sim::projectile_damage(projectile, now.0),
                 chill: sim::projectile_chill(projectile),
                 can_crit: projectile.ability.is_none(),
+                sure_crit: projectile.crit,
             };
             let def = projectile.class.def();
             let with = projectile.ability.and_then(|slot| def.ability(slot)).map_or("auto-attack", |ability| ability.name.as_str());

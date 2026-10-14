@@ -7,7 +7,7 @@
 
 use std::f32::consts::TAU;
 
-use arena_shared::classes::{AbilityDef, ClassDef, common};
+use arena_shared::classes::{AbilityDef, AbilityKind, ClassDef, common};
 use arena_shared::classes::{AttackKind, seconds};
 use arena_shared::config::{FRENZY_BASE, FRENZY_MELEE_TICKS, FRENZY_PER_KILL, FRENZY_RANGED_TICKS, TICK_HZ};
 use arena_shared::protocol::*;
@@ -281,19 +281,24 @@ const WIPE_STEPS: f32 = 256.0;
 /// While an ability cools down: the wipe (dark over the part of the circle still to go, clockwise
 /// from twelve o'clock) and the seconds left (tenths under one). Over it, while the global
 /// cooldown runs (if it's on it), its own quicker wipe, pale, so the cooldown shows through. When
-/// it's ready, a bright frame. Only writes what visibly changed.
+/// it's ready, a bright frame; a prime's glows gold while the attack it readied is still to come.
+/// Only writes what visibly changed.
 fn update_icons(
     clock: AttackClock,
-    me: Query<(&ClassId, &Cooldowns), With<Me>>,
+    me: Query<(&ClassId, &Cooldowns, &AttackState), With<Me>>,
     mut icons: Query<(&AbilityIcon, &mut IconShown, &mut BorderColor)>,
     mut wipes: Query<(&mut BackgroundGradient, &mut Visibility)>,
     mut texts: Query<&mut Text>,
 ) {
-    let Ok((class, cooldowns)) = me.single() else { return };
+    let Ok((class, cooldowns, attack)) = me.single() else { return };
     let now = clock.now(true);
-    for (icon, shown, border) in &mut icons {
+    for (icon, shown, mut border) in &mut icons {
         let Some(ability) = class.def().ability(icon.slot) else { continue };
-        update_icon(icon, shown.into_inner(), border, (now, cooldowns, ability), &mut wipes, &mut texts);
+        let primed = attack.primed.is_some() && matches!(ability.kind, AbilityKind::Prime(_));
+        update_icon(icon, shown.into_inner(), border.reborrow(), (now, cooldowns, ability), &mut wipes, &mut texts);
+        if primed {
+            border.set_if_neq(BorderColor::all(palette::TORCH_FLAME));
+        }
     }
 }
 

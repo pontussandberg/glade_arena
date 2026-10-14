@@ -22,7 +22,7 @@
     abilities: [
         (
             name: "Rift Step",
-            description: "Dash toward the cursor, up to {ability_reach}, dealing {ability_damage} damage to each enemy you pass through.",
+            description: "Dash up to {ability_reach}. Enemies you pass through take {ability_damage} damage.",
             cooldown_ticks: 256,
             kind: Dash(distance: 6.0, min_distance: Some(1.0), ticks: 5, damage: 18),
         ),

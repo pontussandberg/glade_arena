@@ -103,6 +103,9 @@ pub struct AttackState {
     /// An attack started by this tick is quick (`FollowUp`; `None`: not armed). Used up when an
     /// attack goes off, not when one is cancelled.
     pub quick_until: Option<u32>,
+    /// The next attack is primed (`abilities::prime`): sure to crit, and this much more attack
+    /// speed. Used up when a primed attack goes off, not when one is cancelled.
+    pub primed: Option<f32>,
 }
 
 impl AttackState {
@@ -140,8 +143,10 @@ pub struct Swing {
     /// so the empowered attack can come that much sooner.
     pub hastened: bool,
     /// Attack speed on top, as a share of the normal (0.1 = 10% more), from what the attacker
-    /// had going when it started (a `Frenzy`), kept for the whole attack.
+    /// had going when it started (a `Frenzy`, a prime), kept for the whole attack.
     pub haste: f32,
+    /// Primed (`AttackState::primed`): sure to crit.
+    pub primed: bool,
 }
 
 impl Swing {
@@ -379,6 +384,8 @@ pub struct Projectile {
     pub spawn_tick: u32,
     /// Thrown with the ability in this slot, rather than the auto-attack (`None`).
     pub ability: Option<AbilitySlot>,
+    /// A primed auto-attack's (`AttackState::primed`): sure to crit. Set by the server.
+    pub crit: bool,
 }
 
 impl Projectile {
@@ -603,7 +610,7 @@ mod tests {
     #[test]
     fn a_hasted_swing_is_quicker() {
         let attack = &crate::classes::ClassId(0).def().attack;
-        let plain = Swing { started_at: 0, dir: Vec2::X, quick: false, hastened: false, haste: 0.0 };
+        let plain = Swing { started_at: 0, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false };
         let hasted = Swing { haste: 0.3, ..plain };
         assert!(hasted.windup_ticks(attack) < plain.windup_ticks(attack));
         assert!(hasted.ready_at(attack) < plain.ready_at(attack));

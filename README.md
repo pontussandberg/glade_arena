@@ -23,7 +23,7 @@ shares (field reference in the README there):
 
 | Class | Role | Auto-attack | Q |
 |---|---|---|---|
-| Jav | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`) | **Spirit Spear**: a fast spectral spear, thrown instantly (no windup, no root) |
+| Jav | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`) | **Deadeye**: at once, your next auto-attack is a sure crit with 50% more attack speed (15 s cooldown) |
 | Revenant | Duelist | A heavy overhead blow of its dark glaive, the blade coming down flat on the ground from 1.6 m to 3.08 m ahead, tearing it open for 3 s (inside the tear the revenant moves 30% faster); each hit empowers the glaive for the next swing if it follows within 3 s: a lane 50% further and wider, from 2 m to 4.62 m, 0.75 m wide (an empowered hit renews it), lost on a miss (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash toward the cursor, 1 m to 6 m, damaging each enemy you pass through |
 | Frost Mage | Controller | Frostbolts: little damage and shorter range (mid range), but each hit slows (40% for 2 s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5 s (no walking, no dashing) |
 
@@ -140,7 +140,7 @@ cargo never removes outdated ones itself.
 #                 shot, server-decided hit (one bot at 60ms + 2% loss)
 #   combat.rs     melee judged where the target is on the server (standing in and out of
 #                 reach, running past), death and respawn
-#   abilities.rs  spirit spear thrown at once (no windup) and hitting; rift step cutting
+#   abilities.rs  Deadeye priming the next attack; rift step cutting
 #                 through a target once and readying the blade, cutting where it ends but not
 #                 who it leaves behind; frost nova freezing a revenant (no walk, no dash),
 #                 then letting it go; frostbolts slowing

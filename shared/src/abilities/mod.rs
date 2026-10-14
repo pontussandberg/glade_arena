@@ -1,10 +1,11 @@
 //! Abilities: up to `MAX_ABILITIES` per class, on Q, W, E and R (`AbilitySlot`), each of one of
 //! a few kinds. Each kind is a module of its own, holding its numbers and everything it does:
-//! `throw` (a projectile), `dash` and `nova`. What's the same for every kind is here: the
+//! `throw` (a projectile), `dash`, `nova` and `prime`. What's the same for every kind is here: the
 //! definition (`AbilityDef`), cooldowns (`Cooldowns`), and using one (`step`).
 
 pub mod dash;
 pub mod nova;
+pub mod prime;
 pub mod throw;
 
 use bevy::prelude::*;
@@ -15,6 +16,7 @@ use crate::classes::{Chill, ClassId, Shot, common, seconds};
 use crate::protocol::{Chilled, PlayerInput, Projectile};
 use dash::{DashDef, Dashing};
 use nova::NovaDef;
+use prime::PrimeDef;
 use throw::Throw;
 
 /// The most abilities a class can have: one per key (Q, W, E, R; the client binds them). Checked
@@ -64,9 +66,12 @@ pub enum AbilityKind {
     Dash(DashDef),
     /// A burst around the user, at once (`nova`).
     Nova(NovaDef),
+    /// The user's next auto-attack readied: sure to crit, and quicker (`prime`).
+    Prime(PrimeDef),
 }
 
-/// What an ability's hit does to whoever it hits. Abilities never crit.
+/// What an ability's hit does to whoever it hits. Abilities never crit (a prime makes an
+/// auto-attack crit instead).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Effect {
     pub damage: i32,
@@ -80,15 +85,22 @@ impl AbilityKind {
             AbilityKind::Projectile(throw) => Effect { damage: throw.damage, chill: Chill::default() },
             AbilityKind::Dash(dash) => Effect { damage: dash.damage, chill: Chill::default() },
             AbilityKind::Nova(nova) => Effect { damage: nova.damage, chill: nova.chill },
+            AbilityKind::Prime(_) => Effect::default(),
         }
     }
 
-    /// How far it reaches: a throw's range, a dash's distance, a nova's radius.
+    /// Whether it's used toward an aim (a prime isn't: it goes off at once, whatever the aim).
+    pub fn aimed(&self) -> bool {
+        !matches!(self, AbilityKind::Prime(_))
+    }
+
+    /// How far it reaches: a throw's range, a dash's distance, a nova's radius (a prime, none).
     pub fn reach(&self) -> f32 {
         match *self {
             AbilityKind::Projectile(throw) => throw.range,
             AbilityKind::Dash(dash) => dash.distance,
             AbilityKind::Nova(nova) => nova.radius,
+            AbilityKind::Prime(_) => 0.0,
         }
     }
 
@@ -104,6 +116,9 @@ impl AbilityKind {
         let mut all = vec![("ability_damage", effect.damage.to_string()), ("ability_reach", format!("{} m", self.reach()))];
         if effect.chill.root_ticks > 0 {
             all.push(("ability_root", seconds(effect.chill.root_ticks)));
+        }
+        if let AbilityKind::Prime(prime) = self {
+            all.push(("ability_attack_speed", format!("{:.0}%", prime.attack_speed * 100.0)));
         }
         all
     }
@@ -176,12 +191,14 @@ pub enum Cast {
     /// `ability`, a nova, bursts around the caster; the server resolves who it hits
     /// (`NovaDef::hits`).
     Nova { ability: &'static AbilityDef, nova: NovaDef },
+    /// The next auto-attack readied (`AttackState::primed`).
+    Prime(PrimeDef),
 }
 
 /// One tick of a fighter's abilities. A dash that has gone its distance ends, and a root stops
 /// one in progress. Each ability's key pressed since the last tick (`PlayerInput::casts`, in the
 /// order they were pressed) uses it toward its aim, if it's ready: a throw and a nova go off at
-/// once; a dash starts (mid-windup too, the attack still going off when it's over; not while
+/// once, and so does a prime (whatever the aim); a dash starts (mid-windup too, the attack still going off when it's over; not while
 /// rooted) and runs until it has covered its distance, moved by `sim::move_player`. One used
 /// starts the global cooldown before the next is tried.
 #[allow(clippy::too_many_arguments)]
@@ -202,7 +219,15 @@ pub fn step(
     let mut casts = Vec::new();
     for CastOrder { slot, aim } in input.casts() {
         let Some(ability) = class.def().ability(slot) else { continue };
-        let Some(dir) = aim.try_normalize().filter(|_| tick >= cooldowns.usable_at(slot, ability)) else { continue };
+        if tick < cooldowns.usable_at(slot, ability) {
+            continue;
+        }
+        if let AbilityKind::Prime(prime) = ability.kind {
+            casts.push(Cast::Prime(prime));
+            cooldowns.start(slot, ability, tick);
+            continue;
+        }
+        let Some(dir) = aim.try_normalize() else { continue };
         casts.push(match ability.kind {
             AbilityKind::Projectile(throw) => Cast::Throw(throw.projectile(owner, class, slot, pos, dir, tick)),
             // Mid-windup too: the windup goes on, and the attack still goes off when it's over,
@@ -213,6 +238,7 @@ pub fn step(
             }
             AbilityKind::Dash(_) => continue,
             AbilityKind::Nova(nova) => Cast::Nova { ability, nova },
+            AbilityKind::Prime(_) => unreachable!("cast above"),
         });
         cooldowns.start(slot, ability, tick);
     }

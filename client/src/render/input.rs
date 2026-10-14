@@ -107,7 +107,9 @@ pub(super) fn read_local_input(
         if !keys.just_pressed(ability_key(slot)) || !key_casts(slot, mode.free) {
             continue;
         }
-        if cast_mode.casts_now(shift) {
+        // A prime has nothing to aim: its key casts it at once, quick cast or not.
+        let aimed = my_class.and_then(|def| def.ability(slot)).is_some_and(|ability| ability.kind.aimed());
+        if cast_mode.casts_now(shift) || !aimed {
             casts.order_cast(slot, aim);
             aiming.0 = None;
         } else if ready(slot) {
@@ -119,6 +121,11 @@ pub(super) fn read_local_input(
     // click drops the aim (`drops_aim`); ESC does too (`esc_menu`).
     if mouse.just_pressed(MouseButton::Left) {
         if on_control {
+            *held_click = true;
+        } else if let Some(slot) = on_icon
+            && my_class.and_then(|def| def.ability(slot)).is_some_and(|ability| !ability.kind.aimed())
+        {
+            casts.order_cast(slot, aim);
             *held_click = true;
         } else if let Some(slot) = on_icon {
             aiming.0 = Some(slot).filter(|&slot| ready(slot));

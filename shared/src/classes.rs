@@ -469,6 +469,7 @@ mod tests {
     use super::*;
     use crate::abilities::dash::DashDef;
     use crate::abilities::nova::NovaDef;
+    use crate::abilities::prime::PrimeDef;
     use crate::abilities::throw::Throw;
 
     #[test]
@@ -515,6 +516,9 @@ mod tests {
                         assert!(damage >= 0 && (0.5..=10.0).contains(&radius), "{what}: nova");
                         assert!(damage > 0 || !chill.is_none(), "{what}: a nova that does nothing");
                         chill_is_sane(&c.id, chill);
+                    }
+                    AbilityKind::Prime(PrimeDef { attack_speed }) => {
+                        assert!((0.0..=3.0).contains(&attack_speed), "{what}: prime attack_speed");
                     }
                 }
                 let filled = c.describe_ability(ability);
