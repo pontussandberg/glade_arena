@@ -105,10 +105,10 @@ pub(super) fn respawn(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
     // Dummies come back on the spot instead (`restore_dummies`); zombies don't (`bury_zombies`).
-    mut dead: Query<(Entity, &ClassId, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, (&mut Cooldowns, &mut Dashing), &mut Dead), (Without<Dummy>, Without<Zombie>)>,
+    mut dead: Query<(Entity, &ClassId, &mut Health, (&mut Chilled, &mut Hasted, &mut Frenzy), &mut AttackState, (&mut Cooldowns, &mut Dashing), &mut Dead), (Without<Dummy>, Without<Zombie>)>,
 ) {
     let now = timeline.tick().0;
-    for (player, class, mut health, (mut chilled, mut hasted), mut attack, (mut cooldowns, mut dashing), mut dead) in &mut dead {
+    for (player, class, mut health, (mut chilled, mut hasted, mut frenzy), mut attack, (mut cooldowns, mut dashing), mut dead) in &mut dead {
         if !dead.placed && now + PLACE_BEFORE_RESPAWN_TICKS >= dead.respawn_at {
             dead.placed = true;
             commands.entity(player).insert(NeedsSpawnPoint);
@@ -117,6 +117,8 @@ pub(super) fn respawn(
             health.0 = class.def().max_hp;
             chilled.set_if_neq(Chilled::default());
             hasted.set_if_neq(Hasted::default());
+            // Its frenzy's over; the zombies it killed still count.
+            frenzy.set_if_neq(Frenzy { kills: frenzy.kills, ..default() });
             *attack = AttackState::default();
             // Practice's No cooldowns stays as it was.
             *cooldowns = Cooldowns { free: cooldowns.free, ..default() };

@@ -174,6 +174,9 @@ pub(crate) struct Rig {
     /// The backswing cut short by walking off: the attack's `released_at`, and how far it's
     /// blended out (0..1).
     cut: Option<(u32, f32)>,
+    /// The last attack's backswing speed, and when it went off: kept once the server clears its
+    /// swing, so its follow-through and the hand's rearming don't jump back to normal speed.
+    backswing: Option<(Option<u32>, f32)>,
     /// How far its weapon is grown, empowered by its attack's `follow_up` (0..1, eased).
     empowered: f32,
     joints: Joints,
@@ -245,6 +248,7 @@ fn add_rigs(
             stride: 0.0,
             walking: 0.0,
             cut: None,
+            backswing: None,
             empowered: 0.0,
             joints: Joints::default(),
         };
@@ -407,7 +411,13 @@ fn pose_rigs(
             .or_else(|| attack.swing.filter(|swing| is_me && attack.released_at.is_some_and(|at| at >= swing.started_at && now < at as f32)));
         // The last attack's speed scales its backswing like its windup, and a hit that armed its
         // `follow_up` speeds it up (normal once it's done).
-        let speed = attack.swing.map_or(1.0, |swing| swing.backswing_speed(&class.def().attack));
+        let speed = match attack.swing {
+            Some(swing) => swing.backswing_speed(&class.def().attack),
+            None => rig.backswing.filter(|(at, _)| *at == attack.released_at).map_or(1.0, |(_, speed)| speed),
+        };
+        if attack.swing.is_some() {
+            rig.backswing = Some((attack.released_at, speed));
+        }
         // Ticks since the last attack went off, at normal attack speed.
         let released = since_throw(attack.released_at, seen.and_then(|seen| seen.attack)).map(|since| since * speed);
         let moves = rig.moves;

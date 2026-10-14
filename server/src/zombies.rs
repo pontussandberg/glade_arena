@@ -113,8 +113,9 @@ pub(super) fn feed_frenzy(
 ) {
     let now = timeline.tick().0;
     for (room, dead) in &killed {
-        let Some((_, class, _, mut frenzy)) = killers.iter_mut().find(|(id, _, r, _)| id.0 == dead.killer && *r == room) else { continue };
         let Some(before) = lobby.count_zombie_kill(room.key, dead.killer) else { continue };
+        // Its killer may have left the arena since (its shot still flying): counted all the same.
+        let Some((_, class, _, mut frenzy)) = killers.iter_mut().find(|(id, _, r, _)| id.0 == dead.killer && *r == room) else { continue };
         let melee = matches!(class.def().attack.kind, AttackKind::Melee { .. });
         *frenzy = Frenzy::after_kill(now, before, melee);
     }

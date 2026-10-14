@@ -38,6 +38,11 @@ pub(super) fn damage(
     blow: Blow,
     (by, class, with): Attacker,
 ) {
+    // Killed already this tick (its `Dead` is still a command to apply): later hits do nothing,
+    // so the kill stays the first killer's.
+    if health.0 == 0 {
+        return;
+    }
     let crit = blow.can_crit && fastrand::f32() < class.def().crit.chance_against(chilled.rooted_at(now));
     let amount = if crit { (blow.amount as f32 * common().crit_multiplier).round() as i32 } else { blow.amount };
     health.0 = (health.0 - amount).max(0);

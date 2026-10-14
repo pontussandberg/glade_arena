@@ -63,11 +63,12 @@ pub const ZOMBIES: u8 = 3;
 pub const KILLS_TO_WIN: u32 = 5;
 
 /// Who won a match.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum Winner {
     /// This member (`Member::guest_id`), in free-for-all.
     Guest(u32),
-    Team(u8),
+    /// A team: who was on it as it won (`winners`) and who was on the other (`losers`).
+    Team { winners: Vec<u32>, losers: Vec<u32> },
 }
 
 /// A line in the server browser.
@@ -130,14 +131,16 @@ impl RoomView {
     }
 
     /// Who won, as players read it: "Bjorn Ironside", or a team as `guest_id` sees it ("Your
-    /// team", "The other team").
+    /// team", "The other team"), by the side they were on as it was won. `None` for a team's win
+    /// to someone who wasn't in that match.
     pub fn winner_name(&self, guest_id: u32) -> Option<String> {
-        Some(match self.winner? {
-            Winner::Guest(id) if id == guest_id => "You".into(),
-            Winner::Guest(id) => self.member(id).map_or("Someone who left".into(), |m| m.name.clone()),
-            Winner::Team(team) if self.member(guest_id).is_some_and(|m| m.team == team) => "Your team".into(),
-            Winner::Team(_) => "The other team".into(),
-        })
+        match self.winner.as_ref()? {
+            Winner::Guest(id) if *id == guest_id => Some("You".into()),
+            Winner::Guest(id) => Some(self.member(*id).map_or("Someone who left".into(), |m| m.name.clone())),
+            Winner::Team { winners, .. } if winners.contains(&guest_id) => Some("Your team".into()),
+            Winner::Team { losers, .. } if losers.contains(&guest_id) => Some("The other team".into()),
+            Winner::Team { .. } => None,
+        }
     }
 }
 
@@ -153,8 +156,6 @@ pub struct Member {
     pub in_arena: bool,
     /// Players they killed this match (or the last one, until the next starts).
     pub kills: u32,
-    /// Zombies they killed, likewise.
-    pub zombie_kills: u32,
 }
 
 /// Why we're no longer in a room.
