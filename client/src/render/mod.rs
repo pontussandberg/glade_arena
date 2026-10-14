@@ -360,7 +360,7 @@ fn add_visuals(
         }
         if thrown {
             let wake = visuals.material(&mut materials, projectile.owner, Look::Wind);
-            shot.insert(Thrown { launch: None, wake, butt: None });
+            shot.insert(Thrown { launch: None, wake, wake_at: None });
             // Its only shadow is the one straight under it, on its line: where it really is (the
             // sun's would fall meters off to the side), so none of it casts one, its point's spark
             // and its wind neither.
