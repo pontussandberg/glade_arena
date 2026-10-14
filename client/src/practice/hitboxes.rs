@@ -49,13 +49,11 @@ pub struct ShowHitboxes3d(pub bool);
 /// and how far apart its rings are.
 const BODY_HEIGHT: f32 = 2.1;
 const RING_EVERY: f32 = 0.15;
-/// The heights `height_color` runs over: from the floor (blue) up to the top of a body (red).
-const COLOR_HEIGHTS: f32 = BODY_HEIGHT;
 
 /// A hitbox's color in the 3D view at `height` (meters) off the floor: blue at the floor, through
-/// green and yellow, to red at the top of a body.
+/// green and yellow, to red at the top of a body (`BODY_HEIGHT`).
 fn height_color(height: f32) -> Color {
-    let t = (height / COLOR_HEIGHTS).clamp(0.0, 1.0);
+    let t = (height / BODY_HEIGHT).clamp(0.0, 1.0);
     Color::hsl(240.0 * (1.0 - t), 0.95, 0.55)
 }
 
@@ -161,20 +159,24 @@ fn draw_hitboxes_3d(
     shots: Query<(&Projectile, &Transform, &InheritedVisibility)>,
 ) {
     let flat = Quat::from_rotation_x(FRAC_PI_2);
+    // The rings' heights and colors, the same for every fighter.
+    let rings: Vec<(f32, Color)> = (0..=(BODY_HEIGHT / RING_EVERY).round() as usize)
+        .map(|i| i as f32 * RING_EVERY)
+        .map(|height| (height, height_color(height)))
+        .collect();
+    let (floor, top) = (height_color(0.0), height_color(BODY_HEIGHT));
     for (pos, health) in &fighters {
         if health.is_some_and(|h| !h.alive()) {
             continue;
         }
         let at = to_world(pos.0, 0.0);
-        let rings = (BODY_HEIGHT / RING_EVERY).round() as usize;
-        for i in 0..=rings {
-            let height = i as f32 * RING_EVERY;
-            gizmos.circle(Isometry3d::new(at.with_y(height), flat), PLAYER_RADIUS, height_color(height));
+        for &(height, color) in &rings {
+            gizmos.circle(Isometry3d::new(at.with_y(height), flat), PLAYER_RADIUS, color);
         }
         // Its sides, so it reads as a column.
         for k in 0..4 {
             let side = Quat::from_rotation_y(k as f32 * FRAC_PI_2) * Vec3::X * PLAYER_RADIUS;
-            gizmos.line_gradient(at + side, at + side + Vec3::Y * BODY_HEIGHT, height_color(0.0), height_color(BODY_HEIGHT));
+            gizmos.line_gradient(at + side, at + side + Vec3::Y * BODY_HEIGHT, floor, top);
         }
     }
     // Only one that's shown: a thrown spear still in the hand isn't anywhere yet.

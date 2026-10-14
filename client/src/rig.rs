@@ -596,6 +596,10 @@ impl Spring {
         // (unless that's a jump right round), so it moves the same at any frame rate; damped at
         // least critically (no overshoot) above 1. Chasing a target moving at `rate`, it trails
         // `lag` behind it; how far it is off that swings out and settles.
+        if self.target == Some(target) && self.at == target && self.speed == 0.0 {
+            // Already settled on it: still, as solving it would leave it.
+            return target;
+        }
         let from = self.target.filter(|from| (target - from).abs() < PI && dt > 0.0).unwrap_or(target);
         let rate = if dt > 0.0 { (target - from) / dt } else { 0.0 };
         let (w, z) = (stiffness, damping);
@@ -1041,7 +1045,7 @@ fn add_rigs(
             aura: handles.held_aura.as_ref().map(|(mesh, material)| part(mesh, material, Vec3::ZERO)),
             gleam: handles.held_glint.as_ref().map(|(mesh, material, edge)| (part(mesh, material, Vec3::ZERO), *edge)),
             gleaming: Gleaming { seed: player.index().index(), ..default() },
-            moves: moves(&class.def().id),
+            moves: class_moves,
             stride: 0.0,
             walking: 0.0,
             cut: None,
@@ -1169,13 +1173,12 @@ fn ease_out(from: f32, to: f32, x: f32) -> f32 {
 fn strike_at(ticks: f32, strike_ticks: f32, contact: f32, heavy: bool, throws: bool) -> (f32, f32) {
     if throws {
         // The rest of it whipped through quickly after letting go, slowing into place.
-        let after = WHIP_TICKS;
         let strike = if ticks < strike_ticks {
             contact * (ticks / strike_ticks).clamp(0.0, 1.0).powi(2)
         } else {
-            contact + (1.0 - contact) * (1.0 - (1.0 - ((ticks - strike_ticks) / after.max(1e-3)).min(1.0)).powi(2))
+            contact + (1.0 - contact) * (1.0 - (1.0 - ((ticks - strike_ticks) / WHIP_TICKS).min(1.0)).powi(2))
         };
-        return (strike, after);
+        return (strike, WHIP_TICKS);
     }
     // Where on the ease the contact falls.
     let at_contact = if heavy { contact.cbrt() } else { 1.0 - (1.0 - contact).cbrt() };
@@ -1298,11 +1301,12 @@ fn pose_rigs(
         let rearm = (def.attack.period_ticks(1.0) - def.attack.windup_ticks(1.0)) as f32;
         // The latest throw the pose has let go of: ours as our clock gets to it (the state says
         // so a moment early), another's as soon as its spear is seen (it's released then).
-        let let_go = attack.released_at.filter(|&at| now >= at as f32).max(seen.and_then(|seen| seen.attack).filter(|_| !is_me));
+        let seen_throw = seen.and_then(|seen| seen.attack).filter(|_| !is_me);
+        let let_go = attack.released_at.filter(|&at| now >= at as f32).max(seen_throw);
         // Empty once the flying spear has left the hand (or it's late: `empty_hands`).
-        let throw = attack.released_at.max(seen.and_then(|seen| seen.attack).filter(|_| !is_me));
-        let rearming = throw.filter(|_| moves.throws && matches!(def.attack.kind, AttackKind::Projectile { .. }) && released.is_some_and(|s| s < rearm));
-        let late = throw.is_some_and(|at| present > at as f32 + MAX_HOLD_TICKS);
+        let thrown = attack.released_at.max(seen_throw);
+        let rearming = thrown.filter(|_| moves.throws && matches!(def.attack.kind, AttackKind::Projectile { .. }) && released.is_some_and(|s| s < rearm));
+        let late = thrown.is_some_and(|at| present > at as f32 + MAX_HOLD_TICKS);
         // Our own hand letting go this frame: just how it was posed as it did, between frames.
         let frame_ticks = dt * TICK_HZ as f32;
         let released_from = match let_go {
@@ -1331,22 +1335,22 @@ fn pose_rigs(
         // good until it's late (it may never come: a shot that hit or ended at once), when it's
         // back in the hand, hidden till the next attack's ready (`empty_hands`).
         let mut held = posed.held;
-        let ahead_of_news = released_from.filter(|_| let_go.is_some() && held_at.launched < let_go && !late);
-        let at = match (ahead_of_news, let_go, def.attack.kind.shot()) {
-            (Some(from), Some(at), Some(shot)) => {
-                let flown = (now - at as f32).max(0.0) / TICK_HZ as f32 * shot.speed;
-                let flying = Transform { translation: from.translation + arena::to_world(facing.look, 0.0) * flown, ..from };
-                // What it hangs from: the fighter, its weapon arm and elbow (see `add_rigs`).
-                let elbow = Transform::from_translation(placed.translation.with_y(0.0))
-                    * posed.body
-                    * Transform::from_translation(RIG_SHOULDER).with_rotation(posed.arms[0])
-                    * Transform::from_translation(moves.elbow_at).with_rotation(posed.elbows[0]);
-                held = Transform::from_matrix(Mat4::from(elbow.compute_affine().inverse() * flying.compute_affine()));
-                flying
-            }
-            _ => held_in_world(&placed, &posed),
-        };
         if moves.throws {
+            let ahead_of_news = released_from.filter(|_| held_at.launched < let_go && !late);
+            let at = match (ahead_of_news, let_go, def.attack.kind.shot()) {
+                (Some(from), Some(at), Some(shot)) => {
+                    let flown = (now - at as f32).max(0.0) / TICK_HZ as f32 * shot.speed;
+                    let flying = Transform { translation: from.translation + arena::to_world(facing.look, 0.0) * flown, ..from };
+                    // What it hangs from: the fighter, its weapon arm and elbow (see `add_rigs`).
+                    let elbow = Transform::from_translation(placed.translation.with_y(0.0))
+                        * posed.body
+                        * Transform::from_translation(RIG_SHOULDER).with_rotation(posed.arms[0])
+                        * Transform::from_translation(moves.elbow_at).with_rotation(posed.elbows[0]);
+                    held = Transform::from_matrix(Mat4::from(elbow.compute_affine().inverse() * flying.compute_affine()));
+                    flying
+                }
+                _ => held_in_world(&placed, &posed),
+            };
             let launched = held_at.launched;
             held_at.set_if_neq(HeldAt { at, let_go, launched, released_from, rearming, late });
         }

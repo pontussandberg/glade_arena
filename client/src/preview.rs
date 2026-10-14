@@ -265,12 +265,7 @@ fn preview_cloth_on_arm() {
         let cloth = crate::cloth::settled(&wardrobe, &posed, 2.0);
         let (tris, _, _) = posed_figure(key, &posed, 1.0, Some(&cloth));
         for (i, from) in views.into_iter().enumerate() {
-            let mut cell = vec![[200u8, 204, 200]; SIZE * SIZE];
-            render(&tris, from, Vec3::Y * 1.45, 1.4, &mut cell, SIZE, 0);
-            for y in 0..SIZE {
-                let at = (row * SIZE + y) * width + i * SIZE;
-                image[at..at + SIZE].copy_from_slice(&cell[y * SIZE..(y + 1) * SIZE]);
-            }
+            render(&tris, from, Vec3::Y * 1.45, 1.4, &mut image[row * SIZE * width..], width, i * SIZE);
         }
     }
     std::fs::write(dir.join(format!("cloth-on-arm-{key}.png")), png(width, SIZE * 2, &image)).unwrap();
