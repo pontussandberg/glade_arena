@@ -123,6 +123,7 @@ impl Plugin for ServerGamePlugin {
                 resolve_projectile_hits,
                 restore_dummies,
                 respawn,
+                feed_frenzy,
                 bury_zombies,
                 raise_zombies,
                 place_players,

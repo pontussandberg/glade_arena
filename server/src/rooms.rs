@@ -110,8 +110,9 @@ struct Guest {
     active_at: Duration,
     /// Their latest input, to notice when it changes.
     last_input: PlayerInput,
-    /// Players they killed in their room's match (or its last one).
+    /// Players they killed in their room's match (or its last one), and zombies.
     kills: u32,
+    zombie_kills: u32,
 }
 
 struct Room {
@@ -167,7 +168,7 @@ impl Lobby {
             .members
             .iter()
             .filter_map(|link| self.guests.get(link))
-            .map(|g| Member { guest_id: g.id, name: g.name.clone(), peer: g.peer, team: g.team, class: g.class, in_arena: g.playing && room.started, kills: g.kills })
+            .map(|g| Member { guest_id: g.id, name: g.name.clone(), peer: g.peer, team: g.team, class: g.class, in_arena: g.playing && room.started, kills: g.kills, zombie_kills: g.zombie_kills })
             .collect();
         let leader = self.guests.get(&room.leader).map_or(0, |g| g.id);
         RoomView {
@@ -213,8 +214,20 @@ impl Lobby {
         for member in &room.members {
             if let Some(guest) = self.guests.get_mut(member) {
                 guest.kills = 0;
+                guest.zombie_kills = 0;
             }
         }
+    }
+
+    /// `killer` killed a zombie in room `key`: counted if they're a member. How many they had
+    /// killed before it.
+    pub(crate) fn count_zombie_kill(&mut self, key: RoomKey, killer: PeerId) -> Option<u32> {
+        let room = self.rooms.get_mut(&key)?;
+        let link = room.members.iter().copied().find(|link| self.guests.get(link).is_some_and(|g| g.peer == killer))?;
+        room.changed = true;
+        let guest = self.guests.get_mut(&link).expect("a member");
+        guest.zombie_kills += 1;
+        Some(guest.zombie_kills - 1)
     }
 
     /// `killer` killed `victim` in room `key`, at `now`: it counts toward the match if both are
@@ -308,6 +321,7 @@ fn greet(
                 active_at: ctx.time.elapsed(),
                 last_input: PlayerInput::default(),
                 kills: 0,
+                zombie_kills: 0,
             });
             ctx.send(link, LobbyEvent::Welcome { guest_id: id, name });
             let list = lobby.list();
@@ -623,6 +637,7 @@ fn join(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity, key: RoomKey) -> Result<
     guest.room = Some(key);
     guest.team = team;
     guest.kills = 0;
+    guest.zombie_kills = 0;
     info!(room = key.0, guest = guest.id, "joined a room");
     ctx.commands.entity(link).insert(Rooms::single(net));
     enter_arena(lobby, ctx, link);

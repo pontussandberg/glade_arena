@@ -579,7 +579,7 @@ mod tests {
         let mut heights = Vec::new();
         for fps in [30.0, 60.0, 144.0] {
             for phase in 0..8 {
-                let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false };
+                let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0 };
                 let release = 10 + swing.windup_ticks(&def.attack);
                 let mut joints = Joints::default();
                 let dt = 1.0 / fps;

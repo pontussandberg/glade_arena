@@ -50,7 +50,7 @@ pub(super) fn fighter(id: PeerId, class: ClassId, room: InRoom, team: Team, at: 
         (class, team, room, room.rooms()),
         Pos(at),
         Health(class.def().max_hp),
-        (Chilled::default(), Hasted::default(), RecentHits::default()),
+        (Chilled::default(), Hasted::default(), Frenzy::default(), RecentHits::default()),
         (AttackState::default(), Cooldowns::default(), Dashing::default(), LastSwing::default()),
     )
 }

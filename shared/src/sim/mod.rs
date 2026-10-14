@@ -255,7 +255,7 @@ mod tests {
         let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some()) else { return };
         let attack = quickened(class);
         let (period, windup) = (attack.period_ticks(1.0), attack.windup_ticks(1.0));
-        let mut swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false };
+        let mut swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0 };
         assert_eq!(swing.ready_at(&attack), 10 + period);
         // As the server does when the swing lands.
         swing.hastened = true;

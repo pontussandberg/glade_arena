@@ -59,13 +59,18 @@ pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, mut s
 }
 
 /// `step_attack`'s second half: a new attack starting, if clicked for and none is in progress.
-pub fn start_attack(tick: u32, class: ClassId, input: &PlayerInput, mut state: AttackState) -> AttackState {
+pub fn start_attack(tick: u32, class: ClassId, input: &PlayerInput, state: AttackState) -> AttackState {
+    start_attack_hasted(tick, class, input, state, 0.0)
+}
+
+/// `start_attack`, a new attack `haste` faster (0.1 = 10% more attack speed) all through.
+pub fn start_attack_hasted(tick: u32, class: ClassId, input: &PlayerInput, mut state: AttackState, haste: f32) -> AttackState {
     let ready = state.swing.is_none_or(|swing| tick >= swing.ready_at(&class.def().attack));
     if ready
         && input.fire
         && let Some(dir) = input.aim.try_normalize()
     {
-        state.swing = Some(Swing { started_at: tick, dir, quick: state.quick_at(tick as f32), hastened: false });
+        state.swing = Some(Swing { started_at: tick, dir, quick: state.quick_at(tick as f32), hastened: false, haste });
     }
     state
 }

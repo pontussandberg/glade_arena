@@ -153,6 +153,8 @@ pub struct Member {
     pub in_arena: bool,
     /// Players they killed this match (or the last one, until the next starts).
     pub kills: u32,
+    /// Zombies they killed, likewise.
+    pub zombie_kills: u32,
 }
 
 /// Why we're no longer in a room.

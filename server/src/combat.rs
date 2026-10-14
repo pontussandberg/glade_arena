@@ -99,14 +99,14 @@ pub(super) fn attack(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut attackers: Query<
-        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team)),
+        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), &Frenzy),
         InPlay,
     >,
     mut targets: Targets,
     mut rifts: ResMut<Rifts>,
 ) {
     let now = timeline.tick();
-    for (id, class, pos, mut input, mut state, mut last_swing, (room, team)) in &mut attackers {
+    for (id, class, pos, mut input, mut state, mut last_swing, (room, team), frenzy) in &mut attackers {
         let side = (*room, *team);
         // In two halves (`sim::step_attack`): a swing that lands arms a quick attack in between.
         let (mut next, released) = sim::release_attack(now.0, id.0, *class, pos.0, *state);
@@ -134,7 +134,8 @@ pub(super) fn attack(
                 }
             }
         }
-        let next = sim::start_attack(now.0, *class, &input, next);
+        // A frenzy speeds up the attack it starts, all through.
+        let next = sim::start_attack_hasted(now.0, *class, &input, next, frenzy.at(now.0 as f32));
         if next.swing.is_some_and(|w| w.started_at == now.0) {
             input.move_to = None;
         }

@@ -1,13 +1,15 @@
 //! Your abilities, LoL-style: a row of square icons at the bottom center of your own screen, one
 //! per ability (Q, W, E, R), each with a dark clock-wipe sweeping away clockwise and the seconds
 //! left while it cools down (over it, a quicker, paler wipe for the global cooldown, if it's on
-//! it), and your passive (if your class has one) in a smaller square left of them. Hovering one
-//! shows what it does. Only you see them.
+//! it), and your passive (if your class has one) in a smaller square left of them. Left of that,
+//! in a match with zombies, a smaller one still: how many zombies you've killed, and your frenzy
+//! (`Frenzy`) draining away. Hovering one shows what it does. Only you see them.
 
 use std::f32::consts::TAU;
 
 use arena_shared::classes::{AbilityDef, ClassDef, common};
-use arena_shared::config::TICK_HZ;
+use arena_shared::classes::{AttackKind, seconds};
+use arena_shared::config::{FRENZY_BASE, FRENZY_MELEE_TICKS, FRENZY_PER_KILL, FRENZY_RANGED_TICKS, TICK_HZ};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 
@@ -15,7 +17,8 @@ use crate::Me;
 use crate::feedback::AttackClock;
 use crate::arena::palette;
 use crate::casting::key_label;
-use crate::render::{GameUi, shown, ui_text};
+use crate::render::{GameUi, set_fill, shown, ui_text};
+use crate::rooms::CurrentRoom;
 use crate::stat_frame::{self, Blurb};
 use crate::tooltip::{Side, hover_shows, tip, tip_note, tip_text, tip_title};
 
@@ -23,7 +26,7 @@ pub struct ActionBarPlugin;
 
 impl Plugin for ActionBarPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (spawn_icons, update_icons).chain());
+        app.add_systems(Update, (spawn_icons, update_icons, update_frenzy).chain());
     }
 }
 
@@ -34,6 +37,8 @@ const BOTTOM: f32 = 18.0;
 /// The passive's icon size, and its gap from the first ability's.
 const PASSIVE: f32 = 46.0;
 const PASSIVE_GAP: f32 = 10.0;
+/// The frenzy's icon size (left of the passive's, as far from it).
+const FRENZY: f32 = 32.0;
 /// A tooltip's width (pixels).
 const TIP_WIDTH: f32 = 280.0;
 
@@ -84,8 +89,80 @@ fn spawn_icons(mut commands: Commands, me: Query<&ClassId, Added<Me>>, parts: Qu
     for (slot, ability) in class.def().abilities() {
         spawn_icon(&mut commands, class.def(), slot, ability, first + slot.0 as f32 * (ICON + ICON_GAP));
     }
+    let mut left_edge = first;
     if let Some(blurb) = stat_frame::passive_blurb(class.def()) {
-        spawn_passive(&mut commands, blurb, first - PASSIVE_GAP - PASSIVE);
+        left_edge -= PASSIVE_GAP + PASSIVE;
+        spawn_passive(&mut commands, blurb, left_edge);
+    }
+    spawn_frenzy(&mut commands, class.def(), left_edge - PASSIVE_GAP - FRENZY);
+}
+
+/// The frenzy's icon (this entity), shown in a match with zombies, and its parts that change: the
+/// zombies killed, and the bar of what's left of the frenzy.
+#[derive(Component)]
+struct FrenzyIcon {
+    kills: Entity,
+    bar: Entity,
+}
+
+/// The frenzy's icon, its left edge `from_center` pixels from the middle of the screen: the
+/// number of zombies we've killed over a bar along its bottom, full as a kill sends us into a
+/// frenzy and draining as it fades.
+fn spawn_frenzy(commands: &mut Commands, class: &ClassDef, from_center: f32) {
+    let melee = matches!(class.attack.kind, AttackKind::Melee { .. });
+    let fades = seconds(if melee { FRENZY_MELEE_TICKS } else { FRENZY_RANGED_TICKS });
+    let share = |share: f32| format!("{:.0}%", share * 100.0);
+    let description = format!(
+        "Killing a zombie (landing its last hit) makes you walk and attack faster, fading away over {fades}: {} after your first, {} more with every zombie you kill after that, for the rest of the match.",
+        share(FRENZY_BASE),
+        share(FRENZY_PER_KILL),
+    );
+    let tip = commands
+        .spawn((
+            tip(Side::Above, (FRENZY - TIP_WIDTH) / 2.0, TIP_WIDTH),
+            children![tip_title("Frenzy"), tip_note("Zombies killed"), tip_text(description)],
+        ))
+        .id();
+    let kills = commands.spawn(ui_text("0", 14.0, palette::ui::TEXT)).id();
+    let number = commands.spawn(centered()).add_child(kills).id();
+    let bar = commands.spawn((Node { height: percent(100.0), width: px(0.0), ..default() }, BackgroundColor(palette::TORCH_FLAME))).id();
+    let track = commands
+        .spawn(Node { position_type: PositionType::Absolute, left: px(0.0), right: px(0.0), bottom: px(0.0), height: px(4.0), ..default() })
+        .add_child(bar)
+        .id();
+    let mut icon = commands.spawn((FrenzyIcon { kills, bar }, ActionBarPart, GameUi, icon_frame(tip, FRENZY, from_center, palette::ui::MUTED)));
+    icon.add_children(&[number, track, tip]);
+    // Shown in a match with zombies only (`update_frenzy`).
+    icon.entry::<Node>().and_modify(|mut node| node.display = Display::None);
+}
+
+/// The frenzy's icon, in a match with zombies only: our zombie kills, the bar draining as our
+/// frenzy fades, and its frame lit while it lasts.
+fn update_frenzy(
+    clock: AttackClock,
+    room: Res<CurrentRoom>,
+    me: Query<&Frenzy, With<Me>>,
+    mut icons: Query<(&FrenzyIcon, &mut Node, &mut BorderColor)>,
+    mut nodes: Query<&mut Node, Without<FrenzyIcon>>,
+    mut texts: Query<&mut Text>,
+) {
+    let Ok((icon, mut node, mut border)) = icons.single_mut() else { return };
+    let zombies = room.0.as_ref().is_some_and(|view| view.goal.is_some() && view.started);
+    let display = if zombies { Display::Flex } else { Display::None };
+    if node.display != display {
+        node.display = display;
+    }
+    let Ok(frenzy) = me.single() else { return };
+    let left = frenzy.at(clock.now(true)) / frenzy.strength.max(f32::EPSILON);
+    border.set_if_neq(BorderColor::all(if left > 0.0 { palette::TORCH_FLAME } else { palette::ui::MUTED }));
+    if let Ok(mut bar) = nodes.get_mut(icon.bar) {
+        set_fill(&mut bar, left);
+    }
+    let kills = frenzy.kills.to_string();
+    if let Ok(mut text) = texts.get_mut(icon.kills)
+        && text.0 != kills
+    {
+        text.0 = kills;
     }
 }
 

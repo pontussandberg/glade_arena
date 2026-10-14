@@ -40,6 +40,16 @@ pub const HEAL_FRACTION: f32 = 0.15;
 pub const HASTE_FACTOR: f32 = 1.5;
 pub const HASTE_TICKS: u32 = 2 * TICK_HZ as u32;
 
+// Frenzy (`protocol::Frenzy`): killing a zombie makes its killer walk and attack faster for a
+// while, more with every zombie it has killed this match.
+/// The first kill's frenzy (a share of speed: 0.1 = 10%), and how much stronger each kill makes
+/// the next one's.
+pub const FRENZY_BASE: f32 = 0.10;
+pub const FRENZY_PER_KILL: f32 = 0.02;
+/// How long it takes to fade, for a fighter attacking from range and one in melee.
+pub const FRENZY_RANGED_TICKS: u32 = 5 * TICK_HZ as u32 / 2;
+pub const FRENZY_MELEE_TICKS: u32 = 5 * TICK_HZ as u32;
+
 // Waygates (in `map.rs`): stepping onto one end puts a fighter on the other.
 /// How close (center to center) a fighter has to come to an end to go through.
 pub const GATE_RADIUS: f32 = 0.6;

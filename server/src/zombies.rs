@@ -2,13 +2,14 @@
 //! farthest from everyone, shambles toward the nearest fighter and claws at it once it's in
 //! reach. They're fighters like any other (hit, slowed, frozen and killed like anyone) on their
 //! own side (`rooms::ZOMBIES`), only driven by the server instead of a client: it sets their
-//! intent (`PlayerInput`) as a player's commands would. A dead one is gone for good, and killing
-//! one scores nothing.
+//! intent (`PlayerInput`) as a player's commands would. A dead one is gone for good. Killing one
+//! scores nothing toward the match, but sends its killer into a frenzy (`Frenzy`).
 
 use std::collections::HashMap;
 
 use super::*;
 
+use arena_shared::classes::AttackKind;
 use arena_shared::rooms::{RoomKey, ZOMBIES};
 
 use crate::rooms::{InRoom, Lobby};
@@ -98,6 +99,24 @@ pub(super) fn chase(
         } else {
             input.move_to = Some(target);
         }
+    }
+}
+
+/// A zombie killed (its last hit by a player) counts toward its killer's zombie kills, and
+/// sends them into a frenzy as strong as those kills before it make it: walking and attacking
+/// faster, fading away (slower for a fighter in melee). A new one replaces what's left of the last.
+pub(super) fn feed_frenzy(
+    timeline: Res<LocalTimeline>,
+    mut lobby: ResMut<Lobby>,
+    killed: Query<(&InRoom, &Dead), (With<Zombie>, Added<Dead>)>,
+    mut killers: Query<(&PlayerId, &ClassId, &InRoom, &mut Frenzy), Without<Zombie>>,
+) {
+    let now = timeline.tick().0;
+    for (room, dead) in &killed {
+        let Some((_, class, _, mut frenzy)) = killers.iter_mut().find(|(id, _, r, _)| id.0 == dead.killer && *r == room) else { continue };
+        let Some(before) = lobby.count_zombie_kill(room.key, dead.killer) else { continue };
+        let melee = matches!(class.def().attack.kind, AttackKind::Melee { .. });
+        *frenzy = Frenzy::after_kill(now, before, melee);
     }
 }
 
