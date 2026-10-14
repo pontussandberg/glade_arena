@@ -204,7 +204,6 @@ fn spawn_minimap(mut commands: Commands) {
                 .spawn((
                     CameraLock { art },
                     HudButton,
-                    Button,
                     button_fill(palette::ui::PANEL),
                     hover_shows(tip),
                     Node {
