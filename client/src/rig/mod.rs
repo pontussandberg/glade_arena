@@ -66,13 +66,17 @@ mod throw;
 pub(crate) use throw::*;
 mod shine;
 use shine::*;
+mod drips;
+use drips::*;
 
 pub struct RigPlugin;
 
 impl Plugin for RigPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((crate::cloth::ClothPlugin, crate::swish::SwishPlugin));
-        app.add_systems(Startup, load_rigs);
+        app.add_systems(Startup, (load_rigs, load_drips));
+        app.add_systems(PostUpdate, shed_drips.after(TransformSystems::Propagate));
+        app.add_systems(Update, fall_drips);
         app.add_systems(Update, (add_rigs, see_throws, turn_fighters, pose_rigs, show_auras, gleam_blades).chain().in_set(Posing));
     }
 }
@@ -177,6 +181,9 @@ pub(crate) struct Rig {
     /// The last attack's backswing speed, and when it went off: kept once the server clears its
     /// swing, so its follow-through and the hand's rearming don't jump back to normal speed.
     backswing: Option<(Option<u32>, f32)>,
+    /// While its next attack is primed: when (seconds) it drips its next drop of light, and how
+    /// many it has dripped (`shed_drips`).
+    drips: (f32, u32),
     /// How far its weapon is grown, empowered by its attack's `follow_up` (0..1, eased).
     empowered: f32,
     joints: Joints,
@@ -249,6 +256,7 @@ fn add_rigs(
             walking: 0.0,
             cut: None,
             backswing: None,
+            drips: (0.0, 0),
             empowered: 0.0,
             joints: Joints::default(),
         };
