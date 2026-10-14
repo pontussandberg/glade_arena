@@ -68,6 +68,7 @@ mod shine;
 use shine::*;
 mod drips;
 use drips::*;
+pub(crate) use drips::ShotDrips;
 
 pub struct RigPlugin;
 
@@ -75,7 +76,7 @@ impl Plugin for RigPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((crate::cloth::ClothPlugin, crate::swish::SwishPlugin));
         app.add_systems(Startup, (load_rigs, load_drips));
-        app.add_systems(PostUpdate, shed_drips.after(TransformSystems::Propagate));
+        app.add_systems(PostUpdate, (shed_drips, drip_from_shots).after(TransformSystems::Propagate));
         app.add_systems(Update, fall_drips);
         app.add_systems(Update, (add_rigs, see_throws, turn_fighters, pose_rigs, show_auras, gleam_blades).chain().in_set(Posing));
     }

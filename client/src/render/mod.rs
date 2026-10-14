@@ -125,6 +125,8 @@ pub(crate) struct Visuals {
     /// Per class and shot (auto-attack: false, Q: true).
     projectiles: HashMap<(ClassId, Option<AbilitySlot>), arena::ShotLook<Handle<Mesh>>>,
     shot_tip: Handle<Mesh>,
+    /// Deadeye's light on a primed javelin in flight.
+    primed_aura: Handle<Mesh>,
     wind: Handle<Mesh>,
     spear_shadow: Handle<Mesh>,
     /// Per owner (`None` for looks that are the same for everyone: all but bodies, so a hit
@@ -149,6 +151,8 @@ pub(crate) enum Look {
     Wind,
     /// The white glow on a thrown spear's point.
     Spark,
+    /// Deadeye's pale light on a primed javelin.
+    Deadeye,
     /// The faint dark streak on the ground under a thrown spear.
     Shadow,
     /// The faint circle at the edge of your auto-attack's range.
@@ -185,6 +189,7 @@ impl Visuals {
                     Look::Plain => arena::matte(Color::WHITE),
                     Look::Wind => arena::translucent(Color::WHITE, 0.6, 1.5),
                     Look::Spark => arena::glow(Color::WHITE, 5.0),
+                    Look::Deadeye => arena::glow(palette::DEADEYE, 9.0),
                     Look::Shadow => arena::translucent(palette::INK, 0.4, 0.0),
                     Look::Range => arena::translucent(Color::WHITE, 0.2, 1.0),
                     Look::Frost => arena::translucent(palette::ICE, 0.45, 1.6),
@@ -254,6 +259,7 @@ fn setup_scene(
             })
             .collect(),
         shot_tip: meshes.add(arena::shot_tip_mesh()),
+        primed_aura: meshes.add(arena::primed_spear_aura()),
         wind: meshes.add(arena::wind_mesh()),
         spear_shadow: meshes.add(arena::spear_shadow_mesh()),
         materials: HashMap::default(),
@@ -368,6 +374,11 @@ fn add_visuals(
         if let Some(aura) = aura {
             let material = visuals.material(&mut materials, projectile.owner, Look::Aura);
             shot.with_child((Mesh3d(aura), MeshMaterial3d(material)));
+        }
+        // A primed javelin (Deadeye's sure crit) flies lit as it was held, dripping its light.
+        if thrown && projectile.crit {
+            let light = visuals.material(&mut materials, projectile.owner, Look::Deadeye);
+            shot.insert(crate::rig::ShotDrips::default()).with_child((Mesh3d(visuals.primed_aura.clone()), MeshMaterial3d(light), NotShadowCaster));
         }
         if thrown {
             let material = visuals.material(&mut materials, projectile.owner, Look::Wind);
