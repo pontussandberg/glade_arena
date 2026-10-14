@@ -372,7 +372,8 @@ pub(super) fn javelinist_wardrobe() -> Wardrobe {
 
     Wardrobe {
         drapes,
-        trim: palette::SOUL,
+        // The hem glows with Deadeye's light.
+        trim: palette::DEADEYE,
         body: vec![
             Column { center: Vec2::ZERO, half: Vec2::new(0.152, 0.192), from: 0.3, to: 1.05, round: 2.0 },
             // The chest and shoulders, under the cowl, as squared off as the tunic there (and a
