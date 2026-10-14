@@ -64,7 +64,7 @@ impl Plugin for RenderPlugin {
             (
                 (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
                 (add_visuals, sync_transforms).chain().before(crate::rig::Posing),
-                (fly_shots, crate::rig::empty_hands).chain().after(crate::rig::Posing),
+                (fly_shots, fade_wakes, crate::rig::empty_hands).chain().after(crate::rig::Posing),
                 (show_novas, grow_bursts, end_fleeting, show_frost),
                 align_to_world.after(crate::rig::Posing).after(fly_shots),
                 toggle_range_circle,
@@ -121,7 +121,8 @@ pub(crate) struct Visuals {
     /// Per class and shot (auto-attack: false, Q: true).
     projectiles: HashMap<(ClassId, Option<AbilitySlot>), arena::ShotLook<Handle<Mesh>>>,
     shot_tip: Handle<Mesh>,
-    wind: Handle<Mesh>,
+    /// A piece of a thrown spear's wake.
+    pub(super) wake: Handle<Mesh>,
     spear_shadow: Handle<Mesh>,
     /// Per owner (`None` for looks that are the same for everyone: all but bodies, so a hit
     /// flashes just that fighter) and look.
@@ -141,7 +142,7 @@ pub(crate) enum Look {
     Spirit,
     /// Plain, for meshes that carry their own colors (a thrown javelin).
     Plain,
-    /// The faint white wind behind a thrown spear.
+    /// The faint white wind a thrown spear leaves behind (its wake).
     Wind,
     /// The white glow on a thrown spear's point.
     Spark,
@@ -242,7 +243,7 @@ fn setup_scene(
             })
             .collect(),
         shot_tip: meshes.add(arena::shot_tip_mesh()),
-        wind: meshes.add(arena::wind_mesh()),
+        wake: meshes.add(arena::wake_mesh()),
         spear_shadow: meshes.add(arena::spear_shadow_mesh()),
         materials: HashMap::default(),
     });
@@ -358,11 +359,8 @@ fn add_visuals(
             shot.with_child((Mesh3d(aura), MeshMaterial3d(material)));
         }
         if thrown {
-            let material = visuals.material(&mut materials, projectile.owner, Look::Wind);
-            // No length yet: it grows as the spear flies.
-            let wind = Transform::from_xyz(-WIND_FRONT, 0.0, 0.0).with_scale(Vec3::new(0.0, 1.0, 1.0));
-            let wind = shot.commands().spawn((Mesh3d(visuals.wind.clone()), MeshMaterial3d(material), wind, NotShadowCaster)).id();
-            shot.add_child(wind).insert(Thrown { wind, launch: None });
+            let wake = visuals.material(&mut materials, projectile.owner, Look::Wind);
+            shot.insert(Thrown { launch: None, wake, butt: None });
             // Its only shadow is the one straight under it, on its line: where it really is (the
             // sun's would fall meters off to the side), so none of it casts one, its point's spark
             // and its wind neither.
