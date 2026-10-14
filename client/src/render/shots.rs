@@ -212,8 +212,8 @@ pub(super) fn fly_shots(
 /// it, so it doesn't just vanish. How long the flash lasts and how big it gets (seconds, meters);
 /// how many splinters, how fast they fly back and up (m/s), how long they last, how big, how drawn
 /// out along their flight, and how hard they fall (m/s²).
-const FLASH_SECONDS: f32 = 0.12;
-const FLASH_SIZE: f32 = 0.16;
+const FLASH_SECONDS: f32 = 0.08;
+const FLASH_SIZE: f32 = 0.055;
 const SPLINTERS: u32 = 7;
 const SPLINTER_SPEED: (f32, f32) = (2.2, 4.2);
 const SPLINTER_RISE: f32 = 1.4;
