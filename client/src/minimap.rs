@@ -37,6 +37,7 @@ impl Plugin for MinimapPlugin {
                 (spawn_gate_marks, update_gate_marks).chain(),
                 frame_view.in_set(CameraPlaced),
                 (click_lock, show_lock).chain(),
+                (click_fullscreen, show_fullscreen).chain(),
             ),
         );
     }
@@ -95,6 +96,20 @@ const PADLOCK: [&[&str]; 2] = [
     &["..###..", ".#...#.", ".#.....", "#######", "###.###", "###.###", "#######"],
 ];
 const PADLOCK_PIXEL: f32 = 3.0;
+
+/// The full screen button, just left of the camera's lock: clicking it fills the screen with the
+/// game, or gives it back. Its picture is drawn in `art`.
+#[derive(Component)]
+struct FullscreenButton {
+    art: Entity,
+}
+
+/// Its picture, old-school pixel art: four corners pointing out (to fill the screen) or in (to
+/// leave it).
+const FULLSCREEN_ART: [&[&str]; 2] = [
+    &["###.###", "#.....#", "#.....#", ".......", "#.....#", "#.....#", "###.###"],
+    &[".#...#.", ".#...#.", "##...##", ".......", "##...##", ".#...#.", ".#...#."],
+];
 
 /// A pickup's marker (this entity, a round chip) and its text, and what it shows now: the
 /// pickup's icon (`None`: it's lying there), else the seconds until it's back.
@@ -200,6 +215,24 @@ fn spawn_minimap(mut commands: Commands) {
                 })
                 .id();
             let art = minimap.spawn(Node { width: percent(100.0), height: percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }).id();
+            let full_art = minimap.spawn(Node { width: percent(100.0), height: percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }).id();
+            minimap
+                .spawn((
+                    FullscreenButton { art: full_art },
+                    HudButton,
+                    button_fill(palette::ui::PANEL),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(-2.0 * (LOCK + LOCK_GAP)),
+                        bottom: px(0.0),
+                        width: px(LOCK),
+                        height: px(LOCK),
+                        border: UiRect::all(px(2.0)),
+                        ..default()
+                    },
+                    BorderColor::all(palette::ui::MUTED),
+                ))
+                .add_child(full_art);
             minimap
                 .spawn((
                     CameraLock { art },
@@ -223,6 +256,29 @@ fn spawn_minimap(mut commands: Commands) {
                     children![key_chip("Y", 9.0, palette::ui::TEXT, Color::NONE)],
                 ));
         });
+}
+
+/// A click on the full screen button fills the screen with the game, or gives it back.
+fn click_fullscreen(button: Single<Ref<Interaction>, With<FullscreenButton>>, mut window: Single<&mut Window, With<bevy::window::PrimaryWindow>>) {
+    if clicked(button.into_inner()) {
+        window.mode = match window.mode {
+            bevy::window::WindowMode::Windowed => bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Current),
+            _ => bevy::window::WindowMode::Windowed,
+        };
+    }
+}
+
+/// The full screen button shows which way a click goes: out to full screen, or back in.
+fn show_fullscreen(
+    mut commands: Commands,
+    window: Single<Ref<Window>, With<bevy::window::PrimaryWindow>>,
+    button: Single<Ref<FullscreenButton>>,
+) {
+    if !window.is_changed() && !button.is_added() {
+        return;
+    }
+    let full = window.mode != bevy::window::WindowMode::Windowed;
+    commands.entity(button.art).despawn_children().with_children(|art| pixel_art(art, FULLSCREEN_ART[full as usize], PADLOCK_PIXEL, palette::ui::TEXT));
 }
 
 /// A click on the lock locks or unlocks the camera.
