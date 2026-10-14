@@ -292,7 +292,7 @@ fn show_lobbies(
                     Node { justify_content: JustifyContent::Center, padding: UiRect::all(px(GAP * 2.0)), border: UiRect::all(px(1.0)), ..default() },
                     BorderColor::all(palette::ui::MUTED.with_alpha(0.2)),
                 ))
-                .with_child(ui_text("No lobbies yet. Create the first one below.", 12.0, palette::ui::MUTED));
+                .with_child(ui_text("No lobbies yet", 12.0, palette::ui::MUTED));
             }
             for room in list.0.iter().take(MAX_ROWS) {
                 spawn_row(card, room);
@@ -304,7 +304,6 @@ fn show_lobbies(
 
         panel.spawn(card()).with_children(|card| {
             card.spawn(ui_text("Create a lobby", 20.0, palette::ui::TEXT));
-            card.spawn(ui_text("Lead it: pick the mode, and start when your friends are in. It plays on the map picked up top.", 12.0, palette::ui::MUTED));
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
             card.spawn(label("Name"));
             card.spawn((
@@ -318,7 +317,7 @@ fn show_lobbies(
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
             card.spawn(label("Mode"));
             card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
-                for (mode, what) in [(Mode::Ffa, "Everyone for themselves, up to 10"), (Mode::Teams, "Two teams, up to 10 a side")] {
+                for mode in [Mode::Ffa, Mode::Teams] {
                     row.spawn((
                         ModeButton(mode),
                         Button,
@@ -334,10 +333,7 @@ fn show_lobbies(
                         BorderColor::all(palette::ui::MUTED.with_alpha(0.3)),
                         BackgroundColor(palette::ui::BACKDROP),
                     ))
-                    .with_children(|tile| {
-                        tile.spawn(ui_text(mode.label(), 14.0, palette::ui::TEXT));
-                        tile.spawn(ui_text(what, 11.0, palette::ui::MUTED));
-                    });
+                    .with_child(ui_text(mode.label(), 14.0, palette::ui::TEXT));
                 }
             });
             card.spawn(Node { height: px(GAP * 0.5), ..default() });

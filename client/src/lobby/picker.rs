@@ -12,8 +12,8 @@ use crate::arena::{self, palette, to_world};
 use crate::render::{Visuals, clicked, key_chip, ui_text};
 use crate::stat_frame;
 
-/// A fighter to pick: its number, name and role.
-pub(super) fn spawn_tile(tiles: &mut ChildSpawnerCommands, number: usize, class: ClassId) {
+/// A fighter to pick: its name and role (its number key still picks it).
+pub(super) fn spawn_tile(tiles: &mut ChildSpawnerCommands, class: ClassId) {
     let def = class.def();
     tiles
         .spawn((
@@ -31,7 +31,6 @@ pub(super) fn spawn_tile(tiles: &mut ChildSpawnerCommands, number: usize, class:
             BackgroundColor(Color::NONE),
         ))
         .with_children(|tile| {
-            tile.spawn(ui_text(number.to_string(), 11.0, palette::ui::MUTED));
             tile.spawn(ui_text(def.name.clone(), 20.0, palette::ui::TEXT));
             tile.spawn(ui_text(def.role.to_uppercase(), 11.0, ACCENT));
         });
