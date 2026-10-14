@@ -65,6 +65,17 @@ pub fn shot_look(class: &ClassDef, shot: Shot, ability: bool) -> ShotLook {
     }
 }
 
+/// Deadeye's light on a primed javelin in flight: the held spear's (`spear_aura`), posed as a shot
+/// is (along +X, its point at the origin).
+pub fn primed_spear_aura() -> Mesh {
+    spear_aura().translated_by(Vec3::NEG_Y * GRIP_TO_TIP).rotated_by(ALONG_X)
+}
+
+/// `spear_edge`, on a javelin in flight (posed as `primed_spear_aura` is).
+pub fn shot_spear_edge(t: f32) -> Vec3 {
+    ALONG_X * (spear_edge(t) - Vec3::Y * GRIP_TO_TIP)
+}
+
 /// The white glow on a thrown spear's point: a small bright spark stretched along +X, at the
 /// origin.
 pub fn shot_tip_mesh() -> Mesh {
