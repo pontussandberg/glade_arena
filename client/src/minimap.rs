@@ -1,7 +1,8 @@
 //! The minimap in the bottom-right corner: our room's map drawn tile by tile from the shared map
 //! (so it's exactly what blocks movement), every fighter as a dot in its ring color, every
 //! pickup as its icon while it's lying there or the seconds until it's back, every waygate end
-//! as a ring (dim while it's closed), and a frame showing what the camera sees. Drawn again when
+//! as a ring (dim while it's closed), where we're walking to as a small ring in our color, and
+//! a frame showing what the camera sees. Drawn again when
 //! the map changes.
 
 use arena_shared::config::TICK_HZ;
@@ -30,6 +31,7 @@ impl Plugin for MinimapPlugin {
                 draw_map.run_if(resource_changed::<CurrentMap>),
                 (spawn_dots, color_dots).chain(),
                 place_dots,
+                show_destination,
                 (spawn_markers, update_markers).chain(),
                 (spawn_gate_marks, update_gate_marks).chain(),
                 frame_view.in_set(CameraPlaced),
@@ -62,6 +64,13 @@ struct Dot {
 /// What the camera sees.
 #[derive(Component)]
 struct ViewFrame;
+
+/// Where we're walking to (`DesiredInput::move_to`).
+#[derive(Component)]
+struct DestinationDot;
+
+/// The destination's ring's size.
+const DESTINATION: f32 = 9.0;
 
 /// A pickup's marker (this entity, a round chip) and its text, and what it shows now: the
 /// pickup's icon (`None`: it's lying there), else the seconds until it's back.
@@ -144,7 +153,33 @@ fn spawn_minimap(mut commands: Commands) {
             ViewFrame,
             Node { position_type: PositionType::Absolute, border: UiRect::all(px(1.0)), ..default() },
             BorderColor::all(palette::ui::TEXT),
+        ))
+        .with_child((
+            DestinationDot,
+            Node {
+                position_type: PositionType::Absolute,
+                width: px(DESTINATION),
+                height: px(DESTINATION),
+                border: UiRect::all(px(2.0)),
+                border_radius: BorderRadius::MAX,
+                ..default()
+            },
+            BorderColor::all(palette::YOU),
+            Visibility::Hidden,
         ));
+}
+
+/// Where we're walking to, on the minimap, while we are.
+fn show_destination(
+    current: Res<CurrentMap>,
+    desired: Res<crate::DesiredInput>,
+    dot: Single<(&mut Node, &mut Visibility), With<DestinationDot>>,
+) {
+    let (mut node, mut visibility) = dot.into_inner();
+    visibility.set_if_neq(shown(desired.0.move_to.is_some()));
+    if let Some(to) = desired.0.move_to {
+        place(&mut node, current.map(), to, DESTINATION);
+    }
 }
 
 /// The map, drawn in the minimap at the size it takes there.
