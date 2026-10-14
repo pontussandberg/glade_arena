@@ -28,7 +28,7 @@ impl Team {
     }
 }
 
-/// Position on the 2D gameplay plane (the client renders it in 3D, see `render.rs`).
+/// Position on the 2D gameplay plane (the client renders it in 3D, see `render/`).
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect, Deref, DerefMut)]
 pub struct Pos(pub Vec2);
 

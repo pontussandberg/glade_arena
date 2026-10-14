@@ -111,7 +111,7 @@ scripts/  build-web.sh, serve.mjs
 - The class files (`shared/assets/classes/`) are compiled into both sides, and their hash is
   part of the protocol id: a client built with different class numbers can't connect.
 
-Rule of thumb: gameplay rules go in `shared/src/sim.rs` as pure functions. Server-only
+Rule of thumb: gameplay rules go in `shared/src/sim/` as pure functions. Server-only
 decisions (damage, death) stay in `server/`.
 
 ## Running

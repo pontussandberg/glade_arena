@@ -8,7 +8,7 @@ mispredicting.
 
 The order of the classes is `CLASS_FILES` in `shared/src/classes.rs`: the class picker and its
 number keys, the default pick, and the order target dummies come in. A new class also needs its
-look in the client (`arena.rs` figure and parts, `rig.rs` moves).
+look in the client (`arena/` figure and parts, `rig/` moves).
 
 Every class file starts with `#![enable(unwrap_variant_newtypes)]`, so a kind is written
 `Dash(distance: 6.0, ...)` rather than `Dash((distance: 6.0, ...))`, and an optional value
