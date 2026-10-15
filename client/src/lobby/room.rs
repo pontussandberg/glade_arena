@@ -17,7 +17,7 @@ use crate::rooms::{CurrentRoom, Me, Notice, Screen, request};
 /// out; the other lobbies to join. Under it the leaderboards. Who's in it: in free-for-all a list; in teams the two side by side, with the way to
 /// switch sides under ours. Then the way out. Rebuilt when the room changes, or we come to it.
 ///
-/// Names are in one neutral color; ours is in the accent (on a tinted row), as in the badge over the fighter.
+/// Each player is a row of its own, edged on the left; ours is edged and tinted in the accent.
 pub(super) fn show_room(
     mut commands: Commands,
     room: Res<CurrentRoom>,
@@ -219,19 +219,21 @@ fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
 /// fighter, and a tag (leader, in the arena, ready). Our own row is tinted.
 fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, member: &Member, my_id: u32) {
     let is_me = member.guest_id == my_id;
+    // A solid row of its own, edged on the left: ours in the accent, the rest in the text's color.
     let row = Node {
         align_items: AlignItems::Baseline,
         column_gap: px(GAP),
         flex_wrap: FlexWrap::Wrap,
-        padding: UiRect::axes(px(GAP), px(GAP * 0.6)),
+        padding: UiRect::axes(px(GAP * 1.5), px(GAP)),
+        border: UiRect::left(px(3.0)),
         ..node
     };
-    let tint = if is_me { ACCENT.with_alpha(0.14) } else { palette::ui::BACKDROP.with_alpha(0.5) };
-    parent.spawn((row, BackgroundColor(tint))).with_children(|row| {
-        // Ours in the accent, so it reads as "you" on either side.
-        row.spawn(ui_text(member.name.clone(), 13.0, if is_me { ACCENT } else { palette::ui::TEXT }));
+    let (tint, edge) = if is_me { (ACCENT.with_alpha(0.22), ACCENT) } else { (palette::ui::BACKDROP, palette::ui::TEXT.with_alpha(0.5)) };
+    parent.spawn((row, BackgroundColor(tint), BorderColor::all(edge))).with_children(|row| {
+        // Ours reads as "you" by its accent edge and tint; its text light on them.
+        row.spawn(ui_text(member.name.clone(), 15.0, palette::ui::TEXT));
         let fighter = member.class.map_or("Picking...".to_string(), |c| c.def().name.clone());
-        row.spawn(ui_text(fighter, 11.0, palette::ui::MUTED));
+        row.spawn(ui_text(fighter, 12.0, if is_me { palette::ui::TEXT.with_alpha(0.75) } else { palette::ui::MUTED }));
         // Then one tag, pushed to the end: who leads, who's in, who's ready.
         let tag = if member.guest_id == view.leader {
             Some(("LEADER", palette::TORCH_FLAME))
@@ -243,7 +245,7 @@ fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, me
             None
         };
         if let Some((tag, color)) = tag {
-            row.spawn((Node { margin: UiRect::left(Val::Auto), ..default() }, children![ui_text(tag, 9.0, color)]));
+            row.spawn((Node { margin: UiRect::left(Val::Auto), ..default() }, children![ui_text(tag, 10.0, color)]));
         }
     });
 }
