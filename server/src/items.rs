@@ -551,7 +551,7 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                     Err(_) => {
                         let doom = Doomed { by: hit.attacker, class: hit.class, side: hit.side, at: now + lasts, stored: hit.amount, share };
                         r.commands.entity(hit.victim).try_insert(doom);
-                        spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Warn(FxColor::Void), hit.at, 0.9, now, lasts));
+                        spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Doom, hit.at, 0.9, now, lasts));
                     }
                 }
             }

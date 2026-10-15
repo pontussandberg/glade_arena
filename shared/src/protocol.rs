@@ -447,6 +447,8 @@ pub enum FxKind {
     Meteor,
     /// A monster vanishing at `at` and reappearing at `to` (a blink).
     Blink,
+    /// A Doom Bell's mark on its victim, where it was struck, until the bell tolls at `until`.
+    Doom,
 }
 
 /// A passing effect of an item or a monster, for the client to draw: what, where, and from when

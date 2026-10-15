@@ -16,7 +16,7 @@
         kind: Projectile(speed: 15.0, radius: 0.24, range: 12.0),
     ),
     abilities: [],
-    look: Some(figure: "javelinist", size: 1.0, tint: (0.65, 0.8, 1.4), cloth: false),
+    look: Some(figure: "javelinist", size: 1.0, tint: (0.65, 0.8, 1.4), cloth: false, bolts: Some(Storm)),
     mob: Some(
         brain: Kite(keep: 9.0),
         tricks: [Mortar(damage: 24, radius: 1.8, fuse_ticks: 26, every_ticks: 150, shell: Lightning)],

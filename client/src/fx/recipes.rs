@@ -41,7 +41,7 @@ pub(super) fn play_new(
             FxKind::Blast(FxColor::Blood) => splatter(c, &art, &scene, Ink::Blood, Ink::Blood),
             FxKind::Blast(FxColor::Frost) => frost_shatter(c, &art, &scene),
             FxKind::Blast(color) => spirit_burst(c, &art, &scene, color),
-            FxKind::Warn(FxColor::Void) => doom_mark(c, &art, &scene),
+            FxKind::Doom => doom_mark(c, &art, &scene),
             FxKind::Warn(FxColor::Spirit) => echo(c, &art, &scene),
             FxKind::Warn(color) => warning(c, &art, &scene, color),
             FxKind::Bolt => gathering_storm(c, &art, &scene),
@@ -429,12 +429,11 @@ fn meteor(c: &mut Commands, art: &FxArt, s: &Scene) {
 /// a dark ripple closing), and bursts back out of one where it lands (motes thrown out, a ripple
 /// opening, a flash).
 fn blink(c: &mut Commands, art: &FxArt, s: &Scene) {
-    let gone = Scene { radius: 1.0, ..*s };
     put(c, art, s.pick(1, &art.splotch), Part::new(s.start, [0.04, 0.2, 0.6], Ink::Void, ground(s.at, 0.02)).size(0.9).grow(1.6));
     put(c, art, &art.band, Part::new(s.start, [0.18, 0.18, 0.3], Ink::VoidLight, ground(s.at, 0.05)).sized(Vec3::new(0.3, 1.0, 0.3)).grow(4.0).shrink(0.2));
     for i in 0..10 {
         let k = 40 + i * 6;
-        let motion = Motion::Orbit { center: s.at, angle: gone.r(k) * TAU, speed: 5.0, radius: (1.2, 0.05), height: (0.3 + 1.4 * gone.r(k + 1), 0.9) };
+        let motion = Motion::Orbit { center: s.at, angle: s.r(k) * TAU, speed: 5.0, radius: (1.2, 0.05), height: (0.3 + 1.4 * s.r(k + 1), 0.9) };
         put(c, art, &art.mote, Part::new(s.start, [0.02, 0.2, 0.3], Ink::VoidLight, s.at).size(0.07).motion(motion).flicker(0.3));
     }
     let there = Scene { at: s.to, radius: 1.2, seed: s.seed ^ 0x55, ..*s };

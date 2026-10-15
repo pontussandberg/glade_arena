@@ -171,6 +171,9 @@ pub struct RunView {
     pub omen: Option<Omen>,
 }
 
+/// Every how many waves a boss leads one (the waves mode's).
+pub const BOSS_EVERY: u32 = 5;
+
 /// What can be strange about a wave, past the first few.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Omen {
@@ -193,16 +196,17 @@ impl Omen {
     /// The order they come in (`Omen::of_wave`): a Gilded wave first, then the rest.
     const IN_TURN: [Omen; 6] = [Omen::Gilded, Omen::Horde, Omen::Frenzy, Omen::Restless, Omen::BloodMoon, Omen::Volatile];
 
-    /// What's strange about `wave`, always the same: from wave 4, the second and fourth wave
-    /// after each boss (4, 7, 9, 12, 14, 17, 19, ...), each in turn (`IN_TURN`).
+    /// What's strange about `wave`, always the same: the second and fourth wave after each boss
+    /// (`BOSS_EVERY`: 7, 9, 12, 14, ...) and the fourth of the run, each in turn (`IN_TURN`).
     pub fn of_wave(wave: u32) -> Option<Omen> {
-        let n = match wave % 5 {
-            2 => 2 * (wave / 5),
-            4 => 2 * (wave / 5) + 1,
+        let (laps, after) = (wave / BOSS_EVERY, wave % BOSS_EVERY);
+        let fourth = match after {
+            2 => false,
+            4 => true,
             _ => return None,
         };
-        // The first, wave 4, is the first in turn (wave 2 has none).
-        let n = n.checked_sub(1).filter(|_| wave >= 4)?;
+        // Not wave 2: the first is wave 4, the first in turn.
+        let n = (2 * laps + u32::from(fourth)).checked_sub(1)?;
         Some(Self::IN_TURN[n as usize % Self::IN_TURN.len()])
     }
 

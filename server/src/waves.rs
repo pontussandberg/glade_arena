@@ -24,7 +24,7 @@ use super::*;
 use arena_shared::config::TICK_HZ;
 use arena_shared::items::Satchel;
 use arena_shared::map::Map;
-use arena_shared::rooms::{Omen, Phase, RoomKey, ZOMBIES};
+use arena_shared::rooms::{BOSS_EVERY, Omen, Phase, RoomKey, ZOMBIES};
 
 use crate::brain::Mob;
 use crate::fx::spawn_fx;
@@ -56,8 +56,6 @@ const MEND_EVERY_TICKS: u32 = TICK_HZ as u32 / 2;
 const UNTIL_CLEARED: u32 = u32::MAX / 2;
 /// How much of their health a player picked up by an ally comes back with.
 const REVIVE_HEALTH: f32 = 0.4;
-/// Every how many waves a boss leads one.
-pub(crate) const BOSS_EVERY: u32 = 5;
 /// How long a lost run's end shows before everyone's back in the lobby.
 const OVER_SHOWS: Duration = Duration::from_secs(8);
 /// How near the party a lair may be to send out monsters, and how far (if any are between).
@@ -144,10 +142,11 @@ pub(crate) struct Run {
     chests: Vec<Entity>,
     /// What's strange about this wave (`Omen::of_wave`, shown as the shop opens before it).
     pub(crate) omen: Option<Omen>,
-    /// This wave's own chances: which monsters come, and which are elites. Seeded by the wave's
-    /// number as it comes, so a wave is the same every run.
+    /// This wave's own chances: which monsters come, and which are elites (`wave_chances`, as it
+    /// comes).
     rng: fastrand::Rng,
-    /// Monsters that have died this wave (on a Restless wave every `RISES_EVERY`th rises).
+    /// Monsters that could rise again that have died this wave (on a Restless wave every
+    /// `RISES_EVERY`th does).
     deaths: u32,
 }
 
@@ -175,7 +174,8 @@ impl Run {
             alive: 0,
             chests: Vec::new(),
             omen: Omen::of_wave(wave),
-            rng: fastrand::Rng::with_seed(wave as u64),
+            // Set as each wave comes.
+            rng: wave_chances(wave),
             deaths: 0,
         }
     }
@@ -259,6 +259,11 @@ fn spawn_mob_as(commands: &mut Commands, lobby: &mut Lobby, now: u32, room: InRo
     let entity = mob.id();
     spawn_fx(commands, room, Fx::at(FxKind::Rise, at, 0.8 * def.size(), now, 16));
     entity
+}
+
+/// `wave`'s own chances: seeded by its number, so it comes out the same whenever it comes.
+fn wave_chances(wave: u32) -> fastrand::Rng {
+    fastrand::Rng::with_seed(wave as u64)
 }
 
 /// The monsters that may come in `wave` (not bosses, not what only comes summoned), with how
@@ -359,8 +364,7 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now,
             run.phase = RunPhase::Fight;
             run.ready.clear();
             run.budget = budget(wave, size) * run.omen.map_or(1.0, Omen::budget_scale);
-            // The wave's own chances, the same whenever it comes.
-            run.rng = fastrand::Rng::with_seed(wave as u64);
+            run.rng = wave_chances(wave);
             run.deaths = 0;
             run.next_pack_at = now;
             run.boss_out = boss_of(wave).is_none();
@@ -540,14 +544,15 @@ pub(super) fn pay_bounties(timeline: Res<LocalTimeline>, mut commands: Commands,
         let omen = lobby.run(room.key).and_then(|run| run.omen);
         lobby.give_gold(room.key, mob.bounty * omen.map_or(1, Omen::bounty_scale));
         let boss = class.def().is_boss();
-        let deaths = lobby.run_mut(room.key).map_or(0, |run| {
+        // Only those that could rise count: not a boss, nor one raised by another (summoned, or
+        // risen already).
+        let may_rise = !boss && mob.raised_by.is_none();
+        let deaths = lobby.run_mut(room.key).filter(|_| may_rise).map_or(0, |run| {
             run.deaths += 1;
             run.deaths
         });
-        // Risen ones (raised by another) don't rise again.
         if omen.is_some_and(Omen::raises)
-            && !boss
-            && mob.raised_by.is_none()
+            && may_rise
             && deaths.is_multiple_of(RISES_EVERY)
             && let Some(risen) = ClassId::by_key(RISES_AS)
         {
@@ -620,7 +625,7 @@ mod tests {
     #[test]
     fn a_wave_is_the_same_every_time() {
         let sequence = |wave: u32| {
-            let mut run = Run::new(0, wave);
+            let mut run = Run { rng: wave_chances(wave), ..Run::new(0, wave) };
             let mut budget = budget(wave, 1);
             let mut picks = Vec::new();
             while budget > 0.0 {

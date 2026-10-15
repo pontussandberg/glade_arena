@@ -20,7 +20,7 @@
         burst: Some(radius: 2.0, share: 0.8, color: Fire),
     ),
     abilities: [],
-    look: Some(figure: "frost_mage", size: 2.1, tint: (1.45, 0.7, 0.4)),
+    look: Some(figure: "frost_mage", size: 2.1, tint: (1.45, 0.7, 0.4), bolts: Some(Fire)),
     mob: Some(
         brain: Kite(keep: 8.0),
         tricks: [

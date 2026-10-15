@@ -16,7 +16,7 @@
         kind: Projectile(speed: 14.0, radius: 0.26, range: 11.0),
     ),
     abilities: [],
-    look: Some(figure: "frost_mage", size: 0.95, tint: (0.75, 0.5, 1.3), cloth: false),
+    look: Some(figure: "frost_mage", size: 0.95, tint: (0.75, 0.5, 1.3), cloth: false, bolts: Some(Void)),
     mob: Some(
         brain: Kite(keep: 7.5),
         tricks: [Blink(within: 3.5, distance: 7.0, every_ticks: 160), Fan(count: 3, spread: 0.5, every_ticks: 128)],

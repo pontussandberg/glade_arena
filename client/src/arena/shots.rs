@@ -4,6 +4,7 @@
 use super::*;
 
 use arena_shared::classes::{ClassDef, Shot};
+use arena_shared::protocol::FxColor;
 
 /// A flat strip along world +X from `from` to `to`, `width` wide: the lane a shot will fly down.
 pub fn lane_mesh(from: f32, to: f32, width: f32) -> Mesh {
@@ -55,14 +56,15 @@ pub(super) const ALONG_X: Quat = Quat::from_xyzw(0.0, 0.0, -std::f32::consts::FR
 /// the shot's radius.
 pub fn shot_look(class: &ClassDef, shot: Shot, ability: bool) -> ShotLook {
     let plain = |mesh, glow| ShotLook { mesh, glow, thrown: false, aura: None, spin: 0.0 };
-    // Casters borrowing another's figure throw their own: fire, the void, sparks.
-    let own = match class.id.as_str() {
-        "ember_archmage" => Some(ShotGlow::Ember),
-        "void_acolyte" | "bonecaller" => Some(ShotGlow::Void),
-        "storm_caller" => Some(ShotGlow::Storm),
-        _ => None,
-    };
-    if let Some(glow) = own.filter(|_| !ability) {
+    // Casters borrowing another's figure throw their own (`LookDef::bolts`): fire, the void,
+    // sparks; anything else glows pale.
+    if let Some(bolts) = class.look.as_ref().and_then(|look| look.bolts).filter(|_| !ability) {
+        let glow = match bolts {
+            FxColor::Fire => ShotGlow::Ember,
+            FxColor::Void => ShotGlow::Void,
+            FxColor::Storm => ShotGlow::Storm,
+            _ => ShotGlow::Pale,
+        };
         return plain(gem_mesh(shot.radius), glow);
     }
     match (class.figure(), ability) {

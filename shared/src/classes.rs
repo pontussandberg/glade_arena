@@ -111,6 +111,9 @@ pub struct LookDef {
     pub tint: (f32, f32, f32),
     #[serde(default = "yes")]
     pub cloth: bool,
+    /// What its shots glow (a caster's: fire, the void, a storm's sparks), not its figure's.
+    #[serde(default)]
+    pub bolts: Option<FxColor>,
 }
 
 fn white() -> (f32, f32, f32) {

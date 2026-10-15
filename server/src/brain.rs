@@ -89,6 +89,17 @@ pub(crate) struct Fields(HashMap<RoomKey, (u32, Vec<IVec2>, FlowField)>);
 /// How far a mortar throws.
 const MORTAR_REACH: f32 = 14.0;
 
+/// Where a volley of `count` shells comes down: the first right on `target`, the rest round it
+/// `scatter` out (from `angle`), evenly as far as open ground allows, each on a spot of its own: one
+/// with nowhere to land isn't thrown, never two on one spot.
+fn shell_spots(map: &Map, target: Vec2, count: u32, scatter: f32, angle: f32) -> Vec<Vec2> {
+    let rest = count.saturating_sub(1);
+    let tries = rest.max(1) * 2;
+    let round: Vec<Vec2> = (0..tries).map(|n| target + Vec2::from_angle(angle + TAU * n as f32 / tries as f32) * scatter).filter(|spot| map.walkable_at(*spot)).collect();
+    let step = (round.len() as f32 / rest.max(1) as f32).max(1.0);
+    std::iter::once(target).chain((0..rest).filter_map(|n| round.get((n as f32 * step) as usize).copied())).collect()
+}
+
 /// What a blinking monster leaves behind (`Trick::Blink::leaves`): how far its burst reaches,
 /// and how soon it goes off.
 const BLINK_LEAVES_RADIUS: f32 = 2.4;
@@ -283,10 +294,7 @@ pub(super) fn think(
                     if dist < MORTAR_REACH {
                         fired = true;
                         let by = By { id: id.0, class: *class, side, source: Source::Trick };
-                        // The first right where its prey stands, the rest evenly round it.
-                        for n in 0..*count {
-                            let at = if n == 0 { target } else { target + Vec2::from_angle(mob.flank + TAU * n as f32 / (*count - 1) as f32) * *scatter };
-                            let at = if map.walkable_at(at) { at } else { target };
+                        for at in shell_spots(map, target, *count, *scatter, mob.flank) {
                             deeds.0.push(Deed::Mortar { by, from: pos.0, at, radius: *radius, damage: mighty(*damage, might), fuse: *fuse_ticks, shell: *shell });
                         }
                     }
@@ -297,7 +305,8 @@ pub(super) fn think(
                     let spot = [away, away.rotate(Vec2::from_angle(0.6)), away.rotate(Vec2::from_angle(-0.6)), away.perp(), -away.perp()]
                         .into_iter()
                         .map(|dir| pos.0 + dir * *distance)
-                        .find(|spot| map.walkable_at(*spot));
+                        // Never through a wall, nor into somewhere it can't be got at.
+                        .find(|spot| map.walkable_at(*spot) && map.line_walkable(pos.0, *spot));
                     if let Some(to) = spot {
                         fired = true;
                         input.move_to = None;
@@ -318,6 +327,10 @@ pub(super) fn think(
             }
             if fired && let (Some(every), Some(at)) = (every, mob.ready_at.get_mut(i)) {
                 *at = now + every;
+            }
+            // Gone from here: its other tricks wait for it to be there (they'd go off from here).
+            if fired && matches!(trick, Trick::Blink { .. }) {
+                break;
             }
         }
     }
@@ -366,7 +379,7 @@ pub(super) fn do_deeds(
                         spawn_fx(&mut commands, by.side.0, Fx::between(FxKind::Lob(FxColor::Poison), from, at, radius, now, fuse));
                         (FxKind::Warn(FxColor::Poison), FxKind::Blast(FxColor::Poison))
                     }
-                    Shell::Lightning => (FxKind::Bolt, FxKind::Blast(FxColor::Storm)),
+                    Shell::Lightning => (FxKind::Warn(FxColor::Storm), FxKind::Blast(FxColor::Storm)),
                     Shell::Meteor => (FxKind::Meteor, FxKind::Blast(FxColor::Fire)),
                 };
                 let shell = Delayed { by, at, radius, damage, chill: Chill::default(), fire_at: now + fuse, look };
@@ -424,5 +437,31 @@ pub(super) fn spread_out(lobby: Res<Lobby>, mut mobs: Query<(&mut Pos, &InRoom, 
                 pos.0 = next;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use arena_shared::map::MapId;
+
+    /// A volley never lands two shells on one spot, against a wall or out in the open.
+    #[test]
+    fn shells_each_land_on_a_spot_of_their_own() {
+        let map = MapId::Wilds.map();
+        let open = map.shop.unwrap() + Vec2::new(0.0, -4.0);
+        // Hard by a wall: a walkable tile with one next to it that isn't.
+        let by_wall = map.tiles().map(|(t, _)| Map::center(t)).find(|p| map.walkable_at(*p) && !map.walkable_at(*p + Vec2::X)).unwrap();
+        for target in [open, by_wall] {
+            let spots = shell_spots(map, target, 5, 3.0, 0.4);
+            assert_eq!(spots[0], target);
+            assert!(spots.iter().all(|s| map.walkable_at(*s)), "a shell off open ground: {spots:?}");
+            for (i, a) in spots.iter().enumerate() {
+                assert!(spots[i + 1..].iter().all(|b| a.distance(*b) > 0.5), "two shells on one spot: {spots:?}");
+            }
+        }
+        assert_eq!(shell_spots(map, open, 5, 3.0, 0.4).len(), 5, "out in the open, all of them");
+        assert_eq!(shell_spots(map, open, 1, 3.0, 0.4), vec![open]);
     }
 }
