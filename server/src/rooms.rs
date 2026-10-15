@@ -191,7 +191,7 @@ impl Lobby {
     }
 
     fn summary(&self, key: RoomKey, room: &Room) -> RoomSummary {
-        RoomSummary { key, name: room.name.clone(), mode: room.mode, map: room.map, players: room.members.len() as u8, started: room.started }
+        RoomSummary { key, name: room.name.clone(), mode: room.mode, map: room.map, players: room.members.len() as u8, started: room.started, closed: !room.joinable() }
     }
 
     fn view(&self, key: RoomKey, room: &Room) -> RoomView {
@@ -331,6 +331,11 @@ impl Lobby {
     }
 
     /// Room `key`'s run is lost: everyone back in the lobby at `ends_at` (`Time<Real>`).
+    /// A run is under way: the lobby list is sent again, showing it closed.
+    pub(crate) fn close_run(&mut self) {
+        self.list_changed = true;
+    }
+
     pub(crate) fn lose_run(&mut self, key: RoomKey, ends_at: Duration) {
         if let Some(room) = self.rooms.get_mut(&key) {
             if let Some(run) = &room.run {
@@ -437,7 +442,7 @@ struct Ctx<'w, 's> {
     projectiles: Query<'w, 's, (Entity, &'static InRoom), With<Projectile>>,
     /// Everything in a room: its fighters, monsters, decoys, shots, effects, pickups, gates.
     in_rooms: Query<'w, 's, (Entity, &'static InRoom)>,
-    zombies: Query<'w, 's, &'static InRoom, With<crate::Zombie>>,
+    zombies: Query<'w, 's, (Entity, &'static InRoom, Has<crate::Dead>), With<crate::Zombie>>,
     senders: Query<'w, 's, &'static mut MessageSender<LobbyEvent>>,
 }
 
@@ -554,6 +559,9 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             if room.members.len() >= room.mode.capacity() {
                 return Err("That room is full");
             }
+            if !room.joinable() {
+                return Err("That run is under way: join one before its first wave");
+            }
             leave(lobby, ctx, link);
             join(lobby, ctx, link, key)?;
         }
@@ -564,7 +572,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                 .iter()
                 // A started one: a quick-joined room's match is on from the off (one whose run was
                 // lost is back in its lobby, and made again).
-                .find(|(_, room)| !room.practice && room.started && room.name == name && room.members.len() < room.mode.capacity())
+                .find(|(_, room)| !room.practice && room.started && room.joinable() && room.name == name && room.members.len() < room.mode.capacity())
                 .map(|(key, _)| *key);
             if room_key.is_some() && room_key == found {
                 return Ok(());
@@ -731,7 +739,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             if !room.practice {
                 return Err("Zombies to order are for practice");
             }
-            if ctx.zombies.iter().filter(|r| r.key == key).count() + 3 > MAX_PRACTICE_ZOMBIES {
+            if ctx.zombies.iter().filter(|(_, r, dead)| r.key == key && !dead).count() + 3 > MAX_PRACTICE_ZOMBIES {
                 return Err("That's enough zombies");
             }
             let map = room.map.map();
@@ -748,8 +756,6 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                 // Sent to clients from the start: placed already, they skip `place_players`, where
                 // others start being sent.
                 ctx.commands.entity(zombie).insert((crate::zombies::Sluggish(crate::zombies::PRACTICE_ZOMBIE_SPEED), crate::replicated_npc()));
-                // Gone with the map's things when practice moves to another map.
-                lobby.rooms.get_mut(&key).expect("in it").things.push(zombie);
             }
             info!(room = key.0, "practice zombies placed");
         }
@@ -881,6 +887,10 @@ fn switch_map(lobby: &mut Lobby, ctx: &mut Ctx, key: RoomKey, map: MapId) {
     for (projectile, _) in ctx.projectiles.iter().filter(|(_, r)| **r == in_room) {
         ctx.commands.entity(projectile).try_despawn();
     }
+    // Zombies (practice's) stood on the old map: gone with it.
+    for (zombie, ..) in ctx.zombies.iter().filter(|(_, r, _)| **r == in_room) {
+        ctx.commands.entity(zombie).try_despawn();
+    }
     for &member in &room.members {
         if let Some(player) = ctx.player_of(member) {
             ctx.commands.entity(player).insert(NeedsSpawnPoint);
@@ -926,6 +936,12 @@ impl Room {
     /// Its run, while it's on.
     fn live_run(&self) -> Option<&Run> {
         self.run.as_ref().filter(|run| self.started && run.on())
+    }
+
+    /// Whether anyone may join it now: anything but a run against the waves under way (once its
+    /// first wave has come, or it's lost).
+    fn joinable(&self) -> bool {
+        !self.started || !self.mode.pve() || self.run.as_ref().is_some_and(|run| run.on() && !run.fought)
     }
 
     /// Its match is on and not yet won.

@@ -275,10 +275,10 @@ pub(super) fn think(
                     deeds.0.push(Deed::Mend { room: *room, at: pos.0, radius: *radius, amount: *amount });
                 }
                 Trick::Ring { count, .. } | Trick::Fan { count, .. } => {
+                    let Some(shot) = def.attack.kind.shot().filter(|_| *count > 0) else { continue };
                     fired = true;
-                    let Some(shot) = def.attack.kind.shot() else { continue };
                     let (from, step) = match trick {
-                        Trick::Fan { spread, .. } => (to.to_angle() - spread / 2.0, spread / (*count - 1).max(1) as f32),
+                        Trick::Fan { spread, .. } => (to.to_angle() - spread / 2.0, spread / count.saturating_sub(1).max(1) as f32),
                         _ => (mob.flank, TAU / *count as f32),
                     };
                     let shots = (0..*count)
@@ -413,15 +413,19 @@ const NUDGE: f32 = 0.06;
 /// Monsters don't stand in each other: crowding ones are nudged apart (where the ground lets
 /// them), so a pack spreads round its prey instead of piling into one body.
 pub(super) fn spread_out(lobby: Res<Lobby>, mut mobs: Query<(&mut Pos, &InRoom, &ClassId, &Dashing), (With<Mob>, InPlay)>) {
-    let all: Vec<(Vec2, RoomKey, f32)> = mobs.iter().map(|(pos, room, class, _)| (pos.0, room.key, class.def().size())).collect();
+    // By room: each is only ever crowded by those in its own.
+    let mut by_room: HashMap<RoomKey, Vec<(usize, Vec2, f32)>> = HashMap::new();
+    for (i, (pos, room, class, _)) in mobs.iter().enumerate() {
+        by_room.entry(room.key).or_default().push((i, pos.0, class.def().size()));
+    }
     for (i, (mut pos, room, class, dashing)) in mobs.iter_mut().enumerate() {
         if dashing.0.is_some() {
             continue;
         }
         let size = class.def().size();
         let mut push = Vec2::ZERO;
-        for (j, &(other, other_room, other_size)) in all.iter().enumerate() {
-            if i == j || other_room != room.key {
+        for &(j, other, other_size) in by_room.get(&room.key).map_or(&[][..], |v| &v[..]) {
+            if i == j {
                 continue;
             }
             let apart = pos.0 - other;

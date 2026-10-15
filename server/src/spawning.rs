@@ -39,7 +39,7 @@ pub(crate) struct Dead {
 /// A respawning player is moved to its spawn point this long before it comes back to life:
 /// longer than other clients' interpolation delay, so they never see it slide from where it
 /// died to where it respawns (it's still hidden while that happens).
-const PLACE_BEFORE_RESPAWN_TICKS: u32 = TICK_HZ as u32 / 4;
+pub(crate) const PLACE_BEFORE_RESPAWN_TICKS: u32 = TICK_HZ as u32 / 4;
 
 /// Players who can move, attack and be hit: placed and alive.
 pub(crate) type InPlay = (Without<NeedsSpawnPoint>, Without<Dead>);

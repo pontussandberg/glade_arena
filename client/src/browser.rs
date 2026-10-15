@@ -446,7 +446,9 @@ fn spawn_row(card: &mut ChildSpawnerCommands, room: &RoomSummary) {
                 line.spawn(ui_text(format!("{}  ·  {}  ·  {}/{}", room.mode.label(), room.map.label(), room.players, room.mode.capacity()), 11.0, palette::ui::MUTED));
             });
         });
-        if room.full() {
+        if room.closed {
+            row.spawn(ui_text("In progress", 12.0, palette::ui::MUTED));
+        } else if room.full() {
             row.spawn(ui_text("Full", 12.0, palette::ui::MUTED));
         } else {
             row.spawn((JoinButton(room.key), button("Join", 12.0, palette::ui::SELECTED, palette::ui::TEXT, ACCENT)));

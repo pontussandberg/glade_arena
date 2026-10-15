@@ -319,7 +319,7 @@ pub(super) fn tick_items(
         if now < doom.at && !dead {
             continue;
         }
-        commands.entity(entity).remove::<Doomed>();
+        commands.entity(entity).try_remove::<Doomed>();
         let toll = (doom.stored as f32 * doom.share).round() as i32;
         let Ok((_, victim, ..)) = targets.get(entity) else { continue };
         if dead || toll <= 0 {
@@ -357,6 +357,9 @@ const ROUNDS: usize = 6;
 /// Reacts to this tick's hits (see the module's docs).
 pub(super) fn react(mut r: Reacting) {
     let now = r.timeline.tick().0;
+    if r.log.0.is_empty() {
+        return;
+    }
     let ids: HashMap<PeerId, Entity> = r.fighters.iter().map(|(entity, id)| (id.0, entity)).collect();
     *r.ids = ids;
     for _ in 0..ROUNDS {
@@ -637,7 +640,8 @@ fn monster_hit(r: &mut Reacting, now: u32, hit: &Landed) {
     {
         let map = r.lobby.map(&side.0);
         for at in crate::waves::ring_spots(map, hit.at, brain::SPLITS_INTO_COUNT, 0.8).collect::<Vec<_>>() {
-            crate::waves::spawn_mob(&mut r.commands, &mut r.lobby, now, side.0, brood, at, 1.0, might, None);
+            // Called up by the elite: no bounty of their own, and they don't rise again.
+            crate::waves::spawn_mob(&mut r.commands, &mut r.lobby, now, side.0, brood, at, 1.0, might, Some(hit.victim));
         }
     }
 }

@@ -117,6 +117,8 @@ pub struct RoomSummary {
     pub map: MapId,
     pub players: u8,
     pub started: bool,
+    /// No way in: a run against the waves under way.
+    pub closed: bool,
 }
 
 impl RoomSummary {

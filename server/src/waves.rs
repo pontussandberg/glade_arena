@@ -148,6 +148,8 @@ pub(crate) struct Run {
     /// Monsters that could rise again that have died this wave (on a Restless wave every
     /// `RISES_EVERY`th does).
     deaths: u32,
+    /// A wave has come: the run is under way, and no one joins it any more.
+    pub(crate) fought: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +179,7 @@ impl Run {
             // Set as each wave comes.
             rng: wave_chances(wave),
             deaths: 0,
+            fought: false,
         }
     }
 
@@ -366,10 +369,15 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now,
             run.budget = budget(wave, size) * run.omen.map_or(1.0, Omen::budget_scale);
             run.rng = wave_chances(wave);
             run.deaths = 0;
+            // Under way: closed to newcomers now (the lobby list says so, below).
+            let closing = !std::mem::replace(&mut run.fought, true);
             run.next_pack_at = now;
             run.boss_out = boss_of(wave).is_none();
             run.chests = scatter_chests(commands, room, map, &party_at, wave);
             info!(room = key.0, wave, party = size, "a wave comes");
+            if closing {
+                lobby.close_run();
+            }
         }
         RunPhase::Fight => {
             // A boss fell: the downed get up (back at the camp).
@@ -438,7 +446,8 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now,
 fn bring_back(party: &mut Party, room: InRoom, now: u32) {
     for (_, r, .., dead) in party.iter_mut() {
         if let Some(mut dead) = dead.filter(|_| *r == room) {
-            dead.respawn_at = now + 1;
+            // Time to be moved to the camp while still down (`respawn`), then up there.
+            dead.respawn_at = now + crate::spawning::PLACE_BEFORE_RESPAWN_TICKS + 2;
             dead.placed = false;
         }
     }
@@ -542,7 +551,11 @@ pub(super) fn pay_bounties(timeline: Res<LocalTimeline>, mut commands: Commands,
     let now = timeline.tick().0;
     for (entity, mob, room, pos, class, might) in &killed {
         let omen = lobby.run(room.key).and_then(|run| run.omen);
-        lobby.give_gold(room.key, mob.bounty * omen.map_or(1, Omen::bounty_scale));
+        // What another called up (summoned, risen, split off) pays nothing: no farming a boss's
+        // endless summons.
+        if mob.raised_by.is_none() {
+            lobby.give_gold(room.key, mob.bounty * omen.map_or(1, Omen::bounty_scale));
+        }
         let boss = class.def().is_boss();
         // Only those that could rise count: not a boss, nor one raised by another (summoned, or
         // risen already).

@@ -227,3 +227,24 @@ fn practice_is_unlisted_and_fighters_step_out_to_the_lobby() {
     });
     assert!(g.room(0).is_some(), "A left the room");
 }
+
+/// A run against the waves can be joined until its first wave comes, never after: the list shows
+/// it in progress, a join is turned down, and quick-joining it by name makes a fresh one.
+#[test]
+fn a_run_under_way_cant_be_joined() {
+    let mut g = guests(5885, &["revenant", "javelinist"], |_| {});
+    g.ask(0, RoomRequest::QuickJoin("Waves".into()));
+    g.until(Duration::from_secs(10), "A in the run", |g| g.room(0).is_some_and(|r| r.run.is_some()));
+    let key = g.room(0).unwrap().key;
+    g.until(Duration::from_secs(5), "B sees it open", |g| g.rooms_listed(1).iter().any(|r| r.key == key && !r.closed));
+    g.ask(0, RoomRequest::Ready(true));
+    g.until(Duration::from_secs(10), "the first wave", |g| g.room(0).and_then(|r| r.run).is_some_and(|run| run.phase == Phase::Fight));
+    g.until(Duration::from_secs(5), "B sees it in progress", |g| g.rooms_listed(1).iter().any(|r| r.key == key && r.closed));
+    g.ask(1, RoomRequest::Join(key));
+    g.until(Duration::from_secs(3), "B turned away", |g| {
+        g.clients[1].world().resource::<Notice>().0.as_deref().is_some_and(|n| n.contains("under way"))
+    });
+    assert!(g.room(1).is_none(), "B got into a run under way");
+    g.ask(1, RoomRequest::QuickJoin("Waves".into()));
+    g.until(Duration::from_secs(5), "B in a run of their own", |g| g.room(1).is_some_and(|r| r.key != key));
+}
