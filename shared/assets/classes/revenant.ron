@@ -16,7 +16,7 @@
         kind: Melee(range: 3.08, width: 0.5, from: 1.6),
         // The ground it hits tears open for a while; inside it the revenant walks faster.
         // ... and burns its foes standing in it, healing the revenant a share of the burn.
-        rift: Some(ticks: 96, haste: 0.3, burn: 4, leech: 0.5),
+        rift: Some(ticks: 96, haste: 0.3, burn: 4, leech: 0.25),
         // Empowered: quicker, the lane starting a little further out and reaching further and wider.
         // The empowered strike knocks up what it hits, briefly: shorter than its own quickened
         // attack, so it can't keep anything in the air by itself.
