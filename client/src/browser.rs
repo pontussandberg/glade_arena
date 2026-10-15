@@ -1,11 +1,11 @@
 //! Home's lobbies: a pane beside the character select that folds open and shut. Its header is
 //! always there (how many lobbies are open, how many live), and a click on it opens or folds it.
-//! "Create / join lobby" (the character select's big button, at home) only ever opens it: a click
+//! "Lobbies" (the character select's big button, at home, beside "Practice") only ever opens it: a click
 //! on it while it's open flashes the header. Open, it shows every lobby there is (name, mode,
 //! how full, whether its match is on), each with a way in, the ones for fighting each other (PvP)
 //! apart from the ones against the waves (PvE); and below them a form to create one: a name
-//! (click it to type) and the mode, PvP or PvE. Before home, while connecting, a plain screen
-//! saying so.
+//! (click it to type), then the game (PvP or PvE), its mode (PvP: free for all or teams) and its
+//! map, shown behind as it's picked. Before home, while connecting, a plain screen saying so.
 
 use arena_shared::map::MapId;
 use arena_shared::protocol::RoomRequest;
@@ -19,7 +19,7 @@ use lightyear::prelude::*;
 use crate::arena::palette;
 use crate::lobby::{SidePanel, card, fold_chip, label, pane_header};
 use crate::render::{ButtonFill, button, clicked, key_chip, ui_text};
-use crate::rooms::{CurrentMap, Me, RoomList, Screen, request};
+use crate::rooms::{CurrentMap, HOME_MAP, Me, RoomList, Screen, request};
 use crate::arena::palette::ui::ACCENT;
 
 pub struct BrowserPlugin;
@@ -121,7 +121,7 @@ pub(crate) struct LobbiesOpen(bool);
 #[derive(Resource, Default)]
 pub(crate) struct HeaderFlash(Option<f32>);
 
-/// "Create / join lobby" clicked at `now` (`Time` seconds): the pane opens, or, open already, its
+/// "Lobbies" clicked at `now` (`Time` seconds): the pane opens, or, open already, its
 /// header flashes.
 pub(crate) fn open_lobbies(open: &mut LobbiesOpen, flash: &mut HeaderFlash, now: f32) {
     if open.0 {
@@ -134,11 +134,12 @@ pub(crate) fn open_lobbies(open: &mut LobbiesOpen, flash: &mut HeaderFlash, now:
 /// How long the header's flash takes to fade.
 const FLASH_SECS: f32 = 0.45;
 
-/// The lobby about to be created, while home.
+/// The lobby about to be created, while home: against the waves on Hollow Wilds, to begin with.
 #[derive(Resource)]
 struct Home {
     name: String,
     mode: Mode,
+    map: MapId,
 }
 
 /// Typing goes into the new lobby's name, not to the character select's keys.
@@ -159,16 +160,25 @@ struct NameBox;
 #[derive(Component)]
 struct NameField;
 
+/// Fighting each other (PvP, `false`) or the waves together (PvE).
+#[derive(Component)]
+struct GameButton(bool);
+
 #[derive(Component)]
 struct ModeButton(Mode);
 
 #[derive(Component)]
+struct MapButton(MapId);
+
+#[derive(Component)]
 struct CreateButton;
 
-fn open_home(mut commands: Commands, me: Option<Res<Me>>) {
+fn open_home(mut commands: Commands, me: Option<Res<Me>>, mut map: ResMut<CurrentMap>) {
     // The first name only: a whole one with its byname can be too long for a lobby's.
     let first = me.as_ref().map_or("Guest", |me| first_name(&me.name));
-    commands.insert_resource(Home { name: format!("{first}'s lobby"), mode: Mode::Ffa });
+    commands.insert_resource(Home { name: format!("{first}'s lobby"), mode: Mode::Waves, map: HOME_MAP });
+    // Home shows Hollow Wilds again, whatever the last room was on.
+    map.set_if_neq(CurrentMap(HOME_MAP));
 }
 
 fn close_home(mut commands: Commands, mut typing: ResMut<Typing>) {
@@ -199,7 +209,6 @@ fn type_name(
     mut typed: MessageReader<KeyboardInput>,
     typing: Res<Typing>,
     mut home: ResMut<Home>,
-    map: Res<CurrentMap>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
     for key in typed.read() {
@@ -211,7 +220,7 @@ fn type_name(
                 home.name.pop();
             }
             // Still typing (so the Enter isn't also taken for practice), until we're in the lobby.
-            Key::Enter => create(&home, map.0, &mut sender),
+            Key::Enter => create(&home, &mut sender),
             _ => {
                 if let Some(text) = &key.text {
                     for c in text.chars().filter(|c| !c.is_control()) {
@@ -225,20 +234,19 @@ fn type_name(
     }
 }
 
-/// A new lobby, on the map picked at home (or, for a mode that isn't played on it, its own).
-fn create(home: &Home, map: MapId, sender: &mut MessageSender<RoomRequest>) {
-    let map = if home.mode.maps().contains(&map) { map } else { home.mode.maps()[0] };
-    request(sender, RoomRequest::Create { name: home.name.clone(), mode: home.mode, map });
+/// A new lobby, as picked.
+fn create(home: &Home, sender: &mut MessageSender<RoomRequest>) {
+    request(sender, RoomRequest::Create { name: home.name.clone(), mode: home.mode, map: home.mode.fit_map(home.map) });
 }
 
 #[allow(clippy::too_many_arguments)]
 fn lobby_buttons(
     header: Query<Ref<Interaction>, With<PaneHeader>>,
     joins: Query<(Ref<Interaction>, &JoinButton)>,
-    modes: Query<(Ref<Interaction>, &ModeButton)>,
+    (games, modes, maps): (Query<(Ref<Interaction>, &GameButton)>, Query<(Ref<Interaction>, &ModeButton)>, Query<(Ref<Interaction>, &MapButton)>),
     create_button: Query<Ref<Interaction>, With<CreateButton>>,
     mut home: ResMut<Home>,
-    map: Res<CurrentMap>,
+    mut shown: ResMut<CurrentMap>,
     mut open: ResMut<LobbiesOpen>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
@@ -250,13 +258,33 @@ fn lobby_buttons(
             request(&mut sender, RoomRequest::Join(join.0));
         }
     }
-    for (interaction, mode) in &modes {
-        if clicked(interaction) {
-            home.mode = mode.0;
+    // The game, then its mode, then its map (shown behind as it's picked): a game or mode played
+    // elsewhere takes the map with it.
+    let mut picked = None;
+    for (interaction, game) in &games {
+        if clicked(interaction) && home.mode.pve() != game.0 {
+            picked = Some(if game.0 { Mode::Waves } else { Mode::Ffa });
         }
     }
+    for (interaction, mode) in &modes {
+        if clicked(interaction) {
+            picked = Some(mode.0);
+        }
+    }
+    if let Some(mode) = picked {
+        home.mode = mode;
+        home.map = mode.fit_map(home.map);
+    }
+    for (interaction, map) in &maps {
+        if clicked(interaction) {
+            home.map = map.0;
+        }
+    }
+    if home.is_changed() {
+        shown.set_if_neq(CurrentMap(home.map));
+    }
     if create_button.iter().any(clicked) {
-        create(&home, map.0, &mut sender);
+        create(&home, &mut sender);
     }
 }
 
@@ -268,9 +296,13 @@ fn show_lobbies(
     open: Res<LobbiesOpen>,
     list: Res<RoomList>,
     panel: Single<(Entity, Ref<SidePanel>, &mut Visibility)>,
+    mut built_for: Local<Option<(bool, MapId)>>,
 ) {
     let (panel, fresh, mut visibility) = panel.into_inner();
-    if !(open.is_changed() || home.is_added() || fresh.is_added() || list.is_changed()) {
+    // The form's rows change with the game picked (its modes, its maps).
+    let form = Some((home.mode.pve(), home.mode.maps()[0]));
+    let form_changed = std::mem::replace(&mut *built_for, form) != form;
+    if !(open.is_changed() || home.is_added() || fresh.is_added() || list.is_changed() || form_changed) {
         return;
     }
     visibility.set_if_neq(Visibility::Inherited);
@@ -319,33 +351,39 @@ fn show_lobbies(
                 BackgroundColor(palette::ui::BACKDROP),
             ))
             .with_child((NameField, ui_text("", 15.0, palette::ui::TEXT)));
+            // First the game: two big choices, plainly apart.
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
-            for (title, modes) in [("PvP", &Mode::PVP[..]), ("PvE", &Mode::PVE[..])] {
-                card.spawn(label(title));
-                card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
-                    for &mode in modes {
-                        row.spawn((
-                            ModeButton(mode),
-                            Button,
-                            Node {
-                                flex_direction: FlexDirection::Column,
-                                flex_grow: 1.0,
-                                flex_basis: px(0.0),
-                                row_gap: px(2.0),
-                                padding: UiRect::all(px(GAP)),
-                                border: UiRect::all(px(1.0)),
-                                ..default()
-                            },
-                            BorderColor::all(palette::ui::MUTED.with_alpha(0.3)),
-                            BackgroundColor(palette::ui::BACKDROP),
-                        ))
+            card.spawn(label("Game"));
+            card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
+                for (pve, title, blurb) in [(false, "PvP", "Fight each other"), (true, "PvE", "Survive endless waves together")] {
+                    row.spawn((GameButton(pve), Button, choice(GAP), BorderColor::all(palette::ui::MUTED.with_alpha(0.3)), BackgroundColor(palette::ui::BACKDROP)))
                         .with_children(|button| {
-                            button.spawn(ui_text(mode.label(), 14.0, palette::ui::TEXT));
-                            button.spawn(ui_text(mode.blurb(), 10.0, palette::ui::MUTED));
+                            button.spawn(ui_text(title, 18.0, palette::ui::TEXT));
+                            button.spawn(ui_text(blurb, 11.0, SUBTITLE));
                         });
+                }
+            });
+            // Then, fighting each other, how.
+            if !home.mode.pve() {
+                card.spawn(label("Mode"));
+                card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
+                    for mode in Mode::PVP {
+                        row.spawn((ModeButton(mode), Button, choice(GAP), BorderColor::all(palette::ui::MUTED.with_alpha(0.3)), BackgroundColor(palette::ui::BACKDROP)))
+                            .with_children(|button| {
+                                button.spawn(ui_text(mode.label(), 14.0, palette::ui::TEXT));
+                                button.spawn(ui_text(mode.blurb(), 10.0, SUBTITLE));
+                            });
                     }
                 });
             }
+            // Then where: the game's maps (the one picked shows behind).
+            card.spawn(label("Map"));
+            card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
+                for map in home.mode.maps() {
+                    row.spawn((MapButton(*map), Button, choice(GAP * 0.75), BorderColor::all(palette::ui::MUTED.with_alpha(0.3)), BackgroundColor(palette::ui::BACKDROP)))
+                        .with_child(ui_text(map.label(), 13.0, palette::ui::TEXT));
+                }
+            });
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
             card.spawn((CreateButton, button("CREATE LOBBY", 14.0, ACCENT, palette::ui::PANEL, ACCENT)));
         });
@@ -416,15 +454,32 @@ fn spawn_row(card: &mut ChildSpawnerCommands, room: &RoomSummary) {
     });
 }
 
-/// The name (with a blinking caret and its box lit while typing), and the picked mode marked.
+/// What a choice says under its name: light enough to read on its fill, picked or not.
+const SUBTITLE: Color = Color::srgba(0.93, 0.88, 0.8, 0.72);
+
+/// One of the form's choices, `padding` round: as wide as its row's others.
+fn choice(padding: f32) -> Node {
+    Node {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        flex_basis: px(0.0),
+        row_gap: px(2.0),
+        padding: UiRect::all(px(padding)),
+        border: UiRect::all(px(1.0)),
+        ..default()
+    }
+}
+
+/// The name (with a blinking caret and its box lit while typing), and the picked game, mode and
+/// map marked.
 #[allow(clippy::type_complexity)]
 fn show_form(
     time: Res<Time>,
     home: Res<Home>,
     typing: Res<Typing>,
     mut name: Query<&mut Text, With<NameField>>,
-    mut name_box: Query<&mut BorderColor, (With<NameBox>, Without<ModeButton>)>,
-    mut modes: Query<(&ModeButton, &Interaction, &mut BorderColor, &mut BackgroundColor)>,
+    mut name_box: Query<&mut BorderColor, (With<NameBox>, Without<ModeButton>, Without<GameButton>, Without<MapButton>)>,
+    mut modes: Query<(AnyOf<(&GameButton, &ModeButton, &MapButton)>, &Interaction, &mut BorderColor, &mut BackgroundColor)>,
 ) {
     let caret = if typing.0 && time.elapsed_secs().fract() < 0.5 { "|" } else { " " };
     let text = format!("{}{caret}", home.name);
@@ -437,8 +492,9 @@ fn show_form(
     for mut border in &mut name_box {
         border.set_if_neq(BorderColor::all(edge));
     }
-    for (mode, interaction, mut border, mut fill) in &mut modes {
-        let (edge, color) = match (mode.0 == home.mode, interaction) {
+    for ((game, mode, map), interaction, mut border, mut fill) in &mut modes {
+        let picked = game.is_some_and(|g| g.0 == home.mode.pve()) || mode.is_some_and(|m| m.0 == home.mode) || map.is_some_and(|m| m.0 == home.map);
+        let (edge, color) = match (picked, interaction) {
             (true, _) => (ACCENT, palette::ui::SELECTED),
             (false, Interaction::None) => (palette::ui::MUTED.with_alpha(0.3), palette::ui::BACKDROP),
             (false, _) => (palette::ui::MUTED.with_alpha(0.6), palette::ui::PANEL),

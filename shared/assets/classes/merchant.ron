@@ -16,5 +16,4 @@
         kind: Melee(range: 1.0, width: 0.5),
     ),
     abilities: [],
-    look: Some(figure: "frost_mage", size: 1.05, tint: (1.25, 0.95, 0.6)),
 )

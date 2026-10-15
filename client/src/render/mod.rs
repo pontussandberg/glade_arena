@@ -41,7 +41,6 @@ impl Plugin for RenderPlugin {
             crate::casting::CastingPlugin,
             crate::browser::BrowserPlugin,
             crate::lobby::LobbyPlugin,
-            crate::map_pick::MapPickPlugin,
             crate::esc_menu::EscMenuPlugin,
             crate::feedback::FeedbackPlugin,
             crate::rig::RigPlugin,

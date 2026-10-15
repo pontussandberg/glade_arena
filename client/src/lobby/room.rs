@@ -11,7 +11,7 @@ use crate::browser::{HeaderFlash, LobbiesOpen};
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::palette;
 use crate::render::{button, clicked, shown, ui_text};
-use crate::rooms::{CurrentMap, CurrentRoom, Me, Notice, Screen, request};
+use crate::rooms::{CurrentRoom, Me, Notice, Screen, request};
 
 /// The room column, two cards. The room: name, whether it's on, its mode and map (for the leader,
 /// switches). Who's in it: in free-for-all a list; in teams the two side by side, with the way to
@@ -71,11 +71,14 @@ pub(super) fn show_room(
                     }
                 }
             }
+            // The game first (fighting each other, or the waves together), then its mode, then where.
             let editing = view.may_edit(my_id);
-            let pvp = Mode::PVP.map(|mode| (mode, mode.label()));
-            let pve = Mode::PVE.map(|mode| (mode, mode.label()));
-            setting(card, "PvP", &pvp, view.mode, editing, RoomRequest::SetMode);
-            setting(card, "PvE", &pve, view.mode, editing, RoomRequest::SetMode);
+            let games = [(false, "PvP: each other"), (true, "PvE: the waves")];
+            setting(card, "Game", &games, view.mode.pve(), editing, |pve| RoomRequest::SetMode(if pve { Mode::Waves } else { Mode::Ffa }));
+            if !view.mode.pve() {
+                let modes = Mode::PVP.map(|mode| (mode, mode.label()));
+                setting(card, "Mode", &modes, view.mode, editing, RoomRequest::SetMode);
+            }
             let maps: Vec<(MapId, &str)> = view.mode.maps().iter().map(|map| (*map, map.label())).collect();
             setting(card, "Map", &maps, view.map, editing, RoomRequest::SetMap);
         });
@@ -286,15 +289,14 @@ fn way_in(screen: Screen, view: Option<&RoomView>, me: Option<&Me>) -> WayIn {
 
 /// The big button: at home, it opens the lobbies (flashing their header, if they're open already);
 /// in a room, the leader starts the match (everyone goes in as what they picked), and once it's
-/// on, in we go. The small one over it, at home only, practices as the selected fighter on the
-/// picked map. We're taken to the arena when our fighter appears.
+/// on, in we go. The small one over it, at home only, practices as the selected fighter on Hollow
+/// Wilds. We're taken to the arena when our fighter appears.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn enter_arena(
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     screen: Res<State<Screen>>,
     room: Res<CurrentRoom>,
     me: Option<Res<Me>>,
-    map: Res<CurrentMap>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
     button: Single<(Ref<Interaction>, &mut BackgroundColor), With<EnterButton>>,
     mut label: Single<&mut Text, With<EnterLabel>>,
@@ -308,10 +310,11 @@ pub(super) fn enter_arena(
     if way == WayIn::Lobbies && clicked(practice_click) {
         // In on the press, as the big button goes: forget the held button.
         mouse.reset(MouseButton::Left);
-        request(&mut sender, RoomRequest::Practice(map.0));
+        // Always on Hollow Wilds (its tools switch maps).
+        request(&mut sender, RoomRequest::Practice(crate::rooms::HOME_MAP));
     }
     let text = match way {
-        WayIn::Lobbies => "CREATE / JOIN LOBBY",
+        WayIn::Lobbies => "LOBBIES",
         WayIn::Enter => "ENTER THE ARENA",
         WayIn::Start => "START THE MATCH",
         WayIn::Wait => "WAITING FOR THE LEADER",

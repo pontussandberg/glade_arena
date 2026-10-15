@@ -47,8 +47,6 @@ pub mod arena;
 pub mod lobby;
 
 #[cfg(feature = "render")]
-pub mod map_pick;
-#[cfg(feature = "render")]
 pub mod minimap;
 #[cfg(feature = "render")]
 pub mod pickups;

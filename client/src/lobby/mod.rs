@@ -8,7 +8,7 @@
 //!   and its passive and Q ability
 //! - the fighters to pick from in a row of tiles at the bottom (click, or press the number)
 //! - on the right, the side panel: at home, the lobbies to join or create (`browser.rs`, opened
-//!   with "Create / join lobby"); in a room, its name, mode and map, who's in it (by team), the
+//!   with "Lobbies"); in a room, its name, mode and map, who's in it (by team), the
 //!   team buttons, and for the leader the mode and map switches
 //! - the way in at the bottom right: at home, practice; in a room, the
 //!   leader's start, or once the match is on, into the arena
@@ -78,6 +78,9 @@ pub(crate) const GAP: f32 = 8.0;
 pub(crate) const MARGIN: f32 = 40.0;
 /// The side panel's width.
 const SIDE_WIDTH: f32 = 456.0;
+/// How tall the row of buttons at the bottom is (with the status line over it), which the side
+/// panel stops above.
+const BOTTOM_ROW: f32 = 84.0;
 
 /// What the lobby shows, while it's open.
 #[derive(Resource)]
@@ -232,13 +235,17 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
             screen.spawn((
                 SidePanel,
                 Visibility::Hidden,
+                // Down to just above the buttons at the bottom, never over them: what doesn't fit is
+                // cut off (the lobbies listed are few anyway).
                 Node {
                     position_type: PositionType::Absolute,
                     top: px(MARGIN),
+                    bottom: px(MARGIN + BOTTOM_ROW),
                     right: px(MARGIN),
                     width: px(SIDE_WIDTH),
                     flex_direction: FlexDirection::Column,
                     row_gap: px(GAP * 1.5),
+                    overflow: Overflow::clip_y(),
                     ..default()
                 },
             ));
@@ -268,14 +275,16 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                         .spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Stretch, row_gap: px(GAP), ..default() })
                         .with_children(|column| {
                             column.spawn((Status, ui_text("", 12.0, palette::ui::MUTED), Node { align_self: AlignSelf::FlexEnd, ..default() }));
-                            column
-                                .spawn((
+                            // Practice beside the big button, not over it: one row.
+                            column.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Stretch, ..default() }).with_children(|row| {
+                                row.spawn((
                                     PracticeButton,
                                     Button,
                                     ButtonFill(palette::ui::PANEL),
                                     Node {
-                                        padding: UiRect::axes(px(36.0), px(12.0)),
+                                        padding: UiRect::axes(px(20.0), px(16.0)),
                                         justify_content: JustifyContent::Center,
+                                        align_items: AlignItems::Center,
                                         border: UiRect::all(px(1.0)),
                                         ..default()
                                     },
@@ -283,14 +292,14 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                                     BackgroundColor(palette::ui::PANEL),
                                 ))
                                 .with_child(ui_text("PRACTICE", 14.0, palette::ui::TEXT));
-                            column
-                                .spawn((
+                                row.spawn((
                                     EnterButton,
                                     Button,
                                     Node { padding: UiRect::axes(px(36.0), px(16.0)), justify_content: JustifyContent::Center, ..default() },
                                     BackgroundColor(ACCENT),
                                 ))
-                                .with_child((EnterLabel, ui_text("CREATE / JOIN LOBBY", 18.0, palette::ui::PANEL)));
+                                .with_child((EnterLabel, ui_text("LOBBIES", 18.0, palette::ui::PANEL)));
+                            });
                         });
                 });
             });
