@@ -164,6 +164,58 @@ pub struct RunView {
     pub best: u32,
     /// The boss of this wave, if it has one (its class's name).
     pub boss: Option<String>,
+    /// What's strange about this wave, if anything: known while shopping for it.
+    pub omen: Option<Omen>,
+    /// What a life for the party costs at the merchant now (`life_price`).
+    pub life_price: u32,
+}
+
+/// What the `bought`th life bought from the merchant in a run costs: dearer each time.
+pub fn life_price(bought: u32) -> u32 {
+    400 + 250 * bought
+}
+
+/// What can be strange about a wave, past the first few.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Omen {
+    /// Far more of them.
+    Horde,
+    /// Elites everywhere.
+    BloodMoon,
+    /// Every monster hasted.
+    Frenzy,
+    /// Every bounty doubled.
+    Gilded,
+    /// The dead may rise again.
+    Restless,
+    /// Everything bursts as it dies.
+    Volatile,
+}
+
+impl Omen {
+    pub const ALL: [Omen; 6] = [Omen::Horde, Omen::BloodMoon, Omen::Frenzy, Omen::Gilded, Omen::Restless, Omen::Volatile];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Omen::Horde => "Horde",
+            Omen::BloodMoon => "Blood Moon",
+            Omen::Frenzy => "Frenzy",
+            Omen::Gilded => "Gilded",
+            Omen::Restless => "Restless Dead",
+            Omen::Volatile => "Volatile",
+        }
+    }
+
+    pub fn blurb(self) -> &'static str {
+        match self {
+            Omen::Horde => "Half as many again come out of the lairs",
+            Omen::BloodMoon => "Elites everywhere",
+            Omen::Frenzy => "Every monster is hasted",
+            Omen::Gilded => "Every bounty is doubled",
+            Omen::Restless => "The dead may rise again",
+            Omen::Volatile => "Everything bursts as it dies",
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]

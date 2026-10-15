@@ -565,7 +565,13 @@ fn monster_hit(r: &mut Reacting, now: u32, hit: &Landed) {
     {
         blast(&mut r.commands, &mut r.log, now, &mut r.targets, by, hit.at, *radius, (*damage as f32 * might).round() as i32, Chill::default(), Hue::Poison);
     }
+    let volatile_wave = r.lobby.run(side.0.key).and_then(|run| run.omen) == Some(arena_shared::rooms::Omen::Volatile);
     match elite {
+        _ if volatile_wave && elite != Some(Affix::Volatile) => {
+            let (fuse, radius) = (20, 2.0);
+            spawn_fx(&mut r.commands, side.0, Fx { kind: FxKind::Warn(Hue::Fire), at: hit.at, to: hit.at, radius, from: now, until: now + fuse });
+            r.pending.0.push(Delayed { by, at: hit.at, radius, damage: (14.0 * might).round() as i32, chill: Chill::default(), fire_at: now + fuse, hue: Hue::Fire });
+        }
         Some(Affix::Volatile) => {
             let fuse = 26;
             let radius = 2.6;

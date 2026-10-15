@@ -16,7 +16,7 @@ use super::*;
 
 use arena_shared::config::TICK_HZ;
 use arena_shared::items::Satchel;
-use arena_shared::rooms::{Phase, RoomKey, ZOMBIES};
+use arena_shared::rooms::{Omen, Phase, RoomKey, ZOMBIES};
 
 use crate::brain::Mob;
 use crate::fx::spawn_fx;
@@ -62,9 +62,9 @@ fn toughness(wave: u32, party: usize) -> f32 {
     (1.0 + 0.09 * w + 0.002 * w * w) * (1.0 + 0.3 * (party.max(1) - 1) as f32)
 }
 
-/// How much harder than its class a monster hits on `wave`.
+/// How much harder than its class a monster hits on `wave`: softer at first, then harder.
 fn might(wave: u32) -> f32 {
-    1.0 + 0.035 * (wave - 1) as f32
+    0.75 + 0.04 * (wave - 1) as f32
 }
 
 /// How much tougher a boss is: by the party, and by how many times round the bosses have come.
@@ -125,6 +125,21 @@ pub(crate) struct Run {
     chests: Vec<Entity>,
     /// The seconds the shop's countdown last showed.
     pub(crate) shown_secs: u32,
+    /// What's strange about this wave (rolled as the shop opens before it).
+    pub(crate) omen: Option<Omen>,
+    /// Lives bought from the merchant this run.
+    pub(crate) lives_bought: u32,
+}
+
+/// From which wave omens may come, and how likely one is.
+const OMENS_FROM: u32 = 4;
+const OMEN_ODDS: f32 = 0.5;
+/// The odds that a monster dying on a Restless wave rises again.
+const RISE_ODDS: f32 = 0.3;
+
+/// Whatever's strange about `wave`, if anything: never the first few, nor a boss's.
+fn roll_omen(wave: u32) -> Option<Omen> {
+    (wave >= OMENS_FROM && boss_of(wave).is_none() && fastrand::f32() < OMEN_ODDS).then(|| Omen::ALL[fastrand::usize(..Omen::ALL.len())])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +165,8 @@ impl Run {
             alive: 0,
             chests: Vec::new(),
             shown_secs: 0,
+            omen: None,
+            lives_bought: 0,
         }
     }
 
@@ -207,9 +224,11 @@ fn spawn_mob_as(commands: &mut Commands, lobby: &mut Lobby, room: InRoom, class:
     mob.insert((Health(hp), MaxHealth(hp)));
     if let Some(affix) = elite {
         mob.insert(Elite(affix));
-        if affix == Affix::Swift {
-            mob.insert(Hasted(Span { from: now + 1, until: u32::MAX }));
-        }
+    }
+    // Swift, or every one on a Frenzy wave (bosses aside).
+    let frenzy = lobby.run(room.key).and_then(|run| run.omen) == Some(Omen::Frenzy) && !def.mob.as_ref().is_some_and(|m| m.boss);
+    if elite == Some(Affix::Swift) || frenzy {
+        mob.insert(Hasted(Span { from: now + 1, until: u32::MAX }));
     }
     let entity = mob.id();
     spawn_fx(commands, room, Fx { kind: FxKind::Rise, at, to: at, radius: 0.8 * def.size(), from: now, until: now + 16 });
@@ -305,7 +324,7 @@ pub(super) fn run_waves(
                 // The wave comes.
                 run.phase = RunPhase::Fight;
                 run.ready.clear();
-                run.budget = budget(run.wave, size);
+                run.budget = budget(run.wave, size) * if run.omen == Some(Omen::Horde) { 1.5 } else { 1.0 };
                 run.next_pack_at = now;
                 run.boss_out = boss_of(run.wave).is_none();
                 let wave = run.wave;
@@ -362,7 +381,9 @@ pub(super) fn run_waves(
                     for n in 0..mob.pack {
                         let at = lair + Vec2::from_angle(TAU * n as f32 / mob.pack as f32) * if mob.pack > 1 { 1.2 } else { 0.0 };
                         let at = if map.walkable_at(at) { at } else { lair };
-                        let elite = (fastrand::f32() < elite_odds(wave)).then(|| Affix::ALL[fastrand::usize(..Affix::ALL.len())]);
+                        let blood_moon = lobby.run(key).and_then(|r| r.omen) == Some(Omen::BloodMoon);
+                        let odds = if blood_moon { (elite_odds(wave) * 3.0).max(0.25) } else { elite_odds(wave) };
+                        let elite = (fastrand::f32() < odds).then(|| Affix::ALL[fastrand::usize(..Affix::ALL.len())]);
                         spawn_mob_as(&mut commands, &mut lobby, room, class, at, toughness(wave, size), might(wave), None, elite);
                     }
                     continue;
@@ -374,6 +395,7 @@ pub(super) fn run_waves(
                 let pay = WAVE_PAY + WAVE_PAY_GROWTH * wave;
                 run.wave += 1;
                 run.phase = RunPhase::Shop { until: now + SHOP_TICKS };
+                run.omen = roll_omen(run.wave);
                 run.waiting.clear();
                 let chests = std::mem::take(&mut run.chests);
                 for chest in chests {
@@ -448,12 +470,25 @@ pub(super) fn shelter(
     }
 }
 
-/// A monster killed pays its bounty to the party; a boss, a life more.
-pub(super) fn pay_bounties(timeline: Res<LocalTimeline>, mut commands: Commands, mut lobby: ResMut<Lobby>, killed: Query<(&Mob, &InRoom, &Pos, &ClassId), Added<Dead>>) {
+/// A monster killed pays its bounty to the party (twice, on a Gilded wave); a boss, a life more.
+/// On a Restless wave, the dead may rise again (once).
+pub(super) fn pay_bounties(timeline: Res<LocalTimeline>, mut commands: Commands, mut lobby: ResMut<Lobby>, killed: Query<(Entity, &Mob, &InRoom, &Pos, &ClassId, Option<&Might>), Added<Dead>>) {
     let now = timeline.tick().0;
-    for (mob, room, pos, class) in &killed {
+    for (entity, mob, room, pos, class, might) in &killed {
+        let omen = lobby.run(room.key).and_then(|run| run.omen);
         if mob.bounty > 0 {
-            lobby.give_gold(room.key, mob.bounty);
+            lobby.give_gold(room.key, mob.bounty * if omen == Some(Omen::Gilded) { 2 } else { 1 });
+        }
+        // Risen ones (raised by another) don't rise again.
+        if omen == Some(Omen::Restless)
+            && !mob.boss
+            && mob.raised_by.is_none()
+            && fastrand::f32() < RISE_ODDS
+            && let Some(zombie) = ClassId::by_key("zombie")
+        {
+            let wave = lobby.run(room.key).map_or(1, |run| run.wave);
+            let size = lobby.party(room.key).len();
+            spawn_mob(&mut commands, &mut lobby, *room, zombie, pos.0, Some(toughness(wave, size)), crate::combat::might_of(might), Some(entity));
         }
         if mob.boss {
             if let Some(run) = lobby.run_mut(room.key) {

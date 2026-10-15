@@ -645,6 +645,8 @@ pub enum RoomRequest {
     Sell(u8),
     /// Waves only, between waves: we're ready for the next (or not, again).
     Ready(bool),
+    /// Waves only, near the shopkeeper: a life for the party (`rooms::life_price`).
+    BuyLife,
 }
 
 /// What the server tells a client about guests and rooms.

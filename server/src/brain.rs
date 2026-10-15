@@ -34,6 +34,9 @@ pub(crate) struct Mob {
     pub(crate) enraged: bool,
     /// Who called it up, if it was summoned.
     pub(crate) raised_by: Option<Entity>,
+    /// A kiter backs off until the first tick, and may again from the second: in short bursts,
+    /// standing its ground in between, so it can be caught.
+    retreat: (u32, u32),
 }
 
 impl Mob {
@@ -42,7 +45,7 @@ impl Mob {
         let tricks = def.map_or(&[][..], |m| &m.tricks[..]);
         // Each trick's first go comes a while in, not all at once.
         let ready_at = tricks.iter().map(|trick| now + trick_every(trick).map_or(0, |every| fastrand::u32(every / 3..=every))).collect();
-        Mob { bounty, boss: def.is_some_and(|m| m.boss), burst: false, ready_at, flank: fastrand::f32() * TAU, enraged: false, raised_by }
+        Mob { bounty, boss: def.is_some_and(|m| m.boss), burst: false, ready_at, flank: fastrand::f32() * TAU, enraged: false, raised_by, retreat: (0, 0) }
     }
 }
 
@@ -57,6 +60,10 @@ fn trick_every(trick: &Trick) -> Option<u32> {
 /// Server-only: each room's flow field toward its prey, and when it was made.
 #[derive(Resource, Default)]
 pub(crate) struct Fields(HashMap<RoomKey, (u32, FlowField)>);
+
+/// How long a kiter backs off at a time, and how often it may.
+const RETREAT_TICKS: u32 = 48;
+const RETREAT_EVERY_TICKS: u32 = 160;
 
 /// How often a room's flow field is made again.
 const FIELD_EVERY_TICKS: u32 = 12;
@@ -147,7 +154,10 @@ pub(super) fn think(
                 input.fire = true;
             }
             Brain::Chase => input.move_to = walk_to(if dist < 5.0 { flanked } else { target }),
-            Brain::Kite { keep } if dist < keep * 0.55 => {
+            Brain::Kite { keep } if dist < keep * 0.55 && (now < mob.retreat.0 || now >= mob.retreat.1) => {
+                if now >= mob.retreat.0 {
+                    mob.retreat = (now + RETREAT_TICKS, now + RETREAT_EVERY_TICKS);
+                }
                 // Too close: back off, sideways along a wall if it must.
                 let away = (-to).normalize_or_zero();
                 let back = [away, away.perp(), -away.perp()].into_iter().map(|d| pos.0 + d * 3.0).find(|p| map.walkable_at(*p) && map.line_walkable(pos.0, *p));
@@ -291,6 +301,41 @@ pub(super) fn do_deeds(
                 for shot in shots {
                     spawn_projectile(&mut commands, shot, side, might);
                 }
+            }
+        }
+    }
+}
+
+/// How far apart (center to center, for monsters of their figure's size) monsters keep, and the
+/// most a crowded one is nudged a tick.
+const ELBOW_ROOM: f32 = 0.85;
+const NUDGE: f32 = 0.06;
+
+/// Monsters don't stand in each other: crowding ones are nudged apart (where the ground lets
+/// them), so a pack spreads round its prey instead of piling into one body.
+pub(super) fn spread_out(lobby: Res<Lobby>, mut mobs: Query<(&mut Pos, &InRoom, &ClassId, &Dashing), (With<Mob>, InPlay)>) {
+    let all: Vec<(Vec2, InRoom, f32)> = mobs.iter().map(|(pos, room, class, _)| (pos.0, *room, class.def().size())).collect();
+    for (i, (mut pos, room, class, dashing)) in mobs.iter_mut().enumerate() {
+        if dashing.0.is_some() {
+            continue;
+        }
+        let size = class.def().size();
+        let mut push = Vec2::ZERO;
+        for (j, &(other, other_room, other_size)) in all.iter().enumerate() {
+            let apart = pos.0 - other;
+            let room_for = ELBOW_ROOM * (size + other_size) / 2.0;
+            if i == j || other_room != *room || apart.length_squared() >= room_for * room_for {
+                continue;
+            }
+            // Exactly on top: apart some way of their own.
+            let away = apart.try_normalize().unwrap_or(Vec2::from_angle(i as f32));
+            push += away * (room_for - apart.length());
+        }
+        let push = push.clamp_length_max(NUDGE);
+        if push != Vec2::ZERO {
+            let next = pos.0 + push;
+            if lobby.map(room).line_walkable(pos.0, next) {
+                pos.0 = next;
             }
         }
     }

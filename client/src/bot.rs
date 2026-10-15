@@ -2,19 +2,25 @@
 //! nearest enemy and swing; ranged classes keep their distance and shoot. It clicks to attack
 //! whenever it's in range (the server drops clicks until its last attack is done), and stands
 //! still while one winds up, since moving would cancel it. Turn it on with
-//! `ARENA_BOT=1` (native client) to have someone to fight when testing alone.
+//! `ARENA_BOT=1` (native client) to have someone to fight when testing alone. Against the waves,
+//! between them it walks up to the merchant, buys what it can afford (its class's own items
+//! first, then the cheapest), and says it's ready.
 
 use arena_shared::abilities::AbilityKind;
+use arena_shared::items::{Item, Satchel};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use lightyear::prelude::client::RemoteTimeline;
 use lightyear::prelude::*;
 
-use crate::rooms::CurrentMap;
+use crate::rooms::{CurrentMap, CurrentRoom, request};
 use crate::{DesiredInput, Me, PlayerControls, SendCommands};
 
 /// How far inside its lane's ends (`AttackDef::hit_span`) a melee bot starts a swing.
 const MELEE_LEAD: f32 = 0.6;
+/// How many foes this close make the bot back off rather than fight.
+const CROWDED_WITHIN: f32 = 3.5;
+const CROWDED_BY: usize = 3;
 
 /// Present when this client is played by the bot.
 #[derive(Resource)]
@@ -27,7 +33,7 @@ impl Plugin for BotPlugin {
         app.insert_resource(Bot);
         app.configure_sets(Update, PlayerControls.run_if(|| false));
         // Decide every frame, right before what changed is sent.
-        app.add_systems(Update, think.before(SendCommands));
+        app.add_systems(Update, (think, go_shopping).chain().before(SendCommands));
     }
 }
 
@@ -79,6 +85,19 @@ fn think(
         (Some(current), Some(new)) if (new - current).abs().max_element() < 2.0 => Some(current),
         _ => wanted,
     };
+    // Crowded (a pack all round, against the waves): back away from the middle of it first.
+    let near: Vec<Vec2> = others
+        .iter()
+        .filter(|(id, p, health, team)| id.0 != my_id.0 && health.alive() && p.0.distance(me.0) < CROWDED_WITHIN && !my_team.zip(*team).is_some_and(|(mine, theirs)| mine.allied(*theirs)))
+        .map(|(_, p, ..)| p.0)
+        .collect();
+    if near.len() >= CROWDED_BY && attack.winding_up().is_none() {
+        let middle = near.iter().copied().sum::<Vec2>() / near.len() as f32;
+        let away = (me.0 - middle).normalize_or(-to_target.normalize_or_zero());
+        let flee = [away, away.perp(), -away.perp()].into_iter().find_map(|dir| map.walk_target(me.0 + dir * 4.0, 2));
+        desired.0 = PlayerInput { move_to: flee, aim: to_target, ..default() };
+        return;
+    }
     let clear = map.shot_clear(me.0, target);
     let fire = in_reach && clear;
     let move_to = move_to.filter(|_| !fire && attack.winding_up().is_none());
@@ -101,5 +120,49 @@ fn think(
     desired.0 = PlayerInput { move_to, aim: to_target, fire, ..default() };
     if let Some(slot) = cast {
         desired.0.order_cast(slot, to_target);
+    }
+}
+
+/// How often the bot asks the merchant for something (seconds), so a refusal isn't repeated
+/// every frame.
+const ASK_EVERY: f32 = 0.5;
+
+/// Between waves: to the merchant, buying what's affordable, then ready.
+#[allow(clippy::too_many_arguments)]
+fn go_shopping(
+    time: Res<Time>,
+    room: Res<CurrentRoom>,
+    guest: Option<Res<crate::rooms::Me>>,
+    me: Query<(&Pos, &ClassId, &Satchel), With<Me>>,
+    merchant: Query<&Pos, With<Shopkeeper>>,
+    mut desired: ResMut<DesiredInput>,
+    mut sender: Query<&mut MessageSender<RoomRequest>, With<Client>>,
+    mut asked_at: Local<f32>,
+) {
+    let Some(run) = room.0.as_ref().filter(|view| view.started).and_then(|view| view.run.as_ref()) else { return };
+    if !matches!(run.phase, arena_shared::rooms::Phase::Shop { .. }) {
+        return;
+    }
+    let (Ok((pos, class, satchel)), Some(shop)) = (me.single(), merchant.iter().next()) else { return };
+    let Ok(mut sender) = sender.single_mut() else { return };
+    let now = time.elapsed_secs();
+    if now < *asked_at + ASK_EVERY {
+        return;
+    }
+    // Its class's own items first, then the cheapest it can afford.
+    let mut wanted: Vec<(Item, u32)> = Item::ALL.into_iter().filter_map(|item| Some((item, satchel.price_of(item, *class).ok()?))).filter(|(_, cost)| *cost <= satchel.gold).collect();
+    wanted.sort_by_key(|(item, cost)| (item.class().is_none(), *cost));
+    let ready = guest.is_some_and(|guest| run.ready.contains(&guest.guest_id));
+    match wanted.first() {
+        Some(_) if pos.distance(shop.0) > SHOP_RADIUS - 1.0 => desired.0.move_to = Some(shop.0),
+        Some((item, _)) => {
+            *asked_at = now;
+            request(&mut sender, RoomRequest::Buy(*item));
+        }
+        None if !ready => {
+            *asked_at = now;
+            request(&mut sender, RoomRequest::Ready(true));
+        }
+        None => {}
     }
 }

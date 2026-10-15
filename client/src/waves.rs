@@ -32,6 +32,7 @@ impl Plugin for WavesPlugin {
                 (show_banner, show_boss, show_over, ready_up).chain(),
                 (show_satchel, open_shop, show_shop, trade).chain(),
                 (add_fx, play_fx, circle_wisps),
+                (name_in_world, place_names).chain(),
             ),
         );
     }
@@ -71,6 +72,10 @@ struct SatchelBar;
 /// The merchant's shop, at the right.
 #[derive(Component)]
 struct ShopPanel;
+
+/// The shop's button for a life for the party.
+#[derive(Component)]
+struct LifeButton;
 
 /// A button in the shop: buy (or raise) an item; or, on our item's tile while the shop's open,
 /// sell what's in that slot.
@@ -186,6 +191,9 @@ fn show_banner(mut commands: Commands, room: Res<CurrentRoom>, me: Option<Res<cr
             Phase::Shop { secs_left } => {
                 let next = if run.boss.is_some() { format!("WAVE {} - BOSS", run.wave) } else { format!("WAVE {}", run.wave) };
                 banner.spawn(ui_text(format!("{next} IN {secs_left}s"), 20.0, palette::ui::TEXT));
+                if let Some(omen) = run.omen {
+                    banner.spawn(ui_text(format!("OMEN: {}  -  {}", omen.label().to_uppercase(), omen.blurb()), 12.0, palette::BLOOD));
+                }
                 banner.spawn(Node { column_gap: px(GAP * 2.0), align_items: AlignItems::Center, ..default() }).with_children(|row| {
                     row.spawn(ui_text("Shop at the merchant in the camp", 12.0, palette::ui::MUTED));
                     row.spawn(ui_text(lives, 12.0, palette::HEAL));
@@ -197,6 +205,9 @@ fn show_banner(mut commands: Commands, room: Res<CurrentRoom>, me: Option<Res<cr
             }
             Phase::Fight => {
                 banner.spawn(ui_text(format!("WAVE {}", run.wave), 22.0, palette::ui::TEXT));
+                if let Some(omen) = run.omen {
+                    banner.spawn(ui_text(omen.label().to_uppercase(), 11.0, palette::BLOOD));
+                }
                 banner.spawn(Node { column_gap: px(GAP * 2.0), ..default() }).with_children(|row| {
                     let left = if run.enemies_left == 1 { "1 monster left".to_string() } else { format!("{} monsters left", run.enemies_left) };
                     row.spawn(ui_text(left, 12.0, palette::MONSTER));
@@ -376,12 +387,15 @@ fn show_satchel(
                     item_tip(&mut tile_entity, owned.item, owned.level, false);
                     if open.0 {
                         let back = Satchel::sell_value(&owned);
-                        tile_entity.with_child((
-                            SellButton(slot as u8),
-                            HudButton,
-                            button(format!("+{back}"), 9.0, palette::ui::BACKDROP, palette::GOLD, palette::GOLD.with_alpha(0.6)),
-                            Node { position_type: PositionType::Absolute, bottom: px(-20.0), ..default() },
-                        ));
+                        tile_entity.with_children(|tile| {
+                            // Hanging under the tile.
+                            tile.spawn((SellButton(slot as u8), HudButton, button(format!("+{back}"), 9.0, palette::ui::BACKDROP, palette::GOLD, palette::GOLD.with_alpha(0.6))))
+                                .entry::<Node>()
+                                .and_modify(|mut node| {
+                                    node.position_type = PositionType::Absolute;
+                                    node.bottom = px(-22.0);
+                                });
+                        });
                     }
                 }
                 None => {
@@ -412,6 +426,7 @@ fn open_shop(
 /// when it opens, or our gold or items change.
 fn show_shop(
     mut commands: Commands,
+    room: Res<CurrentRoom>,
     open: Res<ShopOpen>,
     me: Query<(Ref<Satchel>, &ClassId), With<Me>>,
     panel: Single<(Entity, &mut Node), With<ShopPanel>>,
@@ -422,9 +437,10 @@ fn show_shop(
         node.display = display;
     }
     let Ok((satchel, class)) = me.single() else { return };
-    if !open.0 || !(open.is_changed() || satchel.is_changed()) {
+    if !open.0 || !(open.is_changed() || satchel.is_changed() || room.is_changed()) {
         return;
     }
+    let life_price = run_of(&room).map(|run| run.life_price);
     commands.entity(panel).despawn_children();
     commands.entity(panel).with_children(|panel| {
         panel.spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, ..default() }).with_children(|head| {
@@ -465,16 +481,31 @@ fn show_shop(
                 });
             }
         });
+        // A life for the party, for whoever has gold to spare.
+        if let Some(price) = life_price {
+            panel.spawn((Node { column_gap: px(GAP), align_items: AlignItems::Center, padding: UiRect::all(px(3.0)), ..default() }, BackgroundColor(palette::ui::BACKDROP.with_alpha(0.5)))).with_children(|row| {
+                row.spawn(Node { flex_direction: FlexDirection::Column, flex_grow: 1.0, ..default() }).with_children(|words| {
+                    words.spawn(ui_text("Spirit Candle", 12.0, palette::HEAL));
+                    words.spawn(ui_text("A life more for the whole party. Dearer each time.", 9.0, palette::ui::MUTED));
+                });
+                let (fill, text) = if satchel.gold >= price { (palette::ui::SELECTED, palette::GOLD) } else { (palette::ui::BACKDROP, palette::ui::MUTED) };
+                row.spawn((LifeButton, HudButton, button(price.to_string(), 10.0, fill, text, palette::GOLD.with_alpha(0.5))));
+            });
+        }
         panel.spawn(ui_text("Hover an item to see what it does. Walk away to close.", 9.0, palette::ui::MUTED));
     });
 }
 
 /// The shop's buttons and our items' sell buttons ask the server.
 fn trade(
+    life: Query<Ref<Interaction>, With<LifeButton>>,
     buys: Query<(Ref<Interaction>, &BuyButton)>,
     sells: Query<(Ref<Interaction>, &SellButton)>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
+    if life.iter().any(clicked) {
+        request(&mut sender, RoomRequest::BuyLife);
+    }
     for (interaction, buy) in &buys {
         if clicked(interaction) {
             request(&mut sender, RoomRequest::Buy(buy.0));
@@ -483,6 +514,63 @@ fn trade(
     for (interaction, sell) in &sells {
         if clicked(interaction) {
             request(&mut sender, RoomRequest::Sell(sell.0));
+        }
+    }
+}
+
+// Names in the world.
+
+/// A name floating over a fighter (`of`), this many meters up: the merchant's, an elite's twist.
+#[derive(Component)]
+struct NameOver {
+    of: Entity,
+    height: f32,
+}
+
+/// The merchant gets their name over their head, an elite its twist, in its color.
+fn name_in_world(
+    mut commands: Commands,
+    new: Query<(Entity, &ClassId, Option<&Elite>, Has<Shopkeeper>), Or<(Added<Elite>, Added<Shopkeeper>)>>,
+) {
+    for (entity, class, elite, shopkeeper) in &new {
+        let size = class.def().size() * if elite.is_some() { crate::rig::ELITE_SIZE } else { 1.0 };
+        let (text, color, height) = match elite {
+            _ if shopkeeper => ("MERCHANT".to_string(), palette::GOLD, 2.4 * size),
+            Some(elite) => (elite.0.label().to_uppercase(), crate::render::affix_color(elite.0), 2.9 * size),
+            None => continue,
+        };
+        commands.spawn((
+            GameUi,
+            NameOver { of: entity, height },
+            Node { position_type: PositionType::Absolute, ..default() },
+            ui_text(text, 11.0, color),
+            Pickable::IGNORE,
+            Visibility::Hidden,
+        ));
+    }
+}
+
+/// Names follow their fighters on screen, hidden while they're dead; gone with them.
+fn place_names(
+    mut commands: Commands,
+    camera: Single<(&Camera, &GlobalTransform)>,
+    fighters: Query<(&Pos, Option<&Health>)>,
+    mut names: Query<(Entity, &NameOver, &mut Node, &mut Visibility, &ComputedNode)>,
+) {
+    let (camera, transform) = *camera;
+    for (name, over, mut node, mut visibility, computed) in &mut names {
+        let Ok((pos, health)) = fighters.get(over.of) else {
+            commands.entity(name).despawn();
+            continue;
+        };
+        let screen = camera.world_to_viewport(transform, to_world(pos.0, over.height)).ok().filter(|_| health.is_none_or(Health::alive));
+        visibility.set_if_neq(shown(screen.is_some()));
+        let Some(screen) = screen else { continue };
+        let width = computed.size().x * computed.inverse_scale_factor();
+        let (left, top) = (px(screen.x - width / 2.0), px(screen.y));
+        if node.left != left || node.top != top {
+            node.left = left;
+            node.top = top;
         }
     }
 }

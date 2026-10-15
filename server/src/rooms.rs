@@ -194,6 +194,8 @@ impl Lobby {
             waiting: run.waiting.clone(),
             best: room.best,
             boss: boss_of(run.wave).map(|boss| boss.def().name.clone()),
+            omen: run.omen,
+            life_price: life_price(run.lives_bought),
         });
         let leader = self.guests.get(&room.leader).map_or(0, |g| g.id);
         RoomView {
@@ -671,6 +673,20 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             let class = lobby.guests[&link].class.ok_or("Pick a fighter first")?;
             lobby.guests.get_mut(&link).expect("checked").satchel.buy(item, class)?;
             info!(room = key.0, guest = lobby.guests[&link].id, item = item.name(), level = lobby.guests[&link].satchel.level(item), "bought");
+        }
+        RoomRequest::BuyLife => {
+            let key = room_key.ok_or("You're not in a room")?;
+            near_the_shop(lobby, ctx, link, key)?;
+            let price = lobby.run(key).map_or(0, |run| life_price(run.lives_bought));
+            let satchel = &mut lobby.guests.get_mut(&link).expect("checked").satchel;
+            if satchel.gold < price {
+                return Err("Not enough gold");
+            }
+            satchel.gold -= price;
+            let run = lobby.run_mut(key).expect("near the shop in a run");
+            run.lives += 1;
+            run.lives_bought += 1;
+            info!(room = key.0, guest = lobby.guests[&link].id, price, "bought a life");
         }
         RoomRequest::Sell(slot) => {
             let key = room_key.ok_or("You're not in a room")?;

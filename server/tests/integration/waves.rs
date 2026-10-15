@@ -133,7 +133,9 @@ fn a_run_opens_at_the_shop_and_waves_come_and_go() {
 #[ignore]
 fn long_run() {
     let class = std::env::var("ARENA_CLASS").unwrap_or("revenant".into());
-    let mut p = Party::new(5861, &class, true);
+    // `ARENA_PORT` to run several at once.
+    let port = std::env::var("ARENA_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(5861);
+    let mut p = Party::new(port, &class, true);
     p.start_run();
     let wishlist = [Item::StormCoil, Item::EmberHeart, Item::Bloodfang, Item::WispLantern, Item::ThunderCrown, Item::BrambleMantle];
     let mut wave_started = Instant::now();
