@@ -241,8 +241,9 @@ pub(super) fn tick_items(
     zones.0.retain(|zone| zone.until > now);
     for zone in &zones.0 {
         if zone.pull > 0.0 {
-            for (entity, _, (room, team), pos, health, ..) in targets.iter() {
-                if health.0 > 0 && foes(zone.by.side, (*room, *team)) && pos.0.distance(zone.at) <= zone.radius + PLAYER_RADIUS {
+            // Only its maker's foes, as its pulse hurts (never them, nor the sheltered).
+            for (entity, id, (room, team), pos, health, .., sheltered) in targets.iter() {
+                if health.0 > 0 && !sheltered && id.0 != zone.by.id && foes(zone.by.side, (*room, *team)) && pos.0.distance(zone.at) <= zone.radius + PLAYER_RADIUS {
                     let next = pos.0.move_towards(zone.at, zone.pull * TICK_DT);
                     if lobby.map(room).line_walkable(pos.0, next) {
                         commands.entity(entity).insert(Pos(next));
