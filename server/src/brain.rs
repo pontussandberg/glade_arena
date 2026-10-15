@@ -108,7 +108,7 @@ pub(crate) enum Deed {
 #[derive(Resource, Default)]
 pub(crate) struct Deeds(Vec<Deed>);
 
-type Prey<'w, 's> = Query<'w, 's, (&'static Pos, &'static InRoom, &'static Team), (With<PlayerId>, Without<Zombie>, Without<Untouchable>, InPlay)>;
+type Prey<'w, 's> = Query<'w, 's, (&'static Pos, &'static InRoom, &'static Team), (With<PlayerId>, Without<Zombie>, Without<Untouchable>, Without<Sheltered>, InPlay)>;
 
 /// Each monster's think: whom it goes for, where it walks, whether it attacks, and its tricks.
 #[allow(clippy::type_complexity)]
@@ -311,7 +311,7 @@ pub(super) fn do_deeds(
             Deed::Burst { by, entity, at, radius, damage: burst } => {
                 blast(&mut commands, &mut log, now, &mut targets, by, at, radius, burst, Chill::default(), FxColor::Poison);
                 // It's spent: it bursts itself, a blow of all it has left.
-                if let Ok((_, id, _, pos, mut health, mut chilled, mut hits, _)) = targets.get_mut(entity) {
+                if let Ok((_, id, _, pos, mut health, mut chilled, mut hits, ..)) = targets.get_mut(entity) {
                     let (id, at, rest) = (id.0, pos.0, health.0);
                     let blow = Blow::ability(rest, Chill::default());
                     damage(&mut commands, &mut log, now, (entity, id, at), (&mut health, &mut chilled, &mut hits), blow, (id, by.class, "a burst"), (by.side, Source::Trick, None));
@@ -319,15 +319,15 @@ pub(super) fn do_deeds(
             }
             Deed::Mend { room, at, radius, amount } => {
                 spawn_fx(&mut commands, room, Fx::at(FxKind::Blast(FxColor::Poison), at, radius, now, 14));
-                for (_, _, (r, team), pos, mut health, _, mut hits, max) in &mut targets {
+                for (_, _, (r, team), pos, mut health, _, mut hits, max, _) in &mut targets {
                     if *r == room && team.0 == ZOMBIES && pos.0.distance(at) <= radius {
                         mend(&mut health, max, &mut hits, amount);
                     }
                 }
             }
             Deed::Summon { room, class, count, at, might, raiser } => {
-                for spot in crate::waves::ring_spots(lobby.map(&room), at, count, 1.6) {
-                    crate::waves::spawn_mob(&mut commands, &mut lobby, room, class, spot, 1.0, might, Some(raiser));
+                for spot in crate::waves::ring_spots(lobby.map(&room), at, count, 1.6).collect::<Vec<_>>() {
+                    crate::waves::spawn_mob(&mut commands, &mut lobby, now, room, class, spot, 1.0, might, Some(raiser));
                 }
             }
             Deed::Mortar { by, from, at, radius, damage, fuse } => {

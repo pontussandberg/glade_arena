@@ -471,6 +471,19 @@ impl Satchel {
 
 
 
+    /// Gives back in full what was spent on the items a fighter of `class` can't carry (they came
+    /// back as another class), and drops them. What it gave back.
+    pub fn refund_unfit(&mut self, class: ClassId) -> u32 {
+        let mut back = 0;
+        for slot in &mut self.slots {
+            if let Some(owned) = slot.take_if(|owned| !owned.item.fits(class)) {
+                back += owned.spent;
+            }
+        }
+        self.gold += back;
+        back
+    }
+
     /// Sells the item in `slot`, if there's one there. What it gave back.
     pub fn sell(&mut self, slot: usize) -> Option<u32> {
         let owned = self.slots.get_mut(slot)?.take()?;
@@ -514,6 +527,11 @@ mod tests {
         assert!(satchel.buy(Item::RicochetCharm, revenant).is_err(), "a melee fighter's ricochet");
         let spent = 10_000 - satchel.gold;
         assert_eq!(satchel.sell(0), Some(spent / 2));
+        // Back as a revenant: the jav's ricochet goes, all it cost given back.
+        satchel.buy(Item::RicochetCharm, jav).unwrap();
+        let gold = satchel.gold;
+        assert_eq!(satchel.refund_unfit(revenant), Item::RicochetCharm.cost(0));
+        assert_eq!((satchel.level(Item::RicochetCharm), satchel.gold), (0, gold + Item::RicochetCharm.cost(0)));
         assert_eq!(satchel.level(Item::StormCoil), 0);
         for item in [Item::EmberHeart, Item::RimeSigil, Item::Bloodfang, Item::EchoStone, Item::PowderKeg, Item::VoidOrb] {
             satchel.buy(item, jav).unwrap();

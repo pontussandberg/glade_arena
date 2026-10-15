@@ -56,9 +56,9 @@ pub struct RoomList(pub Vec<RoomSummary>);
 pub struct CurrentRoom(pub Option<RoomView>);
 
 impl CurrentRoom {
-    /// Our room's run, while its match is on (a run on, or just lost).
+    /// Our room's run, while its match is on (a run on, or just lost): only against the waves.
     pub fn run(&self) -> Option<&RunView> {
-        self.0.as_ref().filter(|view| view.started).and_then(|view| view.run.as_ref())
+        self.0.as_ref().filter(|view| view.started && view.mode.pve()).and_then(|view| view.run.as_ref())
     }
 }
 

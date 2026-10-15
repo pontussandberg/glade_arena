@@ -47,7 +47,7 @@ pub(super) fn use_abilities(
     let now = timeline.tick();
     // Read up front: `targets` holds every player's `Chilled` mutably. A root or slow landing
     // during this loop starts next tick anyway.
-    let chills: Vec<(PeerId, Chilled)> = targets.iter().map(|(_, id, .., chilled, _, _)| (id.0, *chilled)).collect();
+    let chills: Vec<(PeerId, Chilled)> = targets.iter().map(|(_, id, .., chilled, _, _, _)| (id.0, *chilled)).collect();
     for (id, class, pos, mut input, (mut cooldowns, mut dashing), mut hits, (room, team), mut attack, might) in &mut users {
         let side = (*room, *team);
         let might = might_of(might);

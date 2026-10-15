@@ -52,6 +52,9 @@ const CAMP_MENDS: f32 = 0.04;
 const MEND_EVERY_TICKS: u32 = TICK_HZ as u32 / 2;
 /// How long a fallen player with a life to spend waits.
 const COMEBACK_TICKS: u32 = 5 * TICK_HZ as u32;
+/// When a fallen player with no life to spend comes back: not until the wave's cleared (or a
+/// life comes along).
+const UNTIL_CLEARED: u32 = u32::MAX / 2;
 /// Every how many waves a boss leads one.
 pub(crate) const BOSS_EVERY: u32 = 5;
 /// How long a lost run's end shows before everyone's back in the lobby.
@@ -219,22 +222,22 @@ pub(crate) fn ring_spots(map: &Map, at: Vec2, count: u32, radius: f32) -> impl I
     })
 }
 
-/// A monster of `class` rising at `at` in `room`: `hp_scale` times as tough as its class,
-/// hitting `might` times as hard, called up by `raised_by` if it was summoned (or rose again).
+/// A monster of `class` rising at `at` in `room` at `now`: `hp_scale` times as tough as its
+/// class, hitting `might` times as hard, called up by `raised_by` if it was summoned (or rose
+/// again).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn spawn_mob(commands: &mut Commands, lobby: &mut Lobby, room: InRoom, class: ClassId, at: Vec2, hp_scale: f32, might: f32, raised_by: Option<Entity>) -> Entity {
-    spawn_mob_as(commands, lobby, room, class, at, hp_scale, might, raised_by, None)
+pub(crate) fn spawn_mob(commands: &mut Commands, lobby: &mut Lobby, now: u32, room: InRoom, class: ClassId, at: Vec2, hp_scale: f32, might: f32, raised_by: Option<Entity>) -> Entity {
+    spawn_mob_as(commands, lobby, now, room, class, at, hp_scale, might, raised_by, None)
 }
 
 /// `spawn_mob`, an elite with `elite`.
 #[allow(clippy::too_many_arguments)]
-fn spawn_mob_as(commands: &mut Commands, lobby: &mut Lobby, room: InRoom, class: ClassId, at: Vec2, hp_scale: f32, might: f32, raised_by: Option<Entity>, elite: Option<Affix>) -> Entity {
+fn spawn_mob_as(commands: &mut Commands, lobby: &mut Lobby, now: u32, room: InRoom, class: ClassId, at: Vec2, hp_scale: f32, might: f32, raised_by: Option<Entity>, elite: Option<Affix>) -> Entity {
     let def = class.def();
     let (elite_hp, elite_might, elite_bounty) = if elite.is_some() { ELITE } else { (1.0, 1.0, 1) };
     let hp = (def.max_hp as f32 * hp_scale * elite_hp).round().max(1.0) as i32;
     let bounty = def.mob.as_ref().map_or(0, |m| m.bounty) * elite_bounty;
     let id = lobby.next_local();
-    let now = lobby.now();
     let mut mob = commands.spawn((
         Name::from(def.name.clone()),
         Zombie,
@@ -320,7 +323,6 @@ pub(super) fn run_waves(
     mobs: Query<&InRoom, (With<Mob>, Without<Dead>)>,
 ) {
     let now = timeline.tick().0;
-    lobby.set_now(now);
     let mut alive: HashMap<RoomKey, u32> = HashMap::new();
     for room in &mobs {
         *alive.entry(room.key).or_default() += 1;
@@ -328,7 +330,7 @@ pub(super) fn run_waves(
     for (key, room) in lobby.runs() {
         let alive = alive.get(&key).copied().unwrap_or(0);
         step_run(&mut commands, &mut lobby, &mut party, (now, time.elapsed()), room, alive);
-        lobby.refresh_run(key);
+        lobby.refresh_run(key, now);
     }
 }
 
@@ -337,7 +339,8 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now,
     let key = room.key;
     let map = lobby.map(&room);
     let members = lobby.party(key);
-    let size = members.len().max(1);
+    // Scaled to who's fighting, not who's in the room.
+    let size = lobby.fighting(key).max(1);
     let fighters: Vec<(Entity, Vec2, bool)> = party.iter().filter(|(_, r, ..)| **r == room).map(|(c, _, pos, _, _, dead)| (c.owner, pos.0, dead.is_some())).collect();
     let party_at: Vec<Vec2> = fighters.iter().filter(|(.., dead)| !dead).map(|(_, p, _)| *p).collect();
     let Some(run) = lobby.run_mut(key) else { return };
@@ -363,8 +366,22 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now,
             info!(room = key.0, wave, party = size, "a wave comes");
         }
         RunPhase::Fight => {
-            // Lost: everyone in the arena down, with no lives to spend.
-            if !fighters.is_empty() && fighters.iter().all(|(.., dead)| *dead) && run.lives == 0 {
+            // A life come along (a boss killed, one bought) brings back who's waiting for it.
+            if run.lives > 0 && !run.waiting.is_empty() {
+                for (controlled_by, r, _, _, _, dead) in party.iter_mut() {
+                    let Some(mut dead) = dead.filter(|dead| *r == room && dead.respawn_at >= UNTIL_CLEARED) else { continue };
+                    if run.lives == 0 {
+                        break;
+                    }
+                    run.lives -= 1;
+                    dead.respawn_at = now + COMEBACK_TICKS;
+                    let guest = members.iter().find(|(link, _)| *link == controlled_by.owner).map(|(_, id)| *id);
+                    run.waiting.retain(|id| Some(*id) != guest);
+                }
+            }
+            // Lost: everyone in the arena down for the wave (none coming back on a life).
+            let out = party.iter().filter(|(_, r, ..)| **r == room).all(|(.., dead)| dead.is_some_and(|dead| dead.respawn_at >= UNTIL_CLEARED));
+            if !fighters.is_empty() && out {
                 run.phase = RunPhase::Over { reached: wave };
                 run.clear_chests(commands);
                 info!(room = key.0, wave, "the run is lost");
@@ -376,21 +393,20 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now,
                 && let Some(at) = pick_lair(&map.lairs, &party_at)
             {
                 run.boss_out = true;
-                spawn_mob(commands, lobby, room, boss, at, boss_toughness(wave, size), might(wave), None);
+                spawn_mob(commands, lobby, now, room, boss, at, boss_toughness(wave, size), might(wave), None);
                 info!(room = key.0, wave, boss = boss.def().name, "a boss comes");
                 return;
             }
             if run.budget > 0.0 && now >= run.next_pack_at && (alive as usize) < most_about(wave, size) {
                 run.next_pack_at = now + spawn_every(wave);
-                let Some(class) = pick(&roster(wave), run.budget) else { return };
+                let (Some(class), Some(lair)) = (pick(&roster(wave), run.budget), pick_lair(&map.lairs, &party_at)) else { return };
                 let mob = class.def().mob.as_ref().expect("on the roster");
                 run.budget -= mob.cost * mob.pack as f32;
                 let odds = run.omen.map_or(elite_odds(wave), |omen| omen.elite_odds(elite_odds(wave)));
-                let Some(lair) = pick_lair(&map.lairs, &party_at) else { return };
                 let radius = if mob.pack > 1 { 1.2 } else { 0.0 };
                 for at in ring_spots(map, lair, mob.pack, radius).collect::<Vec<_>>() {
                     let elite = (fastrand::f32() < odds).then(|| Affix::ALL[fastrand::usize(..Affix::ALL.len())]);
-                    spawn_mob_as(commands, lobby, room, class, at, toughness(wave, size), might(wave), None, elite);
+                    spawn_mob_as(commands, lobby, now, room, class, at, toughness(wave, size), might(wave), None, elite);
                 }
                 return;
             }
@@ -436,13 +452,14 @@ pub(super) fn fall(timeline: Res<LocalTimeline>, mut lobby: ResMut<Lobby>, mut f
             dead.respawn_at = now + COMEBACK_TICKS;
         } else {
             // Until the wave's cleared (`run_waves` brings them back).
-            dead.respawn_at = u32::MAX / 2;
+            dead.respawn_at = UNTIL_CLEARED;
             run.waiting.extend(guest);
         }
     }
 }
 
-/// Server-only: a player just back in a run, out of harm's way until `until` (`Untouchable`).
+/// Server-only: a player just back in a run, out of harm's way until `until`: nothing hits them,
+/// and monsters pay them no mind.
 #[derive(Component)]
 pub(crate) struct Sheltered {
     until: u32,
@@ -466,7 +483,7 @@ pub(super) fn shelter(
         if !lobby.run_on(room.key) {
             continue;
         }
-        commands.entity(player).try_insert((Untouchable, Sheltered { until: now + SHELTER_TICKS }));
+        commands.entity(player).try_insert(Sheltered { until: now + SHELTER_TICKS });
         spawn_fx(&mut commands, *room, Fx::at(FxKind::Blast(FxColor::Spirit), at.0, REBIRTH_REACH, now, 14));
         let map = lobby.map(room);
         for (monster_room, mut pos) in &mut monsters {
@@ -488,7 +505,7 @@ pub(super) fn shelter(
     }
     for (player, shelter) in &sheltered {
         if now >= shelter.until {
-            commands.entity(player).try_remove::<(Untouchable, Sheltered)>();
+            commands.entity(player).try_remove::<Sheltered>();
         }
     }
 }
@@ -509,8 +526,8 @@ pub(super) fn pay_bounties(timeline: Res<LocalTimeline>, mut commands: Commands,
             && let Some(risen) = ClassId::by_key(RISES_AS)
         {
             let wave = lobby.run(room.key).map_or(1, |run| run.wave);
-            let size = lobby.party(room.key).len();
-            spawn_mob(&mut commands, &mut lobby, *room, risen, pos.0, toughness(wave, size), crate::combat::might_of(might), Some(entity));
+            let size = lobby.fighting(room.key);
+            spawn_mob(&mut commands, &mut lobby, now, *room, risen, pos.0, toughness(wave, size), crate::combat::might_of(might), Some(entity));
         }
         if boss {
             if let Some(run) = lobby.run_mut(room.key) {

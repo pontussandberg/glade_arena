@@ -13,6 +13,8 @@
 //! Effects never crit, and an item's own hits only set off what reacts to kills, so nothing
 //! feeds itself forever.
 
+use std::collections::HashMap;
+
 use super::*;
 
 use arena_shared::classes::{AbilityKind, Chill, Trick};
@@ -157,14 +159,16 @@ pub(crate) fn blast(commands: &mut Commands, log: &mut HitLog, now: u32, targets
 fn nearest_foe(targets: &Targets, side: Side, at: Vec2, reach: f32, skip: impl Fn(PeerId) -> bool) -> Option<(PeerId, Vec2)> {
     targets
         .iter()
-        .filter(|(_, id, (room, team), pos, health, ..)| health.0 > 0 && !skip(id.0) && foes(side, (**room, **team)) && pos.0.distance(at) <= reach)
+        .filter(|(_, id, (room, team), pos, health, .., sheltered)| health.0 > 0 && !sheltered && !skip(id.0) && foes(side, (**room, **team)) && pos.0.distance(at) <= reach)
         .map(|(_, id, _, pos, ..)| (id.0, pos.0))
         .min_by(|a, b| a.1.distance_squared(at).total_cmp(&b.1.distance_squared(at)))
 }
 
 /// Heals the fighter `id` by `amount`, up to its most: shown as a heal.
-fn heal(targets: &mut Targets, id: PeerId, amount: i32) {
-    if let Some((.., mut health, _, mut hits, max)) = targets.iter_mut().find(|(_, p, ..)| p.0 == id) {
+fn heal(r: &mut Reacting, id: PeerId, amount: i32) {
+    if let Some(&entity) = r.ids.get(&id)
+        && let Ok((.., mut health, _, mut hits, max, _)) = r.targets.get_mut(entity)
+    {
         mend(&mut health, max, &mut hits, amount);
     }
 }
@@ -298,6 +302,9 @@ pub(super) struct Reacting<'w, 's> {
     holders: Query<'w, 's, (Entity, &'static PlayerId, &'static Satchel, &'static mut ItemState, &'static mut Frenzy)>,
     mobs: Query<'w, 's, (&'static Mob, Option<&'static Elite>, &'static ClassId, Option<&'static Might>)>,
     doomed: Query<'w, 's, &'static mut Doomed>,
+    fighters: Query<'w, 's, (Entity, &'static PlayerId)>,
+    /// Every fighter by its id, made once a tick: hits name who dealt them by id.
+    ids: Local<'s, HashMap<PeerId, Entity>>,
 }
 
 /// How many rounds of hits setting off hits (bursts killing into bursts) one tick follows.
@@ -306,6 +313,8 @@ const ROUNDS: usize = 6;
 /// Reacts to this tick's hits and abilities (see the module's docs).
 pub(super) fn react(mut r: Reacting) {
     let now = r.timeline.tick().0;
+    let ids: HashMap<PeerId, Entity> = r.fighters.iter().map(|(entity, id)| (id.0, entity)).collect();
+    *r.ids = ids;
     let casts = std::mem::take(&mut r.cast_log.0);
     for cast in casts {
         on_cast(&mut r, now, cast);
@@ -325,7 +334,8 @@ pub(super) fn react(mut r: Reacting) {
 
 /// The entity and satchel of the fighter `id`, if it carries items.
 fn holder(r: &Reacting, id: PeerId) -> Option<(Entity, Satchel)> {
-    r.holders.iter().find(|(_, p, ..)| p.0 == id).map(|(entity, _, satchel, ..)| (entity, *satchel))
+    let entity = *r.ids.get(&id)?;
+    r.holders.get(entity).ok().map(|(_, _, satchel, ..)| (entity, *satchel))
 }
 
 fn on_cast(r: &mut Reacting, now: u32, cast: Used) {
@@ -440,7 +450,7 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                     arm(&mut r.commands, &mut r.pending, now, bolt, FxKind::Bolt);
                 }
             }
-            Item::Bloodfang => heal(&mut r.targets, hit.attacker, items::bloodfang(level)),
+            Item::Bloodfang => heal(r, hit.attacker, items::bloodfang(level)),
             Item::DoomBell if !hit.killed => {
                 let (share, lasts) = items::doom_bell(level);
                 match r.doomed.get_mut(hit.victim) {
@@ -456,7 +466,7 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
             Item::MidasCoin if !hit.killed => {
                 let (below, gold) = items::midas_coin(level);
                 let boss = r.mobs.get(hit.victim).is_ok_and(|(_, _, class, _)| class.def().is_boss());
-                let Ok((entity, id, _, pos, mut health, mut chilled, mut hits, max)) = r.targets.get_mut(hit.victim) else { continue };
+                let Ok((entity, id, _, pos, mut health, mut chilled, mut hits, max, _)) = r.targets.get_mut(hit.victim) else { continue };
                 if boss || health.0 <= 0 || health.0 as f32 > below * max.0 as f32 || id.0 == hit.attacker {
                     continue;
                 }
@@ -517,7 +527,7 @@ fn victim_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (En
                 if !ready(&mut state.phoenix_at, now, recharge) {
                     continue;
                 }
-                if let Ok((entity, .., mut health, _, mut hits, max)) = r.targets.get_mut(hit.victim) {
+                if let Ok((entity, .., mut health, _, mut hits, max, _)) = r.targets.get_mut(hit.victim) {
                     health.0 = (max.0 as f32 * share).round() as i32;
                     hits.push(health.0, HitKind::Heal);
                     r.commands.entity(entity).remove::<Dead>();
@@ -533,12 +543,9 @@ fn victim_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (En
 /// burst, a volatile's blast (or anyone's, on a Volatile wave), a splitting one's brood.
 fn monster_hit(r: &mut Reacting, now: u32, hit: &Landed) {
     // Only a monster's hits have a twist (players' are `Netcode`).
-    let elite = match hit.attacker {
-        PeerId::Local(_) => r.targets.iter().find(|(_, id, ..)| id.0 == hit.attacker).and_then(|(entity, ..)| r.mobs.get(entity).ok()?.1.copied()),
-        _ => None,
-    };
+    let elite = r.ids.get(&hit.attacker).and_then(|entity| r.mobs.get(*entity).ok()?.1.copied());
     match elite.map(|e| e.0) {
-        Some(Affix::Vampiric) => heal(&mut r.targets, hit.attacker, hit.amount),
+        Some(Affix::Vampiric) => heal(r, hit.attacker, hit.amount),
         Some(Affix::Frostbound) if !hit.killed && hit.source != Source::Trick => {
             let by = By { id: hit.attacker, class: hit.class, side: hit.side, source: Source::Trick };
             let blow = Blow::ability(0, Chill { root_ticks: brain::FROSTBOUND_ROOT_TICKS, ..default() });
@@ -573,8 +580,8 @@ fn monster_hit(r: &mut Reacting, now: u32, hit: &Landed) {
         && let Some(brood) = ClassId::by_key(brain::SPLITS_INTO)
     {
         let map = r.lobby.map(&side.0);
-        for at in crate::waves::ring_spots(map, hit.at, brain::SPLITS_INTO_COUNT, 0.8) {
-            crate::waves::spawn_mob(&mut r.commands, &mut r.lobby, side.0, brood, at, 1.0, might, None);
+        for at in crate::waves::ring_spots(map, hit.at, brain::SPLITS_INTO_COUNT, 0.8).collect::<Vec<_>>() {
+            crate::waves::spawn_mob(&mut r.commands, &mut r.lobby, now, side.0, brood, at, 1.0, might, None);
         }
     }
 }

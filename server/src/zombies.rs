@@ -116,7 +116,7 @@ pub(super) fn feed_frenzy(
     for (room, dead) in &killed {
         let Some(before) = lobby.count_zombie_kill(room.key, dead.killer) else { continue };
         // Against the waves, kills are counted, but frenzies come from items and shrines.
-        if lobby.run(room.key).is_some() {
+        if lobby.pve(room.key) {
             continue;
         }
         // Its killer may have left the arena since (its shot still flying): counted all the same.

@@ -172,6 +172,7 @@ pub(super) type Targets<'w, 's> = Query<
         &'static mut Chilled,
         &'static mut RecentHits,
         &'static MaxHealth,
+        Has<Sheltered>,
     ),
     (InPlay, Without<Untouchable>),
 >;
@@ -191,10 +192,10 @@ pub(super) fn hit_foes(
     mut hits: impl FnMut(PeerId, Vec2) -> bool,
 ) -> usize {
     let mut count = 0;
-    for (target, target_id, (room, team), target_pos, mut health, mut chilled, mut recent, _) in targets {
+    for (target, target_id, (room, team), target_pos, mut health, mut chilled, mut recent, _, sheltered) in targets {
         // One killed already this tick (`damage`) isn't hit: a swing that only struck a body
-        // didn't land.
-        if health.0 > 0 && target_id.0 != attacker.0 && foes(side, (*room, *team)) && hits(target_id.0, target_pos.0) {
+        // didn't land. Nor is one just back and sheltered.
+        if health.0 > 0 && !sheltered && target_id.0 != attacker.0 && foes(side, (*room, *team)) && hits(target_id.0, target_pos.0) {
             let hit = (&mut *health, &mut *chilled, &mut *recent);
             damage(commands, log, now, (target, target_id.0, target_pos.0), hit, blow, attacker, (side, source, None));
             count += 1;

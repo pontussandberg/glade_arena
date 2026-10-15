@@ -101,8 +101,6 @@ pub struct Lobby {
     free_net: Vec<RoomId>,
     /// The browser's list changed since it was last sent.
     list_changed: bool,
-    /// The tick the fight is on (as `run_waves` last saw it), for what's set going by it.
-    now: u32,
 }
 
 struct Guest {
@@ -187,7 +185,8 @@ impl Lobby {
             .filter_map(|link| self.guests.get(link))
             .map(|g| Member { guest_id: g.id, name: g.name.clone(), peer: g.peer, team: g.team, class: g.class, in_arena: g.playing && room.started, kills: g.kills, zombie_kills: g.zombie_kills })
             .collect();
-        let run = self.run_view(room);
+        // The run as `refresh_run` last found it.
+        let run = room.shown_run.clone();
         let leader = self.guests.get(&room.leader).map_or(0, |g| g.id);
         RoomView {
             key,
@@ -205,11 +204,11 @@ impl Lobby {
         }
     }
 
-    /// What `room`'s members see of its run.
-    fn run_view(&self, room: &Room) -> Option<RunView> {
+    /// What `room`'s members see of its run at `now`.
+    fn run_view(room: &Room, now: u32) -> Option<RunView> {
         room.run.as_ref().map(|run| RunView {
             wave: run.wave,
-            phase: run.phase_view(self.now),
+            phase: run.phase_view(now),
             lives: run.lives,
             enemies_left: run.enemies_left(),
             ready: run.ready.clone(),
@@ -223,10 +222,9 @@ impl Lobby {
 
     /// Room `key`'s members see its run again if what they'd see of it changed (the countdown, a
     /// kill, a life spent, someone ready): checked every tick, sent only then.
-    pub(crate) fn refresh_run(&mut self, key: RoomKey) {
-        let Some(room) = self.rooms.get(&key) else { return };
-        let view = self.run_view(room);
-        let room = self.rooms.get_mut(&key).expect("checked");
+    pub(crate) fn refresh_run(&mut self, key: RoomKey, now: u32) {
+        let Some(room) = self.rooms.get_mut(&key) else { return };
+        let view = Lobby::run_view(room, now);
         if room.shown_run != view {
             room.shown_run = view;
             room.changed = true;
@@ -261,6 +259,17 @@ impl Lobby {
     /// Room `key`'s run (or its last), whether it's on or not.
     pub(crate) fn run(&self, key: RoomKey) -> Option<&Run> {
         self.rooms.get(&key)?.run.as_ref()
+    }
+
+    /// Whether room `key` is against the waves.
+    pub(crate) fn pve(&self, key: RoomKey) -> bool {
+        self.rooms.get(&key).is_some_and(|room| room.mode.pve())
+    }
+
+    /// How many of room `key`'s members are in its arena (or on their way in).
+    pub(crate) fn fighting(&self, key: RoomKey) -> usize {
+        let Some(room) = self.rooms.get(&key) else { return 0 };
+        room.members.iter().filter(|link| self.guests.get(link).is_some_and(|g| g.playing && g.class.is_some())).count()
     }
 
     /// Whether room `key` has a run on.
@@ -318,13 +327,7 @@ impl Lobby {
         self.guests.get(&link).map(|g| g.id)
     }
 
-    pub(crate) fn now(&self) -> u32 {
-        self.now
-    }
 
-    pub(crate) fn set_now(&mut self, now: u32) {
-        self.now = now;
-    }
 
     /// Everyone's kills in room `key` back to none, and no winner.
     fn clear_score(&mut self, key: RoomKey) {
@@ -400,7 +403,8 @@ impl Lobby {
 struct Ctx<'w, 's> {
     commands: Commands<'w, 's>,
     time: Res<'w, Time<Real>>,
-    players: Query<'w, 's, (Entity, &'static ControlledBy, &'static Pos), With<PlayerId>>,
+    timeline: Res<'w, LocalTimeline>,
+    players: Query<'w, 's, (Entity, &'static ControlledBy, &'static Pos, &'static ClassId), With<PlayerId>>,
     projectiles: Query<'w, 's, (Entity, &'static InRoom), With<Projectile>>,
     senders: Query<'w, 's, &'static mut MessageSender<LobbyEvent>>,
 }
@@ -413,12 +417,17 @@ impl Ctx<'_, '_> {
     }
 
     fn player_of(&self, link: Entity) -> Option<Entity> {
-        self.players.iter().find(|(_, c, _)| c.owner == link).map(|(player, ..)| player)
+        self.players.iter().find(|(_, c, ..)| c.owner == link).map(|(player, ..)| player)
     }
 
-    /// Where `link`'s fighter is, if it's in the arena.
-    fn pos_of(&self, link: Entity) -> Option<Vec2> {
-        self.players.iter().find(|(_, c, _)| c.owner == link).map(|(.., pos)| pos.0)
+    /// Where `link`'s fighter is, and what it fights as, if it's in the arena.
+    fn fighter_of(&self, link: Entity) -> Option<(Vec2, ClassId)> {
+        self.players.iter().find(|(_, c, ..)| c.owner == link).map(|(_, _, pos, class)| (pos.0, *class))
+    }
+
+    /// The server's tick.
+    fn now(&self) -> u32 {
+        self.timeline.tick().0
     }
 }
 
@@ -521,7 +530,9 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             let found = lobby
                 .rooms
                 .iter()
-                .find(|(_, room)| !room.practice && room.name == name && room.members.len() < room.mode.capacity())
+                // A started one: a quick-joined room's match is on from the off (one whose run was
+                // lost is back in its lobby, and made again).
+                .find(|(_, room)| !room.practice && room.started && room.name == name && room.members.len() < room.mode.capacity())
                 .map(|(key, _)| *key);
             if room_key.is_some() && room_key == found {
                 return Ok(());
@@ -535,7 +546,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                     let mode = if name.to_lowercase().starts_with("waves") { Mode::Waves } else { Mode::Ffa };
                     let from_wave = name.split_whitespace().nth(1).and_then(|n| n.parse::<u32>().ok()).filter(|n| (1..=200).contains(n));
                     let key = create(lobby, allocator, ctx, link, name, mode, mode.maps()[0]);
-                    let now = lobby.now;
+                    let now = ctx.now();
                     let room = lobby.rooms.get_mut(&key).expect("just made");
                     room.started = true;
                     if mode.pve() {
@@ -607,6 +618,11 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             let room = lobby.rooms.get_mut(&key).expect("checked");
             room.mode = mode;
             room.goal = (!mode.pve()).then_some(KILLS_TO_WIN);
+            // The last run was against the waves: gone with them.
+            if !mode.pve() {
+                room.run = None;
+                room.shown_run = None;
+            }
             room.changed = true;
             lobby.list_changed = true;
             // Onto a map the mode plays on.
@@ -685,8 +701,8 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
         }
         RoomRequest::Buy(item) => {
             let key = room_key.ok_or("You're not in a room")?;
-            near_the_shop(lobby, ctx, link, key)?;
-            let class = lobby.guests[&link].class.ok_or("Pick a fighter first")?;
+            // For the fighter they are, whatever they've picked to be next.
+            let class = near_the_shop(lobby, ctx, link, key)?;
             lobby.guests.get_mut(&link).expect("checked").satchel.buy(item, class)?;
             info!(room = key.0, guest = lobby.guests[&link].id, item = item.name(), level = lobby.guests[&link].satchel.level(item), "bought");
         }
@@ -720,7 +736,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
         }
         RoomRequest::Start => {
             let key = room_key.ok_or("You're not in a room")?;
-            let now = lobby.now;
+            let now = ctx.now();
             let room = lobby.rooms.get_mut(&key).expect("in it");
             if room.leader != link {
                 return Err("Only the leader can start the match");
@@ -828,18 +844,18 @@ fn mode_team(mode: Mode, n: usize) -> u8 {
     }
 }
 
-/// Whether `link` may trade now: in a run, their fighter by the shopkeeper.
-fn near_the_shop(lobby: &Lobby, ctx: &Ctx, link: Entity, key: RoomKey) -> Result<(), &'static str> {
+/// Whether `link` may trade now: in a run, their fighter by the shopkeeper. What it fights as.
+fn near_the_shop(lobby: &Lobby, ctx: &Ctx, link: Entity, key: RoomKey) -> Result<ClassId, &'static str> {
     let room = &lobby.rooms[&key];
     if room.live_run().is_none() {
         return Err("The shop is open in a run against the waves");
     }
     let shop = room.map.map().shop.ok_or("There's no shop here")?;
-    let pos = ctx.pos_of(link).ok_or("You're not in the arena")?;
+    let (pos, class) = ctx.fighter_of(link).ok_or("You're not in the arena")?;
     if pos.distance(shop) > SHOP_RADIUS + 0.5 {
         return Err("Walk up to the merchant to trade");
     }
-    Ok(())
+    Ok(class)
 }
 
 impl Room {
@@ -893,9 +909,9 @@ fn join(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity, key: RoomKey) -> Result<
 }
 
 /// Spawns `link`'s fighter if their room has started, they want in, have picked a class and
-/// aren't in yet.
-fn enter_arena(lobby: &Lobby, ctx: &mut Ctx, link: Entity) {
-    let Some(guest) = lobby.guests.get(&link) else { return };
+/// aren't in yet. Items carried that the class can't (they were another class) are given back.
+fn enter_arena(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity) {
+    let Some(guest) = lobby.guests.get_mut(&link) else { return };
     let (Some(key), Some(class)) = (guest.room, guest.class) else { return };
     if !guest.playing {
         return;
@@ -904,6 +920,7 @@ fn enter_arena(lobby: &Lobby, ctx: &mut Ctx, link: Entity) {
     if !room.started || ctx.player_of(link).is_some() {
         return;
     }
+    guest.satchel.refund_unfit(class);
     info!(room = key.0, guest = guest.id, class = class.def().name, "entered the arena");
     let in_room = room.in_room(key);
     spawn_player(&mut ctx.commands, link, guest.peer, class, in_room, Team(guest.team));
@@ -962,7 +979,7 @@ fn handle_class_choices(
             {
                 room.changed = true;
             }
-            enter_arena(&lobby, &mut ctx, link);
+            enter_arena(&mut lobby, &mut ctx, link);
         }
     }
 }

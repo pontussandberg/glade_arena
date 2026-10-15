@@ -43,8 +43,9 @@ pub(super) fn resolve_projectile_hits(
 ) {
     let now = timeline.tick();
     for (projectile_entity, projectile_pos, projectile, room, team, might, spares, (bounces, shard)) in &projectiles {
-        for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent, _) in &mut targets {
+        for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent, _, sheltered) in &mut targets {
             if target_id.0 == projectile.owner
+                || sheltered
                 || spares.is_some_and(|s| s.0 == target_id.0)
                 || health.0 == 0
                 || !foes((*room, *team), (*target_room, *target_team))
