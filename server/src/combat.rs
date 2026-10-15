@@ -3,7 +3,7 @@
 
 use super::*;
 
-use arena_shared::classes::{AbilityKind, Chill, common};
+use arena_shared::classes::{Chill, common};
 use arena_shared::sim;
 
 use crate::rooms::{InRoom, Lobby};
@@ -104,7 +104,9 @@ pub(super) fn hit_foes(
 ) -> usize {
     let mut count = 0;
     for (target, target_id, (room, team), target_pos, mut health, mut chilled, mut recent) in targets {
-        if target_id.0 != attacker.0 && foes(side, (*room, *team)) && hits(target_id.0, target_pos.0) {
+        // One killed already this tick (`damage`) isn't hit: a swing that only struck a body
+        // didn't land.
+        if health.0 > 0 && target_id.0 != attacker.0 && foes(side, (*room, *team)) && hits(target_id.0, target_pos.0) {
             damage(commands, now, (target, target_id.0), (&mut health, &mut chilled, &mut recent), blow, attacker);
             count += 1;
         }
@@ -131,14 +133,15 @@ pub(super) fn attack(
     let now = timeline.tick();
     for (id, class, pos, mut input, mut state, mut last_swing, (room, team), frenzy, mut cooldowns) in &mut attackers {
         let side = (*room, *team);
-        // A primed attack going off this tick is a sure crit.
-        let primed = state.winding_up().is_some_and(|swing| swing.primed);
+        // A primed attack going off this tick is a sure crit (`primer`: the ability that readied it).
+        let primer = state.primed.filter(|_| state.winding_up().is_some_and(|swing| swing.primed)).map(|(slot, _)| slot);
+        let primed = primer.is_some();
         // In two halves (`sim::step_attack`): a swing that lands arms a quick attack in between.
         let (mut next, released) = sim::release_attack(now.0, id.0, *class, pos.0, *state);
         // The prime that readied it is used up now: its cooldown starts.
-        if primed
-            && released.is_some()
-            && let Some((slot, ability)) = class.def().abilities().find(|(_, ability)| matches!(ability.kind, AbilityKind::Prime(_)))
+        if released.is_some()
+            && let Some(slot) = primer
+            && let Some(ability) = class.def().ability(slot)
         {
             cooldowns.start_own(slot, ability, now.0);
         }

@@ -202,8 +202,8 @@ pub enum Cast {
     /// `ability`, a nova, bursts around the caster; the server resolves who it hits
     /// (`NovaDef::hits`).
     Nova { ability: &'static AbilityDef, nova: NovaDef },
-    /// The next auto-attack readied (`AttackState::primed`).
-    Prime(PrimeDef),
+    /// The next auto-attack readied (`AttackState::primed`) by the ability in `slot`.
+    Prime { slot: AbilitySlot, prime: PrimeDef },
 }
 
 /// One tick of a fighter's abilities. A dash that has gone its distance ends, and a root stops
@@ -236,7 +236,7 @@ pub fn step(
         // Every kind but a prime goes toward its aim, and needs one.
         let dir = aim.try_normalize();
         casts.push(match (ability.kind, dir) {
-            (AbilityKind::Prime(prime), _) => Cast::Prime(prime),
+            (AbilityKind::Prime(prime), _) => Cast::Prime { slot, prime },
             (_, None) => continue,
             (AbilityKind::Projectile(throw), Some(dir)) => Cast::Throw(throw.projectile(owner, class, slot, pos, dir, tick)),
             // Mid-windup too: the windup goes on, and the attack still goes off when it's over,

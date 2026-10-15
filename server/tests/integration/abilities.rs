@@ -49,7 +49,7 @@ fn deadeye_primes_one_quicker_sure_crit() {
     let t0 = Instant::now();
     d.until(Duration::from_secs(1), "A sees its attack primed", |d| attack_state(&mut d.a, A).primed.is_some());
     println!("primed on A after {:?}", t0.elapsed());
-    assert_eq!(attack_state(&mut d.a, A).primed, Some(attack_speed));
+    assert_eq!(attack_state(&mut d.a, A).primed, Some((Q, attack_speed)));
     assert!(attack_state(&mut d.a, A).swing.is_none(), "priming shouldn't start an attack");
     let cooldowns = |d: &mut Duel| player::<Cooldowns>(&mut d.server, A).unwrap();
     assert_eq!(cooldowns(&mut d).cooldown_over_at(Q), 0, "its cooldown started before the attack it readied");

@@ -205,17 +205,24 @@ pub(super) fn toggle_range_circle(
     visibility.set_if_neq(shown(show));
 }
 
+/// Where we're walking to, while we are: a marker on the ground, and a ring on the minimap.
 pub(super) fn show_destination(
     desired: Res<DesiredInput>,
+    current: Res<crate::rooms::CurrentMap>,
     marker: Single<(&mut Transform, &mut Visibility), With<DestinationMarker>>,
+    dot: Option<Single<(&mut Node, &mut Visibility), (With<crate::minimap::DestinationDot>, Without<DestinationMarker>)>>,
 ) {
     let (mut transform, mut visibility) = marker.into_inner();
-    match desired.0.move_to {
-        Some(point) => {
-            transform.translation = to_world(point, 0.03);
-            *visibility = Visibility::Inherited;
+    visibility.set_if_neq(shown(desired.0.move_to.is_some()));
+    if let Some(point) = desired.0.move_to {
+        transform.translation = to_world(point, 0.03);
+    }
+    if let Some(dot) = dot {
+        let (mut node, mut visibility) = dot.into_inner();
+        visibility.set_if_neq(shown(desired.0.move_to.is_some()));
+        if let Some(point) = desired.0.move_to {
+            crate::minimap::place_destination(&mut node, current.map(), point);
         }
-        None => *visibility = Visibility::Hidden,
     }
 }
 

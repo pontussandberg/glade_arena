@@ -103,9 +103,10 @@ pub struct AttackState {
     /// An attack started by this tick is quick (`FollowUp`; `None`: not armed). Used up when an
     /// attack goes off, not when one is cancelled.
     pub quick_until: Option<u32>,
-    /// The next attack is primed (`abilities::prime`): sure to crit, and this much more attack
-    /// speed. Used up when a primed attack goes off, not when one is cancelled.
-    pub primed: Option<f32>,
+    /// The next attack is primed (`abilities::prime`) by the ability in this slot: sure to crit,
+    /// and this much more attack speed. Used up when a primed attack goes off, not when one is
+    /// cancelled.
+    pub primed: Option<(AbilitySlot, f32)>,
 }
 
 impl AttackState {
@@ -299,15 +300,14 @@ impl Hasted {
 
 /// A rush of speed from killing zombies: walking and attacking `strength` faster (0.1 = 10%)
 /// from `from`, fading linearly to nothing at `until` (ticks). Each zombie a fighter kills in a
-/// match starts it again, stronger by the zombies killed before (`FRENZY_PER_KILL` each); `kills`
-/// is how many that is. Server-authoritative and replicated: an attack's speed is fixed as it
+/// match starts it again, stronger by the zombies killed before (`FRENZY_PER_KILL` each; counted
+/// in `Member::zombie_kills`). Server-authoritative and replicated: an attack's speed is fixed as it
 /// starts (`Swing::haste`), and the action bar shows it.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct Frenzy {
     pub from: u32,
     pub until: u32,
     pub strength: f32,
-    pub kills: u32,
 }
 
 impl Frenzy {
@@ -316,7 +316,7 @@ impl Frenzy {
     pub fn after_kill(now: u32, kills: u32, melee: bool) -> Frenzy {
         let ticks = if melee { crate::config::FRENZY_MELEE_TICKS } else { crate::config::FRENZY_RANGED_TICKS };
         let strength = crate::config::FRENZY_BASE + crate::config::FRENZY_PER_KILL * kills as f32;
-        Frenzy { from: now, until: now + ticks, strength, kills: kills + 1 }
+        Frenzy { from: now, until: now + ticks, strength }
     }
 
     /// How much faster it makes its fighter at `tick` (a fractional tick, for drawing in between):
@@ -602,7 +602,7 @@ mod tests {
     #[test]
     fn frenzy_grows_with_kills_and_fades() {
         let first = Frenzy::after_kill(100, 0, false);
-        assert!((first.strength - 0.1).abs() < 1e-6 && first.kills == 1);
+        assert!((first.strength - 0.1).abs() < 1e-6);
         // After ten kills, the next one's is three times the first.
         assert!((Frenzy::after_kill(100, 10, false).strength - 0.3).abs() < 1e-6);
         assert_eq!(first.until - first.from, FRENZY_RANGED_TICKS);

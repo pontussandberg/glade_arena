@@ -135,6 +135,7 @@ impl Plugin for CameraPlugin {
         );
         app.add_systems(Startup, spawn_camera);
         app.add_systems(Update, place_camera.after(CameraMoves).before(CameraPlaced));
+        app.add_systems(OnEnter(crate::rooms::Screen::InGame), relock_camera);
         app.add_systems(
             Update,
             (
@@ -296,8 +297,16 @@ fn lock_camera(keys: Res<ButtonInput<KeyCode>>, screen: Res<State<crate::rooms::
     }
 }
 
+/// Into the arena, the camera is locked on your fighter again.
+fn relock_camera(mut mode: ResMut<CameraMode>) {
+    if mode.unlocked {
+        mode.unlocked = false;
+    }
+}
+
 /// The MOBA camera: on your fighter (or the middle of the map until it appears), zoomed by the
-/// wheel; unlocked, it stays put, panned by the cursor at the screen's edges, within the map.
+/// wheel; unlocked, it stays put, panned by the cursor at the screen's edges (not while it's on a
+/// HUD control or the minimap there), within the map.
 #[allow(clippy::too_many_arguments)]
 fn move_camera(
     time: Res<Time>,
@@ -305,16 +314,22 @@ fn move_camera(
     mode: Res<CameraMode>,
     map: Res<crate::rooms::CurrentMap>,
     window: Option<Single<&Window>>,
+    hud: Query<
+        (&ComputedNode, &UiGlobalTransform, &InheritedVisibility),
+        Or<(With<crate::render::HudButton>, With<crate::minimap::Minimap>)>,
+    >,
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     camera: Single<(&mut Transform, &mut CameraRig)>,
 ) {
     let (mut transform, mut rig) = camera.into_inner();
+    let on_hud = |at: Vec2| hud.iter().any(|(node, place, visible)| visible.get() && node.contains_point(*place, at));
     if !mode.unlocked {
         if let Ok(me) = me.single() {
             rig.focus = arena::to_world(me.0, 0.0);
         }
     } else if let Some(window) = window
         && let Some(cursor) = window.cursor_position()
+        && !window.physical_cursor_position().is_some_and(on_hud)
     {
         // Screen right is the world's +X, screen down its +Z (the camera looks down from +Z).
         let size = window.size();

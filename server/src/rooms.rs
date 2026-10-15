@@ -168,7 +168,7 @@ impl Lobby {
             .members
             .iter()
             .filter_map(|link| self.guests.get(link))
-            .map(|g| Member { guest_id: g.id, name: g.name.clone(), peer: g.peer, team: g.team, class: g.class, in_arena: g.playing && room.started, kills: g.kills })
+            .map(|g| Member { guest_id: g.id, name: g.name.clone(), peer: g.peer, team: g.team, class: g.class, in_arena: g.playing && room.started, kills: g.kills, zombie_kills: g.zombie_kills })
             .collect();
         let leader = self.guests.get(&room.leader).map_or(0, |g| g.id);
         RoomView {
@@ -224,6 +224,7 @@ impl Lobby {
     pub(crate) fn count_zombie_kill(&mut self, key: RoomKey, killer: PeerId) -> Option<u32> {
         let room = self.rooms.get_mut(&key)?;
         let link = room.members.iter().copied().find(|link| self.guests.get(link).is_some_and(|g| g.peer == killer))?;
+        room.changed = true;
         let guest = self.guests.get_mut(&link).expect("a member");
         guest.zombie_kills += 1;
         Some(guest.zombie_kills - 1)
@@ -242,23 +243,30 @@ impl Lobby {
         let guest = self.guests.get_mut(&link).expect("a member");
         guest.kills += 1;
         let (id, team, kills) = (guest.id, guest.team, guest.kills);
-        // Who's on which side now, should this kill win it.
-        let side_of = |on: bool| -> Vec<u32> {
-            let room = &self.rooms[&key];
-            room.members.iter().filter_map(|link| self.guests.get(link)).filter(|g| (g.team == team) == on).map(|g| g.id).collect()
-        };
-        let (winners, losers) = (side_of(true), side_of(false));
         let room = self.rooms.get_mut(&key).expect("checked");
         room.changed = true;
-        let (score, winner) = match TEAMS.iter().position(|&t| t == team) {
-            Some(side) if room.mode == Mode::Teams => {
+        let side = TEAMS.iter().position(|&t| t == team).filter(|_| room.mode == Mode::Teams);
+        let score = match side {
+            Some(side) => {
                 room.team_kills[side] += 1;
-                (room.team_kills[side], Winner::Team { winners, losers })
+                room.team_kills[side]
             }
-            _ => (kills, Winner::Guest(id)),
+            None => kills,
         };
         debug!(room = key.0, guest = id, kills, score, "kill counted");
         if score >= goal {
+            // Won by a team: whoever is on its side now wins with it.
+            let winner = match side {
+                Some(_) => {
+                    let side_of = |on: bool| -> Vec<u32> {
+                        let room = &self.rooms[&key];
+                        room.members.iter().filter_map(|link| self.guests.get(link)).filter(|g| (g.team == team) == on).map(|g| g.id).collect()
+                    };
+                    Winner::Team { winners: side_of(true), losers: side_of(false) }
+                }
+                None => Winner::Guest(id),
+            };
+            let room = self.rooms.get_mut(&key).expect("checked");
             info!(room = key.0, ?winner, "match won");
             room.winner = Some(winner);
             room.ends_at = Some(now + MATCH_OVER_AFTER);
@@ -555,7 +563,6 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                 return Ok(());
             }
             room.started = true;
-            room.goal = Some(KILLS_TO_WIN);
             lobby.list_changed = true;
             info!(room = key.0, name = room.name, mode = ?room.mode, players = room.members.len(), "match started");
             let members = room.members.clone();
@@ -665,9 +672,7 @@ fn enter_arena(lobby: &Lobby, ctx: &mut Ctx, link: Entity) {
     }
     info!(room = key.0, guest = guest.id, class = class.def().name, "entered the arena");
     let in_room = room.in_room(key);
-    let player = spawn_player(&mut ctx.commands, link, guest.peer, class, in_room, Team(guest.team));
-    // Back in mid-match: the zombies it killed before still count.
-    ctx.commands.entity(player).insert(Frenzy { kills: guest.zombie_kills, ..default() });
+    spawn_player(&mut ctx.commands, link, guest.peer, class, in_room, Team(guest.team));
 }
 
 /// Out of their room, if they're in one: their fighter goes, and so does the room if it's

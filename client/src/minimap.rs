@@ -32,12 +32,11 @@ impl Plugin for MinimapPlugin {
                 draw_map.run_if(resource_changed::<CurrentMap>),
                 (spawn_dots, color_dots).chain(),
                 place_dots,
-                show_destination,
                 (spawn_markers, update_markers).chain(),
                 (spawn_gate_marks, update_gate_marks).chain(),
                 frame_view.in_set(CameraPlaced),
                 (click_lock, show_lock).chain(),
-                (click_fullscreen, show_fullscreen).chain(),
+                (left_fullscreen, click_fullscreen, show_fullscreen).chain(),
             ),
         );
     }
@@ -73,9 +72,10 @@ struct Dot {
 #[derive(Component)]
 struct ViewFrame;
 
-/// Where we're walking to (`DesiredInput::move_to`).
+/// Where we're walking to (`DesiredInput::move_to`), shown with the ground's marker
+/// (`render::input::show_destination`).
 #[derive(Component)]
-struct DestinationDot;
+pub(crate) struct DestinationDot;
 
 /// The destination's ring's size.
 const DESTINATION: f32 = 9.0;
@@ -268,6 +268,25 @@ fn click_fullscreen(button: Single<Ref<Interaction>, With<FullscreenButton>>, mu
     }
 }
 
+/// Full screen left by the browser itself (Esc, its own controls) isn't told to the window: once
+/// the page that was full screen no longer is, the window is windowed again. (Going full screen
+/// takes the browser a moment, so a page not full screen yet is left be.)
+fn left_fullscreen(mut window: Single<&mut Window, With<bevy::window::PrimaryWindow>>, mut was_full: Local<bool>) {
+    #[cfg(target_family = "wasm")]
+    {
+        let full = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|document| js_sys::Reflect::get(&document, &"fullscreenElement".into()).ok())
+            .is_some_and(|element| !element.is_null() && !element.is_undefined());
+        if *was_full && !full && window.mode != bevy::window::WindowMode::Windowed {
+            window.mode = bevy::window::WindowMode::Windowed;
+        }
+        *was_full = full;
+    }
+    #[cfg(not(target_family = "wasm"))]
+    let _ = (&mut window, &mut was_full);
+}
+
 /// The full screen button shows which way a click goes: out to full screen, or back in.
 fn show_fullscreen(
     mut commands: Commands,
@@ -300,17 +319,9 @@ fn show_lock(mut commands: Commands, mode: Res<CameraMode>, lock: Single<(Ref<Ca
     commands.entity(lock.art).despawn_children().with_children(|art| pixel_art(art, PADLOCK[mode.unlocked as usize], PADLOCK_PIXEL, color));
 }
 
-/// Where we're walking to, on the minimap, while we are.
-fn show_destination(
-    current: Res<CurrentMap>,
-    desired: Res<crate::DesiredInput>,
-    dot: Single<(&mut Node, &mut Visibility), With<DestinationDot>>,
-) {
-    let (mut node, mut visibility) = dot.into_inner();
-    visibility.set_if_neq(shown(desired.0.move_to.is_some()));
-    if let Some(to) = desired.0.move_to {
-        place(&mut node, current.map(), to, DESTINATION);
-    }
+/// Puts the destination's ring on `at`, on `map`'s minimap.
+pub(crate) fn place_destination(node: &mut Node, map: &Map, at: Vec2) {
+    place(node, map, at, DESTINATION);
 }
 
 /// The map, drawn in the minimap at the size it takes there: the node is that and its frame (a

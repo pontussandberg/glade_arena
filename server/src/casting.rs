@@ -62,7 +62,7 @@ pub(super) fn use_abilities(
         // Pressing the prime again while an attack is primed calls it off: the next attack (or the
         // one winding up) is plain again, and no cooldown starts.
         let mut orders = *input;
-        if let Some(speed) = attack.primed {
+        if let Some((_, speed)) = attack.primed {
             let primes = |order: &CastOrder| matches!(class.def().ability(order.slot).map(|ability| ability.kind), Some(AbilityKind::Prime(_)));
             if orders.casts().any(|order| primes(&order)) {
                 let winding_up = !attack.released();
@@ -82,8 +82,8 @@ pub(super) fn use_abilities(
             match cast {
                 Cast::Throw(projectile) => spawn_projectile(&mut commands, projectile, side),
                 Cast::Dash => input.move_to = None,
-                Cast::Prime(prime) => {
-                    attack.primed = Some(prime.attack_speed);
+                Cast::Prime { slot, prime } => {
+                    attack.primed = Some((slot, prime.attack_speed));
                     // Pressed with the click that started an attack this tick (`attack` runs
                     // first): that's the attack it primes.
                     if let Some(swing) = attack.swing.as_mut().filter(|swing| swing.started_at == now.0 && !swing.primed) {

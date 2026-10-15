@@ -255,7 +255,7 @@ fn update_live_stats(
     let def = class.def();
     let now = clock.now(true);
     let empowered = attack.armed_at(now) && def.attack.follow_up.is_some();
-    let haste = attack.primed.unwrap_or(0.0) + frenzy.map_or(0.0, |frenzy| frenzy.at(now));
+    let haste = attack.primed.map_or(0.0, |(_, speed)| speed) + frenzy.map_or(0.0, |frenzy| frenzy.at(now));
     let shown = [
         (frame.0.range, range_text(def, empowered), range_text(def, false)),
         (frame.0.crit, crit_text(def, empowered, attack.primed.is_some()), crit_text(def, false, false)),

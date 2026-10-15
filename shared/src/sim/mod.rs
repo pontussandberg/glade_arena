@@ -447,18 +447,18 @@ mod tests {
         let class = primer();
         let mut both = press(AbilitySlot(class.def().abilities.len() as u8), Vec2::X);
         both.order_cast(Q, Vec2::X);
-        assert!(matches!(step_kit(10, class, Vec2::ZERO, &both, &default(), default()).1, Some(Cast::Prime(_))), "Q lost to a later press");
+        assert!(matches!(step_kit(10, class, Vec2::ZERO, &both, &default(), default()).1, Some(Cast::Prime { .. })), "Q lost to a later press");
     }
 
     #[test]
     fn a_prime_needs_no_aim_and_readies_one_quicker_attack() {
         let class = primer();
-        let Some(Cast::Prime(prime)) = step_kit(10, class, Vec2::ZERO, &press_q(Vec2::ZERO), &default(), default()).1 else {
+        let Some(Cast::Prime { slot, prime }) = step_kit(10, class, Vec2::ZERO, &press_q(Vec2::ZERO), &default(), default()).1 else {
             panic!("no prime the tick Q is pressed")
         };
         let attack = &class.def().attack;
         let fire = aim(Vec2::X, true);
-        let primed = AttackState { primed: Some(prime.attack_speed), ..default() };
+        let primed = AttackState { primed: Some((slot, prime.attack_speed)), ..default() };
         let plain = start_attack(20, class, &fire, AttackState::default()).swing.unwrap();
         let state = start_attack(20, class, &fire, primed);
         let swing = state.swing.unwrap();

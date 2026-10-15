@@ -154,8 +154,9 @@ pub struct Member {
     pub class: Option<ClassId>,
     /// Their fighter is in the arena (else they're in the lobby, picking).
     pub in_arena: bool,
-    /// Players they killed this match (or the last one, until the next starts).
+    /// Players they killed this match (or the last one, until the next starts), and zombies.
     pub kills: u32,
+    pub zombie_kills: u32,
 }
 
 /// Why we're no longer in a room.

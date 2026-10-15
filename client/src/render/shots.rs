@@ -234,16 +234,24 @@ pub(super) struct Impact {
 
 /// A thrown spear gone short of its range hit something (a fighter, a wall, a rock, a tree): a
 /// flash where its point was, and splinters thrown back the way it came, out and up. One that flew
-/// its whole range just ends.
+/// its whole range just ends, and so does every one cleared away mid-flight: at the end of a won
+/// match, or with the map changed.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn strike_home(
     trigger: On<Remove, Projectile>,
     mut commands: Commands,
     time: Res<Time>,
+    room: Res<crate::rooms::CurrentRoom>,
+    map: Res<crate::rooms::CurrentMap>,
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     shots: Query<(&Projectile, &Transform, &Thrown, &InheritedVisibility)>,
 ) {
+    let cleared = room.0.as_ref().is_some_and(|view| view.winner.is_some()) || map.is_changed();
     let Ok((projectile, transform, thrown, visible)) = shots.get(trigger.entity) else { return };
+    if cleared {
+        return;
+    }
     let Some(range) = projectile.class.def().shot(projectile.ability).map(|shot| shot.range) else { return };
     let point = transform.translation;
     let flown = arena::to_gameplay(point).distance(projectile.origin);

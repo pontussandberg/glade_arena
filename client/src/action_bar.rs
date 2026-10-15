@@ -7,7 +7,7 @@
 
 use std::f32::consts::TAU;
 
-use arena_shared::classes::{AbilityDef, AbilityKind, ClassDef, common};
+use arena_shared::classes::{AbilityDef, ClassDef, common};
 use arena_shared::classes::{AttackKind, seconds};
 use arena_shared::config::{FRENZY_BASE, FRENZY_MELEE_TICKS, FRENZY_PER_KILL, FRENZY_RANGED_TICKS, TICK_HZ};
 use arena_shared::protocol::*;
@@ -168,6 +168,7 @@ fn spawn_frenzy(commands: &mut Commands, class: &ClassDef, from_center: f32) {
 fn update_frenzy(
     clock: AttackClock,
     room: Res<CurrentRoom>,
+    guest: Option<Res<crate::rooms::Me>>,
     me: Query<&Frenzy, With<Me>>,
     mut icons: Query<(&FrenzyIcon, &mut Node, &mut BorderColor)>,
     mut nodes: Query<&mut Node, Without<FrenzyIcon>>,
@@ -185,7 +186,7 @@ fn update_frenzy(
     if let Ok(mut bar) = nodes.get_mut(icon.bar) {
         set_fill(&mut bar, left);
     }
-    let kills = frenzy.kills.to_string();
+    let kills = guest.and_then(|guest| room.0.as_ref()?.member(guest.guest_id).map(|member| member.zombie_kills)).unwrap_or(0).to_string();
     for shown in [icon.kills, icon.stack] {
         if let Ok(mut text) = texts.get_mut(shown)
             && text.0 != kills
@@ -359,7 +360,7 @@ fn update_icons(
     let now = clock.now(true);
     for (icon, shown, mut border, mut fill) in &mut icons {
         let Some(ability) = class.def().ability(icon.slot) else { continue };
-        let primed = attack.primed.is_some() && matches!(ability.kind, AbilityKind::Prime(_));
+        let primed = attack.primed.is_some_and(|(slot, _)| slot == icon.slot);
         update_icon(icon, shown.into_inner(), border.reborrow(), (now, cooldowns, ability), &mut wipes, &mut texts);
         // Primed: filled gold, its edge slowly brightening and dimming, until the attack goes off.
         fill.set_if_neq(BackgroundColor(if primed { palette::TORCH_FLAME.with_alpha(0.3) } else { palette::ui::PANEL }));

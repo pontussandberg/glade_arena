@@ -76,7 +76,7 @@ pub fn start_attack_hasted(tick: u32, class: ClassId, input: &PlayerInput, mut s
         && let Some(dir) = input.aim.try_normalize()
     {
         let primed = state.primed.is_some();
-        let haste = haste + state.primed.unwrap_or(0.0);
+        let haste = haste + state.primed.map_or(0.0, |(_, speed)| speed);
         state.swing = Some(Swing { started_at: tick, dir, quick: state.quick_at(tick as f32), hastened: false, haste, primed });
     }
     state

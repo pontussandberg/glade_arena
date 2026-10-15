@@ -117,8 +117,8 @@ pub(super) fn respawn(
             health.0 = class.def().max_hp;
             chilled.set_if_neq(Chilled::default());
             hasted.set_if_neq(Hasted::default());
-            // Its frenzy's over; the zombies it killed still count.
-            frenzy.set_if_neq(Frenzy { kills: frenzy.kills, ..default() });
+            // Its frenzy's over (the zombies it killed still count: `Member::zombie_kills`).
+            frenzy.set_if_neq(Frenzy::default());
             *attack = AttackState::default();
             // Practice's No cooldowns stays as it was.
             *cooldowns = Cooldowns { free: cooldowns.free, ..default() };
