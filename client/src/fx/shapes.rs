@@ -143,6 +143,18 @@ pub(super) fn frost(seed: u32) -> Mesh {
     b.build()
 }
 
+/// A disc lying flat, 1 out (radius 1): solid in the middle, fading to clear at its
+/// rim, perfectly round.
+pub(super) fn disc() -> Mesh {
+    let mut b = FlatMesh::default();
+    let steps = 48;
+    for i in 0..steps {
+        let (a, z) = (i as f32 / steps as f32 * TAU, (i + 1) as f32 / steps as f32 * TAU);
+        b.tri_faded_both([Vec3::ZERO, at(a, 1.0), at(z, 1.0)], [1.0, 0.0, 0.0]);
+    }
+    b.build()
+}
+
 /// A cross lying flat (a plus), its arms 1 out from the middle along X and Z, `width` wide:
 /// solid along each arm's spine, clear at its edges and tip.
 pub(super) fn cross(width: f32) -> Mesh {
