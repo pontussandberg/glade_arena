@@ -55,12 +55,13 @@ impl Plugin for LobbyPlugin {
         app.configure_sets(Update, CameraControl.run_if(in_state(Screen::InGame)));
         app.configure_sets(Update, crate::PlayerControls.run_if(in_state(Screen::InGame)));
         app.insert_resource(DetailsOpen(true));
+        app.init_resource::<room::RoomOpen>();
         app.add_systems(OnEnter(Picking), open_lobby);
         app.add_systems(OnExit(Picking), close_lobby);
         app.add_systems(
             Update,
             (
-                (pick_fighter, fold_details, show_fighter, show_details, (show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena, scroll_panel).chain(),
+                (pick_fighter, fold_details, show_fighter, show_details, (fold_room, show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena, scroll_panel).chain(),
                 show_status,
                 (turn_stage_camera, place_name_tag).chain().in_set(CameraMoves),
                 liven_stage,

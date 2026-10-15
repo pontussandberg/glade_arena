@@ -1222,7 +1222,7 @@ fn take_out_idle(mut lobby: ResMut<Lobby>, timeout: Res<AfkTimeout>, mut next: L
     }
 }
 
-/// Members see their room again when it changed; guests in the browser see the list again when
+/// Members see their room again when it changed; every guest sees the list again when
 /// it changed (at most every `LIST_EVERY`).
 fn send_updates(mut lobby: ResMut<Lobby>, mut list_sent_at: Local<Option<Duration>>, mut ctx: Ctx) {
     let changed: Vec<RoomKey> = lobby.rooms.iter().filter(|(_, room)| room.changed).map(|(key, _)| *key).collect();
@@ -1252,8 +1252,9 @@ fn send_updates(mut lobby: ResMut<Lobby>, mut list_sent_at: Local<Option<Duratio
         lobby.list_changed = false;
         *list_sent_at = Some(now);
         let list = lobby.list();
-        let browsing: Vec<Entity> = lobby.guests.iter().filter(|(_, g)| g.room.is_none()).map(|(link, _)| *link).collect();
-        for link in browsing {
+        // Everyone: at home to pick one, in a room to see the others.
+        let everyone: Vec<Entity> = lobby.guests.keys().copied().collect();
+        for link in everyone {
             ctx.send(link, LobbyEvent::RoomList(list.clone()));
         }
     }

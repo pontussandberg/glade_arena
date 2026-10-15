@@ -33,7 +33,7 @@ impl Plugin for BrowserPlugin {
         app.add_systems(Update, show_connecting.run_if(in_state(Screen::Connecting)));
         app.add_systems(OnEnter(Screen::Home), open_home);
         app.add_systems(OnExit(Screen::Home), close_home);
-        app.add_systems(Update, board_buttons.run_if(in_state(Screen::Home).or_else(in_state(Screen::Room))));
+        app.add_systems(Update, (board_buttons, join_buttons).run_if(in_state(Screen::Home).or_else(in_state(Screen::Room))));
         app.add_systems(
             Update,
             (focus_name, type_name, lobby_buttons, show_lobbies, show_form)
@@ -280,7 +280,6 @@ fn create(home: &Home, sender: &mut MessageSender<RoomRequest>) {
 #[allow(clippy::too_many_arguments)]
 fn lobby_buttons(
     header: Query<Ref<Interaction>, With<PaneHeader>>,
-    joins: Query<(Ref<Interaction>, &JoinButton)>,
     (games, modes, maps): (Query<(Ref<Interaction>, &GameButton)>, Query<(Ref<Interaction>, &ModeButton)>, Query<(Ref<Interaction>, &MapButton)>),
     (create_button, cancel): (Query<Ref<Interaction>, With<CreateButton>>, Query<Ref<Interaction>, With<CancelButton>>),
     (set_password, no_password): (Query<Ref<Interaction>, With<PasswordButton>>, Query<Ref<Interaction>, With<NoPasswordButton>>),
@@ -292,16 +291,6 @@ fn lobby_buttons(
 ) {
     if header.iter().any(clicked) {
         open.0 = !open.0;
-    }
-    for (interaction, join) in &joins {
-        if !clicked(interaction) {
-            continue;
-        }
-        match join.1 {
-            // Its password first.
-            true => prompt.0 = Some(password_asked("Join a lobby", "This lobby has a password.", "JOIN", Answer::JoinRoom(join.0))),
-            false => request(&mut sender, RoomRequest::Join(join.0, None)),
-        }
     }
     // The new lobby's password: asked for in the box (left empty, none), or taken off.
     if set_password.iter().any(clicked) {
@@ -347,6 +336,20 @@ fn lobby_buttons(
     }
     if cancel.iter().any(clicked) {
         home.form_open = false;
+    }
+}
+
+/// A lobby's Join (at home, or in another lobby: out of that one and into this): in, or its
+/// password asked for first.
+fn join_buttons(joins: Query<(Ref<Interaction>, &JoinButton)>, mut prompt: ResMut<TextPrompt>, mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>) {
+    for (interaction, join) in &joins {
+        if !clicked(interaction) {
+            continue;
+        }
+        match join.1 {
+            true => prompt.0 = Some(password_asked("Join a lobby", "This lobby has a password.", "JOIN", Answer::JoinRoom(join.0))),
+            false => request(&mut sender, RoomRequest::Join(join.0, None)),
+        }
     }
 }
 
@@ -419,23 +422,7 @@ fn spawn_lobbies(panel: &mut ChildSpawnerCommands, home: &Home, list: &[RoomSumm
     panel.spawn(pane_body(scrolled)).with_children(|panel| {
         panel.spawn(card()).with_children(|card| {
             card.spawn(ui_text("Join a lobby", 20.0, palette::ui::TEXT));
-            if list.is_empty() {
-                card.spawn(ui_text("No lobbies yet", 12.0, palette::ui::MUTED));
-            }
-            // The waves apart from fights, as many of each as fit.
-            for (title, pve) in [("PvE", true), ("PvP", false)] {
-                let rooms: Vec<&RoomSummary> = list.iter().filter(|room| room.mode.pve() == pve).collect();
-                if rooms.is_empty() {
-                    continue;
-                }
-                card.spawn(label(title));
-                for room in rooms.iter().take(MAX_ROWS / 2) {
-                    spawn_row(card, room);
-                }
-                if rooms.len() > MAX_ROWS / 2 {
-                    card.spawn(ui_text(format!("and {} more", rooms.len() - MAX_ROWS / 2), 11.0, palette::ui::MUTED));
-                }
-            }
+            spawn_join_list(card, list.iter(), "No lobbies yet");
         });
 
         panel.spawn(card()).with_children(|card| {
@@ -584,6 +571,28 @@ fn spawn_header(panel: &mut ChildSpawnerCommands, list: &[RoomSummary], open: bo
             right.spawn(fold_chip(open));
         });
     });
+}
+
+/// The lobbies to join (`rooms`), the waves apart from fights, as many of each as fit; `none`
+/// if there are none.
+pub(crate) fn spawn_join_list<'a>(card: &mut ChildSpawnerCommands, rooms: impl Iterator<Item = &'a RoomSummary>, none: &str) {
+    let rooms: Vec<&RoomSummary> = rooms.collect();
+    if rooms.is_empty() {
+        card.spawn(ui_text(none, 12.0, palette::ui::MUTED));
+    }
+    for (title, pve) in [("PvE", true), ("PvP", false)] {
+        let these: Vec<&&RoomSummary> = rooms.iter().filter(|room| room.mode.pve() == pve).collect();
+        if these.is_empty() {
+            continue;
+        }
+        card.spawn(label(title));
+        for room in these.iter().take(MAX_ROWS / 2) {
+            spawn_row(card, room);
+        }
+        if these.len() > MAX_ROWS / 2 {
+            card.spawn(ui_text(format!("and {} more", these.len() - MAX_ROWS / 2), 11.0, palette::ui::MUTED));
+        }
+    }
 }
 
 /// Lobbies listed at most; the rest are counted.

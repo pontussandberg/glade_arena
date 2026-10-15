@@ -12,8 +12,9 @@ use crate::arena::palette;
 use crate::render::{button, clicked, shown, ui_text};
 use crate::rooms::{CurrentRoom, Me, Notice, Screen, request};
 
-/// The room column, two cards. The room: name, whether it's on, its mode and map (for the leader,
-/// switches). Who's in it: in free-for-all a list; in teams the two side by side, with the way to
+/// The room column: a pane titled with the room's name, folding open and shut. Open: a line on
+/// what it is, a line on where it stands, and for the leader its switches; who's in it; the way
+/// out; the other lobbies to join. Under it the leaderboards. Who's in it: in free-for-all a list; in teams the two side by side, with the way to
 /// switch sides under ours. Then the way out. Rebuilt when the room changes, or we come to it.
 ///
 /// Names are in one neutral color; ours is in the accent (on a tinted row), as in the badge over the fighter.
@@ -24,9 +25,11 @@ pub(super) fn show_room(
     me: Option<Res<Me>>,
     panel: Single<(Entity, Ref<SidePanel>, &mut Visibility)>,
     (boards_open, boards): (Res<crate::browser::BoardsOpen>, Res<crate::rooms::Leaderboards>),
+    (open, list): (Res<RoomOpen>, Res<crate::rooms::RoomList>),
 ) {
     let (panel, fresh, mut visibility) = panel.into_inner();
-    if !room.is_changed() && !fresh.is_added() && !screen.is_changed() && !boards_open.is_changed() && !boards.is_changed() {
+    let changed = room.is_changed() || screen.is_changed() || boards_open.is_changed() || boards.is_changed() || open.is_changed() || list.is_changed();
+    if !changed && !fresh.is_added() {
         return;
     }
     let Some(view) = &room.0 else { return };
@@ -34,59 +37,41 @@ pub(super) fn show_room(
     let my_id = me.as_ref().map_or(0, |me| me.guest_id);
     let leading = view.leader == my_id;
     commands.entity(panel).despawn_children().with_children(|column| {
-        // The room, one block (what doesn't fit scrolls), then the leaderboards.
-        column.spawn(pane(true)).with_children(|block| {
+        // The room, one pane titled with its name (what doesn't fit scrolls): the room, its
+        // players, the way out and the other lobbies; then the leaderboards.
+        column.spawn(pane(open.0)).with_children(|block| {
+            block.spawn((RoomHeader, pane_header())).with_children(|header| {
+                header.spawn(ui_text(view.name.clone(), 18.0, palette::ui::TEXT));
+                header.spawn(fold_chip(open.0));
+            });
+            if !open.0 {
+                return;
+            }
             block.spawn(pane_body(0.0)).with_children(|panel| {
                 panel.spawn(card()).with_children(|card| {
-                    card.spawn(label("Lobby"));
-                    card.spawn(ui_text(view.name.clone(), 24.0, palette::ui::TEXT));
-                    // Before the start: the leader waits for everyone to be ready, then starts.
-                    let ready = view.member(my_id).is_some_and(|m| m.ready);
-                    let status = match (view.started, leading) {
-                        (true, _) => Some(("Match in progress", ACCENT)),
-                        (false, true) if !view.all_ready() => Some(("Waiting for everyone to be ready", palette::ui::MUTED)),
-                        (false, true) => None,
-                        (false, false) if ready => Some(("Ready: waiting for the leader", palette::ui::GO)),
-                        (false, false) => Some(("Ready up when you are", palette::ui::MUTED)),
-                    };
-                    if let Some((line, color)) = status {
-                        card.spawn(ui_text(line, 12.0, color));
-                    }
-                    if !view.started
-                        && let Some(winner) = view.winner_name(my_id)
-                    {
-                        let won = if winner == "You" { "You won the last match".to_string() } else { format!("{winner} won the last match") };
-                        card.spawn(ui_text(won, 12.0, palette::TORCH_FLAME));
-                    }
+                    // What it is in a line (the game, where, what wins it or the best run yet);
+                    // then one line on where things stand.
+                    let mut about = vec![if view.mode.pve() { "PvE".to_string() } else { view.mode.label().to_string() }, view.map.label().to_string()];
                     if let Some(goal) = view.goal {
-                        card.spawn(ui_text(format!("First to {goal} kills. Zombies roam the arena."), 11.0, palette::ui::MUTED));
+                        about.push(format!("first to {goal} kills"));
                     }
-                    if view.mode.pve() {
-                        card.spawn(ui_text("Endless waves of monsters out of the wilds. Buy items from the merchant between waves; a boss every fifth.", 11.0, palette::ui::MUTED));
-                        if let Some(run) = &view.run {
-                            let line = match run.phase {
-                                Phase::Over { reached } if !view.started => Some(format!("The last run fell on wave {reached}")),
-                                _ if view.started => Some(format!("Fighting wave {}", run.wave)),
-                                _ => None,
-                            };
-                            if let Some(line) = line {
-                                card.spawn(ui_text(line, 12.0, palette::TORCH_FLAME));
-                            }
-                            if run.best > 0 {
-                                card.spawn(ui_text(format!("Best: wave {}", run.best), 11.0, palette::ui::TEXT));
-                            }
+                    if let Some(best) = view.run.as_ref().map(|run| run.best).filter(|best| *best > 0) {
+                        about.push(format!("best: wave {best}"));
+                    }
+                    card.spawn(ui_text(about.join("  |  "), 12.0, palette::ui::MUTED));
+                    let (line, color) = status(view, my_id, leading);
+                    card.spawn(ui_text(line, 12.0, color));
+                    // The leader's switches (before the start): the game, its mode, where.
+                    if view.may_edit(my_id) {
+                        let games = [(true, "PvE"), (false, "PvP")];
+                        setting(card, "Game", &games, view.mode.pve(), |pve| RoomRequest::SetMode(if pve { Mode::Waves } else { Mode::Ffa }));
+                        if !view.mode.pve() {
+                            let modes = Mode::PVP.map(|mode| (mode, mode.label()));
+                            setting(card, "Mode", &modes, view.mode, RoomRequest::SetMode);
                         }
+                        let maps: Vec<(MapId, &str)> = view.mode.maps().iter().map(|map| (*map, map.label())).collect();
+                        setting(card, "Map", &maps, view.map, RoomRequest::SetMap);
                     }
-                    // The game first (fighting each other, or the waves together), then its mode, then where.
-                    let editing = view.may_edit(my_id);
-                    let games = [(false, "PvP: each other"), (true, "PvE: the waves")];
-                    setting(card, "Game", &games, view.mode.pve(), editing, |pve| RoomRequest::SetMode(if pve { Mode::Waves } else { Mode::Ffa }));
-                    if !view.mode.pve() {
-                        let modes = Mode::PVP.map(|mode| (mode, mode.label()));
-                        setting(card, "Mode", &modes, view.mode, editing, RoomRequest::SetMode);
-                    }
-                    let maps: Vec<(MapId, &str)> = view.mode.maps().iter().map(|map| (*map, map.label())).collect();
-                    setting(card, "Map", &maps, view.map, editing, RoomRequest::SetMap);
                 });
 
                 panel.spawn(card()).with_children(|card| match view.mode {
@@ -102,10 +87,38 @@ pub(super) fn show_room(
                 let leave = button("Leave lobby", 12.0, palette::ui::PANEL, palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.3));
                 panel.spawn(Node { flex_direction: FlexDirection::Column, padding: UiRect { top: px(0.0), ..UiRect::all(px(CARD_PADDING)) }, ..default() })
                     .with_child((RoomButton(RoomRequest::Leave), leave));
+                // The other lobbies: joining one leaves this.
+                panel.spawn(card()).with_children(|card| {
+                    card.spawn(label("Other lobbies"));
+                    crate::browser::spawn_join_list(card, list.0.iter().filter(|r| r.key != view.key), "None right now");
+                });
             });
         });
         crate::browser::spawn_boards(column, &boards.0, &boards_open);
     });
+}
+
+/// Where the room stands, in one line: the match on (the wave fought); before it, the last result,
+/// then who's ready.
+fn status(view: &RoomView, my_id: u32, leading: bool) -> (String, Color) {
+    if view.started {
+        let line = view.run.as_ref().filter(|_| view.mode.pve()).map_or("Match in progress".to_string(), |run| format!("Fighting wave {}", run.wave));
+        return (line, ACCENT);
+    }
+    if let Some(winner) = view.winner_name(my_id) {
+        let won = if winner == "You" { "You won the last match".to_string() } else { format!("{winner} won the last match") };
+        return (won, palette::TORCH_FLAME);
+    }
+    if let Some(Phase::Over { reached }) = view.run.as_ref().map(|run| run.phase) {
+        return (format!("The last run fell on wave {reached}"), palette::TORCH_FLAME);
+    }
+    let ready = view.member(my_id).is_some_and(|m| m.ready);
+    match (leading, view.all_ready(), ready) {
+        (true, false, _) => ("Waiting for everyone to be ready".into(), palette::ui::MUTED),
+        (true, true, _) => ("Everyone's ready".into(), palette::ui::GO),
+        (false, _, true) => ("Ready: waiting for the leader".into(), palette::ui::GO),
+        (false, _, false) => ("Ready up when you are".into(), palette::ui::MUTED),
+    }
 }
 
 /// One of the room's settings under its `title`: for its leader before the start
@@ -116,17 +129,8 @@ fn setting<T: Copy + PartialEq>(
     title: &str,
     options: &[(T, &str)],
     current: T,
-    editing: bool,
     pick: fn(T) -> RoomRequest,
 ) {
-    if !editing {
-        // Only the one it's on (a mode in the other group shows nothing there).
-        let Some((_, shown)) = options.iter().find(|(option, _)| *option == current) else { return };
-        card.spawn(Node { height: px(GAP * 0.5), ..default() });
-        card.spawn(label(title));
-        card.spawn(ui_text(*shown, 13.0, palette::ui::TEXT));
-        return;
-    }
     card.spawn(Node { height: px(GAP * 0.5), ..default() });
     card.spawn(label(title));
     card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
@@ -211,44 +215,58 @@ fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
     });
 }
 
-/// A member, in `node`'s place, in one column however narrow the side: the leader's tag if they
-/// lead, their name, then their fighter and whether they're in the arena (both wrapping as they
-/// need). Our own row is tinted.
+/// A member, in `node`'s place, on one line (wrapping if the side is narrow): their name, their
+/// fighter, and a tag (leader, in the arena, ready). Our own row is tinted.
 fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, member: &Member, my_id: u32) {
     let is_me = member.guest_id == my_id;
-    // Bottom-aligned, so in rows of one height names and fighters line up, the leader's tag above.
     let row = Node {
-        flex_direction: FlexDirection::Column,
-        justify_content: JustifyContent::FlexEnd,
-        row_gap: px(2.0),
-        padding: UiRect::axes(px(GAP), px(GAP * 0.5)),
+        align_items: AlignItems::Baseline,
+        column_gap: px(GAP),
+        flex_wrap: FlexWrap::Wrap,
+        padding: UiRect::axes(px(GAP), px(GAP * 0.6)),
         ..node
     };
     let tint = if is_me { ACCENT.with_alpha(0.14) } else { palette::ui::BACKDROP.with_alpha(0.5) };
     parent.spawn((row, BackgroundColor(tint))).with_children(|row| {
-        if member.guest_id == view.leader {
-            row.spawn(ui_text("LEADER", 9.0, palette::TORCH_FLAME));
-        } else if !view.started && member.ready {
-            row.spawn(ui_text("READY", 9.0, palette::ui::GO));
-        }
         // Ours in the accent, so it reads as "you" on either side.
         row.spawn(ui_text(member.name.clone(), 13.0, if is_me { ACCENT } else { palette::ui::TEXT }));
         let fighter = member.class.map_or("Picking...".to_string(), |c| c.def().name.clone());
-        row.spawn(Node { column_gap: px(GAP * 0.75), flex_wrap: FlexWrap::Wrap, ..default() }).with_children(|line| {
-            line.spawn(ui_text(fighter, 11.0, palette::ui::MUTED));
-            if member.in_arena {
-                line.spawn(ui_text("in arena", 11.0, ACCENT));
-            }
-            if view.goal.is_some() && (view.started || view.winner.is_some()) {
-                let kills = if member.kills == 1 { "1 kill".to_string() } else { format!("{} kills", member.kills) };
-                line.spawn(ui_text(kills, 11.0, palette::ui::TEXT));
-            }
-            // Against the waves, the monsters killed this run.
-            if view.mode.pve() && view.run.is_some() {
-                line.spawn(ui_text(format!("{} slain", member.zombie_kills), 11.0, palette::ui::TEXT));
-            }
-        });
+        row.spawn(ui_text(fighter, 11.0, palette::ui::MUTED));
+        // Then one tag, pushed to the end: who leads, who's in, who's ready.
+        let tag = if member.guest_id == view.leader {
+            Some(("LEADER", palette::TORCH_FLAME))
+        } else if view.started && member.in_arena {
+            Some(("IN ARENA", ACCENT))
+        } else if !view.started && member.ready {
+            Some(("READY", palette::ui::GO))
+        } else {
+            None
+        };
+        if let Some((tag, color)) = tag {
+            row.spawn((Node { margin: UiRect::left(Val::Auto), ..default() }, children![ui_text(tag, 9.0, color)]));
+        }
     });
+}
+
+/// Whether the room's pane is open (to begin with, it is).
+#[derive(Resource)]
+pub(crate) struct RoomOpen(pub bool);
+
+impl Default for RoomOpen {
+    fn default() -> Self {
+        RoomOpen(true)
+    }
+}
+
+/// The room's pane header: a click folds or opens it.
+#[derive(Component)]
+pub(super) struct RoomHeader;
+
+/// A click on the room's header folds or opens its pane.
+pub(super) fn fold_room(header: Query<Ref<Interaction>, With<RoomHeader>>, mut open: ResMut<RoomOpen>) {
+    if header.iter().any(clicked) {
+        open.0 = !open.0;
+    }
 }
 
 /// The room column's buttons ask the server.
