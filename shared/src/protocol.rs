@@ -436,6 +436,9 @@ pub enum FxKind {
     Coins,
     /// A monster clawing its way up out of the ground at `at`.
     Rise,
+    /// Rime left on the ground out to `radius` round `at` until `until` (Hoarfrost Boots): a
+    /// frost rune, ice shards bursting up and sinking again as it thaws, a cold mist.
+    Rime,
 }
 
 /// A passing effect of an item or a monster, for the client to draw: what, where, and from when

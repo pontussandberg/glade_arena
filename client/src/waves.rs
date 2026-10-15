@@ -612,6 +612,9 @@ struct FxLooks {
     bolt: Handle<Mesh>,
     ball: Handle<Mesh>,
     bit: Handle<Mesh>,
+    /// Rime's: the frost rune (as under a slowed fighter's feet) and an ice shard, 1 m tall.
+    rune: Handle<Mesh>,
+    shard: Handle<Mesh>,
 }
 
 fn load_fx_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
@@ -621,6 +624,8 @@ fn load_fx_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
         bolt: meshes.add(Cuboid::new(1.0, 0.07, 0.07)),
         ball: meshes.add(Sphere::new(1.0).mesh().ico(1).expect("a small ico sphere")),
         bit: meshes.add(Cuboid::new(0.14, 0.14, 0.14)),
+        rune: meshes.add(arena::frost_rune_mesh()),
+        shard: meshes.add(arena::nova_meshes(1.0).shard),
     });
 }
 
@@ -641,6 +646,19 @@ pub(crate) fn hue_color(hue: FxColor) -> Color {
 /// An effect's parts (its children), each with its own material, to fade.
 #[derive(Component)]
 struct FxParts(Vec<(Entity, Handle<StandardMaterial>, f32)>);
+
+/// A part's own place in its effect, for one that moves from there as it plays (rime's shards
+/// and mist).
+#[derive(Component)]
+struct FxBase(Transform);
+
+/// The frost rune's radius in its mesh (`arena::frost_rune_mesh`).
+const RUNE_RADIUS: f32 = 0.64;
+/// Rime's shards and its mist: how many, and how long (ticks) they take to burst up and to sink.
+const RIME_SHARDS: usize = 6;
+const RIME_MOTES: usize = 5;
+const RIME_BURST_TICKS: f32 = 4.0;
+const RIME_THAW_TICKS: f32 = 18.0;
 
 /// Gives each effect its look as it arrives.
 fn add_fx(mut commands: Commands, looks: Res<FxLooks>, mut materials: ResMut<Assets<StandardMaterial>>, new: Query<(Entity, &Fx), Added<Fx>>) {
@@ -694,6 +712,33 @@ fn add_fx(mut commands: Commands, looks: Res<FxLooks>, mut materials: ResMut<Ass
                 let c = palette::ROT_DARK;
                 vec![part(&mut commands, &looks.disc, c, 0.6, 0.2, ground(0.05, fx.radius)), part(&mut commands, &looks.ring, palette::MONSTER, 0.6, 2.0, ground(0.06, fx.radius))]
             }
+            FxKind::Rime => {
+                // Frost over the ground, the rune glowing in it; shards of ice round it, leaning
+                // out, and a few motes of cold mist (placed by `play_fx` from their own places).
+                let rune = Transform::from_xyz(0.0, 0.05, 0.0).with_scale(Vec3::splat(fx.radius / RUNE_RADIUS));
+                let mut children = vec![
+                    part(&mut commands, &looks.disc, palette::ICE, 0.22, 1.2, ground(0.04, fx.radius)),
+                    part(&mut commands, &looks.rune, palette::FROST_GLOW, 0.85, 3.5, rune),
+                ];
+                commands.entity(children[1]).insert(FxBase(rune));
+                let seed = (fx.at.x * 7.13 + fx.at.y * 3.71).abs();
+                for n in 0..RIME_SHARDS + RIME_MOTES {
+                    let turn = n as f32 * 2.399 + seed;
+                    let out = fx.radius * (0.3 + 0.55 * ((seed + n as f32 * 0.618).fract()));
+                    let at = Vec3::new(turn.cos() * out, 0.0, turn.sin() * out);
+                    let (mesh, color, alpha, glow, transform) = if n < RIME_SHARDS {
+                        let tall = 0.35 + 0.35 * ((seed * 1.7 + n as f32 * 0.37).fract());
+                        let lean = Quat::from_rotation_y(-turn);
+                        (&looks.shard, palette::ICE, 0.75, 2.5, Transform::from_translation(at).with_rotation(lean).with_scale(Vec3::splat(tall)))
+                    } else {
+                        (&looks.bit, palette::RIME, 0.6, 2.0, Transform::from_translation(at * 0.8).with_scale(Vec3::splat(0.5)))
+                    };
+                    let id = part(&mut commands, mesh, color, alpha, glow, transform);
+                    commands.entity(id).insert(FxBase(transform));
+                    children.push(id);
+                }
+                children
+            }
         };
         let root = if fx.kind == FxKind::Arc || fx.kind == FxKind::Lob { Vec3::ZERO } else { to_world(fx.at, 0.0) };
         commands.entity(entity).insert((Transform::from_translation(root), Visibility::Inherited, FxParts(parts))).add_children(&children);
@@ -703,7 +748,14 @@ fn add_fx(mut commands: Commands, looks: Res<FxLooks>, mut materials: ResMut<Ass
 /// Effects play out on the timeline others' fighters are drawn on: blasts spread and fade, zones
 /// breathe and fade at their end, warnings fill until they land, kegs fly, bolts flash, coins
 /// fly up.
-fn play_fx(clock: AttackClock, fx: Query<(&Fx, &FxParts)>, mut transforms: Query<&mut Transform>, mut materials: ResMut<Assets<StandardMaterial>>, mut visibility: Query<&mut Visibility>) {
+fn play_fx(
+    clock: AttackClock,
+    fx: Query<(&Fx, &FxParts)>,
+    bases: Query<&FxBase>,
+    mut transforms: Query<&mut Transform>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut visibility: Query<&mut Visibility>,
+) {
     let now = clock.now(false);
     for (fx, parts) in &fx {
         let span = (fx.until as f32 - fx.from as f32).max(1.0);
@@ -786,6 +838,35 @@ fn play_fx(clock: AttackClock, fx: Query<(&Fx, &FxParts)>, mut transforms: Query
             FxKind::Rise => {
                 fade(0, 1.0 - t);
                 fade(1, 1.0 - t);
+            }
+            FxKind::Rime => {
+                // Bursting up, holding, sinking as it thaws: the shards grow out of the ground and
+                // back in, the rune turns slowly and fades, the mist rises and fades on a loop.
+                let burst = ((now - fx.from as f32) / RIME_BURST_TICKS).clamp(0.0, 1.0);
+                let thaw = ((fx.until as f32 - now) / RIME_THAW_TICKS).clamp(0.0, 1.0);
+                let up = 1.0 - (1.0 - burst.min(thaw)).powi(3);
+                fade(0, thaw);
+                fade(1, thaw);
+                for (i, (part, ..)) in parts.0.iter().enumerate().skip(1) {
+                    let (Ok(base), Ok(mut transform)) = (bases.get(*part), transforms.get_mut(*part)) else { continue };
+                    let base = base.0;
+                    match i {
+                        1 => transform.rotation = base.rotation * Quat::from_rotation_y(now * 0.02),
+                        _ if i <= RIME_SHARDS + 1 => {
+                            // Overshooting a touch as they burst, as ice cracks up.
+                            let height = up * (1.0 + 0.15 * (1.0 - burst) * burst * 4.0);
+                            transform.scale = base.scale * Vec3::new(1.0, height.max(0.01), 1.0);
+                        }
+                        _ => {
+                            let rise = (now * 0.025 + i as f32 * 0.37).fract();
+                            transform.translation = base.translation + Vec3::Y * (0.1 + 1.1 * rise);
+                            transform.scale = base.scale * (1.0 - rise) * up.max(0.01);
+                        }
+                    }
+                    if i > 1 {
+                        fade(i, thaw);
+                    }
+                }
             }
         }
     }

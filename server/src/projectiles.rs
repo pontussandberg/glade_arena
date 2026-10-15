@@ -17,6 +17,11 @@ pub(super) fn spawn_projectile(commands: &mut Commands, projectile: Projectile, 
 #[derive(Component)]
 pub(crate) struct Spares(pub(crate) PeerId);
 
+/// Server-only: the monsters a piercing shot (`AttackDef::pierces`) has gone through, so it hits
+/// each once.
+#[derive(Component, Default)]
+pub(crate) struct Pierced(Vec<PeerId>);
+
 pub(super) fn move_projectiles(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
@@ -34,25 +39,37 @@ pub(super) fn move_projectiles(
 
 /// Projectile hits on the shooter's foes (allies' pass through), judged against where everyone
 /// is now, like every hit. Clients see the result through replicated `Health` (and `Chilled`).
+/// A shot ends at the first it hits, but one that pierces (`AttackDef::pierces`, an auto-attack's)
+/// flies on through monsters, hitting each once.
+#[allow(clippy::type_complexity)]
 pub(super) fn resolve_projectile_hits(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    projectiles: Query<(Entity, &Pos, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Spares>, (Option<&Bounces>, Has<Shard>))>,
+    mut projectiles: Query<(Entity, &Pos, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Spares>, (Option<&Bounces>, Has<Shard>, Option<&mut Pierced>))>,
     mut targets: Targets,
     mut log: ResMut<HitLog>,
 ) {
     let now = timeline.tick();
-    for (projectile_entity, projectile_pos, projectile, room, team, might, spares, (bounces, shard)) in &projectiles {
+    for (projectile_entity, projectile_pos, projectile, room, team, might, spares, (bounces, shard, mut pierced)) in &mut projectiles {
+        let pierces = projectile.ability.is_none() && projectile.class.def().attack.pierces;
+        let mut through: Vec<PeerId> = pierced.as_ref().map_or_else(Vec::new, |p| p.0.clone());
         for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent, _, sheltered) in &mut targets {
             if target_id.0 == projectile.owner
                 || sheltered
                 || spares.is_some_and(|s| s.0 == target_id.0)
+                || through.contains(&target_id.0)
                 || health.0 == 0
                 || !foes((*room, *team), (*target_room, *target_team))
                 || !sim::projectile_hits(projectile_pos.0, projectile, target_pos.0) {
                 continue;
             }
-            commands.entity(projectile_entity).try_despawn();
+            let goes_on = pierces && target_team.0 == arena_shared::rooms::ZOMBIES;
+            let first = through.is_empty();
+            if goes_on {
+                through.push(target_id.0);
+            } else {
+                commands.entity(projectile_entity).try_despawn();
+            }
             let amount = mighty(sim::projectile_damage(projectile, now.0), might_of(might));
             let chill = sim::projectile_chill(projectile);
             let blow = if projectile.ability.is_none() { Blow::attack(amount, chill, false, projectile.crit) } else { Blow::ability(amount, chill) };
@@ -61,9 +78,19 @@ pub(super) fn resolve_projectile_hits(
             let source = projectile.ability.map_or(Source::Attack, Source::Ability);
             let hit = (&mut *health, &mut *chilled, &mut *recent);
             let at = (target, target_id.0, target_pos.0);
-            let shot = ShotHit { projectile: *projectile, might: might_of(might), bounces: bounces.map(|b| b.0), shard };
+            let shot = ShotHit { projectile: *projectile, might: might_of(might), bounces: bounces.map(|b| b.0), shard, pierced: !first };
             damage(&mut commands, &mut log, now.0, at, hit, blow, (projectile.owner, projectile.class, with), ((*room, *team), source, Some(shot)));
-            break;
+            if !goes_on {
+                break;
+            }
+        }
+        // Who it's gone through, for the ticks it flies on.
+        match pierced.as_mut() {
+            Some(pierced) if pierced.0.len() != through.len() => pierced.0 = through,
+            None if !through.is_empty() => {
+                commands.entity(projectile_entity).try_insert(Pierced(through));
+            }
+            _ => {}
         }
     }
 }

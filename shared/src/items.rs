@@ -122,9 +122,9 @@ pub fn wisp_offset(tick: f32, wisp: u32, count: u32, orbit: f32) -> Vec2 {
     let angle = tick / TICK_HZ as f32 * WISP_TURNS * std::f32::consts::TAU + wisp as f32 * std::f32::consts::TAU / count.max(1) as f32;
     Vec2::from_angle(angle) * orbit
 }
-/// Hoarfrost Boots: (slow, damage per pulse, how long a patch lasts in ticks, how often one is left in ticks).
-pub fn hoarfrost_boots(level: u8) -> (f32, i32, u32, u32) {
-    (lv(level, [0.3, 0.4, 0.5]), lv(level, [4, 6, 9]), secs(3.0), secs(0.4))
+/// Hoarfrost Boots: (slow, how long a patch lasts in ticks, how often one is left in ticks).
+pub fn hoarfrost_boots(level: u8) -> (f32, u32, u32) {
+    (lv(level, [0.3, 0.4, 0.5]), lv(level, [secs(3.0), secs(3.5), secs(4.0)]), secs(0.4))
 }
 /// How big a frost patch is.
 pub const FROST_PATCH_RADIUS: f32 = 1.3;
@@ -228,8 +228,8 @@ impl Item {
     /// What it costs at level 1.
     pub fn price(self) -> u32 {
         match self {
-            Item::Bloodfang | Item::BrambleMantle => 250,
-            Item::StormCoil | Item::RimeSigil | Item::HoarfrostBoots | Item::MidasCoin | Item::BerserkerTotem => 300,
+            Item::Bloodfang | Item::BrambleMantle | Item::HoarfrostBoots => 250,
+            Item::StormCoil | Item::RimeSigil | Item::MidasCoin | Item::BerserkerTotem => 300,
             Item::RicochetCharm | Item::GravecallerRift | Item::HeartOfWinter => 300,
             Item::EmberHeart | Item::EchoStone | Item::DoomBell | Item::MirrorShard | Item::HydraSpear => 350,
             Item::PowderKeg | Item::WispLantern | Item::ThunderCrown | Item::VoidOrb => 400,
@@ -339,8 +339,8 @@ impl Item {
                 format!("{count} wisps circle you, burning enemies they touch for {damage} damage.")
             }
             Item::HoarfrostBoots => {
-                let (slow, damage, lasts, _) = hoarfrost_boots(level);
-                format!("Walking leaves frost behind for {}: enemies on it are slowed {} and take {damage} damage every {}.", s(lasts), pct(slow), s(ZONE_PULSE_TICKS))
+                let (slow, lasts, _) = hoarfrost_boots(level);
+                format!("Walking leaves rime behind for {}: enemies on it are slowed {}.", s(lasts), pct(slow))
             }
             Item::DoomBell => {
                 let (share, lasts) = doom_bell(level);

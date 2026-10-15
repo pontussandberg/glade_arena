@@ -80,7 +80,9 @@ seconds to pick them up, the wave is cleared, or a boss falls; if everyone is do
 over (alone, the first fall ends it). Shrines (blood-red stones) send you into a frenzy. From
 wave 4, about half the waves come with an **omen**, known while you shop for them: a Horde, a
 Blood Moon (elites everywhere), a Frenzy (every monster hasted), Gilded (double bounties), the
-Restless Dead (who may rise again) or Volatile (everything bursts as it dies).
+Restless Dead (who may rise again) or Volatile (everything bursts as it dies). Players' auto-attacks
+knock monsters (zombies too) back a little, bosses aside, and the Jav's javelins pierce straight
+through monsters (never players).
 
 **Items** (`shared/src/items.rs`) never give stats: each does something. Six at most; buying one
 you have raises it a level (up to 3), selling gives back half.
@@ -95,7 +97,7 @@ you have raises it a level (up to 3), selling gives back half.
 | Echo Stone | Your ability echoes where you stood, as a burst |
 | Powder Keg | Lobs kegs at the nearest enemy now and then |
 | Wisp Lantern | Wisps circle you, burning what they touch |
-| Hoarfrost Boots | You leave frost behind that slows and hurts |
+| Hoarfrost Boots | You leave rime behind that slows (a frost rune, ice bursting up) |
 | Doom Bell | Marks enemies; the bell tolls back a share of what you dealt them |
 | Midas Coin | Hits finish enemies low on health, for gold (not bosses) |
 | Phoenix Feather | A killing blow raises you instead, in fire (recharges) |

@@ -105,6 +105,9 @@ pub(crate) struct ShotHit {
     pub(crate) might: f32,
     pub(crate) bounces: Option<u8>,
     pub(crate) shard: bool,
+    /// It pierced others before this one (`AttackDef::pierces`): what splits and bounces off a
+    /// shot does so off its first hit only.
+    pub(crate) pierced: bool,
 }
 
 /// Server-only: the hits landed this tick, in order, until `items::react` has seen them.
@@ -142,7 +145,10 @@ pub(super) fn damage(
     let crit = blow.sure_crit || blow.crit_roll.is_some_and(|roll| roll < class.def().crit.chance_against(chilled.rooted_at(now), blow.empowered));
     let amount = if crit { (blow.amount as f32 * common().crit_multiplier).round() as i32 } else { blow.amount };
     health.0 = (health.0 - amount).max(0);
-    hits.push(amount, if crit { HitKind::Crit } else { HitKind::Damage });
+    // A blow of crowd control alone (a slow, a freeze) shows no number.
+    if amount > 0 {
+        hits.push(amount, if crit { HitKind::Crit } else { HitKind::Damage });
+    }
     if !blow.chill.is_none() {
         chilled.apply(blow.chill, now);
     }
@@ -271,6 +277,36 @@ pub(super) fn attack(
         }
         // Only on change: AttackState is replicated.
         state.set_if_neq(next);
+    }
+}
+
+/// Server-only: knocked back along `dir` (a monster hit by a player's auto-attack), `left` meters
+/// of it still to go.
+#[derive(Component)]
+pub(crate) struct Shoved {
+    pub(crate) dir: Vec2,
+    pub(crate) left: f32,
+}
+
+/// How far a player's auto-attack knocks a monster back (a bigger one less; bosses not at all),
+/// and how fast it slides.
+pub(crate) const KNOCKBACK: f32 = 0.55;
+const SHOVE_SPEED: f32 = 7.0;
+
+/// The knocked back slide, a step a tick, until it's gone its way or meets a wall.
+pub(super) fn shove(mut commands: Commands, lobby: Res<Lobby>, mut shoved: Query<(Entity, &mut Pos, &InRoom, &mut Shoved)>) {
+    for (entity, mut pos, room, mut shove) in &mut shoved {
+        let step = shove.left.min(SHOVE_SPEED * TICK_DT);
+        let next = pos.0 + shove.dir * step;
+        if lobby.map(room).line_walkable(pos.0, next) {
+            pos.0 = next;
+            shove.left -= step;
+        } else {
+            shove.left = 0.0;
+        }
+        if shove.left <= 1e-4 {
+            commands.entity(entity).remove::<Shoved>();
+        }
     }
 }
 

@@ -220,11 +220,11 @@ pub(super) fn tick_items(
                     pending.0.push(Delayed { by: by(item), at, radius, damage, chill: Chill::default(), fire_at: now + fuse, color: FxColor::Fire });
                 }
                 Item::HoarfrostBoots if now >= state.trail.0 && pos.0.distance(state.trail.1) >= 0.8 => {
-                    let (slow, damage, lasts, every) = items::hoarfrost_boots(level);
+                    let (slow, lasts, every) = items::hoarfrost_boots(level);
                     state.trail = (now + every, pos.0);
                     let radius = items::FROST_PATCH_RADIUS;
-                    zones.0.push(Zone { by: by(item), at: pos.0, radius, damage, slow, pull: 0.0, until: now + lasts });
-                    spawn_fx(&mut commands, side.0, Fx::at(FxKind::Zone(FxColor::Frost), pos.0, radius, now, lasts));
+                    zones.0.push(Zone { by: by(item), at: pos.0, radius, damage: 0, slow, pull: 0.0, until: now + lasts });
+                    spawn_fx(&mut commands, side.0, Fx::at(FxKind::Rime, pos.0, radius, now, lasts));
                 }
                 Item::GravecallerRift if pulse => {
                     let mine: Vec<sim::Rift> = rifts.0.iter().filter(|(r, rift)| *r == side.0 && rift.owner == id.0).map(|(_, rift)| *rift).collect();
@@ -303,6 +303,7 @@ pub(super) struct Reacting<'w, 's> {
     mobs: Query<'w, 's, (&'static Mob, Option<&'static Elite>, &'static ClassId, Option<&'static Might>)>,
     doomed: Query<'w, 's, &'static mut Doomed>,
     fighters: Query<'w, 's, (Entity, &'static PlayerId)>,
+    zombies: Query<'w, 's, &'static ClassId, With<Zombie>>,
     /// Every fighter by its id, made once a tick: hits name who dealt them by id.
     ids: Local<'s, HashMap<PeerId, Entity>>,
 }
@@ -387,6 +388,7 @@ fn on_cast(r: &mut Reacting, now: u32, cast: Used) {
 fn on_hit(r: &mut Reacting, now: u32, hit: Landed) {
     // Monsters' own: an elite's twist, a bloater's last burst, a split.
     monster_hit(r, now, &hit);
+    knock_back(r, &hit);
     if let Some(holder) = holder(r, hit.attacker) {
         attacker_items(r, now, &hit, holder);
     }
@@ -394,6 +396,26 @@ fn on_hit(r: &mut Reacting, now: u32, hit: Landed) {
         && let Some(holder) = holder(r, hit.victim_id)
     {
         victim_items(r, now, &hit, holder);
+    }
+}
+
+/// A player's auto-attack knocks a monster (a zombie, or one of the waves') back a little, away
+/// from them (along a shot's flight), a bigger one less; bosses stand firm.
+fn knock_back(r: &mut Reacting, hit: &Landed) {
+    if hit.source != Source::Attack || hit.killed || !matches!(hit.attacker, PeerId::Netcode(_)) {
+        return;
+    }
+    let Ok(class) = r.zombies.get(hit.victim) else { return };
+    if class.def().is_boss() {
+        return;
+    }
+    let from = r.ids.get(&hit.attacker).and_then(|e| r.targets.get(*e).ok()).map(|(.., pos, _, _, _, _, _)| pos.0);
+    let dir = match hit.shot {
+        Some(shot) => shot.projectile.dir,
+        None => from.map_or(Vec2::ZERO, |from| (hit.at - from).normalize_or_zero()),
+    };
+    if dir != Vec2::ZERO {
+        r.commands.entity(hit.victim).try_insert(Shoved { dir, left: KNOCKBACK / class.def().size().max(0.5) });
     }
 }
 
@@ -478,7 +500,7 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                 spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Coins, at, 1.0, now, 20));
             }
             Item::RicochetCharm => {
-                let Some(shot) = hit.shot else { continue };
+                let Some(shot) = hit.shot.filter(|shot| !shot.pierced) else { continue };
                 let (bounces, reach, keeps) = items::ricochet_charm(level);
                 let left = shot.bounces.unwrap_or(bounces);
                 if left == 0 {
@@ -491,7 +513,7 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                 r.commands.entity(spawned).insert((Bounces(left - 1), Spares(hit.victim_id)));
             }
             Item::HydraSpear => {
-                let Some(shot) = hit.shot.filter(|shot| !shot.shard) else { continue };
+                let Some(shot) = hit.shot.filter(|shot| !shot.shard && !shot.pierced) else { continue };
                 let (count, keeps) = items::hydra_spear(level);
                 for n in 0..count {
                     let spread = 0.9 * (n as f32 / (count - 1).max(1) as f32 - 0.5);

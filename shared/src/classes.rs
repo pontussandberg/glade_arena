@@ -212,6 +212,9 @@ pub struct AttackDef {
     /// there (none by default).
     #[serde(default)]
     pub rift: Option<RiftDef>,
+    /// Its shots fly on through monsters (never players), hitting each once (no by default).
+    #[serde(default)]
+    pub pierces: bool,
 }
 
 /// The ground a strike tears open over its lane (`AttackDef::lane`, empowered or not): it lasts
@@ -675,6 +678,7 @@ mod tests {
                 assert!(!filled.contains(['{', '}']), "{what}: unknown placeholder in {filled:?}");
             }
             chill_is_sane(&c.id, c.attack.chill);
+            assert!(!c.attack.pierces || c.attack.kind.shot().is_some(), "{}: pierces, but throws nothing", c.id);
             if let Some(RiftDef { ticks, haste }) = c.attack.rift {
                 assert!(matches!(c.attack.kind, AttackKind::Melee { .. }), "{}: a rift from a projectile", c.id);
                 assert!((1..=10 * TICK_HZ as u32).contains(&ticks) && (0.0..=2.0).contains(&haste), "{}: rift", c.id);
@@ -726,7 +730,7 @@ mod tests {
     #[test]
     fn far_scale_scales_with_distance() {
         let kind = |far_scale| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_scale };
-        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None };
+        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None, pierces: false };
         assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(3.0))).damage_at(d)), [10, 20, 30, 30]);
         assert_eq!(attack(kind(None)).damage_at(5.0), 10);
     }
