@@ -21,7 +21,7 @@ pub(crate) fn card() -> impl Bundle {
 }
 
 /// A fold-open pane: one block, its header (`pane_header`) on top and, open, its cards under it,
-/// a thin line (`divider`) between each. Open, its edge is in the accent. Short of room (two
+/// set apart by their own room. Open, its edge is in the accent. Short of room (two
 /// open in one column), it gives some up: its header stays, and its body (`pane_body`) scrolls.
 pub(crate) fn pane(open: bool) -> impl Bundle {
     let edge = if open { ACCENT } else { palette::ui::MUTED.with_alpha(0.3) };
@@ -61,10 +61,6 @@ pub(crate) fn pane_header() -> impl Bundle {
     )
 }
 
-/// The thin line between a pane's parts.
-pub(crate) fn divider() -> impl Bundle {
-    (Node { height: px(1.0), margin: UiRect::horizontal(px(CARD_PADDING)), ..default() }, BackgroundColor(palette::ui::MUTED.with_alpha(0.25)))
-}
 
 /// Whether a click on a pane's header shows the rest (+, in the accent) or hides it (-): its
 /// `fold_sign`, boxed.

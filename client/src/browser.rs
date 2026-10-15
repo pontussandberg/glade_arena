@@ -17,9 +17,9 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use crate::arena::palette;
-use crate::lobby::{SidePanel, card, divider, fold_chip, label, pane, pane_body, pane_header};
+use crate::lobby::{SidePanel, card, fold_chip, label, pane, pane_body, pane_header};
 use crate::prompt::Answered;
-use crate::render::{button, clicked, key_chip, ui_text};
+use crate::render::{ButtonFill, button, clicked, key_chip, ui_text};
 use crate::rooms::{Answer, Asking, CurrentMap, HOME_MAP, Leaderboards, Me, RoomList, Screen, TextPrompt, request};
 use crate::arena::palette::ui::ACCENT;
 
@@ -146,13 +146,21 @@ struct BoardsHeader;
 struct BoardTab(usize);
 
 /// The lobby about to be created, while home: against the waves on Hollow Wilds, open to anyone,
-/// to begin with.
+/// to begin with. Its form shows once "Create lobby" is clicked (`form_open`).
 #[derive(Resource)]
 struct Home {
     name: String,
     mode: Mode,
     map: MapId,
     password: Option<String>,
+    form_open: bool,
+}
+
+impl Home {
+    /// Whether it can be created as it is (it has a name).
+    fn valid(&self) -> bool {
+        arena_shared::rooms::clean_room_name(&self.name).is_some()
+    }
 }
 
 /// Typing goes into the new lobby's name, not to the character select's keys.
@@ -191,13 +199,19 @@ struct ModeButton(Mode);
 #[derive(Component)]
 struct MapButton(MapId);
 
+/// "Create lobby": shows the form, and once it's showing (green when the form is valid), creates
+/// the lobby.
 #[derive(Component)]
 struct CreateButton;
+
+/// Folds the form away again.
+#[derive(Component)]
+struct CancelButton;
 
 fn open_home(mut commands: Commands, me: Option<Res<Me>>, mut map: ResMut<CurrentMap>) {
     // The first name only: a whole one with its byname can be too long for a lobby's.
     let first = me.as_ref().map_or("Guest", |me| first_name(&me.name));
-    commands.insert_resource(Home { name: format!("{first}'s lobby"), mode: Mode::Waves, map: HOME_MAP, password: None });
+    commands.insert_resource(Home { name: format!("{first}'s lobby"), mode: Mode::Waves, map: HOME_MAP, password: None, form_open: false });
     // Home shows Hollow Wilds again, whatever the last room was on.
     map.set_if_neq(CurrentMap(HOME_MAP));
 }
@@ -247,7 +261,8 @@ fn type_name(
                 home.name.pop();
             }
             // Still typing (so the Enter isn't also taken for practice), until we're in the lobby.
-            Key::Enter => create(&home, &mut sender),
+            Key::Enter if home.valid() => create(&home, &mut sender),
+            Key::Enter => {}
             _ => {
                 if let Some(text) = &key.text {
                     for c in text.chars().filter(|c| !c.is_control()) {
@@ -271,7 +286,7 @@ fn lobby_buttons(
     header: Query<Ref<Interaction>, With<PaneHeader>>,
     joins: Query<(Ref<Interaction>, &JoinButton)>,
     (games, modes, maps): (Query<(Ref<Interaction>, &GameButton)>, Query<(Ref<Interaction>, &ModeButton)>, Query<(Ref<Interaction>, &MapButton)>),
-    create_button: Query<Ref<Interaction>, With<CreateButton>>,
+    (create_button, cancel): (Query<Ref<Interaction>, With<CreateButton>>, Query<Ref<Interaction>, With<CancelButton>>),
     (boards_header, tabs): (Query<Ref<Interaction>, With<BoardsHeader>>, Query<(Ref<Interaction>, &BoardTab)>),
     (set_password, no_password): (Query<Ref<Interaction>, With<PasswordButton>>, Query<Ref<Interaction>, With<NoPasswordButton>>),
     mut home: ResMut<Home>,
@@ -337,7 +352,14 @@ fn lobby_buttons(
         shown.set_if_neq(CurrentMap(home.map));
     }
     if create_button.iter().any(clicked) {
-        create(&home, &mut sender);
+        match home.form_open {
+            false => home.form_open = true,
+            true if home.valid() => create(&home, &mut sender),
+            true => {}
+        }
+    }
+    if cancel.iter().any(clicked) {
+        home.form_open = false;
     }
 }
 
@@ -367,11 +389,12 @@ fn show_lobbies(
     list: Res<RoomList>,
     (boards_open, boards): (Res<BoardsOpen>, Res<Leaderboards>),
     panel: Single<(Entity, Ref<SidePanel>, &mut Visibility)>,
-    mut built_for: Local<Option<(bool, MapId, bool)>>,
+    mut built_for: Local<Option<(bool, bool, MapId, bool)>>,
 ) {
     let (panel, fresh, mut visibility) = panel.into_inner();
-    // The form's rows change with the game picked (its modes, its maps), and the password set.
-    let form = Some((home.mode.pve(), home.mode.maps()[0], home.password.is_some()));
+    // The form's rows change with whether it shows, the game picked (its modes, its maps), and
+    // the password set.
+    let form = Some((home.form_open, home.mode.pve(), home.mode.maps()[0], home.password.is_some()));
     let form_changed = std::mem::replace(&mut *built_for, form) != form;
     if !(open.is_changed() || home.is_added() || fresh.is_added() || list.is_changed() || form_changed || boards_open.is_changed() || boards.is_changed()) {
         return;
@@ -385,22 +408,20 @@ fn show_lobbies(
     });
 }
 
-/// The lobbies' pane: its header; open, the lobbies to join, then the form for a new one.
+/// The lobbies' pane: its header; open, the lobbies to join, then "Create lobby", and once that's
+/// clicked the form for a new one, the pane scrolled down to it.
 fn spawn_lobbies(panel: &mut ChildSpawnerCommands, home: &Home, list: &[RoomSummary], open: bool) {
     spawn_header(panel, list, open);
     if !open {
         return;
     }
-    panel.spawn(pane_body()).with_children(|panel| {
-        panel.spawn(divider());
+    // Opened, the form shows at once: scrolled to the end (as far as it goes).
+    let scrolled = if home.form_open { ScrollPosition(Vec2::new(0.0, 10_000.0)) } else { ScrollPosition::default() };
+    panel.spawn((pane_body(), scrolled)).with_children(|panel| {
         panel.spawn(card()).with_children(|card| {
             card.spawn(ui_text("Join a lobby", 20.0, palette::ui::TEXT));
             if list.is_empty() {
-                card.spawn((
-                    Node { justify_content: JustifyContent::Center, padding: UiRect::all(px(GAP * 2.0)), border: UiRect::all(px(1.0)), ..default() },
-                    BorderColor::all(palette::ui::MUTED.with_alpha(0.2)),
-                ))
-                .with_child(ui_text("No lobbies yet", 12.0, palette::ui::MUTED));
+                card.spawn(ui_text("No lobbies yet", 12.0, palette::ui::MUTED));
             }
             // The waves apart from fights, as many of each as fit.
             for (title, pve) in [("PvE", true), ("PvP", false)] {
@@ -418,8 +439,11 @@ fn spawn_lobbies(panel: &mut ChildSpawnerCommands, home: &Home, list: &[RoomSumm
             }
         });
 
-        panel.spawn(divider());
         panel.spawn(card()).with_children(|card| {
+            if !home.form_open {
+                card.spawn((CreateButton, button("CREATE LOBBY", 14.0, ACCENT, palette::ui::PANEL, ACCENT)));
+                return;
+            }
             card.spawn(ui_text("Create a lobby", 20.0, palette::ui::TEXT));
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
             card.spawn(label("Name"));
@@ -431,16 +455,15 @@ fn spawn_lobbies(panel: &mut ChildSpawnerCommands, home: &Home, list: &[RoomSumm
                 BackgroundColor(palette::ui::BACKDROP),
             ))
             .with_child((NameField, ui_text("", 15.0, palette::ui::TEXT)));
-            // First the game: the waves together first and bigger (the obvious choice), then
-            // fighting each other.
+            // First the game: the waves together first (the obvious choice), then fighting each
+            // other.
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
             card.spawn(label("Game"));
             card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
-                for (pve, title, blurb, grow) in [(true, "PvE", "Survive endless waves together", 2.0), (false, "PvP", "Fight each other", 1.0)] {
-                    let node = Node { flex_grow: grow, ..choice(GAP) };
-                    row.spawn((GameButton(pve), Button, node, BorderColor::all(palette::ui::MUTED.with_alpha(0.3)), BackgroundColor(palette::ui::BACKDROP)))
+                for (pve, title, blurb) in [(true, "PvE", "Survive endless waves together"), (false, "PvP", "Fight each other")] {
+                    row.spawn((GameButton(pve), Button, choice(GAP), BorderColor::all(palette::ui::MUTED.with_alpha(0.3)), BackgroundColor(palette::ui::BACKDROP)))
                         .with_children(|button| {
-                            button.spawn(ui_text(title, if pve { 20.0 } else { 15.0 }, palette::ui::TEXT));
+                            button.spawn(ui_text(title, 18.0, palette::ui::TEXT));
                             button.spawn(ui_text(blurb, 11.0, SUBTITLE));
                         });
                 }
@@ -477,7 +500,12 @@ fn spawn_lobbies(panel: &mut ChildSpawnerCommands, home: &Home, list: &[RoomSumm
                 }
             });
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
-            card.spawn((CreateButton, button("CREATE LOBBY", 14.0, ACCENT, palette::ui::PANEL, ACCENT)));
+            card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
+                row.spawn((CancelButton, button("Cancel", 13.0, palette::ui::PANEL, palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.4))));
+                // Green once the form is valid (`show_form`).
+                let mut create = row.spawn((CreateButton, button("CREATE LOBBY", 14.0, palette::ui::GO, palette::ui::TEXT, palette::ui::GO)));
+                create.entry::<Node>().and_modify(|mut node| node.flex_grow = 1.0);
+            });
         });
     });
 }
@@ -493,7 +521,6 @@ fn spawn_boards(panel: &mut ChildSpawnerCommands, scores: &[HighScore], open: &B
             return;
         }
         panel.spawn(pane_body()).with_children(|panel| {
-            panel.spawn(divider());
             panel.spawn(card()).with_children(|card| {
                 card.spawn(Node { column_gap: px(GAP * 0.5), ..default() }).with_children(|row| {
                     for size in 1..=MAX_PARTY {
@@ -625,7 +652,23 @@ fn show_form(
     mut name: Query<&mut Text, With<NameField>>,
     mut name_box: Query<&mut BorderColor, (With<NameBox>, Without<ModeButton>, Without<GameButton>, Without<MapButton>)>,
     mut modes: Query<(AnyOf<(&GameButton, &ModeButton, &MapButton)>, &Interaction, &mut BorderColor, &mut BackgroundColor)>,
+    mut create: Query<(&Interaction, &mut ButtonFill, &mut BackgroundColor, &mut BorderColor), (With<CreateButton>, Without<GameButton>, Without<ModeButton>, Without<MapButton>, Without<NameBox>)>,
 ) {
+    // The form's create button: green while the form is valid (folded, the plain accent).
+    let fill = match (home.form_open, home.valid()) {
+        (false, _) => ACCENT,
+        (true, true) => palette::ui::GO,
+        (true, false) => palette::ui::MUTED.with_alpha(0.5),
+    };
+    for (interaction, mut button_fill, mut background, mut border) in &mut create {
+        if button_fill.0 != fill {
+            button_fill.0 = fill;
+            border.set_if_neq(BorderColor::all(fill));
+            if *interaction == Interaction::None {
+                background.set_if_neq(BackgroundColor(fill));
+            }
+        }
+    }
     let caret = if typing.0 && time.elapsed_secs().fract() < 0.5 { "|" } else { " " };
     let text = format!("{}{caret}", home.name);
     for mut name in &mut name {

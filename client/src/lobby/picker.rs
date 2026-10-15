@@ -145,9 +145,7 @@ pub(super) fn show_details(
             if !open.0 {
                 return;
             }
-            column.spawn(divider());
             stat_frame::spawn_frame(column, lobby.selected, stat_frame::FrameStyle::Card);
-            column.spawn(divider());
             column.spawn(card()).with_children(|card| {
                 if let Some(passive) = stat_frame::passive_blurb(def) {
                     power(card, "P", palette::TORCH_FLAME, passive);
