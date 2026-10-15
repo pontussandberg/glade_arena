@@ -482,3 +482,60 @@ fn pvp_has_a_merchant_and_kills_pay_their_killer() {
         p.satchel().is_some_and(|s| s.gold == arena_shared::items::PVP_ZOMBIE_GOLD)
     });
 }
+
+/// Only an auto-attack's own hits set off on-hit items: a Ricochet Charm's bounce doesn't count
+/// toward the Thunder Crown's every-so-many hits.
+#[test]
+fn bounces_dont_set_off_on_hit_items() {
+    let mut p = Party::new(5869, "javelinist", false);
+    p.ask(RoomRequest::Practice(MapId::Keep));
+    p.until(Duration::from_secs(10), "practicing", |p| p.room().is_some_and(|r| r.practice) && p.satchel().is_some());
+    let shop = MapId::Keep.map().shop.unwrap();
+    let me = open_near(MapId::Keep, shop + Vec2::new(-1.0, 0.0));
+    for _ in 0..5 {
+        place(&mut p.server, 1, me);
+        p.update();
+    }
+    for item in [Item::RicochetCharm, Item::ThunderCrown] {
+        p.ask(RoomRequest::Buy(item));
+        p.until(Duration::from_secs(3), "given the item", |p| p.satchel().is_some_and(|s| s.level(item) == 1));
+    }
+    let (every, ..) = arena_shared::items::thunder_crown(1);
+
+    // A dummy straight ahead, and another off to its side for the javelin to bounce on to.
+    let map = MapId::Keep.map();
+    let first = open_near(MapId::Keep, me + Vec2::new(4.0, 0.0));
+    let second = [Vec2::Y, Vec2::NEG_Y].map(|side| first + side * 2.5).into_iter().find(|&at| map.walkable_at(at)).expect("room for a second dummy");
+    for at in [first, second] {
+        p.ask(RoomRequest::PlaceDummy { at, walks: false });
+    }
+    let hits = |p: &mut Party, at: Vec2| {
+        let world = p.server.world_mut();
+        world.query_filtered::<(&Pos, &RecentHits), Without<Shopkeeper>>().iter(world).find(|(pos, _)| pos.0.distance(at) < 0.5).map(|(_, hits)| hits.seq())
+    };
+    p.until(Duration::from_secs(3), "both dummies up", |p| hits(p, first).is_some() && hits(p, second).is_some());
+    let (first_from, second_from) = (hits(&mut p, first).unwrap(), hits(&mut p, second).unwrap());
+
+    // Javelins until the second dummy's taken more bounces than the crown needs hits.
+    let mut bolts = std::collections::HashSet::new();
+    let mut watch = |p: &mut Party, bolts: &mut std::collections::HashSet<Entity>| {
+        place(&mut p.server, 1, me);
+        let world = p.server.world_mut();
+        bolts.extend(world.query::<(Entity, &Fx)>().iter(world).filter(|(_, fx)| fx.kind == FxKind::Bolt).map(|(e, _)| e));
+    };
+    p.until(Duration::from_secs(20), "bounces enough", |p| {
+        edit_input(&mut p.client, |i| (i.aim, i.fire) = (first - me, true));
+        watch(p, &mut bolts);
+        hits(p, second).unwrap() - second_from > every
+    });
+    // What's still flying lands.
+    for _ in 0..90 {
+        watch(&mut p, &mut bolts);
+        p.update();
+    }
+    let bounces = hits(&mut p, second).unwrap() - second_from;
+    // The first dummy's hits: the javelins, and the bolts that came down on it.
+    let javelins = hits(&mut p, first).unwrap() - first_from - bolts.len() as u32;
+    assert!(bounces > every, "the javelins didn't bounce: {bounces}");
+    assert_eq!(bolts.len() as u32, javelins / every, "{javelins} javelins and {bounces} bounces called down {} bolts", bolts.len());
+}

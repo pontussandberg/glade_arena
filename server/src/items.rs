@@ -107,7 +107,7 @@ impl By {
         match self.source {
             Source::Item(item) => item.name(),
             Source::Trick => "a trick",
-            Source::Attack => "auto-attack",
+            Source::Attack | Source::Splash => "auto-attack",
             Source::Ability(_) => "ability",
         }
     }
@@ -166,7 +166,9 @@ pub(crate) fn blast(commands: &mut Commands, log: &mut HitLog, now: u32, targets
     strike(commands, log, now, targets, by, Blow::ability(damage, chill), |_, p| p.distance(at) <= radius + PLAYER_RADIUS)
 }
 
-/// The foe of `side` nearest `at` within `reach`, alive, other than those `skip` says: who and where.
+/// The foe of `side` nearest `at` within `reach`, alive, other than those `skip` says: who and
+/// where. Callers skip whoever's looking too: with no team (practice, a free-for-all), everyone
+/// is everyone's foe, themselves included.
 fn nearest_foe(targets: &Targets, side: Side, at: Vec2, reach: f32, skip: impl Fn(PeerId) -> bool) -> Option<(PeerId, Vec2)> {
     targets
         .iter()
@@ -249,7 +251,7 @@ pub(super) fn tick_items(
                 }
                 Item::PowderKeg if now >= state.keg_at => {
                     let (every, damage, radius, fuse, reach) = items::powder_keg(level);
-                    let Some((_, at)) = nearest_foe(&targets, side, pos.0, reach, |_| false) else { continue };
+                    let Some((_, at)) = nearest_foe(&targets, side, pos.0, reach, |p| p == id.0) else { continue };
                     state.keg_at = now + every;
                     spawn_fx(&mut commands, side.0, Fx::between(FxKind::Lob(FxColor::Fire), pos.0, at, radius, now, fuse));
                     pending.0.push(Delayed { by: by(item), at, radius, damage, chill: Chill::default(), fire_at: now + fuse, color: FxColor::Fire });
@@ -492,13 +494,28 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                     *frenzy = Frenzy { from: now, until: now + fade, strength };
                 }
             }
+            // An auto-attack's shot bounces on, and so does a bounce (one of the item's own hits,
+            // which sets off nothing else).
+            Item::RicochetCharm if attack || hit.source == Source::Item(item) => {
+                let Some(shot) = hit.shot.filter(|shot| !shot.pierced) else { continue };
+                let (bounces, reach, keeps) = items::ricochet_charm(level);
+                let left = shot.bounces.unwrap_or(bounces);
+                if left == 0 {
+                    continue;
+                }
+                let Some((_, at)) = nearest_foe(&r.targets, hit.side, hit.at, reach, |p| p == hit.victim_id || p == hit.attacker) else { continue };
+                let Some(dir) = (at - hit.at).try_normalize() else { continue };
+                let projectile = Projectile { origin: hit.at, dir, spawn_tick: now, crit: false, extra: true, ..shot.projectile };
+                let spawned = spawn_projectile(&mut r.commands, projectile, hit.side, shot.might * keeps);
+                r.commands.entity(spawned).insert((Bounces(left - 1), Spares(hit.victim_id)));
+            }
             _ if !attack => {}
             Item::StormCoil => {
                 let (jumps, damage, reach) = items::storm_coil(level);
                 let mut struck = vec![hit.victim_id];
                 let mut from = hit.at;
                 for _ in 0..jumps {
-                    let Some((next, at)) = nearest_foe(&r.targets, hit.side, from, reach, |p| struck.contains(&p)) else { break };
+                    let Some((next, at)) = nearest_foe(&r.targets, hit.side, from, reach, |p| p == hit.attacker || struck.contains(&p)) else { break };
                     spawn_fx(&mut r.commands, hit.side.0, Fx::between(FxKind::Arc, from, at, 0.0, now, 8));
                     strike(&mut r.commands, &mut r.log, now, &mut r.targets, by(item), Blow::ability(damage, Chill::default()), |p, _| p == next);
                     struck.push(next);
@@ -546,19 +563,6 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                 damage(&mut r.commands, &mut r.log, now, (entity, id, at), (&mut health, &mut chilled, &mut hits), Blow::ability(rest, Chill::default()), by, (hit.side, Source::Item(item), None));
                 r.lobby.reward(hit.side.0.key, hit.attacker, gold);
                 spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Coins, at, 1.0, now, 20));
-            }
-            Item::RicochetCharm => {
-                let Some(shot) = hit.shot.filter(|shot| !shot.pierced) else { continue };
-                let (bounces, reach, keeps) = items::ricochet_charm(level);
-                let left = shot.bounces.unwrap_or(bounces);
-                if left == 0 {
-                    continue;
-                }
-                let Some((_, at)) = nearest_foe(&r.targets, hit.side, hit.at, reach, |p| p == hit.victim_id) else { continue };
-                let Some(dir) = (at - hit.at).try_normalize() else { continue };
-                let projectile = Projectile { origin: hit.at, dir, spawn_tick: now, crit: false, extra: true, ..shot.projectile };
-                let spawned = spawn_projectile(&mut r.commands, projectile, hit.side, shot.might * keeps);
-                r.commands.entity(spawned).insert((Bounces(left - 1), Spares(hit.victim_id)));
             }
             _ => {}
         }

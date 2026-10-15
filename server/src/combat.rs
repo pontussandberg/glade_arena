@@ -75,6 +75,9 @@ pub(crate) struct Untouchable;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Source {
     Attack,
+    /// The burst round an auto-attack's mark (`AttackDef::burst`): the attack's damage, but it
+    /// sets off no on-hit items (only the one it struck does).
+    Splash,
     Ability(AbilitySlot),
     Item(Item),
     Trick,

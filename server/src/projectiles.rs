@@ -2,6 +2,7 @@
 
 use super::*;
 
+use arena_shared::items::Item;
 use arena_shared::sim;
 
 use crate::rooms::{InRoom, Lobby};
@@ -75,15 +76,20 @@ pub(super) fn resolve_projectile_hits(
             }
             let amount = mighty(sim::projectile_damage(projectile, now.0), might_of(might));
             let chill = sim::projectile_chill(projectile);
-            let blow = if projectile.ability.is_none() { Blow::attack(amount, chill, false, projectile.crit) } else { Blow::ability(amount, chill) };
+            // Only an auto-attack's own javelin or bolt (a Hydra Spear's barrage too: thrown like
+            // it) is the attack's, setting off on-hit items; a bounce is the Ricochet Charm's.
+            let (source, with) = match projectile.ability {
+                Some(slot) => (Source::Ability(slot), projectile.class.def().ability(slot).map_or("ability", |a| a.name.as_str())),
+                None if bounces.is_some() => (Source::Item(Item::RicochetCharm), Item::RicochetCharm.name()),
+                None => (Source::Attack, "auto-attack"),
+            };
+            let blow = if source == Source::Attack { Blow::attack(amount, chill, false, projectile.crit) } else { Blow::ability(amount, chill) };
             let def = projectile.class.def();
-            let with = projectile.ability.and_then(|slot| def.ability(slot)).map_or("auto-attack", |ability| ability.name.as_str());
-            let source = projectile.ability.map_or(Source::Attack, Source::Ability);
             let hit = (&mut *health, &mut *chilled, &mut *recent);
             let at = (target, target_id.0, target_pos.0);
             let shot = ShotHit { projectile: *projectile, might: might_of(might), bounces: bounces.map(|b| b.0), pierced: !first };
             damage(&mut commands, &mut log, now.0, at, hit, blow, (projectile.owner, projectile.class, with), ((*room, *team), source, Some(shot)));
-            if let Some(burst) = def.attack.burst.filter(|_| projectile.ability.is_none()) {
+            if let Some(burst) = def.attack.burst.filter(|_| source == Source::Attack) {
                 bursts.push((burst, target_pos.0, target_id.0, *projectile, mighty(amount, burst.share), chill, (*room, *team)));
             }
             if !goes_on {
@@ -103,6 +109,6 @@ pub(super) fn resolve_projectile_hits(
         crate::fx::spawn_fx(&mut commands, side.0, Fx::at(FxKind::Blast(FxColor::Frost), at, burst.radius, now.0, 10));
         let reach = burst.radius + PLAYER_RADIUS;
         let blow = Blow::attack(amount, chill, false, projectile.crit);
-        hit_foes(&mut commands, &mut log, now.0, &mut targets, (projectile.owner, projectile.class, "auto-attack"), (side, Source::Attack), blow, |id, p| id != struck && p.distance(at) <= reach);
+        hit_foes(&mut commands, &mut log, now.0, &mut targets, (projectile.owner, projectile.class, "auto-attack"), (side, Source::Splash), blow, |id, p| id != struck && p.distance(at) <= reach);
     }
 }

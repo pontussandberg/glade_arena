@@ -88,7 +88,10 @@ through monsters (never players).
 pixel icon (`client/src/item_icons.rs`). Six at most; buying one
 you have raises it a level (up to 3), selling gives back half. A few are one class's own: the shop
 lists them first under "<class> ONLY", and their tiles are rimmed in gold. Items that go off on an
-ability go off when the ability deals damage (once a use; Deadeye's primed javelin counts).
+ability go off when the ability deals damage (once a use; Deadeye's primed javelin counts). Only
+an auto-attack's own hits set off the on-hit items (a Hydra Spear's barrage counts: each javelin is
+thrown); what items deal (a ricochet's bounce, an arc, a burst), and a frostbolt's shatter round
+the one it struck, doesn't.
 
 Every map has a merchant. In practice everything is free, to try items out on the target dummies.
 In a PvP match everyone starts with nothing and earns gold only by their own kills (25 a zombie,
