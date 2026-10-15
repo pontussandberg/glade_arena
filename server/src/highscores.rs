@@ -54,11 +54,13 @@ impl HighScores {
         self.all.get(index)
     }
 
-    /// Where run `index` stands on its board (1: the best), if it's on it.
-    pub fn place(&self, index: usize) -> Option<usize> {
+    /// Where run `index` stands among every run by as many fighters (1: the best), and how many
+    /// those are.
+    pub fn standing(&self, index: usize) -> Option<(usize, usize)> {
         let score = self.all.get(index)?;
+        let alike: Vec<&HighScore> = self.all.iter().filter(|s| s.party.len() == score.party.len()).collect();
         let better = self.all.iter().enumerate().filter(|(i, s)| *i != index && s.party.len() == score.party.len() && HighScore::rank(s, score).is_lt()).count();
-        (better < LEADERBOARD_ROWS).then_some(better + 1)
+        Some((better + 1, alike.len()))
     }
 
     /// Run `index`'s `member` goes by `name` on the boards: the file is written out again.
@@ -186,18 +188,19 @@ mod tests {
         let solo: Vec<(u32, &str)> = boards.iter().filter(|s| s.party.len() == 1).map(|s| (s.wave, s.date.as_str())).collect();
         assert_eq!(solo, [(9, "2026-01-01"), (9, "2026-01-02"), (3, "2026-01-01")]);
         assert_eq!(boards.iter().filter(|s| s.party.len() == 2).count(), 1);
-        assert_eq!((scores.place(2), scores.place(1), scores.place(0), scores.place(3)), (Some(1), Some(2), Some(3), Some(1)));
+        assert_eq!([2, 1, 0, 3].map(|i| scores.standing(i)), [Some((1, 3)), Some((2, 3)), Some((3, 3)), Some((1, 1))]);
         scores.rename(0, 0, "Me".into());
         assert_eq!(scores.boards().iter().find(|s| s.wave == 3).unwrap().party[0].0, "Me");
     }
 
     #[test]
-    fn off_the_board_has_no_place() {
+    fn off_the_board_still_has_a_place() {
         let mut scores = HighScores::default();
         for i in 0..LEADERBOARD_ROWS {
             scores.record(run(10, 1, &format!("2026-01-{i:02}")));
         }
         let low = scores.record(run(2, 1, "2026-02-01"));
-        assert_eq!(scores.place(low), None);
+        assert_eq!(scores.standing(low), Some((LEADERBOARD_ROWS + 1, LEADERBOARD_ROWS + 1)));
+        assert!(!scores.boards().iter().any(|s| s.wave == 2), "past the top, on the board");
     }
 }

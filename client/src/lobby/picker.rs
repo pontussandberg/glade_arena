@@ -117,8 +117,8 @@ pub(super) fn show_fighter(mut commands: Commands, mut lobby: ResMut<Lobby>, vis
 }
 
 /// The selected fighter's details on the left, rebuilt when it changes or the pane opens or
-/// folds. As the lobbies pane: the header (role over name) always; open, cards under it, plainly
-/// apart.
+/// folds. As the side panel's panes, one block: the header (role over name) always; open, its
+/// stats and powers under it.
 pub(super) fn show_details(
     mut commands: Commands,
     lobby: Res<Lobby>,
@@ -133,29 +133,31 @@ pub(super) fn show_details(
     }
     *built_for = Some(lobby.selected);
     let def = lobby.selected.def();
-    commands.entity(details).despawn_children().with_children(|column| {
-        column.spawn((DetailsHeader, pane_header(open.0))).with_children(|header| {
-            header.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2.0), ..default() }).with_children(|left| {
-                left.spawn(ui_text(def.role.to_uppercase(), 12.0, ACCENT));
-                left.spawn(ui_text(def.name.clone(), 36.0, palette::ui::TEXT));
+    commands.entity(details).despawn_children().with_children(|details| {
+        details.spawn(pane(open.0)).with_children(|column| {
+            column.spawn((DetailsHeader, pane_header())).with_children(|header| {
+                header.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2.0), ..default() }).with_children(|left| {
+                    left.spawn(ui_text(def.role.to_uppercase(), 12.0, ACCENT));
+                    left.spawn(ui_text(def.name.clone(), 36.0, palette::ui::TEXT));
+                });
+                header.spawn(fold_chip(open.0));
             });
-            header.spawn(fold_chip(open.0));
-        });
-        if !open.0 {
-            return;
-        }
-        stat_frame::spawn_frame(column, lobby.selected, stat_frame::FrameStyle::Card);
-        column.spawn(card()).with_children(|card| {
-            if let Some(passive) = stat_frame::passive_blurb(def) {
-                power(card, "P", palette::TORCH_FLAME, passive);
-                card.spawn(Node { height: px(GAP), ..default() });
+            if !open.0 {
+                return;
             }
-            for (i, (slot, ability)) in def.abilities().enumerate() {
-                if i > 0 {
+            stat_frame::spawn_frame(column, lobby.selected, stat_frame::FrameStyle::Card);
+            column.spawn(card()).with_children(|card| {
+                if let Some(passive) = stat_frame::passive_blurb(def) {
+                    power(card, "P", palette::TORCH_FLAME, passive);
                     card.spawn(Node { height: px(GAP), ..default() });
                 }
-                power(card, crate::casting::key_label(slot), palette::SPIRIT, stat_frame::ability_blurb(def, slot, ability));
-            }
+                for (i, (slot, ability)) in def.abilities().enumerate() {
+                    if i > 0 {
+                        card.spawn(Node { height: px(GAP), ..default() });
+                    }
+                    power(card, crate::casting::key_label(slot), palette::SPIRIT, stat_frame::ability_blurb(def, slot, ability));
+                }
+            });
         });
     });
 }

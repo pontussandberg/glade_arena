@@ -219,16 +219,13 @@ pub(super) struct FrameRate {
 }
 
 /// The ping and frame rate (with the free camera, for watching the netcode, also the jitter), or
-/// that we're connecting or cut off; and when you're dead, how long until you're
-/// back.
+/// that we're connecting or cut off.
 pub(super) fn update_status(
     time: Res<Time<Real>>,
     mut frame_rate: Local<FrameRate>,
     mut status: Single<&mut Text, With<Status>>,
     client: Query<(&Link, Has<Connected>, Option<&Disconnected>), With<Client>>,
-    me: Query<&Health, (With<Me>, With<PlayerId>)>,
     mode: Res<CameraMode>,
-    (room, guest): (Res<crate::rooms::CurrentRoom>, Option<Res<crate::rooms::Me>>),
 ) {
     frame_rate.seconds += time.delta_secs();
     frame_rate.frames += 1;
@@ -246,18 +243,6 @@ pub(super) fn update_status(
         let _ = write!(text, "ping {:.0} ms   {} fps", ms(link.stats.rtt), frame_rate.shown);
         if mode.free {
             let _ = write!(text, "   jitter {:.0} ms", ms(link.stats.jitter));
-        }
-        if me.single().is_ok_and(|h| !h.alive()) {
-            // Against the waves, one life a wave: down until picked up, or the wave's cleared.
-            let run = room.run();
-            let waiting = run.zip(guest).is_some_and(|(run, guest)| run.waiting.contains(&guest.guest_id));
-            if waiting {
-                text.push_str("\nYou're down. An ally standing over you for 3s picks you up; else, back once the wave is cleared.");
-            } else if run.is_some() {
-                text.push_str("\nYou fell.");
-            } else {
-                let _ = write!(text, "\nYou died. Back in {} seconds.", RESPAWN_TICKS / TICK_HZ as u32);
-            }
         }
     }
     // Only touch the component when the text changed, so Bevy doesn't re-layout it every frame.

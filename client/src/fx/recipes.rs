@@ -281,15 +281,13 @@ fn frost_shatter(c: &mut Commands, art: &FxArt, s: &Scene) {
 }
 
 /// A spirit's burst (a decoy shattering, a comeback): a ripple of spirit light racing
-/// out over the ground, cracks onto the spirit realm glowing under it, a breath of mist, and
-/// wisps rising.
+/// out over the ground, a round glow of it under them swelling and fading, and wisps rising.
 fn spirit_burst(c: &mut Commands, art: &FxArt, s: &Scene, color: FxColor) {
     let (ink, mist) = inks(color);
     let r = s.radius;
     put(c, art, &art.band, Part::new(s.start, [0.18, 0.2, 0.55], ink, ground(s.at, 0.06)).sized(Vec3::new(r, 1.0, r)).grow(0.15).shrink(1.1));
     put(c, art, &art.band, Part::new(s.start + 0.08, [0.2, 0.2, 0.6], mist, ground(s.at, 0.05)).sized(Vec3::new(r * 0.75, 1.0, r * 0.75)).grow(0.1).shrink(1.25));
-    put(c, art, s.pick(1, &art.cracks), Part::new(s.start, [0.06, 0.4, 1.1], ink, ground(s.at, 0.03)).sized(Vec3::new(r * 0.75, 1.0, r * 0.75)).facing(s.r(2) * TAU).grow(0.2).shrink(0.8));
-    put(c, art, s.pick(3, &art.splotch), Part::new(s.start, [0.1, 0.3, 0.9], mist, ground(s.at, 0.025)).size(r * 0.8).grow(0.3));
+    put(c, art, &art.disc, Part::new(s.start, [0.08, 0.3, 0.9], mist, ground(s.at, 0.025)).sized(Vec3::new(r * 0.8, 1.0, r * 0.8)).grow(0.3));
     motes(c, art, s, 12, ink, 0.08, 1.6, 1.0, 0.25);
 }
 

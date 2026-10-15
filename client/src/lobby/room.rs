@@ -7,95 +7,118 @@ use arena_shared::protocol::RoomRequest;
 use arena_shared::map::MapId;
 use arena_shared::rooms::{MAX_PER_TEAM, Member, Mode, NO_TEAM, Phase, RoomView, TEAMS};
 
-use crate::browser::{HeaderFlash, LobbiesOpen};
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::palette;
 use crate::render::{button, clicked, shown, ui_text};
 use crate::rooms::{CurrentRoom, Me, Notice, Screen, request};
 
-/// The room column, two cards. The room: name, whether it's on, its mode and map (for the leader,
-/// switches). Who's in it: in free-for-all a list; in teams the two side by side, with the way to
+/// The room column: a pane titled with the room's name, folding open and shut. Open: a line on
+/// what it is, a line on where it stands, and for the leader its switches; who's in it; the way
+/// out; the other lobbies to join. Under it the leaderboards. Who's in it: in free-for-all a list; in teams the two side by side, with the way to
 /// switch sides under ours. Then the way out. Rebuilt when the room changes, or we come to it.
 ///
-/// Names are in one neutral color; ours is in the accent (on a tinted row), as in the badge over the fighter.
+/// Each player is a row of its own, edged on the left; ours is edged and tinted in the accent.
 pub(super) fn show_room(
     mut commands: Commands,
     room: Res<CurrentRoom>,
     screen: Res<State<Screen>>,
     me: Option<Res<Me>>,
     panel: Single<(Entity, Ref<SidePanel>, &mut Visibility)>,
+    (boards_open, boards): (Res<crate::browser::BoardsOpen>, Res<crate::rooms::Leaderboards>),
+    (open, list): (Res<RoomOpen>, Res<crate::rooms::RoomList>),
 ) {
     let (panel, fresh, mut visibility) = panel.into_inner();
-    if !room.is_changed() && !fresh.is_added() && !screen.is_changed() {
+    let changed = room.is_changed() || screen.is_changed() || boards_open.is_changed() || boards.is_changed() || open.is_changed() || list.is_changed();
+    if !changed && !fresh.is_added() {
         return;
     }
     let Some(view) = &room.0 else { return };
     visibility.set_if_neq(Visibility::Inherited);
     let my_id = me.as_ref().map_or(0, |me| me.guest_id);
     let leading = view.leader == my_id;
-    commands.entity(panel).despawn_children().with_children(|panel| {
-        panel.spawn(card()).with_children(|card| {
-            card.spawn(label("Lobby"));
-            card.spawn(ui_text(view.name.clone(), 24.0, palette::ui::TEXT));
-            // The leader needs no telling: the start button is theirs.
-            let status = match (view.started, leading) {
-                (true, _) => Some(("Match in progress", ACCENT)),
-                (false, true) => None,
-                (false, false) => Some(("Waiting for the leader", palette::ui::MUTED)),
-            };
-            if let Some((line, color)) = status {
-                card.spawn(ui_text(line, 12.0, color));
+    commands.entity(panel).despawn_children().with_children(|column| {
+        // The room, one pane titled with its name (what doesn't fit scrolls): the room, its
+        // players, the way out and the other lobbies; then the leaderboards.
+        column.spawn(pane(open.0)).with_children(|block| {
+            block.spawn((RoomHeader, pane_header())).with_children(|header| {
+                header.spawn(ui_text(view.name.clone(), 18.0, palette::ui::TEXT));
+                header.spawn(fold_chip(open.0));
+            });
+            if !open.0 {
+                return;
             }
-            if !view.started
-                && let Some(winner) = view.winner_name(my_id)
-            {
-                let won = if winner == "You" { "You won the last match".to_string() } else { format!("{winner} won the last match") };
-                card.spawn(ui_text(won, 12.0, palette::TORCH_FLAME));
-            }
-            if let Some(goal) = view.goal {
-                card.spawn(ui_text(format!("First to {goal} kills. Zombies roam the arena."), 11.0, palette::ui::MUTED));
-            }
-            if view.mode.pve() {
-                card.spawn(ui_text("Endless waves of monsters out of the wilds. Buy items from the merchant between waves; a boss every fifth.", 11.0, palette::ui::MUTED));
-                if let Some(run) = &view.run {
-                    let line = match run.phase {
-                        Phase::Over { reached } if !view.started => Some(format!("The last run fell on wave {reached}")),
-                        _ if view.started => Some(format!("Fighting wave {}", run.wave)),
-                        _ => None,
-                    };
-                    if let Some(line) = line {
-                        card.spawn(ui_text(line, 12.0, palette::TORCH_FLAME));
+            block.spawn(pane_body(0.0)).with_children(|panel| {
+                panel.spawn(card()).with_children(|card| {
+                    // What it is in a line (the game, where, what wins it or the best run yet);
+                    // then one line on where things stand.
+                    let mut about = vec![if view.mode.pve() { "PvE".to_string() } else { view.mode.label().to_string() }, view.map.label().to_string()];
+                    if let Some(goal) = view.goal {
+                        about.push(format!("first to {goal} kills"));
                     }
-                    if run.best > 0 {
-                        card.spawn(ui_text(format!("Best: wave {}", run.best), 11.0, palette::ui::TEXT));
+                    if let Some(best) = view.run.as_ref().map(|run| run.best).filter(|best| *best > 0) {
+                        about.push(format!("best: wave {best}"));
                     }
-                }
-            }
-            // The game first (fighting each other, or the waves together), then its mode, then where.
-            let editing = view.may_edit(my_id);
-            let games = [(false, "PvP: each other"), (true, "PvE: the waves")];
-            setting(card, "Game", &games, view.mode.pve(), editing, |pve| RoomRequest::SetMode(if pve { Mode::Waves } else { Mode::Ffa }));
-            if !view.mode.pve() {
-                let modes = Mode::PVP.map(|mode| (mode, mode.label()));
-                setting(card, "Mode", &modes, view.mode, editing, RoomRequest::SetMode);
-            }
-            let maps: Vec<(MapId, &str)> = view.mode.maps().iter().map(|map| (*map, map.label())).collect();
-            setting(card, "Map", &maps, view.map, editing, RoomRequest::SetMap);
-        });
+                    card.spawn(ui_text(about.join("  |  "), 12.0, palette::ui::MUTED));
+                    let (line, color) = status(view, my_id, leading);
+                    card.spawn(ui_text(line, 12.0, color));
+                    // The leader's switches (before the start): the game, its mode, where.
+                    if view.may_edit(my_id) {
+                        let games = [(true, "PvE"), (false, "PvP")];
+                        setting(card, "Game", &games, view.mode.pve(), |pve| RoomRequest::SetMode(if pve { Mode::Waves } else { Mode::Ffa }));
+                        if !view.mode.pve() {
+                            let modes = Mode::PVP.map(|mode| (mode, mode.label()));
+                            setting(card, "Mode", &modes, view.mode, RoomRequest::SetMode);
+                        }
+                        let maps: Vec<(MapId, &str)> = view.mode.maps().iter().map(|map| (*map, map.label())).collect();
+                        setting(card, "Map", &maps, view.map, RoomRequest::SetMap);
+                    }
+                });
 
-        panel.spawn(card()).with_children(|card| match view.mode {
-            Mode::Ffa | Mode::Waves => {
-                card.spawn(label(&format!("Players  {}/{}", view.members.len(), view.mode.capacity())));
-                for member in &view.members {
-                    member_row(card, Node::default(), view, member, my_id);
-                }
-            }
-            Mode::Teams => spawn_teams(card, view, my_id),
-        });
+                panel.spawn(card()).with_children(|card| match view.mode {
+                    Mode::Ffa | Mode::Waves => {
+                        card.spawn(label(&format!("Players  {}/{}", view.members.len(), view.mode.capacity())));
+                        for member in &view.members {
+                            member_row(card, Node::default(), view, member, my_id);
+                        }
+                    }
+                    Mode::Teams => spawn_teams(card, view, my_id),
+                });
 
-        let leave = button("Leave lobby", 12.0, palette::ui::PANEL, palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.3));
-        panel.spawn((RoomButton(RoomRequest::Leave), leave));
+                let leave = button("Leave lobby", 12.0, palette::ui::PANEL, palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.3));
+                panel.spawn(Node { flex_direction: FlexDirection::Column, padding: UiRect { top: px(0.0), ..UiRect::all(px(CARD_PADDING)) }, ..default() })
+                    .with_child((RoomButton(RoomRequest::Leave), leave));
+                // The other lobbies: joining one leaves this.
+                panel.spawn(card()).with_children(|card| {
+                    card.spawn(label("Other lobbies"));
+                    crate::browser::spawn_join_list(card, list.0.iter().filter(|r| r.key != view.key), "None right now");
+                });
+            });
+        });
+        crate::browser::spawn_boards(column, &boards.0, &boards_open);
     });
+}
+
+/// Where the room stands, in one line: the match on (the wave fought); before it, the last result,
+/// then who's ready.
+fn status(view: &RoomView, my_id: u32, leading: bool) -> (String, Color) {
+    if view.started {
+        let line = view.run.as_ref().filter(|_| view.mode.pve()).map_or("Match in progress".to_string(), |run| format!("Fighting wave {}", run.wave));
+        return (line, ACCENT);
+    }
+    if let Some(winner) = view.winner_name(my_id) {
+        let won = if winner == "You" { "You won the last match".to_string() } else { format!("{winner} won the last match") };
+        return (won, palette::TORCH_FLAME);
+    }
+    if let Some(Phase::Over { reached }) = view.run.as_ref().map(|run| run.phase) {
+        return (format!("The last run fell on wave {reached}"), palette::TORCH_FLAME);
+    }
+    let ready = view.member(my_id).is_some_and(|m| m.ready);
+    match (leading, view.all_ready(), ready) {
+        (true, false, _) => ("Waiting for everyone to be ready".into(), palette::ui::MUTED),
+        (true, true, _) => ("Everyone's ready".into(), palette::ui::GO),
+        (false, _, true) => ("Ready: waiting for the leader".into(), palette::ui::GO),
+        (false, _, false) => ("Ready up when you are".into(), palette::ui::MUTED),
+    }
 }
 
 /// One of the room's settings under its `title`: for its leader before the start
@@ -106,17 +129,8 @@ fn setting<T: Copy + PartialEq>(
     title: &str,
     options: &[(T, &str)],
     current: T,
-    editing: bool,
     pick: fn(T) -> RoomRequest,
 ) {
-    if !editing {
-        // Only the one it's on (a mode in the other group shows nothing there).
-        let Some((_, shown)) = options.iter().find(|(option, _)| *option == current) else { return };
-        card.spawn(Node { height: px(GAP * 0.5), ..default() });
-        card.spawn(label(title));
-        card.spawn(ui_text(*shown, 13.0, palette::ui::TEXT));
-        return;
-    }
     card.spawn(Node { height: px(GAP * 0.5), ..default() });
     card.spawn(label(title));
     card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
@@ -201,42 +215,60 @@ fn spawn_teams(card: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
     });
 }
 
-/// A member, in `node`'s place, in one column however narrow the side: the leader's tag if they
-/// lead, their name, then their fighter and whether they're in the arena (both wrapping as they
-/// need). Our own row is tinted.
+/// A member, in `node`'s place, on one line (wrapping if the side is narrow): their name, their
+/// fighter, and a tag (leader, in the arena, ready). Our own row is tinted.
 fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, member: &Member, my_id: u32) {
     let is_me = member.guest_id == my_id;
-    // Bottom-aligned, so in rows of one height names and fighters line up, the leader's tag above.
+    // A solid row of its own, edged on the left: ours in the accent, the rest in the text's color.
     let row = Node {
-        flex_direction: FlexDirection::Column,
-        justify_content: JustifyContent::FlexEnd,
-        row_gap: px(2.0),
-        padding: UiRect::axes(px(GAP), px(GAP * 0.5)),
+        align_items: AlignItems::Baseline,
+        column_gap: px(GAP),
+        flex_wrap: FlexWrap::Wrap,
+        padding: UiRect::axes(px(GAP * 1.5), px(GAP)),
+        border: UiRect::left(px(3.0)),
         ..node
     };
-    let tint = if is_me { ACCENT.with_alpha(0.14) } else { palette::ui::BACKDROP.with_alpha(0.5) };
-    parent.spawn((row, BackgroundColor(tint))).with_children(|row| {
-        if member.guest_id == view.leader {
-            row.spawn(ui_text("LEADER", 9.0, palette::TORCH_FLAME));
-        }
-        // Ours in the accent, so it reads as "you" on either side.
-        row.spawn(ui_text(member.name.clone(), 13.0, if is_me { ACCENT } else { palette::ui::TEXT }));
+    let (tint, edge) = if is_me { (ACCENT.with_alpha(0.22), ACCENT) } else { (palette::ui::BACKDROP, palette::ui::TEXT.with_alpha(0.5)) };
+    parent.spawn((row, BackgroundColor(tint), BorderColor::all(edge))).with_children(|row| {
+        // Ours reads as "you" by its accent edge and tint; its text light on them.
+        row.spawn(ui_text(member.name.clone(), 15.0, palette::ui::TEXT));
         let fighter = member.class.map_or("Picking...".to_string(), |c| c.def().name.clone());
-        row.spawn(Node { column_gap: px(GAP * 0.75), flex_wrap: FlexWrap::Wrap, ..default() }).with_children(|line| {
-            line.spawn(ui_text(fighter, 11.0, palette::ui::MUTED));
-            if member.in_arena {
-                line.spawn(ui_text("in arena", 11.0, ACCENT));
-            }
-            if view.goal.is_some() && (view.started || view.winner.is_some()) {
-                let kills = if member.kills == 1 { "1 kill".to_string() } else { format!("{} kills", member.kills) };
-                line.spawn(ui_text(kills, 11.0, palette::ui::TEXT));
-            }
-            // Against the waves, the monsters killed this run.
-            if view.mode.pve() && view.run.is_some() {
-                line.spawn(ui_text(format!("{} slain", member.zombie_kills), 11.0, palette::ui::TEXT));
-            }
-        });
+        row.spawn(ui_text(fighter, 12.0, if is_me { palette::ui::TEXT.with_alpha(0.75) } else { palette::ui::MUTED }));
+        // Then one tag, pushed to the end: who leads, who's in, who's ready.
+        let tag = if member.guest_id == view.leader {
+            Some(("LEADER", palette::TORCH_FLAME))
+        } else if view.started && member.in_arena {
+            Some(("IN ARENA", ACCENT))
+        } else if !view.started && member.ready {
+            Some(("READY", palette::ui::GO))
+        } else {
+            None
+        };
+        if let Some((tag, color)) = tag {
+            row.spawn((Node { margin: UiRect::left(Val::Auto), ..default() }, children![ui_text(tag, 10.0, color)]));
+        }
     });
+}
+
+/// Whether the room's pane is open (to begin with, it is).
+#[derive(Resource)]
+pub(crate) struct RoomOpen(pub bool);
+
+impl Default for RoomOpen {
+    fn default() -> Self {
+        RoomOpen(true)
+    }
+}
+
+/// The room's pane header: a click folds or opens it.
+#[derive(Component)]
+pub(super) struct RoomHeader;
+
+/// A click on the room's header folds or opens its pane.
+pub(super) fn fold_room(header: Query<Ref<Interaction>, With<RoomHeader>>, mut open: ResMut<RoomOpen>) {
+    if header.iter().any(clicked) {
+        open.0 = !open.0;
+    }
 }
 
 /// The room column's buttons ask the server.
@@ -268,28 +300,33 @@ pub(super) fn show_status(
 /// How often the start button breathes, per second.
 const START_PULSE_HZ: f32 = 0.9;
 
-/// What the big button does: at home, open the lobbies; in a room, into the arena once the match
-/// is on, the start for the leader, or nothing while waiting for the leader.
+/// What the big button does: at home, a run against the waves of our own; in a room, into the
+/// arena once the match is on; before it, the start for the leader once everyone else is ready
+/// (nothing until then), and for everyone else, ready (or not, again).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WayIn {
-    Lobbies,
+    Solo,
     Enter,
     Start,
-    Wait,
+    WaitReady,
+    Ready(bool),
 }
 
 fn way_in(screen: Screen, view: Option<&RoomView>, me: Option<&Me>) -> WayIn {
+    let my_id = me.map_or(0, |me| me.guest_id);
     match view {
-        _ if screen == Screen::Home => WayIn::Lobbies,
+        _ if screen == Screen::Home => WayIn::Solo,
+        None => WayIn::Solo,
         Some(view) if view.started => WayIn::Enter,
-        Some(view) if me.is_some_and(|me| me.guest_id == view.leader) => WayIn::Start,
-        _ => WayIn::Wait,
+        Some(view) if view.leader == my_id && view.all_ready() => WayIn::Start,
+        Some(view) if view.leader == my_id => WayIn::WaitReady,
+        Some(view) => WayIn::Ready(view.member(my_id).is_some_and(|m| m.ready)),
     }
 }
 
-/// The big button: at home, it opens the lobbies (flashing their header, if they're open already);
-/// in a room, the leader starts the match (everyone goes in as what they picked), and once it's
-/// on, in we go. The small one over it, at home only, practices as the selected fighter on Hollow
+/// The big button: at home, green, a run against the waves of our own; in a room, ready (or not),
+/// and the leader starts the match once everyone is (everyone goes in as what they picked); once
+/// it's on, in we go. The small one over it, at home only, practices as the selected fighter on Hollow
 /// Wilds. We're taken to the arena when our fighter appears.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn enter_arena(
@@ -299,26 +336,28 @@ pub(super) fn enter_arena(
     me: Option<Res<Me>>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
     button: Single<(Ref<Interaction>, &mut BackgroundColor), With<EnterButton>>,
-    mut label: Single<&mut Text, With<EnterLabel>>,
+    label: Single<(&mut Text, &mut TextColor), With<EnterLabel>>,
     practice: Single<(Ref<Interaction>, &mut Visibility), With<PracticeButton>>,
     time: Res<Time>,
-    (mut lobbies_open, mut flash): (ResMut<LobbiesOpen>, ResMut<HeaderFlash>),
 ) {
     let way = way_in(*screen.get(), room.0.as_ref(), me.as_deref());
     let (practice_click, mut practice_shown) = practice.into_inner();
-    practice_shown.set_if_neq(shown(way == WayIn::Lobbies));
-    if way == WayIn::Lobbies && clicked(practice_click) {
+    practice_shown.set_if_neq(shown(way == WayIn::Solo));
+    if way == WayIn::Solo && clicked(practice_click) {
         // In on the press, as the big button goes: forget the held button.
         mouse.reset(MouseButton::Left);
         // Always on Hollow Wilds (its tools switch maps).
         request(&mut sender, RoomRequest::Practice(crate::rooms::HOME_MAP));
     }
     let text = match way {
-        WayIn::Lobbies => "LOBBIES",
+        WayIn::Solo => "PLAY SOLO",
         WayIn::Enter => "ENTER THE ARENA",
         WayIn::Start => "START THE MATCH",
-        WayIn::Wait => "WAITING FOR THE LEADER",
+        WayIn::WaitReady => "WAITING FOR PLAYERS",
+        WayIn::Ready(false) => "READY",
+        WayIn::Ready(true) => "READY!",
     };
+    let (mut label, mut label_color) = label.into_inner();
     if label.0 != text {
         label.0 = text.to_string();
     }
@@ -326,10 +365,17 @@ pub(super) fn enter_arena(
     // Starting the match is what the leader is here for: the button slowly brightens and dims
     // until it's pressed.
     let breath = if way == WayIn::Start { 0.5 + 0.5 * (time.elapsed_secs() * START_PULSE_HZ * std::f32::consts::TAU).sin() } else { 0.0 };
+    // Playing solo and being ready are green; the rest in the accent.
+    let base = match way {
+        WayIn::Solo | WayIn::Ready(true) => palette::ui::GO,
+        _ => ACCENT,
+    };
+    // Light on green, dark on the accent.
+    label_color.set_if_neq(TextColor(if base == palette::ui::GO { palette::ui::TEXT.lighter(0.1) } else { palette::ui::PANEL }));
     let fill = match (way, *interaction) {
-        (WayIn::Wait, _) => palette::ui::MUTED.with_alpha(0.5),
-        (_, Interaction::None) => ACCENT.lighter(0.12 * breath),
-        _ => ACCENT.lighter(0.16),
+        (WayIn::WaitReady, _) => palette::ui::MUTED.with_alpha(0.5),
+        (_, Interaction::None) => base.lighter(0.12 * breath),
+        _ => base.lighter(0.16),
     };
     background.set_if_neq(BackgroundColor(fill));
     if !clicked(interaction) {
@@ -339,9 +385,10 @@ pub(super) fn enter_arena(
     // it's still down and take the click for an attack.
     mouse.reset(MouseButton::Left);
     match way {
-        WayIn::Lobbies => crate::browser::open_lobbies(&mut lobbies_open, &mut flash, time.elapsed_secs()),
+        WayIn::Solo => request(&mut sender, RoomRequest::PlaySolo),
         WayIn::Enter => request(&mut sender, RoomRequest::EnterArena),
         WayIn::Start => request(&mut sender, RoomRequest::Start),
-        WayIn::Wait => {}
+        WayIn::WaitReady => {}
+        WayIn::Ready(ready) => request(&mut sender, RoomRequest::Ready(!ready)),
     }
 }

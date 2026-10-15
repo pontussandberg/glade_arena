@@ -78,14 +78,14 @@ fn pickups_on_server(server: &mut App) -> usize {
 #[test]
 fn rooms_are_listed_joined_and_closed_with_the_leader_passed_on() {
     let mut g = guests(5870, &["revenant", "javelinist"], |_| {});
-    g.ask(0, RoomRequest::Create { name: "  Friends \n".into(), mode: Mode::Ffa, map: MapId::default() });
+    g.ask(0, RoomRequest::Create { name: "  Friends \n".into(), mode: Mode::Ffa, map: MapId::default(), password: None });
     g.until(Duration::from_secs(5), "B sees the room listed", |g| g.rooms_listed(1).len() == 1);
     let listed = g.rooms_listed(1)[0].clone();
     assert_eq!(listed.name, "Friends");
     assert!(!listed.started);
     assert_eq!(pickups_on_server(&mut g.server), map().pickups.len());
 
-    g.ask(1, RoomRequest::Join(listed.key));
+    g.ask(1, RoomRequest::Join(listed.key, None));
     g.until(Duration::from_secs(5), "both in the room", |g| g.room(0).is_some_and(|r| r.members.len() == 2));
     let a = g.me(0).unwrap().guest_id;
     let b = g.me(1).unwrap().guest_id;
@@ -142,16 +142,21 @@ fn rooms_are_kept_apart() {
 #[test]
 fn allies_cant_hurt_each_other() {
     let mut g = guests(5872, &["revenant", "javelinist"], |_| {});
-    g.ask(0, RoomRequest::Create { name: "Teams".into(), mode: Mode::Teams, map: MapId::default() });
+    g.ask(0, RoomRequest::Create { name: "Teams".into(), mode: Mode::Teams, map: MapId::default(), password: None });
     g.until(Duration::from_secs(5), "listed", |g| g.rooms_listed(1).len() == 1);
     let key = g.rooms_listed(1)[0].key;
-    g.ask(1, RoomRequest::Join(key));
+    g.ask(1, RoomRequest::Join(key, None));
     g.until(Duration::from_secs(5), "B on the other team", |g| {
         g.room(0).is_some_and(|r| r.members.len() == 2 && r.on_team(TEAM_A) == 1 && r.on_team(TEAM_B) == 1)
     });
     // B joins A's team, and the leader starts.
     g.ask(1, RoomRequest::SetTeam(TEAM_A));
     g.until(Duration::from_secs(5), "both on team A", |g| g.room(0).is_some_and(|r| r.on_team(TEAM_A) == 2));
+    // Not until B is ready.
+    g.ask(0, RoomRequest::Start);
+    g.until(Duration::from_secs(5), "A told B isn't ready", |g| g.clients[0].world().resource::<Notice>().0.as_deref() == Some("Not everyone is ready"));
+    g.ask(1, RoomRequest::Ready(true));
+    g.until(Duration::from_secs(5), "B ready", |g| g.room(0).is_some_and(|r| r.members.iter().all(|m| m.ready || m.guest_id == r.leader)));
     g.ask(0, RoomRequest::Start);
     g.until(Duration::from_secs(10), "both fighting", |g| {
         player::<Health>(&mut g.server, A).is_some() && player::<Health>(&mut g.server, B).is_some()
@@ -204,21 +209,19 @@ fn practice_is_unlisted_and_fighters_step_out_to_the_lobby() {
     g.run(Duration::from_millis(700));
     assert!(g.rooms_listed(1).is_empty(), "practice is listed");
 
-    // B starts a lobby; A leaves practice and joins it mid-match, in once they ask.
-    g.ask(1, RoomRequest::Create { name: "Lobby".into(), mode: Mode::Ffa, map: MapId::default() });
+    // B makes a lobby; A leaves practice and joins it, readies, and B starts: both in.
+    g.ask(1, RoomRequest::Create { name: "Lobby".into(), mode: Mode::Ffa, map: MapId::default(), password: None });
     g.until(Duration::from_secs(5), "B in its lobby", |g| g.room(1).is_some());
-    g.ask(1, RoomRequest::Start);
-    g.until(Duration::from_secs(10), "B fighting", |g| player::<Health>(&mut g.server, B).is_some());
     g.ask(0, RoomRequest::Leave);
     g.until(Duration::from_secs(5), "A home, the lobby listed", |g| g.room(0).is_none() && g.rooms_listed(0).len() == 1);
     assert!(player::<Health>(&mut g.server, A).is_none(), "A still practicing");
     let key = g.rooms_listed(0)[0].key;
-    g.ask(0, RoomRequest::Join(key));
+    g.ask(0, RoomRequest::Join(key, None));
     g.until(Duration::from_secs(5), "A in the lobby", |g| g.room(1).is_some_and(|r| r.members.len() == 2));
-    g.run(Duration::from_millis(300));
-    assert!(player::<Health>(&mut g.server, A).is_none(), "A went in without asking");
-    g.ask(0, RoomRequest::EnterArena);
-    g.until(Duration::from_secs(5), "A fighting", |g| player::<Health>(&mut g.server, A).is_some());
+    g.ask(0, RoomRequest::Ready(true));
+    g.until(Duration::from_secs(5), "A ready", |g| g.room(1).is_some_and(|r| r.all_ready()));
+    g.ask(1, RoomRequest::Start);
+    g.until(Duration::from_secs(10), "both fighting", |g| player::<Health>(&mut g.server, A).is_some() && player::<Health>(&mut g.server, B).is_some());
 
     // Back to the lobby: out of the arena, still in the room.
     g.ask(0, RoomRequest::LeaveArena);
@@ -229,23 +232,51 @@ fn practice_is_unlisted_and_fighters_step_out_to_the_lobby() {
     assert!(g.room(0).is_some(), "A left the room");
 }
 
-/// A run against the waves can be joined until its first wave comes, never after: the list shows
-/// it in progress, a join is turned down, and quick-joining it by name makes a fresh one.
+/// A started lobby (a quick-joined run is, from the off) can't be joined from the list: it shows
+/// in progress and a join is turned down. Quick-joining it by name works until its first wave
+/// comes; after that it makes a fresh one.
 #[test]
 fn a_run_under_way_cant_be_joined() {
     let mut g = guests(5885, &["revenant", "javelinist"], |_| {});
     g.ask(0, RoomRequest::QuickJoin("Waves".into()));
     g.until(Duration::from_secs(10), "A in the run", |g| g.room(0).is_some_and(|r| r.run.is_some()));
     let key = g.room(0).unwrap().key;
-    g.until(Duration::from_secs(5), "B sees it open", |g| g.rooms_listed(1).iter().any(|r| r.key == key && !r.closed));
+    g.until(Duration::from_secs(5), "B sees it in progress", |g| g.rooms_listed(1).iter().any(|r| r.key == key && r.closed));
+    g.ask(1, RoomRequest::Join(key, None));
+    g.until(Duration::from_secs(3), "B turned away", |g| {
+        g.clients[1].world().resource::<Notice>().0.as_deref().is_some_and(|n| n.contains("has started"))
+    });
+    assert!(g.room(1).is_none(), "B got into a started run");
     g.ask(0, RoomRequest::Ready(true));
     g.until(Duration::from_secs(10), "the first wave", |g| g.room(0).and_then(|r| r.run).is_some_and(|run| run.phase == Phase::Fight));
-    g.until(Duration::from_secs(5), "B sees it in progress", |g| g.rooms_listed(1).iter().any(|r| r.key == key && r.closed));
-    g.ask(1, RoomRequest::Join(key));
-    g.until(Duration::from_secs(3), "B turned away", |g| {
-        g.clients[1].world().resource::<Notice>().0.as_deref().is_some_and(|n| n.contains("under way"))
-    });
-    assert!(g.room(1).is_none(), "B got into a run under way");
     g.ask(1, RoomRequest::QuickJoin("Waves".into()));
     g.until(Duration::from_secs(5), "B in a run of their own", |g| g.room(1).is_some_and(|r| r.key != key));
+}
+
+/// A lobby with a password: no way in without it, in with it; never quick-joined.
+#[test]
+fn a_password_keeps_a_lobby_to_those_who_know_it() {
+    let mut g = guests(5901, &["revenant", "javelinist"], |_| {});
+    g.ask(0, RoomRequest::Create { name: "Secret".into(), mode: Mode::Ffa, map: MapId::default(), password: Some(" hush ".into()) });
+    g.until(Duration::from_secs(5), "B sees it listed, locked", |g| g.rooms_listed(1).first().is_some_and(|r| r.locked));
+    let key = g.rooms_listed(1)[0].key;
+    g.ask(1, RoomRequest::Join(key, None));
+    g.until(Duration::from_secs(5), "B refused", |g| g.clients[1].world().resource::<Notice>().0.as_deref() == Some("Wrong password"));
+    g.ask(1, RoomRequest::Join(key, Some("wrong".into())));
+    g.run(Duration::from_millis(300));
+    assert!(g.room(1).is_none(), "in with the wrong password");
+    g.ask(1, RoomRequest::Join(key, Some("hush".into())));
+    g.until(Duration::from_secs(5), "B in", |g| g.room(0).is_some_and(|r| r.members.len() == 2));
+}
+
+/// Playing solo: a run against the waves of one's own, straight into its arena, never listed.
+#[test]
+fn playing_solo_is_a_run_of_ones_own() {
+    let mut g = guests(5902, &["revenant", "javelinist"], |_| {});
+    g.ask(0, RoomRequest::PlaySolo);
+    g.until(Duration::from_secs(10), "A in the arena", |g| player::<Health>(&mut g.server, A).is_some() && g.room(0).is_some_and(|r| r.run.is_some()));
+    let view = g.room(0).unwrap();
+    assert!(view.solo && view.started && view.mode == Mode::Waves && view.run.is_some());
+    g.run(Duration::from_millis(700));
+    assert!(g.rooms_listed(1).is_empty(), "a solo run is listed");
 }

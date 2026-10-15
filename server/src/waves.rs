@@ -17,7 +17,6 @@
 use std::collections::HashMap;
 use std::f32::consts::TAU;
 use std::sync::LazyLock;
-use std::time::Duration;
 
 use super::*;
 
@@ -49,15 +48,10 @@ const READY_TICKS: u32 = 3 * TICK_HZ as u32;
 /// and how far round them monsters are flung back as they do.
 const SHELTER_TICKS: u32 = 3 * TICK_HZ as u32;
 const REBIRTH_REACH: f32 = 6.0;
-/// How much of their health players in the camp get back a second, in a run, and how often.
-const CAMP_MENDS: f32 = 0.04;
-const MEND_EVERY_TICKS: u32 = TICK_HZ as u32 / 2;
 /// When a downed player comes back by themselves: not until the wave's cleared (or a boss falls).
 const UNTIL_CLEARED: u32 = u32::MAX / 2;
 /// How much of their health a player picked up by an ally comes back with.
 const REVIVE_HEALTH: f32 = 0.4;
-/// How long a lost run's end shows before everyone's back in the lobby.
-const OVER_SHOWS: Duration = Duration::from_secs(8);
 /// How near the party a lair may be to send out monsters, and how far (if any are between).
 const LAIR_NEAREST: f32 = 18.0;
 const LAIR_FARTHEST: f32 = 42.0;
@@ -344,7 +338,6 @@ type Party<'w, 's> = Query<'w, 's, (&'static ControlledBy, &'static InRoom, &'st
 pub(super) fn run_waves(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    time: Res<Time<Real>>,
     mut lobby: ResMut<Lobby>,
     mut party: Party,
     mobs: Query<&InRoom, (With<Mob>, Without<Dead>)>,
@@ -356,13 +349,13 @@ pub(super) fn run_waves(
     }
     for (key, room) in lobby.runs() {
         let alive = alive.get(&key).copied().unwrap_or(0);
-        step_run(&mut commands, &mut lobby, &mut party, (now, time.elapsed()), room, alive);
+        step_run(&mut commands, &mut lobby, &mut party, now, room, alive);
         lobby.refresh_run(key, now);
     }
 }
 
 /// One tick of `room`'s run (`run_waves`), `alive` monsters about.
-fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now, real_now): (u32, Duration), room: InRoom, alive: u32) {
+fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, now: u32, room: InRoom, alive: u32) {
     let key = room.key;
     let map = lobby.map(&room);
     let members = lobby.party(key);
@@ -421,7 +414,7 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now,
                 run.phase = RunPhase::Over { reached: wave };
                 run.clear_chests(commands);
                 info!(room = key.0, wave, "the run is lost");
-                lobby.lose_run(key, real_now + OVER_SHOWS);
+                lobby.lose_run(key);
                 return;
             }
             if !run.boss_out
@@ -609,20 +602,6 @@ pub(super) fn pay_bounties(timeline: Res<LocalTimeline>, mut commands: Commands,
             }
             info!(room = room.key.0, boss = class.def().name, "a boss falls");
             spawn_fx(&mut commands, *room, Fx::at(FxKind::Coins, pos.0, 3.0, now, 40));
-        }
-    }
-}
-
-/// The camp's fire mends the party: players in it, in a run, get some health back now and then.
-pub(super) fn mend_at_camp(timeline: Res<LocalTimeline>, lobby: Res<Lobby>, mut party: Query<(&InRoom, &Pos, &mut Health, &MaxHealth, &mut RecentHits), (With<ControlledBy>, InPlay)>) {
-    if timeline.tick().0 % MEND_EVERY_TICKS != 0 {
-        return;
-    }
-    for (room, pos, mut health, max, mut hits) in &mut party {
-        let Some((middle, half)) = lobby.map(room).camp else { continue };
-        if (pos.0 - middle).abs().max_element() < half && lobby.run_on(room.key) {
-            let amount = (max.0 as f32 * CAMP_MENDS * MEND_EVERY_TICKS as f32 / TICK_HZ as f32).ceil() as i32;
-            mend(&mut health, max, &mut hits, amount);
         }
     }
 }
