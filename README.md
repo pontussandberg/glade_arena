@@ -152,6 +152,15 @@ later; the Plague Mother (25) lumbers after you, slams out a wave of rot that sl
 of plague bombs and births bloaters. The server runs them (`server/src/brain.rs`), the waves (`server/src/waves.rs`, where
 all the tuning is) and the items (`server/src/items.rs`).
 
+**Measuring performance** (native): `ARENA_PERF=perf.txt` turns vsync off, notes every frame's
+time and counts what's in the world each second (entities, meshes drawn, effect parts, lights, UI
+nodes, assets), then writes a summary (average, median, 99th percentile, worst frame) and quits
+after `ARENA_PERF_SECS` (60 by default). `ARENA_PERF_OFF=lights,shadows,fog,ui,fx` switches parts
+of the scene off, to see what each costs. Building the client with `--features profile` also
+writes a Chrome trace (`trace-*.json`) of every system's time, every frame (it gets big: a few GB a
+minute). On a fast machine the frame rate hides costs that show on a slow one or in the browser,
+so compare frame times, not frame rates.
+
 To try a later wave natively: `ARENA_ROOM="Waves 10" cargo run -p arena-client -- 11 revenant`
 starts a run at wave 10 with the gold you'd have by then (`ARENA_BOT=1` to let the bot play it,
 `ARENA_SHOTS=<dir>` to save a screenshot every few seconds). `cargo test -p arena-server --test

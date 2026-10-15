@@ -39,6 +39,8 @@ pub mod practice;
 pub mod feedback;
 #[cfg(feature = "render")]
 pub mod fx;
+#[cfg(all(feature = "render", not(target_family = "wasm")))]
+pub mod perf;
 #[cfg(feature = "render")]
 mod item_icons;
 #[cfg(feature = "render")]

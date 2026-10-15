@@ -38,6 +38,10 @@ fn main() {
     }
     app.add_plugins(RenderPlugin);
     #[cfg(not(target_family = "wasm"))]
+    if let Some(out) = std::env::var_os("ARENA_PERF") {
+        app.add_plugins(arena_client::perf::PerfPlugin { out: out.into() });
+    }
+    #[cfg(not(target_family = "wasm"))]
     if let Some(dir) = std::env::var_os("ARENA_SHOTS") {
         app.insert_resource(Snapshots { dir: dir.into(), next: 0.0, taken: 0 });
         app.add_systems(Update, take_snapshots);
