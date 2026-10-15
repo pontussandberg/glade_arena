@@ -5,16 +5,10 @@
 
 use bevy::math::{IVec2, Vec2};
 
-use super::{Map, MapId, Tile, wave};
+use super::{Map, MapId, Tile, squircle, wave};
 use crate::protocol::PickupKind;
 
 const SIZE: IVec2 = IVec2::new(76, 52);
-
-/// A rounded square's "radius" through `p`: the same along its sides, smaller across its corners.
-fn squircle(p: Vec2) -> f32 {
-    let (x2, y2) = (p.x * p.x, p.y * p.y);
-    (x2 * x2 + y2 * y2).sqrt().sqrt()
-}
 
 /// Meters inside the clearing's edge (negative outside): a rounded rectangle, wobbling.
 fn edge(p: Vec2) -> f32 {

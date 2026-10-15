@@ -249,7 +249,7 @@ pub(super) fn update_status(
         }
         if me.single().is_ok_and(|h| !h.alive()) {
             // Against the waves, with no lives left: not until the wave's cleared.
-            let run = room.0.as_ref().filter(|view| view.started).and_then(|view| view.run.as_ref());
+            let run = room.run();
             let waiting = run.zip(guest).is_some_and(|(run, guest)| run.waiting.contains(&guest.guest_id));
             if waiting {
                 text.push_str("\nYou fell. Back once the wave is cleared.");

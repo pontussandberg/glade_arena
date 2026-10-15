@@ -143,8 +143,9 @@ pub(crate) struct Visuals {
     range_circles: HashMap<ClassId, [Handle<Mesh>; 2]>,
     /// Each nova's burst (see `arena::NovaMeshes`), by its class and slot.
     novas: HashMap<(ClassId, AbilitySlot), arena::NovaMeshes<Handle<Mesh>>>,
-    /// The ring an elite monster stands in.
+    /// The ring an elite monster stands in, and its material by its twist.
     elite_ring: Handle<Mesh>,
+    elite_rings: HashMap<Affix, Handle<StandardMaterial>>,
     /// The ice around a frozen (rooted) fighter's feet, and the frost under a slowed one's.
     ice_prison: Handle<Mesh>,
     frost_rune: Handle<Mesh>,
@@ -278,6 +279,7 @@ fn setup_scene(
             })
             .collect(),
         elite_ring: meshes.add(Annulus::new(0.62, 0.8).mesh().resolution(24).build()),
+        elite_rings: HashMap::default(),
         ice_prison: meshes.add(arena::ice_prison_mesh()),
         frost_rune: meshes.add(arena::frost_rune_mesh()),
         projectiles: ClassId::all()
@@ -344,7 +346,7 @@ fn add_visuals(
         }
         // An elite stands in a ring of its twist's color.
         if let Some(elite) = elite {
-            let ring = materials.add(arena::translucent(affix_color(elite.0), 0.55, 3.0));
+            let ring = visuals.elite_rings.entry(elite.0).or_insert_with(|| materials.add(arena::translucent(affix_color(elite.0), 0.55, 3.0))).clone();
             commands.entity(entity).with_child((
                 Mesh3d(visuals.elite_ring.clone()),
                 MeshMaterial3d(ring),

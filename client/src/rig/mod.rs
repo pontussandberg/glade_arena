@@ -89,7 +89,12 @@ pub struct Posing;
 /// Walk cycles per meter walked (the swing and bob: `pose`).
 const STRIDES_PER_METER: f32 = 0.4;
 /// How much bigger an elite monster is drawn than its kind.
-pub(crate) const ELITE_SIZE: f32 = 1.25;
+const ELITE_SIZE: f32 = 1.25;
+
+/// How big a fighter of `class` is drawn, as a share of its figure's size (an `elite` bigger).
+pub(crate) fn drawn_size(class: ClassId, elite: bool) -> f32 {
+    class.def().size() * if elite { ELITE_SIZE } else { 1.0 }
+}
 /// An empowered weapon (`follow_up`): how much bigger it grows, how quickly (per second,
 /// exponential), and how much further its strike smears out, so it reaches its lane's far end
 /// (`FollowUp::reach`).
@@ -240,7 +245,7 @@ fn add_rigs(
     for (player, class, pos, body, elite) in &new {
         let Some(handles) = assets.meshes.get(class) else { continue };
         let class_moves = moves(class.def().figure());
-        let size = class.def().size() * if elite.is_some() { ELITE_SIZE } else { 1.0 };
+        let size = drawn_size(*class, elite.is_some());
         let elbows = [(); 2].map(|_| commands.spawn((Transform::from_translation(class_moves.elbow_at), Visibility::default())).id());
         let knees = [(); 2].map(|_| commands.spawn((Transform::from_translation(RIG_KNEE), Visibility::default())).id());
         let mut part = |mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>, at: Vec3| {

@@ -49,9 +49,9 @@ const MONSTER_BAR_SIZE: Vec2 = Vec2::new(38.0, 5.0);
 /// The size of `class`'s health bar: a player's, or a monster's (a class no one picks).
 fn bar_size(class: ClassId, elite: bool) -> Vec2 {
     let def = class.def();
-    match def.mob.as_ref() {
+    match () {
         _ if def.playable => BAR_SIZE,
-        Some(mob) if mob.boss => MONSTER_BAR_SIZE * Vec2::new(2.2, 1.4),
+        _ if def.is_boss() => MONSTER_BAR_SIZE * Vec2::new(2.2, 1.4),
         _ if elite => MONSTER_BAR_SIZE * Vec2::new(1.4, 1.2),
         _ => MONSTER_BAR_SIZE,
     }
@@ -321,7 +321,7 @@ fn place_bars(
         let health_fraction = health.map_or(1.0, |h| h.0 as f32 / max_hp as f32);
         update_trail(&mut trail, health_fraction, crit_at.map(|c| c.0), now, time.delta_secs());
         let alive = health.is_none_or(Health::alive);
-        let height = class.def().size() * if elite { crate::rig::ELITE_SIZE } else { 1.0 };
+        let height = crate::rig::drawn_size(*class, elite);
         let Some(screen) = over_bar(camera, camera_transform, pos, height).filter(|_| alive) else {
             visibility.set_if_neq(Visibility::Hidden);
             continue;

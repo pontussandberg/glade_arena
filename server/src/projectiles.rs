@@ -43,7 +43,7 @@ pub(super) fn resolve_projectile_hits(
 ) {
     let now = timeline.tick();
     for (projectile_entity, projectile_pos, projectile, room, team, might, spares, (bounces, shard)) in &projectiles {
-        for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent) in &mut targets {
+        for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent, _) in &mut targets {
             if target_id.0 == projectile.owner
                 || spares.is_some_and(|s| s.0 == target_id.0)
                 || health.0 == 0
@@ -52,7 +52,7 @@ pub(super) fn resolve_projectile_hits(
                 continue;
             }
             commands.entity(projectile_entity).try_despawn();
-            let amount = (sim::projectile_damage(projectile, now.0) as f32 * might_of(might)).round() as i32;
+            let amount = mighty(sim::projectile_damage(projectile, now.0), might_of(might));
             let chill = sim::projectile_chill(projectile);
             let blow = if projectile.ability.is_none() { Blow::attack(amount, chill, false, projectile.crit) } else { Blow::ability(amount, chill) };
             let def = projectile.class.def();

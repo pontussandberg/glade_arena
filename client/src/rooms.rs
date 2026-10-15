@@ -55,6 +55,13 @@ pub struct RoomList(pub Vec<RoomSummary>);
 #[derive(Resource, Default, Debug)]
 pub struct CurrentRoom(pub Option<RoomView>);
 
+impl CurrentRoom {
+    /// Our room's run, while its match is on (a run on, or just lost).
+    pub fn run(&self) -> Option<&RunView> {
+        self.0.as_ref().filter(|view| view.started).and_then(|view| view.run.as_ref())
+    }
+}
+
 /// The map our room plays on; out of a room, the one picked at home (`map_pick.rs`, the default
 /// map to begin with), which practice and new lobbies play on, and the last room's once out of it. Changes only when it
 /// does, so what's built from it is rebuilt only then.
@@ -155,7 +162,11 @@ fn read_lobby_events(
                     }
                 }
                 current_map.set_if_neq(CurrentMap(view.map));
-                room.0 = Some(view);
+                // Only news counts as a change: what's built from the room isn't built again for
+                // nothing.
+                if room.0.as_ref() != Some(&view) {
+                    room.0 = Some(view);
+                }
             }
             LobbyEvent::Left(reason) => {
                 room.0 = None;

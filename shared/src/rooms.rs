@@ -70,6 +70,11 @@ impl Mode {
             _ => &MapId::PVP,
         }
     }
+
+    /// `map` if it may be played on, else the first that may.
+    pub fn fit_map(self, map: MapId) -> MapId {
+        if self.maps().contains(&map) { map } else { self.maps()[0] }
+    }
 }
 
 pub const MAX_FFA: usize = 10;
@@ -204,6 +209,36 @@ impl Omen {
             Omen::Restless => "Restless Dead",
             Omen::Volatile => "Volatile",
         }
+    }
+
+    /// How much more of the wave there is.
+    pub fn budget_scale(self) -> f32 {
+        if self == Omen::Horde { 1.5 } else { 1.0 }
+    }
+
+    /// The odds a monster comes as an elite, against `base`.
+    pub fn elite_odds(self, base: f32) -> f32 {
+        if self == Omen::BloodMoon { (base * 3.0).max(0.25) } else { base }
+    }
+
+    /// How many times its bounty a kill pays.
+    pub fn bounty_scale(self) -> u32 {
+        if self == Omen::Gilded { 2 } else { 1 }
+    }
+
+    /// Whether every monster (bosses aside) comes hasted.
+    pub fn hastes(self) -> bool {
+        self == Omen::Frenzy
+    }
+
+    /// Whether the dead may rise again.
+    pub fn raises(self) -> bool {
+        self == Omen::Restless
+    }
+
+    /// Whether every monster bursts as it dies.
+    pub fn bursts(self) -> bool {
+        self == Omen::Volatile
     }
 
     pub fn blurb(self) -> &'static str {

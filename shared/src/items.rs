@@ -410,6 +410,13 @@ pub struct Owned {
     pub spent: u32,
 }
 
+impl Owned {
+    /// What selling it gives back.
+    pub fn sell_value(&self) -> u32 {
+        (self.spent as f32 * SELL_BACK) as u32
+    }
+}
+
 /// A fighter's gold and items, in the waves mode. Server-authoritative (kept for its player for
 /// the whole run, even out of the arena) and replicated, so the HUD shows ours and allies see
 /// each other's.
@@ -462,15 +469,12 @@ impl Satchel {
         Ok(())
     }
 
-    /// What selling the item in `slot` gives back.
-    pub fn sell_value(owned: &Owned) -> u32 {
-        (owned.spent as f32 * SELL_BACK) as u32
-    }
+
 
     /// Sells the item in `slot`, if there's one there. What it gave back.
     pub fn sell(&mut self, slot: usize) -> Option<u32> {
         let owned = self.slots.get_mut(slot)?.take()?;
-        let back = Satchel::sell_value(&owned);
+        let back = owned.sell_value();
         self.gold += back;
         Some(back)
     }

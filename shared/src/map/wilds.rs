@@ -16,15 +16,10 @@
 
 use bevy::math::{IVec2, Vec2};
 
-use super::{Map, MapId, Tile, wave};
+use super::{Map, MapId, Tile, squircle, wave};
 use crate::protocol::PickupKind;
 
 const SIZE: IVec2 = IVec2::new(120, 84);
-
-fn squircle(p: Vec2) -> f32 {
-    let (x2, y2) = (p.x * p.x, p.y * p.y);
-    (x2 * x2 + y2 * y2).sqrt().sqrt()
-}
 
 /// Meters inside the wilds' edge (negative outside): a rounded rectangle, wobbling.
 fn edge(p: Vec2) -> f32 {
@@ -347,8 +342,8 @@ pub(super) fn build() -> Map {
     for &p in TREES {
         map.set(p, Tile::Tree);
     }
-    let grove: Vec<(IVec2, Tile)> = map.tiles().filter(|&(t, tile)| tile == Tile::Grass && grove_tree(t, Map::center(t))).collect();
-    for (t, _) in grove {
+    let grove: Vec<IVec2> = map.tiles().filter(|&(t, tile)| tile == Tile::Grass && grove_tree(t, Map::center(t))).map(|(t, _)| t).collect();
+    for t in grove {
         map.set(Map::center(t), Tile::Tree);
     }
     for &p in POOLS {

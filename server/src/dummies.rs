@@ -23,8 +23,7 @@ pub(crate) fn spawn_dummy(commands: &mut Commands, id: PeerId, class: ClassId, r
             Name::from("Dummy"),
             Dummy { home: at },
             fighter(id, class, room, Team(arena_shared::rooms::NO_TEAM), at),
-            Replicate::to_clients(NetworkTarget::All),
-            InterpolationTarget::to_clients(NetworkTarget::All),
+            replicated_npc(),
         ))
         .id()
 }

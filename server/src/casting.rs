@@ -47,7 +47,7 @@ pub(super) fn use_abilities(
     let now = timeline.tick();
     // Read up front: `targets` holds every player's `Chilled` mutably. A root or slow landing
     // during this loop starts next tick anyway.
-    let chills: Vec<(PeerId, Chilled)> = targets.iter().map(|(_, id, .., chilled, _)| (id.0, *chilled)).collect();
+    let chills: Vec<(PeerId, Chilled)> = targets.iter().map(|(_, id, .., chilled, _, _)| (id.0, *chilled)).collect();
     for (id, class, pos, mut input, (mut cooldowns, mut dashing), mut hits, (room, team), mut attack, might) in &mut users {
         let side = (*room, *team);
         let might = might_of(might);
@@ -56,8 +56,7 @@ pub(super) fn use_abilities(
         // What a hit by `ability` does, and its name for the log.
         let blow = |ability: &'static AbilityDef| {
             let effect = ability.kind.effect();
-            let amount = (effect.damage as f32 * might).round() as i32;
-            (Blow::ability(amount, effect.chill), (id.0, *class, ability.name.as_str()))
+            (Blow::ability(mighty(effect.damage, might), effect.chill), (id.0, *class, ability.name.as_str()))
         };
         // Cut whoever this tick's dash step reached (`move_players` just made it). Checked before
         // the abilities step, which ends the dash on its last tick: so every step is checked, the
@@ -119,9 +118,8 @@ pub(super) fn use_abilities(
                         swing.haste += prime.attack_speed;
                     }
                 }
-                Cast::Nova { ability, nova } => {
+                Cast::Nova { slot, ability, nova } => {
                     let (blow, with) = blow(ability);
-                    let slot = class.def().abilities().find(|(_, a)| std::ptr::eq(*a, ability)).map_or(AbilitySlot(0), |(slot, _)| slot);
                     hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Ability(slot)), blow, |_, at| nova.hits(map, pos.0, at));
                 }
             }

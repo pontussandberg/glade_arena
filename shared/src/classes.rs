@@ -335,6 +335,11 @@ impl ClassDef {
         self.look.as_ref().map_or((1.0, 1.0, 1.0), |look| look.tint)
     }
 
+    /// Whether it's a boss of the waves.
+    pub fn is_boss(&self) -> bool {
+        self.mob.as_ref().is_some_and(|m| m.boss)
+    }
+
     /// Whether its figure wears its cloth.
     pub fn cloth(&self) -> bool {
         self.look.as_ref().is_none_or(|look| look.cloth)

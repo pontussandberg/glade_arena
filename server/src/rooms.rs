@@ -152,8 +152,10 @@ struct Room {
     ends_at: Option<Duration>,
     /// Members need to see it again.
     changed: bool,
-    /// Its run against the waves (or the last one), in the waves mode.
+    /// Its run against the waves (or the last one), in the waves mode, and what its members were
+    /// last sent of it.
     run: Option<Run>,
+    shown_run: Option<RunView>,
     /// The furthest wave it's reached.
     best: u32,
 }
@@ -185,18 +187,7 @@ impl Lobby {
             .filter_map(|link| self.guests.get(link))
             .map(|g| Member { guest_id: g.id, name: g.name.clone(), peer: g.peer, team: g.team, class: g.class, in_arena: g.playing && room.started, kills: g.kills, zombie_kills: g.zombie_kills })
             .collect();
-        let run = room.run.as_ref().map(|run| RunView {
-            wave: run.wave,
-            phase: run.phase_view(self.now),
-            lives: run.lives,
-            enemies_left: run.enemies_left(),
-            ready: run.ready.clone(),
-            waiting: run.waiting.clone(),
-            best: room.best,
-            boss: boss_of(run.wave).map(|boss| boss.def().name.clone()),
-            omen: run.omen,
-            life_price: life_price(run.lives_bought),
-        });
+        let run = self.run_view(room);
         let leader = self.guests.get(&room.leader).map_or(0, |g| g.id);
         RoomView {
             key,
@@ -211,6 +202,34 @@ impl Lobby {
             team_kills: room.team_kills,
             winner: room.winner.clone(),
             run,
+        }
+    }
+
+    /// What `room`'s members see of its run.
+    fn run_view(&self, room: &Room) -> Option<RunView> {
+        room.run.as_ref().map(|run| RunView {
+            wave: run.wave,
+            phase: run.phase_view(self.now),
+            lives: run.lives,
+            enemies_left: run.enemies_left(),
+            ready: run.ready.clone(),
+            waiting: run.waiting.clone(),
+            best: room.best,
+            boss: boss_of(run.wave).map(|boss| boss.def().name.clone()),
+            omen: run.omen,
+            life_price: life_price(run.lives_bought),
+        })
+    }
+
+    /// Room `key`'s members see its run again if what they'd see of it changed (the countdown, a
+    /// kill, a life spent, someone ready): checked every tick, sent only then.
+    pub(crate) fn refresh_run(&mut self, key: RoomKey) {
+        let Some(room) = self.rooms.get(&key) else { return };
+        let view = self.run_view(room);
+        let room = self.rooms.get_mut(&key).expect("checked");
+        if room.shown_run != view {
+            room.shown_run = view;
+            room.changed = true;
         }
     }
 
@@ -231,30 +250,28 @@ impl Lobby {
 
     /// Whether monsters belong in room `key` now: zombies on the hunt, or a run on.
     pub(crate) fn keeps_monsters(&self, key: RoomKey) -> bool {
-        self.rooms.get(&key).is_some_and(|room| room.hunting() || room.started && room.run.as_ref().is_some_and(Run::on))
+        self.rooms.get(&key).is_some_and(|room| room.hunting() || room.live_run().is_some())
     }
 
     /// The rooms with a run on.
     pub(crate) fn runs(&self) -> Vec<(RoomKey, InRoom)> {
-        self.rooms.iter().filter(|(_, room)| room.started && room.run.as_ref().is_some_and(Run::on)).map(|(key, room)| (*key, room.in_room(*key))).collect()
+        self.rooms.iter().filter(|(_, room)| room.live_run().is_some()).map(|(key, room)| (*key, room.in_room(*key))).collect()
     }
 
+    /// Room `key`'s run (or its last), whether it's on or not.
     pub(crate) fn run(&self, key: RoomKey) -> Option<&Run> {
         self.rooms.get(&key)?.run.as_ref()
     }
 
-    /// Room `key`'s run, to change: its members see it again.
-    pub(crate) fn run_mut(&mut self, key: RoomKey) -> Option<&mut Run> {
-        let room = self.rooms.get_mut(&key)?;
-        room.changed = true;
-        room.run.as_mut()
+    /// Whether room `key` has a run on.
+    pub(crate) fn run_on(&self, key: RoomKey) -> bool {
+        self.rooms.get(&key).is_some_and(|room| room.live_run().is_some())
     }
 
-    /// Room `key`'s members see it again.
-    pub(crate) fn touch(&mut self, key: RoomKey) {
-        if let Some(room) = self.rooms.get_mut(&key) {
-            room.changed = true;
-        }
+    /// Room `key`'s run, to change (its members see it again once `refresh_run` finds they'd see
+    /// something new).
+    pub(crate) fn run_mut(&mut self, key: RoomKey) -> Option<&mut Run> {
+        self.rooms.get_mut(&key)?.run.as_mut()
     }
 
     /// Room `key`'s members: their links and guest ids.
@@ -479,7 +496,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             let name = clean_room_name(&name).ok_or("Give the room a name")?;
             leave(lobby, ctx, link);
             // Each mode on its own maps: the waves on theirs, fights on any of the others.
-            let map = if mode.maps().contains(&map) { map } else { mode.maps()[0] };
+            let map = mode.fit_map(map);
             let key = create(lobby, allocator, ctx, link, name, mode, map);
             // A lobby's match is won by kills (a quick-joined room's never ends); the waves'
             // goes on until the party falls.
@@ -522,9 +539,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                     let room = lobby.rooms.get_mut(&key).expect("just made");
                     room.started = true;
                     if mode.pve() {
-                        let mut run = Run::new(now);
-                        run.wave = from_wave.unwrap_or(1);
-                        room.run = Some(run);
+                        room.run = Some(Run::new(now, from_wave.unwrap_or(1)));
                     }
                     key
                 }
@@ -595,8 +610,9 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             room.changed = true;
             lobby.list_changed = true;
             // Onto a map the mode plays on.
-            if !mode.maps().contains(&room.map) {
-                switch_map(lobby, ctx, key, mode.maps()[0]);
+            let fit = mode.fit_map(room.map);
+            if fit != room.map {
+                switch_map(lobby, ctx, key, fit);
             }
         }
         RoomRequest::SetMap(map) => {
@@ -718,7 +734,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             info!(room = key.0, name = room.name, mode = ?room.mode, players = room.members.len(), "match started");
             let members = room.members.clone();
             if room.mode.pve() {
-                room.run = Some(Run::new(now));
+                room.run = Some(Run::new(now, 1));
                 for member in &members {
                     if let Some(guest) = lobby.guests.get_mut(member) {
                         guest.satchel = Satchel { gold: START_GOLD, ..default() };
@@ -765,6 +781,7 @@ fn create(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, leade
         ends_at: None,
         changed: true,
         run: None,
+        shown_run: None,
         best: 0,
     });
     key
@@ -814,7 +831,7 @@ fn mode_team(mode: Mode, n: usize) -> u8 {
 /// Whether `link` may trade now: in a run, their fighter by the shopkeeper.
 fn near_the_shop(lobby: &Lobby, ctx: &Ctx, link: Entity, key: RoomKey) -> Result<(), &'static str> {
     let room = &lobby.rooms[&key];
-    if !room.started || !room.run.as_ref().is_some_and(Run::on) {
+    if room.live_run().is_none() {
         return Err("The shop is open in a run against the waves");
     }
     let shop = room.map.map().shop.ok_or("There's no shop here")?;
@@ -837,6 +854,11 @@ impl Room {
         InRoom { key, net: self.net }
     }
 
+    /// Its run, while it's on.
+    fn live_run(&self) -> Option<&Run> {
+        self.run.as_ref().filter(|run| self.started && run.on())
+    }
+
     /// Its match is on and not yet won.
     fn hunting(&self) -> bool {
         self.started && self.goal.is_some() && self.winner.is_none()
@@ -852,7 +874,7 @@ fn join(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity, key: RoomKey) -> Result<
         mode => mode_team(mode, 0),
     };
     // Into a run under way: with about what everyone else has earned.
-    let gold = room.run.as_ref().filter(|run| room.started && run.on()).map(|run| run.catch_up_gold());
+    let gold = room.live_run().map(Run::catch_up_gold);
     let net = room.net;
     let room = lobby.rooms.get_mut(&key).expect("checked");
     room.members.push(link);
@@ -909,8 +931,8 @@ fn leave(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity) -> bool {
         None => {
             let mut room = lobby.rooms.remove(&key).expect("there");
             room.clear_things(&mut ctx.commands);
-            for chest in room.run.as_mut().map(Run::take_chests).unwrap_or_default() {
-                ctx.commands.entity(chest).try_despawn();
+            if let Some(run) = room.run.as_mut() {
+                run.clear_chests(&mut ctx.commands);
             }
             lobby.free_net.push(room.net);
             info!(room = key.0, "room closed");

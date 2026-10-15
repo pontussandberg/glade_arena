@@ -6,7 +6,7 @@
 
 use arena_shared::items::{self, Item, MAX_LEVEL, SLOTS, Satchel};
 use arena_shared::protocol::*;
-use arena_shared::rooms::{Phase, RunView};
+use arena_shared::rooms::Phase;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
@@ -167,18 +167,13 @@ fn spawn_hud(mut commands: Commands) {
     ));
 }
 
-/// The run we're in, while it's on (or just lost).
-fn run_of(room: &CurrentRoom) -> Option<&RunView> {
-    room.0.as_ref().filter(|view| view.started).and_then(|view| view.run.as_ref())
-}
-
 /// The banner: rebuilt whenever the room changes.
 fn show_banner(mut commands: Commands, room: Res<CurrentRoom>, me: Option<Res<crate::rooms::Me>>, banner: Single<(Entity, &mut Node), With<Banner>>) {
     if !room.is_changed() {
         return;
     }
     let (banner, mut node) = banner.into_inner();
-    let run = run_of(&room);
+    let run = room.run();
     node.display = if run.is_some() { Display::Flex } else { Display::None };
     commands.entity(banner).despawn_children();
     let Some(run) = run else { return };
@@ -231,16 +226,17 @@ fn show_boss(
     mut texts: Query<&mut Text>,
 ) {
     let (bar, mut node) = bar.into_inner();
-    let boss = bosses.iter().find(|(class, health, _)| health.alive() && class.def().mob.as_ref().is_some_and(|m| m.boss));
+    let boss = bosses.iter().find(|(class, health, _)| health.alive() && class.def().is_boss());
     let display = if boss.is_some() { Display::Flex } else { Display::None };
     if node.display != display {
         node.display = display;
     }
     let Some((class, health, max)) = boss else { return };
+    let name = class.def().name.to_uppercase();
     if let Ok(mut text) = texts.get_mut(bar.name)
-        && text.0 != class.def().name
+        && text.0 != name
     {
-        text.0 = class.def().name.to_uppercase();
+        text.0 = name;
     }
     if let Ok(mut fill) = nodes.get_mut(bar.fill) {
         set_fill(&mut fill, health.0 as f32 / max.0.max(1) as f32);
@@ -253,7 +249,7 @@ fn show_over(mut commands: Commands, room: Res<CurrentRoom>, banner: Single<(Ent
         return;
     }
     let (banner, mut node) = banner.into_inner();
-    let reached = run_of(&room).and_then(|run| match run.phase {
+    let reached = room.run().and_then(|run| match run.phase {
         Phase::Over { reached } => Some(reached),
         _ => None,
     });
@@ -277,7 +273,7 @@ fn ready_up(
     buttons: Query<Ref<Interaction>, With<ReadyButton>>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
-    let Some(run) = run_of(&room).filter(|run| matches!(run.phase, Phase::Shop { .. })) else { return };
+    let Some(run) = room.run().filter(|run| matches!(run.phase, Phase::Shop { .. })) else { return };
     let pressed = keys.just_pressed(KeyCode::KeyF) && !typing.is_some_and(|t| t.0);
     if pressed || buttons.iter().any(clicked) {
         let ready = me.is_some_and(|me| run.ready.contains(&me.guest_id));
@@ -323,7 +319,7 @@ fn trigger_color(item: Item) -> Color {
 }
 
 /// A tooltip on what an item does, at `level` (and what it'd do raised, if `next`).
-fn item_tip(parent: &mut EntityCommands, item: Item, level: u8, next: bool) -> Entity {
+fn item_tip(parent: &mut EntityCommands, item: Item, level: u8, next: bool) {
     let mut tip_id = None;
     parent.with_children(|tile| {
         // In the shop (up at the right) it opens below, leftward; on our satchel, above.
@@ -348,9 +344,7 @@ fn item_tip(parent: &mut EntityCommands, item: Item, level: u8, next: bool) -> E
                 .id(),
         );
     });
-    let tip_id = tip_id.expect("spawned");
-    parent.insert(hover_shows(tip_id));
-    tip_id
+    parent.insert(hover_shows(tip_id.expect("spawned")));
 }
 
 /// Our gold and items: rebuilt when they change, or the shop opens or shuts (selling shows then).
@@ -362,13 +356,13 @@ fn show_satchel(
     bar: Single<(Entity, &mut Node), With<SatchelBar>>,
 ) {
     let (bar, mut node) = bar.into_inner();
-    let satchel = me.single().ok().filter(|_| run_of(&room).is_some());
+    let satchel = me.single().ok().filter(|_| room.run().is_some());
     let display = if satchel.is_some() { Display::Flex } else { Display::None };
     if node.display != display {
         node.display = display;
     }
     let Some(satchel) = satchel else { return };
-    if !satchel.is_changed() && !open.is_changed() && !room.is_changed() {
+    if !satchel.is_changed() && !open.is_changed() {
         return;
     }
     commands.entity(bar).despawn_children();
@@ -385,7 +379,7 @@ fn show_satchel(
                     let mut tile_entity = tile_commands.entity(tile);
                     item_tip(&mut tile_entity, owned.item, owned.level, false);
                     if open.0 {
-                        let back = Satchel::sell_value(&owned);
+                        let back = owned.sell_value();
                         tile_entity.with_children(|tile| {
                             // Over the tile (under it is the action bar).
                             tile.spawn((SellButton(slot as u8), HudButton, button(format!("+{back}"), 9.0, palette::ui::BACKDROP, palette::GOLD, palette::GOLD.with_alpha(0.6))))
@@ -416,7 +410,7 @@ fn open_shop(
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     merchant: Query<&Pos, With<Shopkeeper>>,
 ) {
-    let near = run_of(&room).is_some_and(|run| !matches!(run.phase, Phase::Over { .. }))
+    let near = room.run().is_some_and(|run| !matches!(run.phase, Phase::Over { .. }))
         && me.single().ok().zip(merchant.iter().next()).is_some_and(|(me, merchant)| me.distance(merchant.0) <= SHOP_RADIUS);
     open.set_if_neq(ShopOpen(near));
 }
@@ -429,6 +423,7 @@ fn show_shop(
     open: Res<ShopOpen>,
     me: Query<(Ref<Satchel>, &ClassId), With<Me>>,
     panel: Single<(Entity, &mut Node), With<ShopPanel>>,
+    mut shown_price: Local<Option<u32>>,
 ) {
     let (panel, mut node) = panel.into_inner();
     let display = if open.0 { Display::Flex } else { Display::None };
@@ -436,10 +431,12 @@ fn show_shop(
         node.display = display;
     }
     let Ok((satchel, class)) = me.single() else { return };
-    if !open.0 || !(open.is_changed() || satchel.is_changed() || room.is_changed()) {
+    // Of the room, only the life's price shows here.
+    let life_price = room.run().map(|run| run.life_price);
+    let priced = std::mem::replace(&mut *shown_price, life_price) != life_price;
+    if !open.0 || !(open.is_changed() || satchel.is_changed() || priced) {
         return;
     }
-    let life_price = run_of(&room).map(|run| run.life_price);
     commands.entity(panel).despawn_children();
     commands.entity(panel).with_children(|panel| {
         panel.spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, ..default() }).with_children(|head| {
@@ -532,7 +529,7 @@ fn name_in_world(
     new: Query<(Entity, &ClassId, Option<&Elite>, Has<Shopkeeper>), Or<(Added<Elite>, Added<Shopkeeper>)>>,
 ) {
     for (entity, class, elite, shopkeeper) in &new {
-        let size = class.def().size() * if elite.is_some() { crate::rig::ELITE_SIZE } else { 1.0 };
+        let size = crate::rig::drawn_size(*class, elite.is_some());
         let (text, color, height) = match elite {
             _ if shopkeeper => ("MERCHANT".to_string(), palette::GOLD, 2.4 * size),
             Some(elite) => (elite.0.label().to_uppercase(), crate::render::affix_color(elite.0), 2.9 * size),
@@ -619,8 +616,14 @@ fn add_fx(mut commands: Commands, looks: Res<FxLooks>, mut materials: ResMut<Ass
     let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
     for (entity, fx) in &new {
         let mut parts = Vec::new();
+        // Parts that fade alike share a material.
+        let mut shared: Option<(Handle<StandardMaterial>, f32)> = None;
         let mut part = |commands: &mut Commands, mesh: &Handle<Mesh>, color: Color, alpha: f32, glow: f32, transform: Transform| {
-            let material = materials.add(arena::translucent(color, alpha, glow));
+            let material = match &shared {
+                Some((material, _)) if matches!(fx.kind, FxKind::Arc | FxKind::Coins) => material.clone(),
+                _ => materials.add(arena::translucent(color, alpha, glow)),
+            };
+            shared = Some((material.clone(), alpha));
             let id = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), transform, NotShadowCaster)).id();
             parts.push((id, material, alpha));
             id
@@ -643,8 +646,7 @@ fn add_fx(mut commands: Commands, looks: Res<FxLooks>, mut materials: ResMut<Ass
                         let mid = (w[0] + w[1]) / 2.0;
                         let along = w[1] - w[0];
                         let transform = Transform::from_translation(mid).looking_to(along.normalize_or(Vec3::X), Vec3::Y) * Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new(along.length(), 1.0, 1.0));
-                        let id = part(&mut commands, &looks.bolt, c, 0.95, 8.0, transform);
-                        id
+                        part(&mut commands, &looks.bolt, c, 0.95, 8.0, transform)
                     })
                     .collect()
             }
@@ -676,11 +678,14 @@ fn play_fx(clock: AttackClock, fx: Query<(&Fx, &FxParts)>, mut transforms: Query
         let span = (fx.until as f32 - fx.from as f32).max(1.0);
         let t = ((now - fx.from as f32) / span).clamp(0.0, 1.0);
         let over = now > fx.until as f32;
+        // Only a real change touches the material: a touched one goes to the GPU again.
         let mut fade = |i: usize, strength: f32| {
-            if let Some((_, material, alpha)) = parts.0.get(i)
+            let Some((_, material, alpha)) = parts.0.get(i) else { return };
+            let wanted = alpha * strength.clamp(0.0, 1.0);
+            if materials.get(material).is_some_and(|m| (m.base_color.alpha() - wanted).abs() > 0.004)
                 && let Some(mut m) = materials.get_mut(material)
             {
-                m.base_color.set_alpha(alpha * strength.clamp(0.0, 1.0));
+                m.base_color.set_alpha(wanted);
             }
         };
         match fx.kind {

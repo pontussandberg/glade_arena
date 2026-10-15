@@ -167,6 +167,12 @@ pub struct Map {
     beyond: fn(Vec2) -> Tile,
 }
 
+/// A rounded square's "radius" through `p`: the same along its sides, smaller across its corners.
+fn squircle(p: Vec2) -> f32 {
+    let (x2, y2) = (p.x * p.x, p.y * p.y);
+    (x2 * x2 + y2 * y2).sqrt().sqrt()
+}
+
 /// Smooth periodic wave in [-1, 1] with period 4 (a sine look-alike from a cubic), using only
 /// basic arithmetic so it is bit-identical on every platform.
 fn wave(t: f32) -> f32 {
@@ -234,19 +240,27 @@ impl Map {
 
     /// Every tile from `a` to `b` (tile centers, in a straight or diagonal line), no mirror.
     fn line(&mut self, a: Vec2, b: Vec2, tile: Tile) {
-        let steps = (b - a).abs().max_element() as i32;
-        for s in 0..=steps {
-            self.set(a + (b - a) * if steps == 0 { 0.0 } else { s as f32 / steps as f32 }, tile);
+        for p in line_points(a, b) {
+            self.set(p, tile);
         }
     }
 
     /// Every tile from `a` to `b` (tile centers, in a straight or diagonal line), mirrored.
     fn line_mirrored(&mut self, a: Vec2, b: Vec2, tile: Tile) {
-        let steps = (b - a).abs().max_element() as i32;
-        for s in 0..=steps {
-            let p = a + (b - a) * if steps == 0 { 0.0 } else { s as f32 / steps as f32 };
+        for p in line_points(a, b) {
             self.set_mirrored(p, tile);
         }
+    }
+
+    /// Where a walker on tile `here` can step next, and what the step costs (10 straight, 14
+    /// diagonal): the eight tiles round it that are walkable, never cutting a blocked corner.
+    fn steps(&self, here: IVec2) -> impl Iterator<Item = (IVec2, u32)> + '_ {
+        [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)].into_iter().filter_map(move |(dx, dy)| {
+            let next = here + IVec2::new(dx, dy);
+            let diagonal = dx != 0 && dy != 0;
+            let clear = self.walkable(next) && (!diagonal || (self.walkable(here + IVec2::new(dx, 0)) && self.walkable(here + IVec2::new(0, dy))));
+            clear.then_some((next, if diagonal { 14 } else { 10 }))
+        })
     }
 
     /// Walls (from, to, a torch on the `from` end), rocks and trees on one half, mirrored. Returns
@@ -444,16 +458,9 @@ impl Map {
                 return Some(path);
             }
             let here = self.tile_at(i);
-            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
-                let next = here + IVec2::new(dx, dy);
-                let diagonal = dx != 0 && dy != 0;
-                if !self.walkable(next)
-                    || (diagonal && !(self.walkable(here + IVec2::new(dx, 0)) && self.walkable(here + IVec2::new(0, dy))))
-                {
-                    continue;
-                }
+            for (next, step) in self.steps(here) {
                 let j = self.index(next).unwrap();
-                let c = cost[i] + if diagonal { 14 } else { 10 };
+                let c = cost[i] + step;
                 if c < cost[j] {
                     cost[j] = c;
                     came_from[j] = i;
@@ -532,6 +539,12 @@ impl Map {
     }
 }
 
+/// The tile centers from `a` to `b` (tile centers, in a straight or diagonal line).
+fn line_points(a: Vec2, b: Vec2) -> impl Iterator<Item = Vec2> {
+    let steps = (b - a).abs().max_element() as i32;
+    (0..=steps).map(move |s| a + (b - a) * if steps == 0 { 0.0 } else { s as f32 / steps as f32 })
+}
+
 /// A remembered path (`None`: there's no way).
 type Path = Option<Rc<[IVec2]>>;
 
@@ -576,16 +589,9 @@ impl Map {
                 continue;
             }
             let here = self.tile_at(i);
-            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
-                let next = here + IVec2::new(dx, dy);
-                let diagonal = dx != 0 && dy != 0;
-                if !self.walkable(next)
-                    || (diagonal && !(self.walkable(here + IVec2::new(dx, 0)) && self.walkable(here + IVec2::new(0, dy))))
-                {
-                    continue;
-                }
+            for (next, step) in self.steps(here) {
                 let j = self.index(next).expect("walkable tiles are on the grid");
-                let nd = d + if diagonal { 14 } else { 10 };
+                let nd = d + step;
                 if nd < dist[j] {
                     dist[j] = nd;
                     open.push(Reverse((nd, j)));
@@ -596,6 +602,7 @@ impl Map {
     }
 
     /// How far `p` is from the field's nearest source, walking (`None`: it can't get there).
+    #[cfg(test)]
     pub fn flow_distance(&self, field: &FlowField, p: Vec2) -> Option<u32> {
         self.index(Map::tile_of(p)).map(|i| field.dist[i]).filter(|d| *d != u32::MAX)
     }
@@ -610,15 +617,7 @@ impl Map {
             if here == 0 || here == u32::MAX {
                 break;
             }
-            let next = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)]
-                .into_iter()
-                .map(|(dx, dy)| at + IVec2::new(dx, dy))
-                .filter(|t| {
-                    let d = *t - at;
-                    self.walkable(*t) && (d.x == 0 || d.y == 0 || (self.walkable(at + IVec2::new(d.x, 0)) && self.walkable(at + IVec2::new(0, d.y))))
-                })
-                .filter_map(|t| self.index(t).map(|i| (field.dist[i], t)))
-                .min_by_key(|(d, _)| *d)?;
+            let next = self.steps(at).filter_map(|(t, _)| self.index(t).map(|i| (field.dist[i], t))).min_by_key(|(d, _)| *d)?;
             if next.0 >= here {
                 break;
             }

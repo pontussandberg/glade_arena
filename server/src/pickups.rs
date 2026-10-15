@@ -9,13 +9,13 @@ use crate::rooms::{InRoom, Lobby};
 
 /// A room's pickups, lying at `map`'s spots for everyone in it to see.
 pub(super) fn spawn_pickups(commands: &mut Commands, room: InRoom, map: &Map) -> Vec<Entity> {
-    map.pickups
-        .iter()
-        .map(|&(at, kind)| {
-            let pickup = Pickup { kind, at, back_at: None, taken_by: None };
-            commands.spawn((Name::from("Pickup"), pickup, room, room.rooms(), Replicate::to_clients(NetworkTarget::All))).id()
-        })
-        .collect()
+    map.pickups.iter().map(|&(at, kind)| spawn_pickup(commands, room, at, kind)).collect()
+}
+
+/// A pickup of `kind` lying `at` in `room`, for everyone in it to see.
+pub(crate) fn spawn_pickup(commands: &mut Commands, room: InRoom, at: Vec2, kind: PickupKind) -> Entity {
+    let pickup = Pickup { kind, at, back_at: None, taken_by: None };
+    commands.spawn((Name::from("Pickup"), pickup, room, room.rooms(), Replicate::to_clients(NetworkTarget::All))).id()
 }
 
 /// A fighter touching a pickup that's lying there takes it (the first found, if several), and
@@ -45,11 +45,7 @@ pub(super) fn take_pickups(
         };
         let respawn = match pickup.kind {
             PickupKind::Heal => {
-                let healed = (health.0 + sim::heal_amount(max.0)).min(max.0);
-                if healed > health.0 {
-                    hits.push(healed - health.0, HitKind::Heal);
-                    health.0 = healed;
-                }
+                mend(&mut health, max, &mut hits, sim::heal_amount(max.0));
                 HEAL_RESPAWN_TICKS
             }
             PickupKind::Haste => {
@@ -64,7 +60,7 @@ pub(super) fn take_pickups(
                 // Gold for everyone, and it's gone.
                 let gold = crate::waves::chest_gold(&lobby, room.key);
                 lobby.give_gold(room.key, gold);
-                crate::fx::spawn_fx(&mut commands, *room, Fx { kind: FxKind::Coins, at, to: at, radius: 1.5, from: now, until: now + 30 });
+                crate::fx::spawn_fx(&mut commands, *room, Fx::at(FxKind::Coins, at, 1.5, now, 30));
                 commands.entity(entity).try_despawn();
                 info!(target: "arena_server", player = ?id.0, gold, "opened a chest");
                 continue;

@@ -150,7 +150,7 @@ fn go_shopping(
     mut sender: Query<&mut MessageSender<RoomRequest>, With<Client>>,
     mut asked_at: Local<f32>,
 ) {
-    let Some(run) = room.0.as_ref().filter(|view| view.started).and_then(|view| view.run.as_ref()) else { return };
+    let Some(run) = room.run() else { return };
     if !matches!(run.phase, arena_shared::rooms::Phase::Shop { .. }) {
         return;
     }

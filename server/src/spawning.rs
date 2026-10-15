@@ -16,6 +16,12 @@ fn replicated_player(owner: PeerId) -> impl Bundle {
     )
 }
 
+/// Replicated to everyone and interpolated by all: a fighter no client controls (a dummy, a
+/// monster, the shopkeeper, a decoy), there from the start.
+pub(crate) fn replicated_npc() -> impl Bundle {
+    (Replicate::to_clients(NetworkTarget::All), InterpolationTarget::to_clients(NetworkTarget::All))
+}
+
 /// Server-only: this player (new, respawning, or on a map just changed to) still needs a spawn
 /// point.
 #[derive(Component)]
@@ -85,8 +91,7 @@ pub(crate) fn spawn_shopkeeper(commands: &mut Commands, room: InRoom, at: Vec2) 
             Shopkeeper,
             Untouchable,
             fighter(id, class, room, Team(arena_shared::rooms::TEAM_A), at),
-            Replicate::to_clients(NetworkTarget::All),
-            InterpolationTarget::to_clients(NetworkTarget::All),
+            replicated_npc(),
         ))
         .id()
 }

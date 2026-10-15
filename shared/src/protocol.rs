@@ -438,6 +438,18 @@ pub struct Fx {
     pub until: u32,
 }
 
+impl Fx {
+    /// An effect at one spot, out to `radius`, from `now` for `ticks`.
+    pub fn at(kind: FxKind, at: Vec2, radius: f32, now: u32, ticks: u32) -> Fx {
+        Fx { kind, at, to: at, radius, from: now, until: now + ticks }
+    }
+
+    /// An effect from `at` to `to` (an arc, a lob), from `now` for `ticks`.
+    pub fn between(kind: FxKind, at: Vec2, to: Vec2, radius: f32, now: u32, ticks: u32) -> Fx {
+        Fx { kind, at, to, radius, from: now, until: now + ticks }
+    }
+}
+
 /// A pickup lying at `at` (one of its map's `pickups`), or, while `back_at` is set, taken (last
 /// by `taken_by`) and gone until that tick. Server-authoritative: the server decides who takes
 /// it, clients draw it, its timer, and its taker's burst.

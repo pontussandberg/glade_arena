@@ -360,7 +360,7 @@ fn spawn_dots(
 ) {
     for (player, class, is_me, shopkeeper) in &new {
         // The merchant and bosses stand out: bigger, the merchant in gold.
-        let boss = class.def().mob.as_ref().is_some_and(|m| m.boss);
+        let boss = class.def().is_boss();
         let size = match () {
             _ if shopkeeper || boss => DOT * 1.6,
             _ if class.def().playable => DOT,

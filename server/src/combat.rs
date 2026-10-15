@@ -50,6 +50,23 @@ pub(crate) fn might_of(might: Option<&Might>) -> f32 {
     might.map_or(1.0, |m| m.0)
 }
 
+/// `amount` of damage, `might` times as hard.
+pub(crate) fn mighty(amount: i32, might: f32) -> i32 {
+    (amount as f32 * might).round() as i32
+}
+
+/// Heals a living fighter `amount`, up to `max`, shown as a heal. How much it got back.
+pub(crate) fn mend(health: &mut Health, max: &MaxHealth, hits: &mut RecentHits, amount: i32) -> i32 {
+    let healed = (health.0 + amount).min(max.0);
+    if health.0 <= 0 || healed <= health.0 {
+        return 0;
+    }
+    let gained = healed - health.0;
+    hits.push(gained, HitKind::Heal);
+    health.0 = healed;
+    gained
+}
+
 /// Server-only: no one can hurt it (the shopkeeper).
 #[derive(Component)]
 pub(crate) struct Untouchable;
@@ -154,6 +171,7 @@ pub(super) type Targets<'w, 's> = Query<
         &'static mut Health,
         &'static mut Chilled,
         &'static mut RecentHits,
+        &'static MaxHealth,
     ),
     (InPlay, Without<Untouchable>),
 >;
@@ -173,7 +191,7 @@ pub(super) fn hit_foes(
     mut hits: impl FnMut(PeerId, Vec2) -> bool,
 ) -> usize {
     let mut count = 0;
-    for (target, target_id, (room, team), target_pos, mut health, mut chilled, mut recent) in targets {
+    for (target, target_id, (room, team), target_pos, mut health, mut chilled, mut recent, _) in targets {
         // One killed already this tick (`damage`) isn't hit: a swing that only struck a body
         // didn't land.
         if health.0 > 0 && target_id.0 != attacker.0 && foes(side, (*room, *team)) && hits(target_id.0, target_pos.0) {
@@ -228,7 +246,7 @@ pub(super) fn attack(
                 if let Some(rift) = sim::Rift::torn(id.0, *class, pos.0, &swing) {
                     rifts.0.push((*room, rift));
                 }
-                let amount = (class.def().attack.damage as f32 * might).round() as i32;
+                let amount = mighty(class.def().attack.damage, might);
                 let blow = Blow::attack(amount, class.def().attack.chill, swing.empowered, primed);
                 let with = (id.0, *class, "auto-attack");
                 let landed = hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Attack), blow, |_, at| {

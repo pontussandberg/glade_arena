@@ -12,19 +12,38 @@ use super::*;
 
 use arena_shared::abilities::AbilitySlot;
 use arena_shared::classes::{Brain, Chill, Trick};
-use arena_shared::map::FlowField;
+use arena_shared::map::{FlowField, Map};
 use arena_shared::rooms::{RoomKey, ZOMBIES};
 
 use crate::fx::spawn_fx;
-use crate::items::{By, blast};
+use crate::items::{By, Delayed, Pending, arm, blast};
 use crate::rooms::{InRoom, Lobby};
+
+// Elites' twists (`Affix`), and a Volatile wave's.
+
+/// How long a frostbound elite's hits freeze.
+pub(crate) const FROSTBOUND_ROOT_TICKS: u32 = 16;
+
+/// A blast where a monster died: `fuse` ticks later, `damage` (at wave 1's might) within `radius`.
+pub(crate) struct Boom {
+    pub(crate) fuse: u32,
+    pub(crate) radius: f32,
+    pub(crate) damage: i32,
+}
+
+/// A volatile elite's, and any monster's on a Volatile wave.
+pub(crate) const VOLATILE_BLAST: Boom = Boom { fuse: 26, radius: 2.6, damage: 24 };
+pub(crate) const VOLATILE_WAVE_BLAST: Boom = Boom { fuse: 20, radius: 2.0, damage: 14 };
+
+/// What a splitting elite splits into as it dies, and how many.
+pub(crate) const SPLITS_INTO: &str = "gnawer";
+pub(crate) const SPLITS_INTO_COUNT: u32 = 3;
 
 /// Server-only: a monster of the waves.
 #[derive(Component)]
 pub(crate) struct Mob {
     /// Gold for everyone in the run when it dies.
     pub(crate) bounty: u32,
-    pub(crate) boss: bool,
     /// It has burst already (`Trick::Burst`): not again as it dies.
     pub(crate) burst: bool,
     /// When each of its tricks may go again.
@@ -45,22 +64,26 @@ impl Mob {
         let tricks = def.map_or(&[][..], |m| &m.tricks[..]);
         // Each trick's first go comes a while in, not all at once.
         let ready_at = tricks.iter().map(|trick| now + trick_every(trick).map_or(0, |every| fastrand::u32(every / 3..=every))).collect();
-        Mob { bounty, boss: def.is_some_and(|m| m.boss), burst: false, ready_at, flank: fastrand::f32() * TAU, enraged: false, raised_by, retreat: (0, 0) }
+        Mob { bounty, burst: false, ready_at, flank: fastrand::f32() * TAU, enraged: false, raised_by, retreat: (0, 0) }
     }
 }
 
 /// How often a trick that goes off now and then does.
 fn trick_every(trick: &Trick) -> Option<u32> {
     match trick {
-        Trick::Summon { every_ticks, .. } | Trick::Mend { every_ticks, .. } | Trick::Ring { every_ticks, .. } | Trick::Fan { every_ticks, .. } => Some(*every_ticks),
-        Trick::Mortar { every_ticks, .. } => Some(*every_ticks),
+        Trick::Summon { every_ticks, .. }
+        | Trick::Mend { every_ticks, .. }
+        | Trick::Ring { every_ticks, .. }
+        | Trick::Fan { every_ticks, .. }
+        | Trick::Mortar { every_ticks, .. } => Some(*every_ticks),
         _ => None,
     }
 }
 
-/// Server-only: each room's flow field toward its prey, and when it was made.
+/// Server-only: each room's flow field toward its prey: when it was made, and the tiles the prey
+/// stood on then (made again only once they've moved).
 #[derive(Resource, Default)]
-pub(crate) struct Fields(HashMap<RoomKey, (u32, FlowField)>);
+pub(crate) struct Fields(HashMap<RoomKey, (u32, Vec<IVec2>, FlowField)>);
 
 /// How far a mortar throws.
 const MORTAR_REACH: f32 = 14.0;
@@ -108,10 +131,18 @@ pub(super) fn think(
     rooms.dedup();
     fields.0.retain(|key, _| rooms.iter().any(|r| r.key == *key));
     for room in &rooms {
-        let stale = fields.0.get(&room.key).is_none_or(|(at, _)| now >= at + FIELD_EVERY_TICKS);
-        if stale {
-            let sources: Vec<Vec2> = prey.iter().filter(|(_, r, _)| *r == room).map(|(p, ..)| p.0).collect();
-            fields.0.insert(room.key, (now, lobby.map(room).flow_field(sources)));
+        if fields.0.get(&room.key).is_some_and(|(at, ..)| now < at + FIELD_EVERY_TICKS) {
+            continue;
+        }
+        let mut tiles: Vec<IVec2> = prey.iter().filter(|(_, r, _)| *r == room).map(|(p, ..)| Map::tile_of(p.0)).collect();
+        tiles.sort_by_key(|t| (t.x, t.y));
+        tiles.dedup();
+        match fields.0.get_mut(&room.key) {
+            Some((at, was, _)) if *was == tiles => *at = now,
+            _ => {
+                let field = lobby.map(room).flow_field(tiles.iter().map(|t| Map::center(*t)));
+                fields.0.insert(room.key, (now, tiles, field));
+            }
         }
     }
     // Who's summoned whom, for the summoners' caps.
@@ -148,7 +179,7 @@ pub(super) fn think(
             if map.line_walkable(pos.0, goal) {
                 return Some(goal);
             }
-            fields.0.get(&room.key).and_then(|(_, field)| map.downhill(field, pos.0))
+            fields.0.get(&room.key).and_then(|(.., field)| map.downhill(field, pos.0))
         };
         // Close in from its own side of the prey.
         let flanked = target + Vec2::from_angle(mob.flank) * (reach * 0.5).min(1.2);
@@ -207,7 +238,7 @@ pub(super) fn think(
                 Trick::Burst { within, damage, radius } if dist < *within && !mob.burst => {
                     mob.burst = true;
                     let by = By { id: id.0, class: *class, side, source: Source::Trick };
-                    deeds.0.push(Deed::Burst { by, entity, at: pos.0, radius: *radius, damage: (*damage as f32 * might).round() as i32 });
+                    deeds.0.push(Deed::Burst { by, entity, at: pos.0, radius: *radius, damage: mighty(*damage, might) });
                 }
                 Trick::Burst { .. } => {}
                 Trick::Summon { class: kind, count, max, .. } => {
@@ -244,8 +275,7 @@ pub(super) fn think(
                     if dist < MORTAR_REACH {
                         fired = true;
                         let by = By { id: id.0, class: *class, side, source: Source::Trick };
-                        let damage = (*damage as f32 * might).round() as i32;
-                        deeds.0.push(Deed::Mortar { by, from: pos.0, at: target, radius: *radius, damage, fuse: *fuse_ticks });
+                        deeds.0.push(Deed::Mortar { by, from: pos.0, at: target, radius: *radius, damage: mighty(*damage, might), fuse: *fuse_ticks });
                     }
                 }
                 Trick::Enrage { below } => {
@@ -253,7 +283,7 @@ pub(super) fn think(
                         mob.enraged = true;
                         hasted.0 = Span { from: now + 1, until: u32::MAX };
                         commands.entity(entity).insert(Might(might * 1.3));
-                        spawn_fx(&mut commands, *room, Fx { kind: FxKind::Blast(FxColor::Blood), at: pos.0, to: pos.0, radius: 3.0, from: now, until: now + 16 });
+                        spawn_fx(&mut commands, *room, Fx::at(FxKind::Blast(FxColor::Blood), pos.0, 3.0, now, 16));
                     }
                 }
             }
@@ -272,50 +302,38 @@ pub(super) fn do_deeds(
     mut lobby: ResMut<Lobby>,
     mut deeds: ResMut<Deeds>,
     mut log: ResMut<HitLog>,
-    mut pending: ResMut<crate::items::Pending>,
+    mut pending: ResMut<Pending>,
     mut targets: Targets,
-    maxes: Query<&MaxHealth>,
 ) {
     let now = timeline.tick().0;
     for deed in std::mem::take(&mut deeds.0) {
         match deed {
-            Deed::Burst { by, entity, at, radius, damage } => {
-                blast(&mut commands, &mut log, now, &mut targets, by, at, radius, damage, Chill::default(), FxColor::Poison);
-                // It's spent: it bursts itself.
-                if let Ok((_, id, _, _, mut health, _, mut hits)) = targets.get_mut(entity)
-                    && health.0 > 0
-                {
-                    hits.push(health.0, HitKind::Damage);
-                    health.0 = 0;
-                    commands.entity(entity).insert(Dead { respawn_at: now + RESPAWN_TICKS, placed: false, killer: id.0 });
+            Deed::Burst { by, entity, at, radius, damage: burst } => {
+                blast(&mut commands, &mut log, now, &mut targets, by, at, radius, burst, Chill::default(), FxColor::Poison);
+                // It's spent: it bursts itself, a blow of all it has left.
+                if let Ok((_, id, _, pos, mut health, mut chilled, mut hits, _)) = targets.get_mut(entity) {
+                    let (id, at, rest) = (id.0, pos.0, health.0);
+                    let blow = Blow::ability(rest, Chill::default());
+                    damage(&mut commands, &mut log, now, (entity, id, at), (&mut health, &mut chilled, &mut hits), blow, (id, by.class, "a burst"), (by.side, Source::Trick, None));
                 }
             }
             Deed::Mend { room, at, radius, amount } => {
-                spawn_fx(&mut commands, room, Fx { kind: FxKind::Blast(FxColor::Poison), at, to: at, radius, from: now, until: now + 14 });
-                for (entity, _, (r, team), pos, mut health, _, mut hits) in &mut targets {
-                    if *r != room || team.0 != ZOMBIES || health.0 <= 0 || pos.0.distance(at) > radius {
-                        continue;
-                    }
-                    let most = maxes.get(entity).map_or(health.0, |m| m.0);
-                    let healed = (health.0 + amount).min(most);
-                    if healed > health.0 {
-                        hits.push(healed - health.0, HitKind::Heal);
-                        health.0 = healed;
+                spawn_fx(&mut commands, room, Fx::at(FxKind::Blast(FxColor::Poison), at, radius, now, 14));
+                for (_, _, (r, team), pos, mut health, _, mut hits, max) in &mut targets {
+                    if *r == room && team.0 == ZOMBIES && pos.0.distance(at) <= radius {
+                        mend(&mut health, max, &mut hits, amount);
                     }
                 }
             }
             Deed::Summon { room, class, count, at, might, raiser } => {
-                let map = lobby.map(&room);
-                for n in 0..count {
-                    let spot = at + Vec2::from_angle(TAU * n as f32 / count as f32 + fastrand::f32()) * 1.6;
-                    let spot = if map.walkable_at(spot) && map.line_walkable(at, spot) { spot } else { at };
-                    crate::waves::spawn_mob(&mut commands, &mut lobby, room, class, spot, None, might, Some(raiser));
+                for spot in crate::waves::ring_spots(lobby.map(&room), at, count, 1.6) {
+                    crate::waves::spawn_mob(&mut commands, &mut lobby, room, class, spot, 1.0, might, Some(raiser));
                 }
             }
             Deed::Mortar { by, from, at, radius, damage, fuse } => {
-                spawn_fx(&mut commands, by.side.0, Fx { kind: FxKind::Lob, at: from, to: at, radius, from: now, until: now + fuse });
-                spawn_fx(&mut commands, by.side.0, Fx { kind: FxKind::Warn(FxColor::Poison), at, to: at, radius, from: now, until: now + fuse });
-                pending.0.push(crate::items::Delayed { by, at, radius, damage, chill: Chill::default(), fire_at: now + fuse, hue: FxColor::Poison });
+                spawn_fx(&mut commands, by.side.0, Fx::between(FxKind::Lob, from, at, radius, now, fuse));
+                let bomb = Delayed { by, at, radius, damage, chill: Chill::default(), fire_at: now + fuse, color: FxColor::Poison };
+                arm(&mut commands, &mut pending, now, bomb, FxKind::Warn(FxColor::Poison));
             }
             Deed::Shots { side, shots, might } => {
                 for shot in shots {
@@ -334,7 +352,7 @@ const NUDGE: f32 = 0.06;
 /// Monsters don't stand in each other: crowding ones are nudged apart (where the ground lets
 /// them), so a pack spreads round its prey instead of piling into one body.
 pub(super) fn spread_out(lobby: Res<Lobby>, mut mobs: Query<(&mut Pos, &InRoom, &ClassId, &Dashing), (With<Mob>, InPlay)>) {
-    let all: Vec<(Vec2, InRoom, f32)> = mobs.iter().map(|(pos, room, class, _)| (pos.0, *room, class.def().size())).collect();
+    let all: Vec<(Vec2, RoomKey, f32)> = mobs.iter().map(|(pos, room, class, _)| (pos.0, room.key, class.def().size())).collect();
     for (i, (mut pos, room, class, dashing)) in mobs.iter_mut().enumerate() {
         if dashing.0.is_some() {
             continue;
@@ -342,9 +360,12 @@ pub(super) fn spread_out(lobby: Res<Lobby>, mut mobs: Query<(&mut Pos, &InRoom, 
         let size = class.def().size();
         let mut push = Vec2::ZERO;
         for (j, &(other, other_room, other_size)) in all.iter().enumerate() {
+            if i == j || other_room != room.key {
+                continue;
+            }
             let apart = pos.0 - other;
             let room_for = ELBOW_ROOM * (size + other_size) / 2.0;
-            if i == j || other_room != *room || apart.length_squared() >= room_for * room_for {
+            if apart.length_squared() >= room_for * room_for {
                 continue;
             }
             // Exactly on top: apart some way of their own.
