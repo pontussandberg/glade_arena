@@ -230,7 +230,8 @@ impl Lobby {
             map: room.map,
             players: room.members.len() as u8,
             started: room.started,
-            closed: !room.joinable(),
+            // Joined from the list only while waiting (`RoomRequest::Join`).
+            closed: room.started,
             locked: room.password.is_some(),
         }
     }
@@ -629,8 +630,8 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             if room.members.len() >= room.mode.capacity() {
                 return Err("That room is full");
             }
-            if !room.joinable() {
-                return Err("That run is under way: join one before its first wave");
+            if room.started {
+                return Err("That match has started: join one that's waiting");
             }
             leave(lobby, ctx, link);
             join(lobby, ctx, link, key)?;

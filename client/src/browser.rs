@@ -608,14 +608,16 @@ fn spawn_row(card: &mut ChildSpawnerCommands, room: &RoomSummary) {
         row.spawn(Node { flex_direction: FlexDirection::Column, flex_grow: 1.0, row_gap: px(2.0), ..default() }).with_children(|left| {
             left.spawn(ui_text(room.name.clone(), 15.0, palette::ui::TEXT));
             left.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Center, ..default() }).with_children(|line| {
-                let (state, color) = if room.started { ("LIVE", ACCENT) } else { ("WAITING", palette::ui::MUTED) };
-                line.spawn(ui_text(state, 10.0, color));
-                line.spawn(ui_text(format!("{}  |  {}  |  {}/{}", room.mode.label(), room.map.label(), room.players, room.mode.capacity()), 11.0, palette::ui::MUTED));
+                // Whether it's begun, set apart from what it is.
+                let (state, color) = if room.started { ("Started", ACCENT) } else { ("Waiting...", palette::ui::TEXT) };
+                line.spawn(ui_text(state, 11.0, color));
+                line.spawn(ui_text(format!("|  {}  |  {}  |  {}/{}", room.mode.label(), room.map.label(), room.players, room.mode.capacity()), 11.0, palette::ui::MUTED));
                 if room.locked {
                     line.spawn(ui_text("PASSWORD", 10.0, palette::TORCH_FLAME));
                 }
             });
         });
+        // Started, it's closed: only a waiting lobby takes anyone in.
         if room.closed {
             row.spawn(ui_text("In progress", 12.0, palette::ui::MUTED));
         } else if room.full() {

@@ -160,7 +160,7 @@ pub struct RoomSummary {
     pub map: MapId,
     pub players: u8,
     pub started: bool,
-    /// No way in: a run against the waves under way.
+    /// No way in from the list: its match has started.
     pub closed: bool,
     /// Only those with its password may join.
     pub locked: bool,
