@@ -171,9 +171,10 @@ pub fn hydra_spear(level: u8) -> (u32, f32, u32) {
 /// How long after an ability's damage set off its holder's ability items they can go off again:
 /// each use of an ability sets them off once, however many it hits.
 pub const ABILITY_ITEMS_AGAIN: u32 = secs(1.0);
-/// Gravecaller Rift: damage per pulse to enemies in your rifts.
-pub fn gravecaller_rift(level: u8) -> i32 {
-    lv(level, [7, 11, 16])
+/// Gravecaller Rift: how much bigger again Follow Through's empowered strike is (its lane, and
+/// the rift it tears).
+pub fn gravecaller_rift(level: u8) -> f32 {
+    lv(level, [0.15, 0.3, 0.5])
 }
 /// Heart of Winter: (blizzard radius, slow, damage per pulse, how long it lasts in ticks).
 pub fn heart_of_winter(level: u8) -> (f32, f32, i32, u32) {
@@ -299,7 +300,7 @@ impl Item {
             Item::BerserkerTotem => "Every kill feeds the next.",
             Item::RicochetCharm => "Why stop at one?",
             Item::HydraSpear => "One throw, and the sky fills with points.",
-            Item::GravecallerRift => "The wounds you open in the earth stay hungry.",
+            Item::GravecallerRift => "The wounds you open in the earth grow wider.",
             Item::HeartOfWinter => "Your nova leaves a storm behind.",
         }
     }
@@ -376,7 +377,7 @@ impl Item {
                 format!("Each auto-attack throws {count} javelins in a barrage, one right after the other; each after the first deals {} of the damage.", pct(keeps))
             }
             Item::GravecallerRift => {
-                format!("Enemies in your rifts take {} damage every {}.", gravecaller_rift(level), s(ZONE_PULSE_TICKS))
+                format!("Follow Through's empowered strike is {} longer and wider, and so is the rift it tears.", pct(gravecaller_rift(level)))
             }
             Item::HeartOfWinter => {
                 let (radius, slow, damage, lasts) = heart_of_winter(level);

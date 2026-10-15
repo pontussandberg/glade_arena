@@ -295,6 +295,12 @@ pub struct BurstDef {
 pub struct RiftDef {
     pub ticks: u32,
     pub haste: f32,
+    /// Its striker's foes standing in it burn: this much every `ZONE_PULSE_TICKS` (none by
+    /// default), the striker healed `leech` of what it burns.
+    #[serde(default)]
+    pub burn: i32,
+    #[serde(default)]
+    pub leech: f32,
 }
 
 /// Landing an auto-attack empowers the next one, if started within `within_ticks` of the hit:
@@ -313,6 +319,10 @@ pub struct FollowUp {
     /// set: the whole lane scaled out).
     #[serde(default)]
     pub near: Option<f32>,
+    /// The empowered attack knocks those it hits up, off their feet this long (none by default).
+    /// Shorter than the empowered attack itself, so it can't keep anyone in the air alone.
+    #[serde(default)]
+    pub lift_ticks: u32,
 }
 
 fn one() -> f32 {
@@ -334,11 +344,14 @@ pub struct Chill {
     pub slow_ticks: u32,
     #[serde(default)]
     pub root_ticks: u32,
+    /// Knocked up (`Chilled::lifted`): off its feet this long, no walking, dashing or attacking.
+    #[serde(default)]
+    pub lift_ticks: u32,
 }
 
 impl Chill {
     pub fn is_none(&self) -> bool {
-        (self.slow == 0.0 || self.slow_ticks == 0) && self.root_ticks == 0
+        (self.slow == 0.0 || self.slow_ticks == 0) && self.root_ticks == 0 && self.lift_ticks == 0
     }
 }
 
@@ -463,7 +476,7 @@ impl ClassDef {
             ("crit_multiplier", percent(common().crit_multiplier)),
         ];
         if let Some(rift) = self.attack.rift {
-            all.extend([("rift_time", seconds(rift.ticks)), ("rift_haste", percent(rift.haste))]);
+            all.extend([("rift_time", seconds(rift.ticks)), ("rift_haste", percent(rift.haste)), ("rift_burn", rift.burn.to_string()), ("rift_leech", percent(rift.leech))]);
         }
         if let Some(burst) = self.attack.burst {
             all.extend([("burst_radius", format!("{} m", burst.radius)), ("burst_share", percent(burst.share))]);
@@ -473,6 +486,7 @@ impl ClassDef {
                 ("follow_up_time", seconds(follow_up.within_ticks)),
                 ("follow_up_speed", percent(follow_up.attack_speed)),
                 ("follow_up_reach", percent(follow_up.reach - 1.0)),
+                ("follow_up_lift", seconds(follow_up.lift_ticks)),
             ]);
         }
         all
@@ -503,8 +517,14 @@ impl AttackDef {
     /// times as far, its start `near` times, as the weapon grows): (where it starts, where it
     /// ends, how wide it is), from the attacker's center. `None` for a ranged attack.
     pub fn lane(&self, empowered: bool) -> Option<(f32, f32, f32)> {
+        self.lane_grown(empowered, 0.0)
+    }
+
+    /// `lane`, an empowered one `grown` bigger again (0.2: a fifth longer and wider, from an item:
+    /// `LastSwing::grown`).
+    pub fn lane_grown(&self, empowered: bool, grown: f32) -> Option<(f32, f32, f32)> {
         let AttackKind::Melee { range, width, from } = self.kind else { return None };
-        let (reach, near) = self.follow_up.filter(|_| empowered).map_or((1.0, 1.0), |f| (f.reach, f.near.unwrap_or(f.reach)));
+        let (reach, near) = self.follow_up.filter(|_| empowered).map_or((1.0, 1.0), |f| (f.reach * (1.0 + grown), f.near.unwrap_or(f.reach)));
         Some((from * near, range * reach, width * reach))
     }
 
@@ -513,7 +533,12 @@ impl AttackDef {
     /// lane that starts further out than a body's radius has a dead zone in front of you, where
     /// nothing is hit. `None` for a ranged attack.
     pub fn hit_span(&self, empowered: bool) -> Option<(f32, f32)> {
-        let (from, range, _) = self.lane(empowered)?;
+        self.hit_span_grown(empowered, 0.0)
+    }
+
+    /// `hit_span` of a lane `grown` (`lane_grown`).
+    pub fn hit_span_grown(&self, empowered: bool, grown: f32) -> Option<(f32, f32)> {
+        let (from, range, _) = self.lane_grown(empowered, grown)?;
         Some((if from > 0.0 { from - PLAYER_RADIUS } else { 0.0 }, range + PLAYER_RADIUS))
     }
 
@@ -757,11 +782,17 @@ mod tests {
             chill_is_sane(&c.id, c.attack.chill);
             assert!(!c.attack.pierces || c.attack.kind.shot().is_some(), "{}: pierces, but throws nothing", c.id);
             assert!(c.attack.burst.is_none() || c.attack.kind.shot().is_some(), "{}: bursts, but throws nothing", c.id);
-            if let Some(RiftDef { ticks, haste }) = c.attack.rift {
+            // A knock-up shorter than the empowered attack: the striker alone can't chain it.
+            if let Some(follow_up) = c.attack.follow_up {
+                let quickest = c.attack.period_ticks(c.attack.speed(true));
+                assert!(follow_up.lift_ticks < quickest, "{}: a knock-up of {} ticks, as long as its empowered attack ({quickest})", c.id, follow_up.lift_ticks);
+            }
+            if let Some(RiftDef { ticks, haste, burn, leech }) = c.attack.rift {
                 assert!(matches!(c.attack.kind, AttackKind::Melee { .. }), "{}: a rift from a projectile", c.id);
                 assert!((1..=10 * TICK_HZ as u32).contains(&ticks) && (0.0..=2.0).contains(&haste), "{}: rift", c.id);
+                assert!(burn >= 0 && (0.0..=1.0).contains(&leech), "{}: rift burn", c.id);
             }
-            if let Some(FollowUp { within_ticks, attack_speed, reach, near }) = c.attack.follow_up {
+            if let Some(FollowUp { within_ticks, attack_speed, reach, near, lift_ticks: _ }) = c.attack.follow_up {
                 assert!((1.0..=4.0).contains(&reach) && near.is_none_or(|near| (0.5..=reach).contains(&near)), "{}: follow_up reach", c.id);
                 // Only a swing knows it landed when it goes off (`server::attack`).
                 assert!(matches!(c.attack.kind, AttackKind::Melee { .. }), "{}: follow_up on a projectile", c.id);

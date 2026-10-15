@@ -15,9 +15,12 @@
         // not at the revenant's feet.
         kind: Melee(range: 3.08, width: 0.5, from: 1.6),
         // The ground it hits tears open for a while; inside it the revenant walks faster.
-        rift: Some(ticks: 96, haste: 0.3),
+        // ... and burns its foes standing in it, healing the revenant a share of the burn.
+        rift: Some(ticks: 96, haste: 0.3, burn: 4, leech: 0.5),
         // Empowered: quicker, the lane starting a little further out and reaching further and wider.
-        follow_up: Some(within_ticks: 320, attack_speed: 0.5, reach: 1.5, near: Some(1.25)),
+        // The empowered strike knocks up what it hits, briefly: shorter than its own quickened
+        // attack, so it can't keep anything in the air by itself.
+        follow_up: Some(within_ticks: 320, attack_speed: 0.5, reach: 1.5, near: Some(1.25), lift_ticks: 10),
     ),
     abilities: [
         (
@@ -29,7 +32,7 @@
     ],
     passive: Some(
         name: "Follow Through",
-        description: "Auto-attacks tear the ground for {rift_time}: inside it, gain +{rift_haste} move speed. On hit, your next auto-attack within {follow_up_time} gains +{follow_up_speed} attack speed, +{follow_up_reach} reach and {crit_empowered} crit chance.",
+        description: "Auto-attacks tear the ground for {rift_time}: inside it, gain +{rift_haste} move speed; enemies standing in it burn for {rift_burn} every 0.5s, and you heal {rift_leech} of it. On hit, your next auto-attack within {follow_up_time} gains +{follow_up_speed} attack speed, +{follow_up_reach} reach and {crit_empowered} crit chance, and knocks enemies up for {follow_up_lift}.",
     ),
     crit: (empowered: 0.5),
 )

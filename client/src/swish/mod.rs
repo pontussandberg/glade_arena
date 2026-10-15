@@ -36,7 +36,7 @@ pub struct SwishPlugin;
 impl Plugin for SwishPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_swish);
-        app.add_systems(Update, (add_trails, drive_marks, drive_impacts, throw_chunks));
+        app.add_systems(Update, (add_trails, drive_marks, drive_impacts, throw_chunks, burn_in_rifts));
         app.add_systems(PostUpdate, (trail_blades, show_marks, strike_ground, drag_marks, shed_embers).chain().after(TransformSystems::Propagate));
         app.add_systems(Update, (fade_scuffs, fly_sparks, drift_embers));
     }

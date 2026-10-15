@@ -64,7 +64,7 @@ impl Plugin for RenderPlugin {
             Update,
             (
                 (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
-                (add_visuals, sync_transforms).chain().before(crate::rig::Posing),
+                (add_visuals, sync_transforms, lift_fighters).chain().before(crate::rig::Posing),
                 (fly_shots, fade_wakes, fly_impacts, crate::rig::empty_hands).chain().after(crate::rig::Posing),
                 (show_novas, grow_bursts, end_fleeting, show_frost),
                 align_to_world.after(crate::rig::Posing).after(fly_shots),

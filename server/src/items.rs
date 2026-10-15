@@ -2,7 +2,7 @@
 //! attacks and abilities:
 //!
 //! - `tick_items`: what goes on by itself: a barrage's javelins thrown, wisps circling, kegs
-//!   lobbed, frost left underfoot, rifts burning, zones (frost patches, blizzards, vortices) pulsing, things set to go off going off
+//!   lobbed, frost left underfoot, zones (frost patches, blizzards, vortices) pulsing, things set to go off going off
 //!   (`Pending`), decoys shattering, doom bells tolling.
 //! - `react`: every hit landed this tick (`HitLog`), in order: arcs, bursts, freezes, heals,
 //!   executions, marks and bounces off hits; echoes, vortices, decoys and blizzards off an
@@ -20,7 +20,6 @@ use super::*;
 use arena_shared::classes::{AbilityKind, Chill, Trick};
 use arena_shared::items::{self, Item, Satchel, wisp_offset};
 use arena_shared::map::Map;
-use arena_shared::sim;
 
 use crate::brain::{self, Mob};
 use crate::fx::spawn_fx;
@@ -107,6 +106,7 @@ impl By {
         match self.source {
             Source::Item(item) => item.name(),
             Source::Trick => "a trick",
+            Source::Passive => "passive",
             Source::Attack | Source::Splash => "auto-attack",
             Source::Ability(_) => "ability",
         }
@@ -200,7 +200,6 @@ pub(super) fn tick_items(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
-    rifts: Res<Rifts>,
     mut log: ResMut<HitLog>,
     mut pending: ResMut<Pending>,
     mut zones: ResMut<Zones>,
@@ -276,13 +275,6 @@ pub(super) fn tick_items(
                     zones.0.push(Zone { by: by(item), at: pos.0, radius, damage: 0, slow, pull: 0.0, until: now + lasts });
                     spawn_fx(&mut commands, side.0, Fx::at(FxKind::Rime, pos.0, radius, now, lasts));
                 }
-                Item::GravecallerRift if pulse => {
-                    let mine: Vec<sim::Rift> = rifts.0.iter().filter(|(r, rift)| *r == side.0 && rift.owner == id.0).map(|(_, rift)| *rift).collect();
-                    if !mine.is_empty() {
-                        let blow = Blow::ability(items::gravecaller_rift(level), Chill::default());
-                        strike(&mut commands, &mut log, now, &mut targets, by(item), blow, |_, p| mine.iter().any(|rift| rift.holds(p, now)));
-                    }
-                }
                 _ => {}
             }
         }
@@ -302,7 +294,7 @@ pub(super) fn tick_items(
             }
         }
         if pulse {
-            let chill = if zone.slow > 0.0 { Chill { slow: zone.slow, slow_ticks: items::ZONE_PULSE_TICKS + 4, root_ticks: 0 } } else { Chill::default() };
+            let chill = if zone.slow > 0.0 { Chill { slow: zone.slow, slow_ticks: items::ZONE_PULSE_TICKS + 4, root_ticks: 0, lift_ticks: 0 } } else { Chill::default() };
             let (at, reach) = (zone.at, zone.radius + PLAYER_RADIUS);
             strike(&mut commands, &mut log, now, &mut targets, zone.by, Blow::ability(zone.damage, chill), |_, p| p.distance(at) <= reach);
         }

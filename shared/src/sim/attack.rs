@@ -53,7 +53,7 @@ pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, mut s
                 let origin = shot_spawn(pos, dir, radius);
                 Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: None, crit: false, extra: false })
             }
-            AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir, empowered: quick }),
+            AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir, empowered: quick, grown: 0.0 }),
         });
     }
     if state.released() && state.swing.is_some_and(|swing| tick >= swing.ready_at(&class.def().attack)) {
@@ -94,9 +94,9 @@ pub fn cancel_attack(mut state: AttackState) -> AttackState {
 /// Does a swing from `attacker` toward `dir` (`empowered` by its `follow_up` or not) reach
 /// `target`? Its lane (`AttackDef::lane`) reaches the target's body, and not through a wall.
 /// Only the server decides this.
-pub fn melee_hits(map: &Map, attacker: Vec2, dir: Vec2, empowered: bool, class: ClassId, target: Vec2) -> bool {
+pub fn melee_hits(map: &Map, attacker: Vec2, dir: Vec2, (empowered, grown): (bool, f32), class: ClassId, target: Vec2) -> bool {
     let attack = &class.def().attack;
-    let (Some((from, _, width)), Some((nearest, farthest))) = (attack.lane(empowered), attack.hit_span(empowered)) else { return false };
+    let (Some((from, _, width)), Some((nearest, farthest))) = (attack.lane_grown(empowered, grown), attack.hit_span_grown(empowered, grown)) else { return false };
     let to_target = target - attacker;
     let dir = dir.normalize_or_zero();
     let (along, across) = (to_target.dot(dir), to_target.perp_dot(dir).abs());

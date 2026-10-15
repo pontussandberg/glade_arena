@@ -237,6 +237,8 @@ pub struct Chilled {
     pub slow: f32,
     pub slowed: Span,
     pub rooted: Span,
+    /// Knocked up: off its feet, no walking, dashing or attacking (an attack winding up is lost).
+    pub lifted: Span,
 }
 
 /// Ticks `from` (inclusive) to `until` (exclusive). The default covers none.
@@ -274,6 +276,14 @@ impl Chilled {
         if chill.root_ticks > 0 {
             self.rooted = self.rooted.renewed(now, chill.root_ticks);
         }
+        if chill.lift_ticks > 0 {
+            self.lifted = self.lifted.renewed(now, chill.lift_ticks);
+        }
+    }
+
+    /// Off its feet (knocked up) at `tick`.
+    pub fn lifted_at(&self, tick: u32) -> bool {
+        self.lifted.covers(tick as f32)
     }
 
     /// What's left of a player's speed at `tick` (1 unslowed).
@@ -522,6 +532,9 @@ pub struct LastSwing {
     pub tick: u32,
     pub dir: Vec2,
     pub empowered: bool,
+    /// An empowered swing's lane grown bigger again (0.2: a fifth), by an item
+    /// (`AttackDef::lane_grown`).
+    pub grown: f32,
 }
 
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]

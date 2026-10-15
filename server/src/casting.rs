@@ -46,6 +46,7 @@ pub(super) fn use_abilities(
         // last one included, and the spot the dash started from isn't.
         if let Some(dash) = dashing.0
             && !chilled.rooted_at(now.0)
+            && !chilled.lifted_at(now.0)
             && let Some((blow, with)) = class.def().ability(dash.slot).map(blow)
         {
             if hits.0 != dash.started_at {

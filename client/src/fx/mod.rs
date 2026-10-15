@@ -145,7 +145,7 @@ pub(crate) struct FxArt {
     frost: Vec<Handle<Mesh>>,
     whirl: Vec<Handle<Mesh>>,
     band: Handle<Mesh>,
-    tongue: Handle<Mesh>,
+    pub(crate) tongue: Handle<Mesh>,
     glint: Handle<Mesh>,
     /// Solid bits: a chunk, a mote, a coin, a keg, an ice shard (leaning out along +X, 1 tall),
     /// a thorn (its base at the origin, 1 tall).
@@ -405,6 +405,9 @@ pub(crate) enum Sparkle {
     Fury,
     /// A chest: light glinting off its gold.
     Gold,
+    /// One burning (in a revenant's rift): a green flame licking up off its feet, and a mote
+    /// rising off it.
+    Burn,
 }
 
 /// One bit of `sparkle` off a pickup floating at `at` (its middle, in the world), the `k`th (for
@@ -428,6 +431,15 @@ pub(crate) fn sparkle(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3, 
         Sparkle::Fury => {
             let from = at + round(1, 0.45) + Vec3::Y * (0.5 * r(2) - 0.25);
             (art.glint.clone(), Part::new(now, [0.03, 0.05, 0.18], Ink::Spark, from).size(0.3 + 0.2 * r(3)).facing(r(4) * std::f32::consts::TAU).grow(0.3).shrink(0.2).spin(6.0))
+        }
+        Sparkle::Burn => {
+            let from = at.with_y(0.05) + round(1, 0.3 * r(2).sqrt());
+            let rise = Motion::Thrown { velocity: Vec3::Y * (0.8 + 0.5 * r(3)), gravity: -0.2, tumble: Vec3::ZERO };
+            put(commands, art, &art.mote, Part::new(now, [0.05, 0.3, 0.7], Ink::PoisonLight, from + Vec3::Y * 0.2).size(0.04 + 0.03 * r(5)).motion(rise).flicker(0.4).shrink(0.3));
+            // The tongue lies along +X: stood up, leaning a little.
+            let lick = Quat::from_rotation_y(r(6) * std::f32::consts::TAU) * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2 - 0.3 * r(7));
+            let length = 0.3 + 0.25 * r(4);
+            (art.tongue.clone(), Part::new(now, [0.05, 0.12, 0.4], Ink::PoisonLight, from).sized(Vec3::new(length, 1.0, length * 0.5)).turn(lick).grow(0.3).shrink(0.4).flicker(0.3))
         }
         Sparkle::Gold => {
             let from = at + round(1, 0.35) + Vec3::Y * (0.3 * r(2) - 0.3);

@@ -87,7 +87,7 @@ pub(super) fn show_marks(
         // The ground breaks over its hitbox at once, as the hit is dealt (`strike_ground`): it
         // shows where the strike hit, cut short or not.
         blade.striking = true;
-        let mark = match class.def().attack.lane(swing.empowered) {
+        let mark = match class.def().attack.lane_grown(swing.empowered, swing.grown) {
             Some((near, far, _)) => {
                 let dir = swing.dir.normalize_or(Vec2::X);
                 Mark { started: now, from: to_world(pos.0 + dir * near, MARK_HEIGHT), to: to_world(pos.0 + dir * far, MARK_HEIGHT) }

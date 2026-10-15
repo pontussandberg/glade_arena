@@ -24,7 +24,7 @@ shares (field reference in the README there):
 | Class | Role | Auto-attack | Q |
 |---|---|---|---|
 | Jav | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`) | **Deadeye**: at once, your next auto-attack will critically strike, with 50% more attack speed; press again to call it off (15s cooldown, from the throw; off the global cooldown) |
-| Revenant | Duelist | A heavy overhead blow of its dark glaive, the blade coming down flat on the ground from 1.6 m to 3.08 m ahead, tearing it open for 3s (inside the tear the revenant moves 30% faster); each hit empowers the glaive for the next swing if it follows within 10s (time to kite): a lane 50% further and wider, from 2 m to 4.62 m, 0.75 m wide, 50% more attack speed and a 50% crit chance (it never crits otherwise; an empowered hit renews it), lost on a miss (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash toward the cursor, 1 m to 6 m, damaging each enemy you pass through |
+| Revenant | Duelist | A heavy overhead blow of its dark glaive, the blade coming down flat on the ground from 1.6 m to 3.08 m ahead, tearing it open for 3s (inside the tear the revenant moves 30% faster, and enemies standing in it burn for 4 every 0.5s, the revenant healing half of it); each hit empowers the glaive for the next swing if it follows within 10s (time to kite): a lane 50% further and wider, from 2 m to 4.62 m, 0.75 m wide, 50% more attack speed and a 50% crit chance (it never crits otherwise; an empowered hit renews it), and it knocks enemies up for 0.3s (shorter than its own quickened attack, so it can't chain alone), lost on a miss (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash toward the cursor, 1 m to 6 m, damaging each enemy you pass through |
 | Frost Mage | Controller | Frostbolts (mid range) that shatter where they hit, the burst of ice hitting everyone round the one struck for most of the damage; every hit slows (40% for 2s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5s (no walking, no dashing) |
 
 Hits can carry **crowd control** (`chill` in the class files): a slow takes a share off walking
@@ -131,7 +131,7 @@ procedural shapes (`shapes.rs`).
 | Berserker Totem | Kills stack a frenzy (walk and attack faster) |
 | Ricochet Charm | Shots that hit bounce on (ranged classes) |
 | Hydra Spear | Each auto-attack throws a barrage of 2-4 javelins (Jav only) |
-| Gravecaller Rift | Your rifts burn enemies in them (Revenant only) |
+| Gravecaller Rift | Follow Through's empowered strike, and the rift it tears, 15/30/50% longer and wider by level (Revenant only) |
 | Heart of Winter | Frost Nova's damage leaves a blizzard (Frost Mage only) |
 
 They combine: a Hydra Spear's barrage pierces a whole line and sets off Storm Coil arcs, Ember Heart's bursts kill into

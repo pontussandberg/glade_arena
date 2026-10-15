@@ -81,6 +81,8 @@ pub(crate) enum Source {
     Ability(AbilitySlot),
     Item(Item),
     Trick,
+    /// A class's passive working by itself (a revenant's rift burning).
+    Passive,
 }
 
 /// A hit that landed, for what reacts to hits (`items::react`) once the tick's attacks are done.
@@ -233,7 +235,7 @@ pub(super) fn attack(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut attackers: Query<
-        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), (&Frenzy, Option<&Fury>), &mut Cooldowns, Option<&Might>),
+        (Entity, &PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), (&Frenzy, Option<&Fury>), (&mut Cooldowns, Option<&Might>, Option<&arena_shared::items::Satchel>)),
         InPlay,
     >,
     mut targets: Targets,
@@ -241,9 +243,15 @@ pub(super) fn attack(
     mut log: ResMut<HitLog>,
 ) {
     let now = timeline.tick();
-    for (id, class, pos, mut input, mut state, mut last_swing, (room, team), (frenzy, fury), mut cooldowns, might) in &mut attackers {
+    for (entity, id, class, pos, mut input, mut state, mut last_swing, (room, team), (frenzy, fury), (mut cooldowns, might, satchel)) in &mut attackers {
         let might = might_of(might);
         let side = (*room, *team);
+        // Knocked up: no attacking; one winding up is lost.
+        if targets.get(entity).is_ok_and(|(.., chilled, _, _, _)| chilled.lifted_at(now.0)) {
+            input.fire = false;
+            state.set_if_neq(sim::cancel_attack(*state));
+            continue;
+        }
         // A primed attack going off this tick is a sure crit (`primer`: the ability that readied it).
         let primer = state.primed.filter(|_| state.winding_up().is_some_and(|swing| swing.primed)).map(|(slot, _)| slot);
         let primed = primer.is_some();
@@ -261,16 +269,24 @@ pub(super) fn attack(
             Some(sim::Attack::Projectile(projectile)) => {
                 spawn_projectile(&mut commands, Projectile { crit: primed, ..projectile }, side, might);
             }
-            Some(sim::Attack::Melee(swing)) => {
+            Some(sim::Attack::Melee(mut swing)) => {
+                // An empowered strike grows with a Gravecaller Rift.
+                let level = satchel.map_or(0, |s| s.level(arena_shared::items::Item::GravecallerRift));
+                swing.grown = if swing.empowered && level > 0 { arena_shared::items::gravecaller_rift(level) } else { 0.0 };
                 *last_swing = swing;
                 if let Some(rift) = sim::Rift::torn(id.0, *class, pos.0, &swing) {
                     rifts.0.push((*room, rift));
                 }
                 let amount = mighty(class.def().attack.damage, might);
-                let blow = Blow::attack(amount, class.def().attack.chill, swing.empowered, primed);
+                // The empowered strike knocks up what it hits (`FollowUp::lift_ticks`).
+                let mut chill = class.def().attack.chill;
+                if swing.empowered {
+                    chill.lift_ticks = class.def().attack.follow_up.map_or(0, |f| f.lift_ticks);
+                }
+                let blow = Blow::attack(amount, chill, swing.empowered, primed);
                 let with = (id.0, *class, "auto-attack");
                 let landed = hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Attack), blow, |_, at| {
-                    sim::melee_hits(lobby.map(room), pos.0, swing.dir, swing.empowered, *class, at)
+                    sim::melee_hits(lobby.map(room), pos.0, swing.dir, (swing.empowered, swing.grown), *class, at)
                 });
                 if landed > 0
                     && let Some(follow_up) = class.def().attack.follow_up
@@ -329,6 +345,34 @@ pub(super) fn shove(mut commands: Commands, lobby: Res<Lobby>, mut shoved: Query
 pub(super) struct Rifts(pub(super) Vec<(InRoom, sim::Rift)>);
 
 /// Rifts close when their time is up.
+/// Rifts burn their striker's foes standing in them (`RiftDef::burn`), every
+/// `ZONE_PULSE_TICKS` (once, in however many of their rifts), and heal the striker `leech` of
+/// what they burned.
+pub(super) fn burn_rifts(mut commands: Commands, timeline: Res<LocalTimeline>, rifts: Res<Rifts>, mut targets: Targets, classes: Query<&ClassId>, mut log: ResMut<HitLog>) {
+    let now = timeline.tick().0;
+    if !now.is_multiple_of(arena_shared::items::ZONE_PULSE_TICKS) {
+        return;
+    }
+    let mut owners: Vec<PeerId> = rifts.0.iter().filter(|(_, rift)| rift.burn > 0 && rift.until > now).map(|(_, rift)| rift.owner).collect();
+    owners.sort_by_key(|id| format!("{id:?}"));
+    owners.dedup();
+    for owner in owners {
+        let Some((entity, side)) = targets.iter().find(|(_, id, ..)| id.0 == owner).map(|(e, _, (room, team), ..)| (e, (*room, *team))) else { continue };
+        let Ok(class) = classes.get(entity).copied() else { continue };
+        let theirs: Vec<sim::Rift> = rifts.0.iter().filter(|(room, rift)| *room == side.0 && rift.owner == owner && rift.until > now).map(|(_, rift)| *rift).collect();
+        let (burn, leech) = (theirs[0].burn, theirs[0].leech);
+        let burned = hit_foes(&mut commands, &mut log, now, &mut targets, (owner, class, "rift"), (side, Source::Passive), Blow::ability(burn, Chill::default()), |_, at| {
+            theirs.iter().any(|rift| rift.holds(at, now))
+        });
+        let healing = (burn as f32 * burned as f32 * leech).round() as i32;
+        if healing > 0
+            && let Ok((.., mut health, _, mut hits, max, _)) = targets.get_mut(entity)
+        {
+            mend(&mut health, max, &mut hits, healing);
+        }
+    }
+}
+
 pub(super) fn close_rifts(timeline: Res<LocalTimeline>, mut rifts: ResMut<Rifts>) {
     let now = timeline.tick().0;
     rifts.0.retain(|(_, rift)| rift.until > now);
