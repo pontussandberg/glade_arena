@@ -1,0 +1,26 @@
+#![enable(unwrap_variant_newtypes)]
+// A Rot Priest (field reference: README.md): mends the monsters around it, in the waves mode.
+(
+    id: "rot_priest",
+    name: "Rot Priest",
+    role: "Monster",
+    blurb: "Prays over the dead until they get back up.",
+    playable: false,
+    max_hp: 80,
+    move_speed: 2.8,
+    attack: (
+        damage: 7,
+        attack_ticks: 56,
+        windup: 0.45,
+        kind: Projectile(speed: 10.0, radius: 0.3, range: 10.0),
+    ),
+    abilities: [],
+    look: Some(figure: "frost_mage", size: 1.0, tint: (0.6, 0.95, 0.5), cloth: false),
+    mob: Some(
+        brain: Kite(keep: 8.0),
+        tricks: [Mend(radius: 6.0, amount: 30, every_ticks: 128)],
+        bounty: 16,
+        cost: 3.0,
+        from_wave: 8,
+    ),
+)

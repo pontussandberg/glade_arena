@@ -32,20 +32,22 @@ impl Plugin for BotPlugin {
 }
 
 fn think(
-    me: Query<(&PlayerId, &ClassId, &Pos, &AttackState, &Cooldowns), With<Me>>,
+    me: Query<(&PlayerId, &ClassId, &Pos, &AttackState, &Cooldowns, Option<&Team>), With<Me>>,
     server: Query<&RemoteTimeline, With<Client>>,
-    others: Query<(&PlayerId, &Pos, &Health), Without<Me>>,
+    // Not the shopkeeper: no one can hurt them.
+    others: Query<(&PlayerId, &Pos, &Health, Option<&Team>), (Without<Me>, Without<Shopkeeper>)>,
     mut desired: ResMut<DesiredInput>,
     map: Res<CurrentMap>,
 ) {
     let map = map.map();
-    let Ok((my_id, class, me, attack, cooldowns)) = me.single() else { return };
+    let Ok((my_id, class, me, attack, cooldowns, my_team)) = me.single() else { return };
     // The server tick our news is from: an ability whose cooldowns were over by then is ready.
     let latest = server.single().ok().and_then(|timeline| timeline.last_received_tick()).map_or(0, |tick| tick.0);
     let Some(target) = others
         .iter()
-        .filter(|(id, _, health)| id.0 != my_id.0 && health.alive())
-        .map(|(_, p, _)| p.0)
+        // Foes only: not allies (the party, against the waves).
+        .filter(|(id, _, health, team)| id.0 != my_id.0 && health.alive() && !my_team.zip(*team).is_some_and(|(mine, theirs)| mine.allied(*theirs)))
+        .map(|(_, p, ..)| p.0)
         .min_by(|a, b| a.distance(me.0).total_cmp(&b.distance(me.0)))
     else {
         desired.0 = PlayerInput::default();

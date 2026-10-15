@@ -55,3 +55,10 @@ pub const FRENZY_MELEE_TICKS: u32 = 5 * TICK_HZ as u32;
 pub const GATE_RADIUS: f32 = 0.6;
 /// How long both ends stay closed after someone goes through (8 s).
 pub const GATE_CLOSED_TICKS: u32 = 8 * TICK_HZ as u32;
+
+// Shrines and chests (`PickupKind`), in the waves mode's wilds.
+/// A shrine's frenzy: how much faster its taker walks and attacks, fading over this long.
+pub const SHRINE_FRENZY: f32 = 0.35;
+pub const SHRINE_FRENZY_TICKS: u32 = 8 * TICK_HZ as u32;
+/// How long a used shrine takes to come back.
+pub const SHRINE_RESPAWN_TICKS: u32 = 45 * TICK_HZ as u32;

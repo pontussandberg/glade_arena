@@ -1,0 +1,21 @@
+#![enable(unwrap_variant_newtypes)]
+// A Bloater (field reference: README.md): swollen with rot, it bursts when it reaches you or
+// when it dies, in the waves mode. Kill it from afar.
+(
+    id: "bloater",
+    name: "Bloater",
+    role: "Monster",
+    blurb: "Swollen to bursting. Do not be there when it does.",
+    playable: false,
+    max_hp: 80,
+    move_speed: 2.3,
+    attack: (
+        damage: 10,
+        attack_ticks: 48,
+        windup: 0.5,
+        kind: Melee(range: 1.4, width: 1.0),
+    ),
+    abilities: [],
+    look: Some(figure: "zombie", size: 1.35, tint: (0.72, 1.1, 0.5)),
+    mob: Some(brain: Chase, tricks: [Burst(within: 1.8, damage: 34, radius: 2.8)], bounty: 9, cost: 2.0, from_wave: 5),
+)

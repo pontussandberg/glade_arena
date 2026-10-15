@@ -77,8 +77,9 @@ pub(super) fn raise_zombies(
 /// it's well within its claws' reach, swipes at it (the swipe's windup roots it, as anyone's
 /// does, so stepping away from it dodges). With no one to go for, it stands.
 pub(super) fn chase(
-    mut zombies: Query<(&Pos, &ClassId, &InRoom, &mut PlayerInput), (With<Zombie>, InPlay)>,
-    prey: Query<(&Pos, &InRoom), (With<PlayerId>, Without<Zombie>, InPlay)>,
+    // The waves' monsters think for themselves (`brain.rs`).
+    mut zombies: Query<(&Pos, &ClassId, &InRoom, &mut PlayerInput), (With<Zombie>, Without<Mob>, InPlay)>,
+    prey: Query<(&Pos, &InRoom), (With<PlayerId>, Without<Zombie>, Without<Untouchable>, InPlay)>,
 ) {
     for (pos, class, room, mut input) in &mut zombies {
         let nearest = prey
@@ -114,6 +115,10 @@ pub(super) fn feed_frenzy(
     let now = timeline.tick().0;
     for (room, dead) in &killed {
         let Some(before) = lobby.count_zombie_kill(room.key, dead.killer) else { continue };
+        // Against the waves, kills are counted, but frenzies come from items and shrines.
+        if lobby.run(room.key).is_some() {
+            continue;
+        }
         // Its killer may have left the arena since (its shot still flying): counted all the same.
         let Some((_, class, _, mut frenzy)) = killers.iter_mut().find(|(id, _, r, _)| id.0 == dead.killer && *r == room) else { continue };
         let melee = matches!(class.def().attack.kind, AttackKind::Melee { .. });
@@ -133,7 +138,7 @@ pub(super) fn bury_zombies(
     for (zombie, room, dead) in &zombies {
         // It died `RESPAWN_TICKS` before it would respawn.
         let buried = dead.is_some_and(|dead| now + RESPAWN_TICKS >= dead.respawn_at + BURY_TICKS);
-        if buried || !lobby.hunts(room.key) {
+        if buried || !lobby.keeps_monsters(room.key) {
             commands.entity(zombie).try_despawn();
         }
     }

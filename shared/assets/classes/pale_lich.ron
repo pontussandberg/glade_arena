@@ -1,0 +1,36 @@
+#![enable(unwrap_variant_newtypes)]
+// The Pale Lich (field reference: README.md): the second boss of the waves. Rings of frost all
+// round it, a freezing nova, and the dead rising at its call.
+(
+    id: "pale_lich",
+    name: "The Pale Lich",
+    role: "Boss",
+    blurb: "It has outlived everything. It means to outlive you.",
+    playable: false,
+    max_hp: 1500,
+    move_speed: 2.6,
+    attack: (
+        damage: 14,
+        attack_ticks: 40,
+        windup: 0.4,
+        kind: Projectile(speed: 12.0, radius: 0.35, range: 13.0),
+        chill: (slow: 0.35, slow_ticks: 48),
+    ),
+    abilities: [
+        (
+            name: "Grave Frost",
+            description: "Everyone within {ability_reach} takes {ability_damage} damage and is frozen for {ability_root}.",
+            cooldown_ticks: 320,
+            kind: Nova(radius: 4.5, damage: 14, chill: (root_ticks: 40)),
+        ),
+    ],
+    look: Some(figure: "frost_mage", size: 2.1, tint: (0.85, 0.75, 1.15)),
+    mob: Some(
+        brain: Kite(keep: 7.0),
+        tricks: [Slam(slot: 0, within: 4.0), Ring(count: 14, every_ticks: 192), Summon(class: "zombie", count: 3, every_ticks: 352, max: 9)],
+        bounty: 150,
+        cost: 0.0,
+        from_wave: 10,
+        boss: true,
+    ),
+)

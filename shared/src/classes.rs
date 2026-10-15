@@ -17,11 +17,24 @@ use crate::config::{PLAYER_RADIUS, TICK_HZ};
 /// The class files, compiled into both server and client so they can't disagree. Their order is
 /// the classes' order everywhere: the class picker and its number keys, the default pick, and the
 /// order target dummies come in. The ones no one picks (`ClassDef::playable`) go last.
-const CLASS_FILES: [&str; 4] = [
+const CLASS_FILES: [&str; 17] = [
     include_str!("../assets/classes/revenant.ron"),
     include_str!("../assets/classes/javelinist.ron"),
     include_str!("../assets/classes/frost_mage.ron"),
     include_str!("../assets/classes/zombie.ron"),
+    include_str!("../assets/classes/gnawer.ron"),
+    include_str!("../assets/classes/ghoul.ron"),
+    include_str!("../assets/classes/grave_hunter.ron"),
+    include_str!("../assets/classes/bloater.ron"),
+    include_str!("../assets/classes/grave_ogre.ron"),
+    include_str!("../assets/classes/frost_wraith.ron"),
+    include_str!("../assets/classes/bonecaller.ron"),
+    include_str!("../assets/classes/rot_priest.ron"),
+    include_str!("../assets/classes/death_knight.ron"),
+    include_str!("../assets/classes/butcher.ron"),
+    include_str!("../assets/classes/pale_lich.ron"),
+    include_str!("../assets/classes/grave_lord.ron"),
+    include_str!("../assets/classes/merchant.ron"),
 ];
 
 /// What every class shares.
@@ -52,7 +65,7 @@ impl Common {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct ClassDef {
-    /// Stable key; the client also uses it to pick the class's look.
+    /// Stable key; the client also uses it to pick the class's look (`figure`).
     pub id: String,
     pub name: String,
     pub role: String,
@@ -71,6 +84,86 @@ pub struct ClassDef {
     /// Critical hits (none by default).
     #[serde(default)]
     pub crit: Crit,
+    /// How it's drawn, if not as its own figure (`id`): monsters wear another class's figure,
+    /// sized and tinted.
+    #[serde(default)]
+    pub look: Option<LookDef>,
+    /// What the waves mode does with it, if it's a monster that comes in waves.
+    #[serde(default)]
+    pub mob: Option<MobDef>,
+}
+
+/// A class drawn as another's figure (`figure`, a class id with a look of its own), `size` times
+/// as big, its colors multiplied by `tint` (linear RGB, 0 to 1), with or without its cloth.
+#[derive(Deserialize, Debug, Clone)]
+pub struct LookDef {
+    pub figure: String,
+    #[serde(default = "one")]
+    pub size: f32,
+    #[serde(default = "white")]
+    pub tint: (f32, f32, f32),
+    #[serde(default = "yes")]
+    pub cloth: bool,
+}
+
+fn white() -> (f32, f32, f32) {
+    (1.0, 1.0, 1.0)
+}
+
+/// A monster of the waves: how it fights (`brain`, `tricks`), what it's worth and when it first
+/// comes.
+#[derive(Deserialize, Debug, Clone)]
+pub struct MobDef {
+    pub brain: Brain,
+    #[serde(default)]
+    pub tricks: Vec<Trick>,
+    /// Gold for everyone in the run when it dies.
+    pub bounty: u32,
+    /// How much of a wave's budget one takes.
+    pub cost: f32,
+    /// The first wave it comes in (bosses: the waves they lead, `boss_every`).
+    pub from_wave: u32,
+    /// How many come at once.
+    #[serde(default = "one_u32")]
+    pub pack: u32,
+    /// A boss: one leads every wave that's a multiple of the boss waves, in turn.
+    #[serde(default)]
+    pub boss: bool,
+}
+
+fn one_u32() -> u32 {
+    1
+}
+
+/// How a monster gets about.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+pub enum Brain {
+    /// Straight at the nearest prey, attacking once in reach.
+    Chase,
+    /// Keeps this far from its prey, shooting from there; backs off if it comes closer.
+    Kite { keep: f32 },
+}
+
+/// What else a monster does, now and then.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub enum Trick {
+    /// Uses the ability in `slot` (a dash) at its prey once it's nearer than `within`.
+    Lunge { slot: u8, within: f32 },
+    /// Uses the ability in `slot` (a nova) once its prey is nearer than `within`.
+    Slam { slot: u8, within: f32 },
+    /// Swells and bursts once its prey is nearer than `within`, and as it dies: `damage` to its
+    /// foes within `radius`.
+    Burst { within: f32, damage: i32, radius: f32 },
+    /// Every `every_ticks`, `count` of `class` rise around it, while it has fewer than `max` up.
+    Summon { class: String, count: u32, every_ticks: u32, max: u32 },
+    /// Every `every_ticks`, monsters within `radius` (itself too) heal `amount`.
+    Mend { radius: f32, amount: i32, every_ticks: u32 },
+    /// Every `every_ticks`, fires its attack's shot `count` times, all round it.
+    Ring { count: u32, every_ticks: u32 },
+    /// Every `every_ticks`, fires its attack's shot `count` times, fanned `spread` (radians) at its prey.
+    Fan { count: u32, spread: f32, every_ticks: u32 },
+    /// Below `below` of its health, it rages: always hasted, hitting harder.
+    Enrage { below: f32 },
 }
 
 /// The odds that an auto-attack hit this class deals is critical (an ability's never is), for
@@ -223,6 +316,26 @@ impl Shot {
 }
 
 impl ClassDef {
+    /// Which figure it's drawn as: its own, or the one its `look` borrows.
+    pub fn figure(&self) -> &str {
+        self.look.as_ref().map_or(&self.id, |look| &look.figure)
+    }
+
+    /// How big it's drawn, as a share of its figure's size.
+    pub fn size(&self) -> f32 {
+        self.look.as_ref().map_or(1.0, |look| look.size)
+    }
+
+    /// What its figure's colors are multiplied by.
+    pub fn tint(&self) -> (f32, f32, f32) {
+        self.look.as_ref().map_or((1.0, 1.0, 1.0), |look| look.tint)
+    }
+
+    /// Whether its figure wears its cloth.
+    pub fn cloth(&self) -> bool {
+        self.look.as_ref().is_none_or(|look| look.cloth)
+    }
+
     /// The ability in `slot`, if the class has one there.
     pub fn ability(&self, slot: AbilitySlot) -> Option<&AbilityDef> {
         self.abilities.get(slot.0 as usize)
@@ -483,7 +596,30 @@ mod tests {
         assert!(!all.is_empty() && all.len() <= u8::MAX as usize);
         for (i, c) in all.iter().enumerate() {
             assert!(all[..i].iter().all(|o| o.id != c.id), "duplicate class id {}", c.id);
-            assert!((1..=1000).contains(&c.max_hp), "{}: max_hp", c.id);
+            // Bosses are far tougher than anyone who picks a class.
+            let most_hp = if c.playable { 1000 } else { 5000 };
+            assert!((1..=most_hp).contains(&c.max_hp), "{}: max_hp", c.id);
+            if let Some(look) = &c.look {
+                let figure = ClassId::by_key(&look.figure).unwrap_or_else(|| panic!("{}: its figure {} isn't a class", c.id, look.figure));
+                assert!(figure.def().look.is_none(), "{}: its figure {} borrows another's itself", c.id, look.figure);
+                assert!((0.3..=3.0).contains(&look.size), "{}: size", c.id);
+            }
+            if let Some(mob) = &c.mob {
+                assert!(!c.playable, "{}: a monster players pick", c.id);
+                assert!(mob.from_wave >= 1 && mob.pack >= 1 && (mob.boss || mob.cost > 0.0), "{}: mob", c.id);
+                for trick in &mob.tricks {
+                    let kind = |slot: &u8| c.ability(AbilitySlot(*slot)).map(|a| a.kind);
+                    match trick {
+                        Trick::Lunge { slot, .. } => assert!(matches!(kind(slot), Some(AbilityKind::Dash(_))), "{}: lunges without a dash", c.id),
+                        Trick::Slam { slot, .. } => assert!(matches!(kind(slot), Some(AbilityKind::Nova(_))), "{}: slams without a nova", c.id),
+                        Trick::Summon { class, .. } => {
+                            assert!(ClassId::by_key(class).is_some_and(|s| s.def().mob.is_some()), "{}: summons {class}, no monster", c.id)
+                        }
+                        Trick::Ring { .. } | Trick::Fan { .. } => assert!(c.attack.kind.shot().is_some(), "{}: shots it can't fire", c.id),
+                        Trick::Burst { .. } | Trick::Mend { .. } | Trick::Enrage { .. } => {}
+                    }
+                }
+            }
             assert!((1.0..=12.0).contains(&c.move_speed), "{}: move_speed", c.id);
             assert!(c.attack.damage > 0 && c.attack.attack_ticks > 1, "{}: attack", c.id);
             assert!(c.attack.windup > 0.0 && c.attack.windup < 1.0, "{}: windup must be a part of the attack", c.id);

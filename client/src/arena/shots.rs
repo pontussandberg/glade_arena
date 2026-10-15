@@ -51,7 +51,7 @@ pub(super) const ALONG_X: Quat = Quat::from_xyzw(0.0, 0.0, -std::f32::consts::FR
 /// the shot's radius.
 pub fn shot_look(class: &ClassDef, shot: Shot, ability: bool) -> ShotLook {
     let plain = |mesh, glow| ShotLook { mesh, glow, thrown: false, aura: None, spin: 0.0 };
-    match (class.id.as_str(), ability) {
+    match (class.figure(), ability) {
         ("javelinist", false) => ShotLook {
             thrown: true,
             ..plain(carried_javelin().rotated_by(ALONG_X), ShotGlow::Weapon)

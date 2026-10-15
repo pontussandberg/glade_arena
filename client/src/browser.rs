@@ -2,9 +2,10 @@
 //! always there (how many lobbies are open, how many live), and a click on it opens or folds it.
 //! "Create / join lobby" (the character select's big button, at home) only ever opens it: a click
 //! on it while it's open flashes the header. Open, it shows every lobby there is (name, mode,
-//! how full, whether its match is on), each with a way in, and below them a form to create one:
-//! a name (click it to type) and the mode. Before home, while connecting, a plain screen saying
-//! so.
+//! how full, whether its match is on), each with a way in, the ones for fighting each other (PvP)
+//! apart from the ones against the waves (PvE); and below them a form to create one: a name
+//! (click it to type) and the mode, PvP or PvE. Before home, while connecting, a plain screen
+//! saying so.
 
 use arena_shared::map::MapId;
 use arena_shared::protocol::RoomRequest;
@@ -224,8 +225,9 @@ fn type_name(
     }
 }
 
-/// A new lobby, on the map picked at home.
+/// A new lobby, on the map picked at home (or, for a mode that isn't played on it, its own).
 fn create(home: &Home, map: MapId, sender: &mut MessageSender<RoomRequest>) {
+    let map = if home.mode.maps().contains(&map) { map } else { home.mode.maps()[0] };
     request(sender, RoomRequest::Create { name: home.name.clone(), mode: home.mode, map });
 }
 
@@ -289,11 +291,19 @@ fn show_lobbies(
                 ))
                 .with_child(ui_text("No lobbies yet", 12.0, palette::ui::MUTED));
             }
-            for room in list.0.iter().take(MAX_ROWS) {
-                spawn_row(card, room);
-            }
-            if list.0.len() > MAX_ROWS {
-                card.spawn(ui_text(format!("and {} more", list.0.len() - MAX_ROWS), 11.0, palette::ui::MUTED));
+            // Fights apart from the waves, as many of each as fit.
+            for (title, pve) in [("PvP", false), ("PvE", true)] {
+                let rooms: Vec<&RoomSummary> = list.0.iter().filter(|room| room.mode.pve() == pve).collect();
+                if rooms.is_empty() {
+                    continue;
+                }
+                card.spawn(label(title));
+                for room in rooms.iter().take(MAX_ROWS / 2) {
+                    spawn_row(card, room);
+                }
+                if rooms.len() > MAX_ROWS / 2 {
+                    card.spawn(ui_text(format!("and {} more", rooms.len() - MAX_ROWS / 2), 11.0, palette::ui::MUTED));
+                }
             }
         });
 
@@ -310,27 +320,32 @@ fn show_lobbies(
             ))
             .with_child((NameField, ui_text("", 15.0, palette::ui::TEXT)));
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
-            card.spawn(label("Mode"));
-            card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
-                for mode in [Mode::Ffa, Mode::Teams] {
-                    row.spawn((
-                        ModeButton(mode),
-                        Button,
-                        Node {
-                            flex_direction: FlexDirection::Column,
-                            flex_grow: 1.0,
-                            flex_basis: px(0.0),
-                            row_gap: px(2.0),
-                            padding: UiRect::all(px(GAP)),
-                            border: UiRect::all(px(1.0)),
-                            ..default()
-                        },
-                        BorderColor::all(palette::ui::MUTED.with_alpha(0.3)),
-                        BackgroundColor(palette::ui::BACKDROP),
-                    ))
-                    .with_child(ui_text(mode.label(), 14.0, palette::ui::TEXT));
-                }
-            });
+            for (title, modes) in [("PvP", &Mode::PVP[..]), ("PvE", &Mode::PVE[..])] {
+                card.spawn(label(title));
+                card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
+                    for &mode in modes {
+                        row.spawn((
+                            ModeButton(mode),
+                            Button,
+                            Node {
+                                flex_direction: FlexDirection::Column,
+                                flex_grow: 1.0,
+                                flex_basis: px(0.0),
+                                row_gap: px(2.0),
+                                padding: UiRect::all(px(GAP)),
+                                border: UiRect::all(px(1.0)),
+                                ..default()
+                            },
+                            BorderColor::all(palette::ui::MUTED.with_alpha(0.3)),
+                            BackgroundColor(palette::ui::BACKDROP),
+                        ))
+                        .with_children(|button| {
+                            button.spawn(ui_text(mode.label(), 14.0, palette::ui::TEXT));
+                            button.spawn(ui_text(mode.blurb(), 10.0, palette::ui::MUTED));
+                        });
+                    }
+                });
+            }
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
             card.spawn((CreateButton, button("CREATE LOBBY", 14.0, ACCENT, palette::ui::PANEL, ACCENT)));
         });

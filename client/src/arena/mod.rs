@@ -124,9 +124,12 @@ pub mod palette {
     pub const TORCH_FLAME: Color = Color::srgb_u8(0xFF, 0xB2, 0x57);
     pub const TORCH_LIGHT: Color = Color::srgb_u8(0xFF, 0x94, 0x43);
 
-    // Pickups glow like spirits do: a heal's fresh green and a haste's quick blue.
+    // Pickups glow like spirits do: a heal's fresh green and a haste's quick blue; a chest's gold
+    // and a shrine's blood.
     pub const HEAL: Color = Color::srgb_u8(0x7C, 0xF2, 0x9A);
     pub const HASTE: Color = Color::srgb_u8(0x58, 0xA8, 0xFF);
+    pub const GOLD: Color = Color::srgb_u8(0xFF, 0xCC, 0x44);
+    pub const BLOOD: Color = Color::srgb_u8(0xE8, 0x2A, 0x3C);
 
     /// The UI's own theme, "Bronze": panels, text and accents, apart from the world's.
     /// What marks a fighter, an ability or a pickup keeps its world color. Named by role, so a
@@ -358,8 +361,8 @@ mod tests {
     #[test]
     fn every_class_has_its_own_figure() {
         for class in ClassId::all() {
-            let key = &class.def().id;
-            assert!(FIGHTER_LOOKS.contains(&key.as_str()), "class {key:?} has no figure in fighter_mesh");
+            let key = class.def().figure();
+            assert!(FIGHTER_LOOKS.contains(&key), "class {key:?} has no figure in fighter_mesh");
         }
     }
 

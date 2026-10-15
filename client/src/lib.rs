@@ -69,6 +69,8 @@ pub mod swish;
 pub mod tooltip;
 #[cfg(feature = "render")]
 pub mod waygates;
+#[cfg(feature = "render")]
+pub mod waves;
 
 #[derive(Clone)]
 pub struct ClientSettings {

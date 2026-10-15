@@ -1,0 +1,27 @@
+#![enable(unwrap_variant_newtypes)]
+// A Bonecaller (field reference: README.md): keeps back and raises gnawers, in the waves mode.
+// Get to it first.
+(
+    id: "bonecaller",
+    name: "Bonecaller",
+    role: "Monster",
+    blurb: "Calls the small dead up out of the ground. Kill it first.",
+    playable: false,
+    max_hp: 90,
+    move_speed: 2.8,
+    attack: (
+        damage: 8,
+        attack_ticks: 56,
+        windup: 0.45,
+        kind: Projectile(speed: 10.0, radius: 0.3, range: 11.0),
+    ),
+    abilities: [],
+    look: Some(figure: "frost_mage", size: 1.05, tint: (0.78, 0.5, 0.95), cloth: false),
+    mob: Some(
+        brain: Kite(keep: 9.0),
+        tricks: [Summon(class: "gnawer", count: 2, every_ticks: 224, max: 6)],
+        bounty: 20,
+        cost: 4.0,
+        from_wave: 7,
+    ),
+)

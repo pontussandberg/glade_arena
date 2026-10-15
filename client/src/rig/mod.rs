@@ -88,6 +88,8 @@ pub struct Posing;
 
 /// Walk cycles per meter walked (the swing and bob: `pose`).
 const STRIDES_PER_METER: f32 = 0.4;
+/// How much bigger an elite monster is drawn than its kind.
+pub(crate) const ELITE_SIZE: f32 = 1.25;
 /// An empowered weapon (`follow_up`): how much bigger it grows, how quickly (per second,
 /// exponential), and how much further its strike smears out, so it reaches its lane's far end
 /// (`FollowUp::reach`).
@@ -157,6 +159,8 @@ struct Facing {
 /// A fighter's moving parts (child entities), its moves and walk state.
 #[derive(Component)]
 pub(crate) struct Rig {
+    /// How big it's drawn, as a share of its figure's size (`ClassDef::size`, an elite bigger).
+    size: f32,
     head: Entity,
     /// Right (weapon) arm and left (lead) arm, and their elbows (the held weapon hangs from the
     /// weapon arm's).
@@ -198,7 +202,7 @@ fn load_rigs(
 ) {
     let rigs = ClassId::all()
         .map(|c| {
-            let rig = arena::fighter_rig(&c.def().id);
+            let rig = arena::fighter_rig(c.def().figure());
             let mut add = |mesh| meshes.add(mesh);
             let handles = RigHandles {
                 head: add(rig.head),
@@ -214,7 +218,8 @@ fn load_rigs(
                 body_glow: rig.body_glow.map(|mesh| meshes.add(mesh)),
                 held_aura: rig.held_aura.map(|mesh| (meshes.add(mesh), materials.add(arena::glow(rig.glow, AURA_GLOW)))),
                 held_glint: rig.held_glint.map(|(mesh, edge)| (meshes.add(mesh), materials.add(arena::glow(Color::WHITE, EYE_GLOW)), edge)),
-                wardrobe: rig.wardrobe.map(|wardrobe| WardrobeAssets::load(wardrobe, &mut meshes, &mut bindposes, &mut materials)),
+                // A borrowed figure may go without its cloth (monsters, many at once).
+                wardrobe: rig.wardrobe.filter(|_| c.def().cloth()).map(|wardrobe| WardrobeAssets::load(wardrobe, &mut meshes, &mut bindposes, &mut materials)),
             };
             (c, handles)
         })
@@ -230,11 +235,12 @@ fn mirrored(right: Vec3) -> Vec3 {
 fn add_rigs(
     mut commands: Commands,
     assets: Res<RigAssets>,
-    new: Query<(Entity, &ClassId, &Pos, &MeshMaterial3d<StandardMaterial>), Added<Mesh3d>>,
+    new: Query<(Entity, &ClassId, &Pos, &MeshMaterial3d<StandardMaterial>, Option<&Elite>), Added<Mesh3d>>,
 ) {
-    for (player, class, pos, body) in &new {
+    for (player, class, pos, body, elite) in &new {
         let Some(handles) = assets.meshes.get(class) else { continue };
-        let class_moves = moves(&class.def().id);
+        let class_moves = moves(class.def().figure());
+        let size = class.def().size() * if elite.is_some() { ELITE_SIZE } else { 1.0 };
         let elbows = [(); 2].map(|_| commands.spawn((Transform::from_translation(class_moves.elbow_at), Visibility::default())).id());
         let knees = [(); 2].map(|_| commands.spawn((Transform::from_translation(RIG_KNEE), Visibility::default())).id());
         let mut part = |mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>, at: Vec3| {
@@ -253,6 +259,7 @@ fn add_rigs(
             gleam: handles.held_glint.as_ref().map(|(mesh, material, edge)| (part(mesh, material, Vec3::ZERO), *edge)),
             gleaming: Gleaming { seed: player.index().index(), ..default() },
             moves: class_moves,
+            size,
             stride: 0.0,
             walking: 0.0,
             cut: None,
@@ -501,7 +508,11 @@ fn pose_rigs(
         let aimed = targets(moves, phase, 0.0, rig.walking);
         let walk = rig.walking * (1.0 - phase.braced());
         let posed = assemble(moves, &angles, &aimed, facing.look, stride, walk, stretch * smear, blade, 1.0 - phase.braced());
-        let placed = Transform { translation: body.translation.with_y(posed.body.translation.y), ..posed.body };
+        let placed = Transform {
+            translation: body.translation.with_y(posed.body.translation.y * rig.size),
+            scale: posed.body.scale * rig.size,
+            ..posed.body
+        };
         body.set_if_neq(placed);
         // For a fighter that throws its weapon: where it is in the hand this frame (child
         // transforms aren't propagated until after this frame's shots are placed).
@@ -561,7 +572,7 @@ mod tests {
     #[test]
     fn every_class_has_moves() {
         for class in ClassId::all() {
-            super::moves(&class.def().id);
+            super::moves(class.def().figure());
         }
     }
 

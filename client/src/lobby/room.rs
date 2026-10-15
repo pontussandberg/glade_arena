@@ -5,7 +5,7 @@ use super::*;
 
 use arena_shared::protocol::RoomRequest;
 use arena_shared::map::MapId;
-use arena_shared::rooms::{MAX_PER_TEAM, Member, Mode, NO_TEAM, RoomView, TEAMS};
+use arena_shared::rooms::{MAX_PER_TEAM, Member, Mode, NO_TEAM, Phase, RoomView, TEAMS};
 
 use crate::browser::{HeaderFlash, LobbiesOpen};
 use crate::arena::palette::ui::ACCENT;
@@ -55,15 +55,33 @@ pub(super) fn show_room(
             if let Some(goal) = view.goal {
                 card.spawn(ui_text(format!("First to {goal} kills. Zombies roam the arena."), 11.0, palette::ui::MUTED));
             }
+            if view.mode.pve() {
+                card.spawn(ui_text("Endless waves of monsters out of the wilds. Buy items from the merchant between waves; a boss every fifth.", 11.0, palette::ui::MUTED));
+                if let Some(run) = &view.run {
+                    let line = match run.phase {
+                        Phase::Over { reached } if !view.started => Some(format!("The last run fell on wave {reached}")),
+                        _ if view.started => Some(format!("Fighting wave {}", run.wave)),
+                        _ => None,
+                    };
+                    if let Some(line) = line {
+                        card.spawn(ui_text(line, 12.0, palette::TORCH_FLAME));
+                    }
+                    if run.best > 0 {
+                        card.spawn(ui_text(format!("Best: wave {}", run.best), 11.0, palette::ui::TEXT));
+                    }
+                }
+            }
             let editing = view.may_edit(my_id);
-            let modes = [Mode::Ffa, Mode::Teams].map(|mode| (mode, mode.label()));
-            setting(card, "Mode", &modes, view.mode, editing, RoomRequest::SetMode);
-            let maps = MapId::ALL.map(|map| (map, map.label()));
+            let pvp = Mode::PVP.map(|mode| (mode, mode.label()));
+            let pve = Mode::PVE.map(|mode| (mode, mode.label()));
+            setting(card, "PvP", &pvp, view.mode, editing, RoomRequest::SetMode);
+            setting(card, "PvE", &pve, view.mode, editing, RoomRequest::SetMode);
+            let maps: Vec<(MapId, &str)> = view.mode.maps().iter().map(|map| (*map, map.label())).collect();
             setting(card, "Map", &maps, view.map, editing, RoomRequest::SetMap);
         });
 
         panel.spawn(card()).with_children(|card| match view.mode {
-            Mode::Ffa => {
+            Mode::Ffa | Mode::Waves => {
                 card.spawn(label(&format!("Players  {}/{}", view.members.len(), view.mode.capacity())));
                 for member in &view.members {
                     member_row(card, Node::default(), view, member, my_id);
@@ -88,13 +106,16 @@ fn setting<T: Copy + PartialEq>(
     editing: bool,
     pick: fn(T) -> RoomRequest,
 ) {
-    card.spawn(Node { height: px(GAP * 0.5), ..default() });
-    card.spawn(label(title));
     if !editing {
-        let shown = options.iter().find(|(option, _)| *option == current).map_or("", |(_, name)| name);
-        card.spawn(ui_text(shown, 13.0, palette::ui::TEXT));
+        // Only the one it's on (a mode in the other group shows nothing there).
+        let Some((_, shown)) = options.iter().find(|(option, _)| *option == current) else { return };
+        card.spawn(Node { height: px(GAP * 0.5), ..default() });
+        card.spawn(label(title));
+        card.spawn(ui_text(*shown, 13.0, palette::ui::TEXT));
         return;
     }
+    card.spawn(Node { height: px(GAP * 0.5), ..default() });
+    card.spawn(label(title));
     card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
         for &(option, name) in options {
             let on = option == current;
@@ -206,6 +227,10 @@ fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, me
             if view.goal.is_some() && (view.started || view.winner.is_some()) {
                 let kills = if member.kills == 1 { "1 kill".to_string() } else { format!("{} kills", member.kills) };
                 line.spawn(ui_text(kills, 11.0, palette::ui::TEXT));
+            }
+            // Against the waves, the monsters killed this run.
+            if view.mode.pve() && view.run.is_some() {
+                line.spawn(ui_text(format!("{} slain", member.zombie_kills), 11.0, palette::ui::TEXT));
             }
         });
     });

@@ -23,6 +23,9 @@ pub enum Mode {
     Ffa,
     /// Two teams; members pick their side.
     Teams,
+    /// Everyone together against endless waves of monsters, buying items between them
+    /// (`RunView`). On its own map (`MapId::Wilds`).
+    Waves,
 }
 
 impl Mode {
@@ -31,6 +34,7 @@ impl Mode {
         match self {
             Mode::Ffa => MAX_FFA,
             Mode::Teams => 2 * MAX_PER_TEAM,
+            Mode::Waves => MAX_PARTY,
         }
     }
 
@@ -38,12 +42,40 @@ impl Mode {
         match self {
             Mode::Ffa => "Free for all",
             Mode::Teams => "Teams",
+            Mode::Waves => "Waves",
+        }
+    }
+
+    /// One line on what it is.
+    pub fn blurb(self) -> &'static str {
+        match self {
+            Mode::Ffa => "Everyone for themselves",
+            Mode::Teams => "Two sides, pick yours",
+            Mode::Waves => "Together against endless monsters",
+        }
+    }
+
+    /// Players against monsters only, never each other.
+    pub fn pve(self) -> bool {
+        self == Mode::Waves
+    }
+
+    pub const PVP: [Mode; 2] = [Mode::Ffa, Mode::Teams];
+    pub const PVE: [Mode; 1] = [Mode::Waves];
+
+    /// The maps it may be played on: the waves have theirs.
+    pub fn maps(self) -> &'static [MapId] {
+        match self {
+            Mode::Waves => &[MapId::Wilds],
+            _ => &MapId::PVP,
         }
     }
 }
 
 pub const MAX_FFA: usize = 10;
 pub const MAX_PER_TEAM: usize = 10;
+/// The most who fight the waves together.
+pub const MAX_PARTY: usize = 6;
 /// Longest room name, in characters.
 pub const ROOM_NAME_MAX: usize = 24;
 /// A member who hasn't touched anything for this long is taken out of the room.
@@ -109,6 +141,38 @@ pub struct RoomView {
     /// Who won the match: set the moment it's won, and kept, with everyone's kills, until the
     /// next one starts.
     pub winner: Option<Winner>,
+    /// The waves mode's run: on, or the last one, until the next starts.
+    pub run: Option<RunView>,
+}
+
+/// Where a run against the waves is, as its members see it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct RunView {
+    /// The wave being fought, or the one coming up while shopping (1 to begin with).
+    pub wave: u32,
+    pub phase: Phase,
+    /// Deaths the party can still come back from at once; with none left, the fallen wait for
+    /// the wave to be cleared, and if everyone falls, the run is over.
+    pub lives: u32,
+    /// Monsters still to come this wave, and alive.
+    pub enemies_left: u32,
+    /// Who's ready for the next wave (`Member::guest_id`), while shopping.
+    pub ready: Vec<u32>,
+    /// Who fell with no lives left, waiting for the wave to be cleared to come back.
+    pub waiting: Vec<u32>,
+    /// The furthest wave this room has reached.
+    pub best: u32,
+    /// The boss of this wave, if it has one (its class's name).
+    pub boss: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    /// Between waves: the next starts in this many seconds (sooner once everyone's ready).
+    Shop { secs_left: u32 },
+    Fight,
+    /// Everyone fell on this wave.
+    Over { reached: u32 },
 }
 
 impl RoomView {

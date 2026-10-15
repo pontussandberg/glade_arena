@@ -6,10 +6,16 @@ use arena_shared::sim;
 
 use crate::rooms::{InRoom, Lobby};
 
-/// Projectiles are only replicated: clients draw them from where and when they were thrown.
-pub(super) fn spawn_projectile(commands: &mut Commands, projectile: Projectile, (room, team): Side) {
-    commands.spawn((projectile.bundle(), room, room.rooms(), team, Replicate::to_clients(NetworkTarget::All)));
+/// Projectiles are only replicated: clients draw them from where and when they were thrown. Its
+/// hits deal `might` times what its class says.
+pub(super) fn spawn_projectile(commands: &mut Commands, projectile: Projectile, (room, team): Side, might: f32) -> Entity {
+    commands.spawn((projectile.bundle(), room, room.rooms(), team, Might(might), Replicate::to_clients(NetworkTarget::All))).id()
 }
+
+/// Server-only: a shot that flies on from a fighter it hit (bounced, split) passes through that
+/// one, so it isn't hit again the moment the shot appears.
+#[derive(Component)]
+pub(crate) struct Spares(pub(crate) PeerId);
 
 pub(super) fn move_projectiles(
     mut commands: Commands,
@@ -31,24 +37,31 @@ pub(super) fn move_projectiles(
 pub(super) fn resolve_projectile_hits(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    projectiles: Query<(Entity, &Pos, &Projectile, &InRoom, &Team)>,
+    projectiles: Query<(Entity, &Pos, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Spares>, (Option<&Bounces>, Has<Shard>))>,
     mut targets: Targets,
+    mut log: ResMut<HitLog>,
 ) {
     let now = timeline.tick();
-    for (projectile_entity, projectile_pos, projectile, room, team) in &projectiles {
+    for (projectile_entity, projectile_pos, projectile, room, team, might, spares, (bounces, shard)) in &projectiles {
         for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent) in &mut targets {
             if target_id.0 == projectile.owner
+                || spares.is_some_and(|s| s.0 == target_id.0)
+                || health.0 == 0
                 || !foes((*room, *team), (*target_room, *target_team))
                 || !sim::projectile_hits(projectile_pos.0, projectile, target_pos.0) {
                 continue;
             }
             commands.entity(projectile_entity).try_despawn();
-            let (amount, chill) = (sim::projectile_damage(projectile, now.0), sim::projectile_chill(projectile));
+            let amount = (sim::projectile_damage(projectile, now.0) as f32 * might_of(might)).round() as i32;
+            let chill = sim::projectile_chill(projectile);
             let blow = if projectile.ability.is_none() { Blow::attack(amount, chill, false, projectile.crit) } else { Blow::ability(amount, chill) };
             let def = projectile.class.def();
             let with = projectile.ability.and_then(|slot| def.ability(slot)).map_or("auto-attack", |ability| ability.name.as_str());
+            let source = projectile.ability.map_or(Source::Attack, Source::Ability);
             let hit = (&mut *health, &mut *chilled, &mut *recent);
-            damage(&mut commands, now.0, (target, target_id.0), hit, blow, (projectile.owner, projectile.class, with));
+            let at = (target, target_id.0, target_pos.0);
+            let shot = ShotHit { projectile: *projectile, might: might_of(might), bounces: bounces.map(|b| b.0), shard };
+            damage(&mut commands, &mut log, now.0, at, hit, blow, (projectile.owner, projectile.class, with), ((*room, *team), source, Some(shot)));
             break;
         }
     }

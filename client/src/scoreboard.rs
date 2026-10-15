@@ -103,6 +103,8 @@ fn show_score(
         match view.mode {
             Mode::Ffa => ffa_rows(panel, view, my_id),
             Mode::Teams => team_row(panel, view, my_id),
+            // Never won by kills: the waves have their own banner (`waves.rs`).
+            Mode::Waves => {}
         }
     });
     if let Some(winner) = winner {

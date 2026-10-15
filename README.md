@@ -57,6 +57,71 @@ Killed players sit out 3 seconds, then respawn at full health.
 Stack: **Bevy 0.19 + Lightyear 0.30** (pinned together), Rust everywhere. The browser client is
 the same Rust code compiled to WASM, talking WebTransport to the server.
 
+## Waves (PvE)
+
+Besides fighting each other (PvP: free-for-all or teams), a lobby can fight **Waves**: up to six
+players together, against endless waves of monsters, on a map of their own, **Hollow Wilds**.
+It's far bigger than the PvP maps, with a walled camp in the middle and places all around it: a
+graveyard and ruined chapel, a hedge maze, a lake with an island, a quarry with a burned
+watchtower, a rotting marsh with a witch's hut, a circle of standing stones, a chasm with a stone
+bridge and a rope one, and a dark grove. Waygates jump from the camp's outskirts to the far
+corners, and monsters come out of lairs out there (`shared/src/map/wilds.rs`).
+
+A run opens with time at the **merchant** in the camp (walk up to them to trade): a run starts
+with some gold, and every kill pays its bounty to the whole party (no kill stealing), every
+cleared wave pays more, and **chests** turn up out in the wilds during a wave (gold for everyone,
+if someone goes and gets them). Press F (or the banner's button) once you're ready; the next wave
+comes once everyone is, or when the countdown runs out. A boss leads every fifth wave (The
+Butcher, The Pale Lich, The Grave Lord, round again, tougher each time), and from wave 6 a few
+**elites** come along, bigger, tougher, worth more, and with a twist: Swift, Vampiric, Volatile
+(blows up where it dies), Frostbound or Splitting. The party shares **lives**: a fallen player
+comes back at once while there are lives left; with none, they wait for the wave to be cleared,
+and if everyone is down, the run is over. A boss killed is a life more. Shrines (blood-red stones)
+send you into a frenzy.
+
+**Items** (`shared/src/items.rs`) never give stats: each does something. Six at most; buying one
+you have raises it a level (up to 3), selling gives back half.
+
+| Item | What it does |
+|---|---|
+| Storm Coil | Auto-attack hits arc lightning through more enemies |
+| Ember Heart | Kills burst into flame (bursts kill, and burst) |
+| Rime Sigil | Every few auto-attack hits freeze |
+| Bloodfang | Auto-attack hits heal you |
+| Bramble Mantle | Being hit lashes everyone around you |
+| Echo Stone | Your ability echoes where you stood, as a burst |
+| Powder Keg | Lobs kegs at the nearest enemy now and then |
+| Wisp Lantern | Wisps circle you, burning what they touch |
+| Hoarfrost Boots | You leave frost behind that slows and hurts |
+| Doom Bell | Marks enemies; the bell tolls back a share of what you dealt them |
+| Midas Coin | Hits finish enemies low on health, for gold (not bosses) |
+| Phoenix Feather | A killing blow raises you instead, in fire (recharges) |
+| Thunder Crown | Every few hits call down lightning |
+| Void Orb | Your ability opens a vortex at the cursor that drags enemies in |
+| Mirror Shard | Your ability leaves a decoy monsters go for; it shatters |
+| Berserker Totem | Kills stack a frenzy (walk and attack faster) |
+| Ricochet Charm | Shots that hit bounce on (ranged classes) |
+| Hydra Spear | Javelins split on hit (Jav only) |
+| Gravecaller Rift | Your rifts burn enemies in them (Revenant only) |
+| Heart of Winter | Frost Nova leaves a blizzard (Frost Mage only) |
+
+They combine: a Hydra Spear's splits ricochet off Storm Coil arcs, Ember Heart's bursts kill into
+more bursts and feed a Berserker Totem, a Void Orb gathers a pack for Thunder Crown and the kegs.
+
+**Monsters** are classes too (`shared/assets/classes/`, with a `mob` section: how it gets about,
+its tricks, its bounty and when it first comes), wearing the players' and the zombie's figures
+sized and tinted (`look`): zombies, packs of gnawers, pouncing ghouls, spear-throwing grave
+hunters that keep their distance, bloaters that burst, grave ogres that slam the ground, frost
+wraiths, bonecallers raising gnawers, rot priests mending the others, and death knights charging
+through you. The server runs them (`server/src/brain.rs`), the waves (`server/src/waves.rs`, where
+all the tuning is) and the items (`server/src/items.rs`).
+
+To try a later wave natively: `ARENA_ROOM="Waves 10" cargo run -p arena-client -- 11 revenant`
+starts a run at wave 10 with the gold you'd have by then (`ARENA_BOT=1` to let the bot play it,
+`ARENA_SHOTS=<dir>` to save a screenshot every few seconds). `cargo test -p arena-server --test
+integration long_run -- --ignored --nocapture` plays a run with a bot that shops, printing how
+each wave goes (`ARENA_CLASS` picks its class).
+
 ## Layout
 
 ```

@@ -3,6 +3,7 @@
 
 use super::*;
 
+use arena_shared::items::Satchel;
 use arena_shared::sim;
 
 use crate::rooms::{InRoom, Lobby};
@@ -49,7 +50,7 @@ pub(super) fn fighter(id: PeerId, class: ClassId, room: InRoom, team: Team, at: 
         PlayerId(id),
         (class, team, room, room.rooms()),
         Pos(at),
-        Health(class.def().max_hp),
+        (Health(class.def().max_hp), MaxHealth(class.def().max_hp)),
         (Chilled::default(), Hasted::default(), Frenzy::default(), RecentHits::default()),
         (AttackState::default(), Cooldowns::default(), Dashing::default(), LastSwing::default()),
     )
@@ -66,8 +67,26 @@ pub(super) fn spawn_player(commands: &mut Commands, link: Entity, id: PeerId, cl
             DashHits::default(),
             OnGate::default(),
             PlayerInput::default(),
+            (Satchel::default(), ItemState::default()),
             // Replication starts in `place_players`, once it has a real position.
             ControlledBy { owner: link, lifetime: default() },
+        ))
+        .id()
+}
+
+/// The shopkeeper, standing `at` in `room`: a fighter no one can hurt, on the players' side.
+pub(crate) fn spawn_shopkeeper(commands: &mut Commands, room: InRoom, at: Vec2) -> Entity {
+    let class = ClassId::by_key("merchant").expect("the merchant's class file");
+    // Its own number, far from the ones handed out for monsters and dummies.
+    let id = PeerId::Local(u64::MAX - room.key.0 as u64);
+    commands
+        .spawn((
+            Name::from("Shopkeeper"),
+            Shopkeeper,
+            Untouchable,
+            fighter(id, class, room, Team(arena_shared::rooms::TEAM_A), at),
+            Replicate::to_clients(NetworkTarget::All),
+            InterpolationTarget::to_clients(NetworkTarget::All),
         ))
         .id()
 }
@@ -105,16 +124,16 @@ pub(super) fn respawn(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
     // Dummies come back on the spot instead (`restore_dummies`); zombies don't (`bury_zombies`).
-    mut dead: Query<(Entity, &ClassId, &mut Health, (&mut Chilled, &mut Hasted, &mut Frenzy), &mut AttackState, (&mut Cooldowns, &mut Dashing), &mut Dead), (Without<Dummy>, Without<Zombie>)>,
+    mut dead: Query<(Entity, &MaxHealth, &mut Health, (&mut Chilled, &mut Hasted, &mut Frenzy), &mut AttackState, (&mut Cooldowns, &mut Dashing), &mut Dead), (Without<Dummy>, Without<Zombie>, Without<Decoy>)>,
 ) {
     let now = timeline.tick().0;
-    for (player, class, mut health, (mut chilled, mut hasted, mut frenzy), mut attack, (mut cooldowns, mut dashing), mut dead) in &mut dead {
+    for (player, max, mut health, (mut chilled, mut hasted, mut frenzy), mut attack, (mut cooldowns, mut dashing), mut dead) in &mut dead {
         if !dead.placed && now + PLACE_BEFORE_RESPAWN_TICKS >= dead.respawn_at {
             dead.placed = true;
             commands.entity(player).insert(NeedsSpawnPoint);
         }
         if now >= dead.respawn_at {
-            health.0 = class.def().max_hp;
+            health.0 = max.0;
             chilled.set_if_neq(Chilled::default());
             hasted.set_if_neq(Hasted::default());
             // Its frenzy's over (the zombies it killed still count: `Member::zombie_kills`).

@@ -272,12 +272,12 @@ fn update_live_stats(
 
 /// Your health, as it is.
 fn update_health(
-    me: Query<(&ClassId, Option<&Health>), (With<Me>, With<PlayerId>)>,
+    me: Query<(&ClassId, Option<&Health>, Option<&MaxHealth>), (With<Me>, With<PlayerId>)>,
     frame: Option<Single<&MyFrame>>,
     mut texts: Query<&mut Text>,
 ) {
-    let (Some(frame), Ok((class, health))) = (frame, me.single()) else { return };
-    let max = class.def().max_hp;
+    let (Some(frame), Ok((class, health, max))) = (frame, me.single()) else { return };
+    let max = max.map_or(class.def().max_hp, |m| m.0);
     let hp = health.map_or(max, |h| h.0);
     let label = format!("{hp} / {max}");
     if let Ok(mut text) = texts.get_mut(frame.0.text)

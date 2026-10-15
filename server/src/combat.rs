@@ -1,9 +1,12 @@
 //! Attacks and what they do: winding up and going off (`attack`), who's a foe of whom, hits
-//! dealing damage (`damage`), and the rifts a hit can tear in the ground.
+//! dealing damage (`damage`, each one noted in the `HitLog` for what reacts to hits: items,
+//! monsters' twists), and the rifts a hit can tear in the ground.
 
 use super::*;
 
+use arena_shared::abilities::AbilitySlot;
 use arena_shared::classes::{Chill, common};
+use arena_shared::items::Item;
 use arena_shared::sim;
 
 use crate::rooms::{InRoom, Lobby};
@@ -35,7 +38,61 @@ impl Blow {
 }
 
 /// Who dealt a hit, of which class (whose crit odds it rolls), and `with` what (for the log).
-type Attacker<'a> = (PeerId, ClassId, &'a str);
+pub(super) type Attacker<'a> = (PeerId, ClassId, &'a str);
+
+/// Server-only: how much harder than its class's numbers a fighter hits (a monster grown with
+/// the waves), or a shot (a bounced or split one, a share of its first's).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Might(pub(crate) f32);
+
+/// What `Might` a fighter or a shot has (1 without one).
+pub(crate) fn might_of(might: Option<&Might>) -> f32 {
+    might.map_or(1.0, |m| m.0)
+}
+
+/// Server-only: no one can hurt it (the shopkeeper).
+#[derive(Component)]
+pub(crate) struct Untouchable;
+
+/// What dealt a hit: an auto-attack, an ability, an item's effect, or a monster's trick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Source {
+    Attack,
+    Ability(AbilitySlot),
+    Item(Item),
+    Trick,
+}
+
+/// A hit that landed, for what reacts to hits (`items::react`) once the tick's attacks are done.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Landed {
+    pub(crate) attacker: PeerId,
+    pub(crate) class: ClassId,
+    pub(crate) side: Side,
+    pub(crate) victim: Entity,
+    pub(crate) victim_id: PeerId,
+    /// Where the victim was.
+    pub(crate) at: Vec2,
+    pub(crate) amount: i32,
+    pub(crate) killed: bool,
+    pub(crate) source: Source,
+    /// The shot that hit, if one did: what bounces and splits off it.
+    pub(crate) shot: Option<ShotHit>,
+}
+
+/// A shot that hit: it, its might, and how many bounces it has left (`None`: it's never bounced)
+/// or whether it's split off another.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ShotHit {
+    pub(crate) projectile: Projectile,
+    pub(crate) might: f32,
+    pub(crate) bounces: Option<u8>,
+    pub(crate) shard: bool,
+}
+
+/// Server-only: the hits landed this tick, in order, until `items::react` has seen them.
+#[derive(Resource, Default)]
+pub(crate) struct HitLog(pub(crate) Vec<Landed>);
 
 /// Where a fighter (or a projectile) fights: which room, which side.
 pub(super) type Side = (InRoom, Team);
@@ -45,20 +102,24 @@ pub(super) fn foes(side: Side, other: Side) -> bool {
     side.0 == other.0 && !side.1.allied(other.1)
 }
 
-/// Apply a hit dealt by `attacker`; at zero health the player is out of the fight for
-/// `RESPAWN_TICKS`. A blow that can crit rolls on the attacker's class's odds, against whether the
-/// target is frozen now: a root this very hit applies starts next tick, so it doesn't count.
+/// Apply a hit dealt by `attacker` (on `side`, with `source`) to a fighter at `at`; at zero
+/// health it's out of the fight for `RESPAWN_TICKS`. A blow that can crit rolls on the attacker's
+/// class's odds, against whether the target is frozen now: a root this very hit applies starts
+/// next tick, so it doesn't count. Noted in `log`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn damage(
     commands: &mut Commands,
+    log: &mut HitLog,
     now: u32,
-    (player, id): (Entity, PeerId),
+    (player, id, at): (Entity, PeerId, Vec2),
     (health, chilled, hits): (&mut Health, &mut Chilled, &mut RecentHits),
     blow: Blow,
     (by, class, with): Attacker,
+    (side, source, shot): (Side, Source, Option<ShotHit>),
 ) {
     // Killed already this tick (its `Dead` is still a command to apply): later hits do nothing,
     // so the kill stays the first killer's.
-    if health.0 == 0 {
+    if health.0 == 0 || blow.amount <= 0 && blow.chill.is_none() {
         return;
     }
     let crit = blow.sure_crit || blow.crit_roll.is_some_and(|roll| roll < class.def().crit.chance_against(chilled.rooted_at(now), blow.empowered));
@@ -69,10 +130,12 @@ pub(super) fn damage(
         chilled.apply(blow.chill, now);
     }
     debug!(target: "arena_server", attacker = ?by, victim = ?id, with, amount, crit, health = health.0, "hit");
-    if health.0 == 0 {
-        info!(target: "arena_server", killer = ?by, victim = ?id, with, "kill");
+    let killed = health.0 == 0;
+    if killed {
+        debug!(target: "arena_server", killer = ?by, victim = ?id, with, "kill");
         commands.entity(player).insert(Dead { respawn_at: now + RESPAWN_TICKS, placed: false, killer: by });
     }
+    log.0.push(Landed { attacker: by, class, side, victim: player, victim_id: id, at, amount, killed, source, shot });
 }
 
 pub(super) type Targets<'w, 's> = Query<
@@ -87,18 +150,20 @@ pub(super) type Targets<'w, 's> = Query<
         &'static mut Chilled,
         &'static mut RecentHits,
     ),
-    InPlay,
+    (InPlay, Without<Untouchable>),
 >;
 
 /// Deals `blow` to every foe of `attacker` (on `side`) that `hits` says is hit, judged against
 /// where they are now (no lag compensation, as in League: what the server sees is what counts).
 /// Returns how many.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn hit_foes(
     commands: &mut Commands,
+    log: &mut HitLog,
     now: u32,
     targets: &mut Targets,
     attacker: Attacker,
-    side: Side,
+    (side, source): (Side, Source),
     blow: Blow,
     mut hits: impl FnMut(PeerId, Vec2) -> bool,
 ) -> usize {
@@ -107,7 +172,8 @@ pub(super) fn hit_foes(
         // One killed already this tick (`damage`) isn't hit: a swing that only struck a body
         // didn't land.
         if health.0 > 0 && target_id.0 != attacker.0 && foes(side, (*room, *team)) && hits(target_id.0, target_pos.0) {
-            damage(commands, now, (target, target_id.0), (&mut health, &mut chilled, &mut recent), blow, attacker);
+            let hit = (&mut *health, &mut *chilled, &mut *recent);
+            damage(commands, log, now, (target, target_id.0, target_pos.0), hit, blow, attacker, (side, source, None));
             count += 1;
         }
     }
@@ -124,14 +190,16 @@ pub(super) fn attack(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut attackers: Query<
-        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), &Frenzy, &mut Cooldowns),
+        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), &Frenzy, &mut Cooldowns, Option<&Might>),
         InPlay,
     >,
     mut targets: Targets,
     mut rifts: ResMut<Rifts>,
+    mut log: ResMut<HitLog>,
 ) {
     let now = timeline.tick();
-    for (id, class, pos, mut input, mut state, mut last_swing, (room, team), frenzy, mut cooldowns) in &mut attackers {
+    for (id, class, pos, mut input, mut state, mut last_swing, (room, team), frenzy, mut cooldowns, might) in &mut attackers {
+        let might = might_of(might);
         let side = (*room, *team);
         // A primed attack going off this tick is a sure crit (`primer`: the ability that readied it).
         let primer = state.primed.filter(|_| state.winding_up().is_some_and(|swing| swing.primed)).map(|(slot, _)| slot);
@@ -147,15 +215,18 @@ pub(super) fn attack(
         }
         match released {
             None => {}
-            Some(sim::Attack::Projectile(projectile)) => spawn_projectile(&mut commands, Projectile { crit: primed, ..projectile }, side),
+            Some(sim::Attack::Projectile(projectile)) => {
+                spawn_projectile(&mut commands, Projectile { crit: primed, ..projectile }, side, might);
+            }
             Some(sim::Attack::Melee(swing)) => {
                 *last_swing = swing;
                 if let Some(rift) = sim::Rift::torn(id.0, *class, pos.0, &swing) {
                     rifts.0.push((*room, rift));
                 }
-                let blow = Blow::attack(class.def().attack.damage, class.def().attack.chill, swing.empowered, primed);
+                let amount = (class.def().attack.damage as f32 * might).round() as i32;
+                let blow = Blow::attack(amount, class.def().attack.chill, swing.empowered, primed);
                 let with = (id.0, *class, "auto-attack");
-                let landed = hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |_, at| {
+                let landed = hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Attack), blow, |_, at| {
                     sim::melee_hits(lobby.map(room), pos.0, swing.dir, swing.empowered, *class, at)
                 });
                 if landed > 0

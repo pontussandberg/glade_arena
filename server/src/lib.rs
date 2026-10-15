@@ -13,6 +13,8 @@ use std::time::Duration;
 
 use arena_shared::config::*;
 use arena_shared::protocol::*;
+// Over the prelude's color trait of the same name.
+use arena_shared::protocol::Hue;
 use bevy::prelude::*;
 use lightyear::netcode::NetcodeServer;
 use lightyear::prelude::server::*;
@@ -37,6 +39,14 @@ mod dummies;
 use dummies::*;
 mod zombies;
 use zombies::*;
+mod brain;
+use brain::*;
+mod fx;
+use fx::*;
+mod items;
+use items::*;
+mod waves;
+use waves::*;
 
 pub mod logging;
 pub mod rooms;
@@ -107,29 +117,17 @@ impl Plugin for ServerGamePlugin {
         app.insert_resource(ReplicationMetadata::new(SEND_INTERVAL));
         app.add_observer(on_new_link);
         app.init_resource::<Rifts>();
+        app.init_resource::<HitLog>().init_resource::<CastLog>().init_resource::<Pending>().init_resource::<Zones>();
+        app.init_resource::<Fields>().init_resource::<Deeds>();
         // As soon as they're received, before this frame's ticks run.
         app.add_systems(PreUpdate, apply_commands.after(MessageSystems::Receive));
         app.add_systems(
             FixedUpdate,
             (
-                chase,
-                move_players,
-                walk_dummies,
-                take_pickups,
-                use_gates,
-                attack,
-                use_abilities,
-                move_projectiles,
-                resolve_projectile_hits,
-                rooms::count_kills,
-                feed_frenzy,
-                restore_dummies,
-                respawn,
-                bury_zombies,
-                raise_zombies,
-                place_players,
-                use_up_clicks,
-                close_rifts,
+                (chase, think, do_deeds, move_players, walk_dummies, take_pickups, use_gates).chain(),
+                (attack, use_abilities, move_projectiles, resolve_projectile_hits, tick_items, react).chain(),
+                (rooms::count_kills, feed_frenzy, fall, pay_bounties, restore_dummies, respawn, bury_zombies, raise_zombies).chain(),
+                (run_waves, shelter, sync_satchels, place_players, use_up_clicks, close_rifts, end_fx).chain(),
             )
                 .chain(),
         );

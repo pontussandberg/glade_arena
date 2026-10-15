@@ -38,7 +38,7 @@ impl Ease for Pos {
     }
 }
 
-/// Server-authoritative and replicated. The maximum is the class's `max_hp`.
+/// Server-authoritative and replicated. The maximum is its `MaxHealth`.
 /// Zero means dead and waiting to respawn: hidden, and can't move or attack.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Health(pub i32);
@@ -49,6 +49,11 @@ impl Health {
         self.0 > 0
     }
 }
+
+/// The most health a fighter has: its class's `max_hp`, or more for a monster grown with the
+/// waves (or an elite). Server-authoritative and replicated.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct MaxHealth(pub i32);
 
 /// The last few hits a player took, for the damage numbers over it. Server-authoritative and
 /// replicated like `Health`. Every hit gets the next running number, so a client shows each one
@@ -334,6 +339,103 @@ pub enum PickupKind {
     Heal,
     /// Walking `HASTE_FACTOR` times as fast for `HASTE_TICKS`.
     Haste,
+    /// A treasure chest, in the waves mode: gold for everyone in the run. Lies out in the wilds
+    /// during a wave, gone once taken or the wave's over.
+    Chest,
+    /// A blood shrine: a frenzy (`SHRINE_FRENZY`), walking and attacking faster for a while.
+    Shrine,
+}
+
+/// A monster made stronger than its kind, in the waves mode: bigger, tougher, worth more, and
+/// with a twist of its own. Server-authoritative and replicated (the client draws it bigger, in
+/// its twist's color).
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+pub struct Elite(pub Affix);
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
+pub enum Affix {
+    /// Always hasted.
+    Swift,
+    /// Heals by what it deals.
+    Vampiric,
+    /// Blows up where it dies, a moment later.
+    Volatile,
+    /// Its hits freeze for a moment.
+    Frostbound,
+    /// Splits into smaller monsters as it dies.
+    Splitting,
+}
+
+impl Affix {
+    pub const ALL: [Affix; 5] = [Affix::Swift, Affix::Vampiric, Affix::Volatile, Affix::Frostbound, Affix::Splitting];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Affix::Swift => "Swift",
+            Affix::Vampiric => "Vampiric",
+            Affix::Volatile => "Volatile",
+            Affix::Frostbound => "Frostbound",
+            Affix::Splitting => "Splitting",
+        }
+    }
+}
+
+/// The shopkeeper, in the waves mode: a fighter no one can hurt, standing at the map's camp
+/// (`Map::shop`). Near them, players buy and sell items. Replicated, so the client draws them as
+/// the shop.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct Shopkeeper;
+
+/// How close to the shopkeeper a player has to be to trade.
+pub const SHOP_RADIUS: f32 = 4.0;
+
+/// What an effect looks like: its color and feel.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
+pub enum Hue {
+    Fire,
+    Spirit,
+    Frost,
+    Gold,
+    Blood,
+    Poison,
+    Void,
+    Storm,
+    Thorn,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
+pub enum FxKind {
+    /// An arc of lightning from `at` to `to`.
+    Arc,
+    /// A burst out to `radius` around `at`, at once.
+    Blast(Hue),
+    /// Ground marked out to `radius` around `at` until `until`: a frost patch, a blizzard, a
+    /// vortex, a healing circle.
+    Zone(Hue),
+    /// Something about to land at `at` (out to `radius`) at `until`: a keg's fuse, a strike from
+    /// the sky, a bloater swelling. Drawn filling up until then.
+    Warn(Hue),
+    /// A keg flying from `at` to `to`, landing at `until`.
+    Lob,
+    /// Lightning down from the sky onto `at`.
+    Bolt,
+    /// Gold flying up from `at`.
+    Coins,
+    /// A monster clawing its way up out of the ground at `at`.
+    Rise,
+}
+
+/// A passing effect of an item or a monster, for the client to draw: what, where, and from when
+/// to when (ticks). Server-authoritative, replicated; despawned once it's over. Gameplay never
+/// reads it: what it shows has already happened on the server, or is about to.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct Fx {
+    pub kind: FxKind,
+    pub at: Vec2,
+    pub to: Vec2,
+    pub radius: f32,
+    pub from: u32,
+    pub until: u32,
 }
 
 /// A pickup lying at `at` (one of its map's `pickups`), or, while `back_at` is set, taken (last
@@ -537,6 +639,12 @@ pub enum RoomRequest {
     /// Practice only: our abilities with no cooldowns of their own (ready again the moment
     /// they're used), or back to normal.
     NoCooldowns(bool),
+    /// Waves only, near the shopkeeper: buy this item, or raise it a level.
+    Buy(crate::items::Item),
+    /// Waves only, near the shopkeeper: sell the item in this slot.
+    Sell(u8),
+    /// Waves only, between waves: we're ready for the next (or not, again).
+    Ready(bool),
 }
 
 /// What the server tells a client about guests and rooms.
@@ -581,6 +689,11 @@ impl Plugin for ProtocolPlugin {
         app.component::<Hasted>().replicate();
         app.component::<Frenzy>().replicate();
         app.component::<Pickup>().replicate();
+        app.component::<MaxHealth>().replicate();
+        app.component::<crate::items::Satchel>().replicate();
+        app.component::<Elite>().replicate();
+        app.component::<Shopkeeper>().replicate();
+        app.component::<Fx>().replicate();
         app.component::<Waygate>().replicate();
         // Others' fighters are interpolated (smooth, a little in the past); our own isn't: it's
         // shown as the server last said it was, for the least delay after a command.

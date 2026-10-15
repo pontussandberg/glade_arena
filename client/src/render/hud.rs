@@ -228,6 +228,7 @@ pub(super) fn update_status(
     client: Query<(&Link, Has<Connected>, Option<&Disconnected>), With<Client>>,
     me: Query<&Health, (With<Me>, With<PlayerId>)>,
     mode: Res<CameraMode>,
+    (room, guest): (Res<crate::rooms::CurrentRoom>, Option<Res<crate::rooms::Me>>),
 ) {
     frame_rate.seconds += time.delta_secs();
     frame_rate.frames += 1;
@@ -247,7 +248,16 @@ pub(super) fn update_status(
             let _ = write!(text, "   jitter {:.0} ms", ms(link.stats.jitter));
         }
         if me.single().is_ok_and(|h| !h.alive()) {
-            let _ = write!(text, "\nYou died. Back in {} seconds.", RESPAWN_TICKS / TICK_HZ as u32);
+            // Against the waves, with no lives left: not until the wave's cleared.
+            let run = room.0.as_ref().filter(|view| view.started).and_then(|view| view.run.as_ref());
+            let waiting = run.zip(guest).is_some_and(|(run, guest)| run.waiting.contains(&guest.guest_id));
+            if waiting {
+                text.push_str("\nYou fell. Back once the wave is cleared.");
+            } else if run.is_some() {
+                text.push_str("\nYou fell. The party spends a life: back in a moment.");
+            } else {
+                let _ = write!(text, "\nYou died. Back in {} seconds.", RESPAWN_TICKS / TICK_HZ as u32);
+            }
         }
     }
     // Only touch the component when the text changed, so Bevy doesn't re-layout it every frame.

@@ -62,6 +62,14 @@ struct PickupLooks {
     ground: Handle<Mesh>,
     heal: (Handle<StandardMaterial>, Handle<StandardMaterial>),
     haste: (Handle<StandardMaterial>, Handle<StandardMaterial>),
+    chest: (Handle<StandardMaterial>, Handle<StandardMaterial>),
+    shrine: (Handle<StandardMaterial>, Handle<StandardMaterial>),
+    /// A chest's box and lid (in plain wood), its gold bands; a shrine's floating stone.
+    chest_box: Handle<Mesh>,
+    chest_lid: Handle<Mesh>,
+    chest_band: Handle<Mesh>,
+    wood: Handle<StandardMaterial>,
+    shrine_stone: Handle<Mesh>,
     /// The winged boot: its shaft, its foot, a feather of its wings (one meter long along +X,
     /// scaled to its length), and the wings' pale glow.
     boot_shaft: Handle<Mesh>,
@@ -82,6 +90,8 @@ impl PickupLooks {
         match kind {
             PickupKind::Heal => &self.heal,
             PickupKind::Haste => &self.haste,
+            PickupKind::Chest => &self.chest,
+            PickupKind::Shrine => &self.shrine,
         }
     }
 }
@@ -91,6 +101,8 @@ pub(crate) fn color(kind: PickupKind) -> Color {
     match kind {
         PickupKind::Heal => palette::HEAL,
         PickupKind::Haste => palette::HASTE,
+        PickupKind::Chest => palette::GOLD,
+        PickupKind::Shrine => palette::BLOOD,
     }
 }
 
@@ -99,6 +111,8 @@ pub(crate) fn icon(kind: PickupKind) -> &'static str {
     match kind {
         PickupKind::Heal => "+",
         PickupKind::Haste => ">>",
+        PickupKind::Chest => "$",
+        PickupKind::Shrine => "!",
     }
 }
 
@@ -108,7 +122,15 @@ fn load_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mate
         (materials.add(arena::glow(c, GLOW)), materials.add(arena::translucent(c, 0.3, 1.5)))
     };
     let (heal, haste) = (kind(PickupKind::Heal), kind(PickupKind::Haste));
+    let (chest, shrine) = (kind(PickupKind::Chest), kind(PickupKind::Shrine));
     commands.insert_resource(PickupLooks {
+        chest,
+        shrine,
+        chest_box: meshes.add(Cuboid::new(0.8, 0.42, 0.55)),
+        chest_lid: meshes.add(Cuboid::new(0.84, 0.16, 0.59)),
+        chest_band: meshes.add(Cuboid::new(0.1, 0.6, 0.62)),
+        wood: materials.add(arena::matte(palette::BARK)),
+        shrine_stone: meshes.add(Cuboid::new(0.42, 0.42, 0.42)),
         bar: meshes.add(Cuboid::new(0.14, 0.5, 0.14)),
         ground: meshes.add(Circle::new(0.6).mesh().resolution(24).build()),
         heal,
@@ -144,6 +166,21 @@ fn add_pickup_visuals(mut commands: Commands, looks: Res<PickupLooks>, new: Quer
                     cross.spawn(bar(Vec3::ZERO, 0.0));
                     cross.spawn(bar(Vec3::ZERO, 90.0));
                 });
+            }
+            PickupKind::Chest => {
+                // On the ground, not floating: a wooden chest, banded in glowing gold.
+                commands.entity(floating).with_children(|chest| {
+                    chest.spawn((Mesh3d(looks.chest_box.clone()), MeshMaterial3d(looks.wood.clone()), Transform::from_xyz(0.0, -FLOAT_HEIGHT + 0.21, 0.0)));
+                    chest.spawn((Mesh3d(looks.chest_lid.clone()), MeshMaterial3d(looks.wood.clone()), Transform::from_xyz(0.0, -FLOAT_HEIGHT + 0.5, 0.0)));
+                    for x in [-0.26, 0.26] {
+                        chest.spawn((Mesh3d(looks.chest_band.clone()), MeshMaterial3d(body.clone()), Transform::from_xyz(x, -FLOAT_HEIGHT + 0.3, 0.0)));
+                    }
+                });
+            }
+            PickupKind::Shrine => {
+                // A blood-red stone, turned up on its point.
+                let tipped = Quat::from_rotation_x(std::f32::consts::FRAC_PI_4) * Quat::from_rotation_z(std::f32::consts::FRAC_PI_4);
+                commands.entity(floating).with_child((Mesh3d(looks.shrine_stone.clone()), MeshMaterial3d(body.clone()), Transform::from_rotation(tipped)));
             }
             PickupKind::Haste => {
                 let part = |mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>, transform: Transform| {
@@ -192,6 +229,10 @@ fn float_pickups(
         let there = pickup.back_at.is_none();
         visibility.set_if_neq(shown(there));
         if !there {
+            continue;
+        }
+        // A chest sits still on the ground.
+        if pickup.kind == PickupKind::Chest {
             continue;
         }
         if let Ok(mut transform) = floating.get_mut(float.0) {

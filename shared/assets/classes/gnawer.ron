@@ -1,0 +1,21 @@
+#![enable(unwrap_variant_newtypes)]
+// A Gnawer (field reference: README.md): a little rotting thing that comes in packs, fast and
+// frail, in the waves mode.
+(
+    id: "gnawer",
+    name: "Gnawer",
+    role: "Monster",
+    blurb: "Small, quick and always hungry. Never alone.",
+    playable: false,
+    max_hp: 24,
+    move_speed: 4.4,
+    attack: (
+        damage: 6,
+        attack_ticks: 26,
+        windup: 0.4,
+        kind: Melee(range: 1.1, width: 0.8),
+    ),
+    abilities: [],
+    look: Some(figure: "zombie", size: 0.62, tint: (0.78, 0.55, 0.9)),
+    mob: Some(brain: Chase, bounty: 3, cost: 0.45, from_wave: 3, pack: 3),
+)
