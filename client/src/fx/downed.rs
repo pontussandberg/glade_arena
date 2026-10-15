@@ -1,4 +1,4 @@
-//! Where a downed fighter lies: spirit light pooled on the ground round them, a cross of it under
+//! Where a downed fighter lies: healing light pooled on the ground round them, a cross of it under
 //! them, faint, filling out bright from the middle as an ally picks them up (as far as the rescue
 //! has got), and wisps of it rising off them, so they're found from afar.
 
@@ -51,7 +51,7 @@ pub(super) fn mark_downed(
             let (angle, out) = (noise(k, 1) * std::f32::consts::TAU, 0.5 * noise(k, 2));
             let from = at + Vec3::new(angle.cos() * out, 0.2, angle.sin() * out);
             let rise = Motion::Thrown { velocity: Vec3::Y * (1.2 + noise(k, 3)), gravity: -0.3, tumble: Vec3::ZERO };
-            put(&mut commands, &art, &art.mote, Part::new(now, [0.15, 0.9, 1.6], Ink::Spirit, from).size(0.06 + 0.05 * noise(k, 4)).motion(rise).flicker(0.3).shrink(0.2));
+            put(&mut commands, &art, &art.mote, Part::new(now, [0.15, 0.9, 1.6], Ink::Heal, from).size(0.06 + 0.05 * noise(k, 4)).motion(rise).flicker(0.3).shrink(0.2));
         }
     }
     for (fighter, pos, _) in &downed {
@@ -59,12 +59,12 @@ pub(super) fn mark_downed(
             continue;
         }
         let pool = Transform::from_xyz(0.0, 0.03, 0.0).with_scale(Vec3::new(REVIVE_RADIUS, 1.0, REVIVE_RADIUS));
-        let pool = commands.spawn((Mesh3d(art.splotch[0].clone()), MeshMaterial3d(art.ink(Ink::SpiritMist, 0.0).clone()), pool, NotShadowCaster, NotShadowReceiver)).id();
+        let pool = commands.spawn((Mesh3d(art.splotch[0].clone()), MeshMaterial3d(art.ink(Ink::HealMist, 0.0).clone()), pool, NotShadowCaster, NotShadowReceiver)).id();
         let reach = REVIVE_RADIUS * CROSS_REACH;
         let outline = Transform::from_xyz(0.0, 0.04, 0.0).with_scale(Vec3::new(reach, 1.0, reach));
-        let outline = commands.spawn((Mesh3d(art.cross.clone()), MeshMaterial3d(art.ink(Ink::Spirit, CROSS_FAINT).clone()), outline, NotShadowCaster, NotShadowReceiver)).id();
+        let outline = commands.spawn((Mesh3d(art.cross.clone()), MeshMaterial3d(art.ink(Ink::Heal, CROSS_FAINT).clone()), outline, NotShadowCaster, NotShadowReceiver)).id();
         let fill = Transform::from_xyz(0.0, 0.05, 0.0).with_scale(Vec3::new(0.0, 1.0, 0.0));
-        let fill = commands.spawn((Mesh3d(art.cross.clone()), MeshMaterial3d(art.ink(Ink::Spirit, 0.0).clone()), fill, NotShadowCaster, NotShadowReceiver)).id();
+        let fill = commands.spawn((Mesh3d(art.cross.clone()), MeshMaterial3d(art.ink(Ink::Heal, 0.0).clone()), fill, NotShadowCaster, NotShadowReceiver)).id();
         commands
             .spawn((DownMark { of: fighter, fill, wisp_at: 0.0 }, Transform::from_translation(arena::to_world(pos.0, 0.0)), Visibility::Inherited))
             .add_children(&[pool, outline, fill]);
