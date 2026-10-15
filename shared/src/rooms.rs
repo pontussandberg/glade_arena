@@ -156,14 +156,12 @@ pub struct RunView {
     /// The wave being fought, or the one coming up while shopping (1 to begin with).
     pub wave: u32,
     pub phase: Phase,
-    /// Deaths the party can still come back from at once; with none left, the fallen wait for
-    /// the wave to be cleared, and if everyone falls, the run is over.
-    pub lives: u32,
     /// Monsters still to come this wave, and alive.
     pub enemies_left: u32,
     /// Who's ready for the next wave (`Member::guest_id`), while shopping.
     pub ready: Vec<u32>,
-    /// Who fell with no lives left, waiting for the wave to be cleared to come back.
+    /// Who's down (each has one life a wave): until an ally picks them up, or the wave is cleared.
+    /// If everyone is, the run is over.
     pub waiting: Vec<u32>,
     /// The furthest wave this room has reached.
     pub best: u32,
@@ -171,13 +169,6 @@ pub struct RunView {
     pub boss: Option<String>,
     /// What's strange about this wave, if anything: known while shopping for it.
     pub omen: Option<Omen>,
-    /// What a life for the party costs at the merchant now (`life_price`).
-    pub life_price: u32,
-}
-
-/// What the `bought`th life bought from the merchant in a run costs: dearer each time.
-pub fn life_price(bought: u32) -> u32 {
-    400 + 250 * bought
 }
 
 /// What can be strange about a wave, past the first few.

@@ -1,5 +1,5 @@
 //! The waves mode, on screen: the run's banner at the top (the wave, the shop's countdown and the
-//! way to say we're ready, the monsters left, the party's lives), a boss's health under it, the
+//! way to say we're ready, the monsters left, who's down), a boss's health under it, the
 //! end of a lost run across the middle; our gold and items over the action bar; the merchant's
 //! shop, open while we stand by them; and what items and monsters do (`Fx`), and wisps circling
 //! whoever carries a Wisp Lantern.
@@ -32,6 +32,7 @@ impl Plugin for WavesPlugin {
                 (show_satchel, open_shop, show_shop, trade).chain(),
                 (add_fx, play_fx, circle_wisps),
                 (name_in_world, place_names).chain(),
+                mark_downed,
             ),
         );
     }
@@ -71,10 +72,6 @@ struct SatchelBar;
 /// The merchant's shop, at the right.
 #[derive(Component)]
 struct ShopPanel;
-
-/// The shop's button for a life for the party.
-#[derive(Component)]
-struct LifeButton;
 
 /// A button in the shop: buy (or raise) an item; or, on our item's tile while the shop's open,
 /// sell what's in that slot.
@@ -180,7 +177,6 @@ fn show_banner(mut commands: Commands, room: Res<CurrentRoom>, me: Option<Res<cr
     let my_id = me.map_or(0, |me| me.guest_id);
     let party = room.0.as_ref().map_or(1, |view| view.members.len());
     commands.entity(banner).with_children(|banner| {
-        let lives = format!("Lives {}", run.lives);
         match run.phase {
             Phase::Shop { secs_left } => {
                 let next = if run.boss.is_some() { format!("WAVE {} - BOSS", run.wave) } else { format!("WAVE {}", run.wave) };
@@ -190,7 +186,6 @@ fn show_banner(mut commands: Commands, room: Res<CurrentRoom>, me: Option<Res<cr
                 }
                 banner.spawn(Node { column_gap: px(GAP * 2.0), align_items: AlignItems::Center, ..default() }).with_children(|row| {
                     row.spawn(ui_text("Shop at the merchant in the camp; its fire mends you", 12.0, palette::ui::MUTED));
-                    row.spawn(ui_text(lives, 12.0, palette::HEAL));
                 });
                 let ready = run.ready.contains(&my_id);
                 let label = if ready { format!("READY  {}/{}", run.ready.len(), party) } else { "READY (F)".to_string() };
@@ -205,7 +200,9 @@ fn show_banner(mut commands: Commands, room: Res<CurrentRoom>, me: Option<Res<cr
                 banner.spawn(Node { column_gap: px(GAP * 2.0), ..default() }).with_children(|row| {
                     let left = if run.enemies_left == 1 { "1 monster left".to_string() } else { format!("{} monsters left", run.enemies_left) };
                     row.spawn(ui_text(left, 12.0, palette::MONSTER));
-                    row.spawn(ui_text(lives, 12.0, palette::HEAL));
+                    if !run.waiting.is_empty() {
+                        row.spawn(ui_text(format!("{} down", run.waiting.len()), 12.0, palette::ENEMY));
+                    }
                 });
             }
             Phase::Over { reached } => {
@@ -419,11 +416,9 @@ fn open_shop(
 /// when it opens, or our gold or items change.
 fn show_shop(
     mut commands: Commands,
-    room: Res<CurrentRoom>,
     open: Res<ShopOpen>,
     me: Query<(Ref<Satchel>, &ClassId), With<Me>>,
     panel: Single<(Entity, &mut Node), With<ShopPanel>>,
-    mut shown_price: Local<Option<u32>>,
 ) {
     let (panel, mut node) = panel.into_inner();
     let display = if open.0 { Display::Flex } else { Display::None };
@@ -431,10 +426,7 @@ fn show_shop(
         node.display = display;
     }
     let Ok((satchel, class)) = me.single() else { return };
-    // Of the room, only the life's price shows here.
-    let life_price = room.run().map(|run| run.life_price);
-    let priced = std::mem::replace(&mut *shown_price, life_price) != life_price;
-    if !open.0 || !(open.is_changed() || satchel.is_changed() || priced) {
+    if !open.0 || !(open.is_changed() || satchel.is_changed()) {
         return;
     }
     commands.entity(panel).despawn_children();
@@ -477,31 +469,16 @@ fn show_shop(
                 });
             }
         });
-        // A life for the party, for whoever has gold to spare.
-        if let Some(price) = life_price {
-            panel.spawn((Node { column_gap: px(GAP), align_items: AlignItems::Center, padding: UiRect::all(px(3.0)), ..default() }, BackgroundColor(palette::ui::BACKDROP.with_alpha(0.5)))).with_children(|row| {
-                row.spawn(Node { flex_direction: FlexDirection::Column, flex_grow: 1.0, ..default() }).with_children(|words| {
-                    words.spawn(ui_text("Spirit Candle", 12.0, palette::HEAL));
-                    words.spawn(ui_text("A life more for the whole party. Dearer each time.", 9.0, palette::ui::MUTED));
-                });
-                let (fill, text) = if satchel.gold >= price { (palette::ui::SELECTED, palette::GOLD) } else { (palette::ui::BACKDROP, palette::ui::MUTED) };
-                row.spawn((LifeButton, HudButton, button(price.to_string(), 10.0, fill, text, palette::GOLD.with_alpha(0.5))));
-            });
-        }
         panel.spawn(ui_text("Hover an item to see what it does. Walk away to close.", 9.0, palette::ui::MUTED));
     });
 }
 
 /// The shop's buttons and our items' sell buttons ask the server.
 fn trade(
-    life: Query<Ref<Interaction>, With<LifeButton>>,
     buys: Query<(Ref<Interaction>, &BuyButton)>,
     sells: Query<(Ref<Interaction>, &SellButton)>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
-    if life.iter().any(clicked) {
-        request(&mut sender, RoomRequest::BuyLife);
-    }
     for (interaction, buy) in &buys {
         if clicked(interaction) {
             request(&mut sender, RoomRequest::Buy(buy.0));
@@ -511,6 +488,60 @@ fn trade(
         if clicked(interaction) {
             request(&mut sender, RoomRequest::Sell(sell.0));
         }
+    }
+}
+
+// The downed.
+
+/// Where a downed fighter lies (`of`): a ring of spirit light round them, filling as an ally picks
+/// them up, and a pale column over them so they're found from afar.
+#[derive(Component)]
+struct DownMark {
+    of: Entity,
+    fill: Entity,
+}
+
+/// How far up the column over the downed reaches.
+const DOWN_COLUMN: f32 = 2.6;
+
+/// Marks every downed fighter where they lie, the fill of its ring growing with their rescue; the
+/// mark goes when they're back up.
+fn mark_downed(
+    mut commands: Commands,
+    looks: Res<FxLooks>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    downed: Query<(Entity, &Pos, &Downed)>,
+    mut marks: Query<(Entity, &DownMark, &mut Transform)>,
+    mut fills: Query<&mut Transform, Without<DownMark>>,
+    mut material: Local<Option<(Handle<StandardMaterial>, Handle<StandardMaterial>)>>,
+) {
+    let (glow, faint) = material
+        .get_or_insert_with(|| (materials.add(arena::translucent(palette::SPIRIT, 0.85, 4.0)), materials.add(arena::translucent(palette::SPIRIT, 0.3, 2.0))))
+        .clone();
+    let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    for (mark, down, mut transform) in &mut marks {
+        let Ok((_, pos, downed)) = downed.get(down.of) else {
+            commands.entity(mark).despawn();
+            continue;
+        };
+        transform.translation = to_world(pos.0, 0.0);
+        if let Ok(mut fill) = fills.get_mut(down.fill) {
+            let r = REVIVE_RADIUS * downed.rescue.max(0.02);
+            fill.scale = Vec3::new(r, r, 1.0);
+        }
+    }
+    for (fighter, pos, _) in &downed {
+        if marks.iter().any(|(_, mark, _)| mark.of == fighter) {
+            continue;
+        }
+        let ring = Transform::from_xyz(0.0, 0.06, 0.0).with_rotation(flat).with_scale(Vec3::new(REVIVE_RADIUS, REVIVE_RADIUS, 1.0));
+        let fill = commands.spawn((Mesh3d(looks.disc.clone()), MeshMaterial3d(glow.clone()), Transform::from_xyz(0.0, 0.07, 0.0).with_rotation(flat), NotShadowCaster)).id();
+        let ring = commands.spawn((Mesh3d(looks.ring.clone()), MeshMaterial3d(glow.clone()), ring, NotShadowCaster)).id();
+        let column = Transform::from_xyz(0.0, DOWN_COLUMN / 2.0, 0.0).with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new(DOWN_COLUMN, 2.0, 2.0));
+        let column = commands.spawn((Mesh3d(looks.bolt.clone()), MeshMaterial3d(faint.clone()), column, NotShadowCaster)).id();
+        commands
+            .spawn((DownMark { of: fighter, fill }, Transform::from_translation(to_world(pos.0, 0.0)), Visibility::Inherited))
+            .add_children(&[fill, ring, column]);
     }
 }
 

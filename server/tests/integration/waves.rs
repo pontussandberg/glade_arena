@@ -177,10 +177,9 @@ fn long_run() {
             let health = player::<Health>(&mut p.client, 1).map_or(0, |h| h.0);
             let satchel = p.satchel().unwrap_or_default();
             println!(
-                "wave {:2} cleared in {:5.1}s, lives {}, health {health}, gold {}, items {:?}",
+                "wave {:2} cleared in {:5.1}s, health {health}, gold {}, items {:?}",
                 last_wave,
                 wave_started.elapsed().as_secs_f32(),
-                run.lives,
                 satchel.gold,
                 satchel.items().collect::<Vec<_>>()
             );
@@ -199,5 +198,65 @@ fn long_run() {
             p.until(Duration::from_secs(10), "the wave", |p| p.run().is_some_and(|r| r.phase == Phase::Fight || matches!(r.phase, Phase::Over { .. })));
             wave_started = Instant::now();
         }
+    }
+}
+
+/// Two bots in one run, late enough that someone goes down: the other picks them up (stands over
+/// them), and they're back in the same wave. Ignored: it plays real waves until that happens.
+#[test]
+#[ignore]
+fn coop_picks_the_fallen_up() {
+    let port = 5864;
+    let mut server = start_server(port, |_| {});
+    let mut clients: Vec<App> = (1..=2).map(|id| start_guest_with(id, port, "revenant", |c| { c.add_plugins(BotPlugin); })).collect();
+    let step = |server: &mut App, clients: &mut Vec<App>| {
+        server.update();
+        for c in clients.iter_mut() {
+            c.update();
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    let end = Instant::now() + Duration::from_secs(30);
+    while clients.iter().any(|c| c.world().get_resource::<Guest>().is_none()) {
+        assert!(Instant::now() < end, "welcomed");
+        step(&mut server, &mut clients);
+    }
+    let join = |clients: &mut Vec<App>| {
+        for c in clients.iter_mut() {
+            let world = c.world_mut();
+            let mut sender = world.query_filtered::<&mut MessageSender<RoomRequest>, With<Client>>();
+            sender.single_mut(world).unwrap().send::<Reliable>(RoomRequest::QuickJoin("Waves 8".into()));
+        }
+    };
+    join(&mut clients);
+    // Someone goes down, and is back up while the same wave's on (a lost run is played again).
+    let mut downed: Vec<(Entity, u32)> = Vec::new();
+    let end = Instant::now() + Duration::from_secs(900);
+    loop {
+        assert!(Instant::now() < end, "no one was picked up");
+        step(&mut server, &mut clients);
+        let run = clients[0].world().resource::<CurrentRoom>().0.as_ref().and_then(|r| r.run.clone().filter(|_| r.started));
+        let Some(run) = run else {
+            if clients[0].world().resource::<CurrentRoom>().0.as_ref().is_some_and(|r| !r.started) {
+                join(&mut clients);
+            }
+            continue;
+        };
+        if run.phase != Phase::Fight {
+            continue;
+        }
+        let world = server.world_mut();
+        let now_down: Vec<Entity> = world.query_filtered::<Entity, With<Downed>>().iter(world).collect();
+        for entity in &now_down {
+            if !downed.iter().any(|(e, _)| e == entity) {
+                downed.push((*entity, run.wave));
+            }
+        }
+        let mut alive = world.query::<&Health>();
+        let picked_up = downed.iter().any(|&(e, wave)| wave == run.wave && !now_down.contains(&e) && alive.get(world, e).is_ok_and(|h| h.alive()));
+        if picked_up {
+            break;
+        }
+        downed.retain(|&(_, wave)| wave == run.wave);
     }
 }

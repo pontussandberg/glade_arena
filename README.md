@@ -74,10 +74,10 @@ if someone goes and gets them). Press F (or the banner's button) once you're rea
 comes once everyone is, or when the countdown runs out. A boss leads every fifth wave (The
 Butcher, The Pale Lich, The Grave Lord, round again, tougher each time), and from wave 6 a few
 **elites** come along, bigger, tougher, worth more, and with a twist: Swift, Vampiric, Volatile
-(blows up where it dies), Frostbound or Splitting. The party shares **lives**: a fallen player
-comes back at once while there are lives left; with none, they wait for the wave to be cleared,
-and if everyone is down, the run is over. A boss killed is a life more, and the merchant sells
-more (a Spirit Candle, dearer each time). Shrines (blood-red stones) send you into a frenzy. From
+(blows up where it dies), Frostbound or Splitting. Everyone has **one life**: a fallen player is
+**down** where they fell (marked by a ring of spirit light) until an ally stands over them for 3
+seconds to pick them up, the wave is cleared, or a boss falls; if everyone is down, the run is
+over (alone, the first fall ends it). Shrines (blood-red stones) send you into a frenzy. From
 wave 4, about half the waves come with an **omen**, known while you shop for them: a Horde, a
 Blood Moon (elites everywhere), a Frenzy (every monster hasted), Gilded (double bounties), the
 Restless Dead (who may rise again) or Volatile (everything bursts as it dies).

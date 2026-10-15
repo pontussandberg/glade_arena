@@ -248,13 +248,13 @@ pub(super) fn update_status(
             let _ = write!(text, "   jitter {:.0} ms", ms(link.stats.jitter));
         }
         if me.single().is_ok_and(|h| !h.alive()) {
-            // Against the waves, with no lives left: not until the wave's cleared.
+            // Against the waves, one life a wave: down until picked up, or the wave's cleared.
             let run = room.run();
             let waiting = run.zip(guest).is_some_and(|(run, guest)| run.waiting.contains(&guest.guest_id));
             if waiting {
-                text.push_str("\nYou fell. Back once the wave is cleared.");
+                text.push_str("\nYou're down. An ally standing over you for 3s picks you up; else, back once the wave is cleared.");
             } else if run.is_some() {
-                text.push_str("\nYou fell. The party spends a life: back in a moment.");
+                text.push_str("\nYou fell.");
             } else {
                 let _ = write!(text, "\nYou died. Back in {} seconds.", RESPAWN_TICKS / TICK_HZ as u32);
             }

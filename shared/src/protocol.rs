@@ -389,6 +389,19 @@ pub struct Shopkeeper;
 /// How close to the shopkeeper a player has to be to trade.
 pub const SHOP_RADIUS: f32 = 4.0;
 
+/// A player down in a run against the waves (they have one life a wave), `rescue` of the way
+/// (0 to 1) to being picked back up by an ally standing over them for `REVIVE_TICKS`. Stepping
+/// off loses it. Server-authoritative and replicated: the client marks where they lie, and how
+/// far along their rescue is. Gone once they're back up.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
+pub struct Downed {
+    pub rescue: f32,
+}
+
+/// How close (center to center) an ally has to stand to pick a downed player up, and for how long.
+pub const REVIVE_RADIUS: f32 = 1.6;
+pub const REVIVE_TICKS: u32 = 3 * crate::config::TICK_HZ as u32;
+
 /// What an effect looks like: its color and feel.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
 pub enum FxColor {
@@ -657,8 +670,6 @@ pub enum RoomRequest {
     Sell(u8),
     /// Waves only, between waves: we're ready for the next (or not, again).
     Ready(bool),
-    /// Waves only, near the shopkeeper: a life for the party (`rooms::life_price`).
-    BuyLife,
 }
 
 /// What the server tells a client about guests and rooms.
@@ -707,6 +718,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<crate::items::Satchel>().replicate();
         app.component::<Elite>().replicate();
         app.component::<Shopkeeper>().replicate();
+        app.component::<Downed>().replicate();
         app.component::<Fx>().replicate();
         app.component::<Waygate>().replicate();
         // Others' fighters are interpolated (smooth, a little in the past); our own isn't: it's

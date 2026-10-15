@@ -209,14 +209,12 @@ impl Lobby {
         room.run.as_ref().map(|run| RunView {
             wave: run.wave,
             phase: run.phase_view(now),
-            lives: run.lives,
             enemies_left: run.enemies_left(),
             ready: run.ready.clone(),
             waiting: run.waiting.clone(),
             best: room.best,
             boss: boss_of(run.wave).map(|boss| boss.def().name.clone()),
             omen: run.omen,
-            life_price: life_price(run.lives_bought),
         })
     }
 
@@ -705,20 +703,6 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             let class = near_the_shop(lobby, ctx, link, key)?;
             lobby.guests.get_mut(&link).expect("checked").satchel.buy(item, class)?;
             info!(room = key.0, guest = lobby.guests[&link].id, item = item.name(), level = lobby.guests[&link].satchel.level(item), "bought");
-        }
-        RoomRequest::BuyLife => {
-            let key = room_key.ok_or("You're not in a room")?;
-            near_the_shop(lobby, ctx, link, key)?;
-            let price = lobby.run(key).map_or(0, |run| life_price(run.lives_bought));
-            let satchel = &mut lobby.guests.get_mut(&link).expect("checked").satchel;
-            if satchel.gold < price {
-                return Err("Not enough gold");
-            }
-            satchel.gold -= price;
-            let run = lobby.run_mut(key).expect("near the shop in a run");
-            run.lives += 1;
-            run.lives_bought += 1;
-            info!(room = key.0, guest = lobby.guests[&link].id, price, "bought a life");
         }
         RoomRequest::Sell(slot) => {
             let key = room_key.ok_or("You're not in a room")?;

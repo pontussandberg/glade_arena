@@ -4,9 +4,10 @@
 //! few elites (`Elite`) among the rest, and chests turning up out in the wilds. Clearing a wave
 //! pays everyone, heals and brings back the fallen, and opens the shop again until the next.
 //!
-//! Every kill pays its bounty to the whole party, so no one steals a kill. A fallen player comes
-//! back at once while the party has lives; with none left, they wait for the wave to be cleared,
-//! and if the whole party is down, the run is over. A boss killed is a life more.
+//! Every kill pays its bounty to the whole party, so no one steals a kill. Each player has one
+//! life a wave: a fallen one is down (`Downed`) until an ally stands over them long enough to pick
+//! them up (`revive`), or the wave is cleared, or a boss falls. If the whole party is down, the
+//! run is over: alone, one life is all there is.
 //!
 //! How hard a wave is, and what it's worth, is all in the tuning below.
 
@@ -41,8 +42,6 @@ const CHEST_GOLD_GROWTH: u32 = 10;
 const FIRST_SHOP_TICKS: u32 = 25 * TICK_HZ as u32;
 const SHOP_TICKS: u32 = 30 * TICK_HZ as u32;
 const READY_TICKS: u32 = 3 * TICK_HZ as u32;
-/// Lives a run starts with; a boss killed gives one more.
-const START_LIVES: u32 = 3;
 /// How long a player coming back can't be hurt (nor is gone for), so they're not caught at once,
 /// and how far round them monsters are flung back as they do.
 const SHELTER_TICKS: u32 = 3 * TICK_HZ as u32;
@@ -50,11 +49,10 @@ const REBIRTH_REACH: f32 = 6.0;
 /// How much of their health players in the camp get back a second, in a run, and how often.
 const CAMP_MENDS: f32 = 0.04;
 const MEND_EVERY_TICKS: u32 = TICK_HZ as u32 / 2;
-/// How long a fallen player with a life to spend waits.
-const COMEBACK_TICKS: u32 = 5 * TICK_HZ as u32;
-/// When a fallen player with no life to spend comes back: not until the wave's cleared (or a
-/// life comes along).
+/// When a downed player comes back by themselves: not until the wave's cleared (or a boss falls).
 const UNTIL_CLEARED: u32 = u32::MAX / 2;
+/// How much of their health a player picked up by an ally comes back with.
+const REVIVE_HEALTH: f32 = 0.4;
 /// Every how many waves a boss leads one.
 pub(crate) const BOSS_EVERY: u32 = 5;
 /// How long a lost run's end shows before everyone's back in the lobby.
@@ -133,7 +131,6 @@ fn roll_omen(wave: u32) -> Option<Omen> {
 pub(crate) struct Run {
     pub(crate) wave: u32,
     pub(crate) phase: RunPhase,
-    pub(crate) lives: u32,
     /// What's still to spawn this wave, and when the next pack may.
     budget: f32,
     next_pack_at: u32,
@@ -141,16 +138,16 @@ pub(crate) struct Run {
     boss_out: bool,
     /// Who's ready for the next wave (`Member::guest_id`).
     pub(crate) ready: Vec<u32>,
-    /// Who's down until the wave's cleared (`Member::guest_id`).
+    /// Who's down (`Member::guest_id`), until picked up or the wave's cleared.
     pub(crate) waiting: Vec<u32>,
+    /// A boss fell: the downed get up.
+    raise_fallen: bool,
     /// Monsters about, as last counted.
     alive: u32,
     /// Chests lying out this wave.
     chests: Vec<Entity>,
     /// What's strange about this wave (rolled as the shop opens before it).
     pub(crate) omen: Option<Omen>,
-    /// Lives bought from the merchant this run.
-    pub(crate) lives_bought: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,16 +165,15 @@ impl Run {
         Run {
             wave,
             phase: RunPhase::Shop { until: now + FIRST_SHOP_TICKS },
-            lives: START_LIVES,
             budget: 0.0,
             next_pack_at: 0,
             boss_out: false,
             ready: Vec::new(),
             waiting: Vec::new(),
+            raise_fallen: false,
             alive: 0,
             chests: Vec::new(),
             omen: None,
-            lives_bought: 0,
         }
     }
 
@@ -366,20 +362,12 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now,
             info!(room = key.0, wave, party = size, "a wave comes");
         }
         RunPhase::Fight => {
-            // A life come along (a boss killed, one bought) brings back who's waiting for it.
-            if run.lives > 0 && !run.waiting.is_empty() {
-                for (controlled_by, r, _, _, _, dead) in party.iter_mut() {
-                    let Some(mut dead) = dead.filter(|dead| *r == room && dead.respawn_at >= UNTIL_CLEARED) else { continue };
-                    if run.lives == 0 {
-                        break;
-                    }
-                    run.lives -= 1;
-                    dead.respawn_at = now + COMEBACK_TICKS;
-                    let guest = members.iter().find(|(link, _)| *link == controlled_by.owner).map(|(_, id)| *id);
-                    run.waiting.retain(|id| Some(*id) != guest);
-                }
+            // A boss fell: the downed get up (back at the camp).
+            if std::mem::take(&mut run.raise_fallen) {
+                run.waiting.clear();
+                bring_back(party, room, now);
             }
-            // Lost: everyone in the arena down for the wave (none coming back on a life).
+            // Lost: everyone in the arena down.
             let out = party.iter().filter(|(_, r, ..)| **r == room).all(|(.., dead)| dead.is_some_and(|dead| dead.respawn_at >= UNTIL_CLEARED));
             if !fighters.is_empty() && out {
                 run.phase = RunPhase::Over { reached: wave };
@@ -423,16 +411,10 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now,
             info!(room = key.0, wave, pay, "wave cleared");
             lobby.give_gold(key, pay);
             lobby.note_best(key, wave);
+            bring_back(party, room, now);
             for (_, r, _, mut health, max, dead) in party.iter_mut() {
-                if *r != room {
-                    continue;
-                }
-                match dead {
-                    Some(mut dead) => {
-                        dead.respawn_at = now + 1;
-                        dead.placed = false;
-                    }
-                    None => health.0 = max.0,
+                if *r == room && dead.is_none() {
+                    health.0 = max.0;
                 }
             }
         }
@@ -440,21 +422,51 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now,
     }
 }
 
-/// A player falling in a run: back soon if the party has a life to spend, else not until the
-/// wave's cleared.
-pub(super) fn fall(timeline: Res<LocalTimeline>, mut lobby: ResMut<Lobby>, mut fallen: Query<(&ControlledBy, &InRoom, &mut Dead), Added<Dead>>) {
-    let now = timeline.tick().0;
-    for (controlled_by, room, mut dead) in &mut fallen {
+/// Everyone down in `room` comes back (at the camp, fresh) at once.
+fn bring_back(party: &mut Party, room: InRoom, now: u32) {
+    for (_, r, .., dead) in party.iter_mut() {
+        if let Some(mut dead) = dead.filter(|_| *r == room) {
+            dead.respawn_at = now + 1;
+            dead.placed = false;
+        }
+    }
+}
+
+/// A player falling in a run is down where they fell: until an ally picks them up (`revive`), or
+/// the wave's cleared (`run_waves` brings them back).
+pub(super) fn fall(mut commands: Commands, mut lobby: ResMut<Lobby>, mut fallen: Query<(Entity, &ControlledBy, &InRoom, &mut Dead), Added<Dead>>) {
+    for (player, controlled_by, room, mut dead) in &mut fallen {
         let guest = lobby.guest_id(controlled_by.owner);
         let Some(run) = lobby.run_mut(room.key).filter(|run| run.phase == RunPhase::Fight) else { continue };
-        if run.lives > 0 {
-            run.lives -= 1;
-            dead.respawn_at = now + COMEBACK_TICKS;
-        } else {
-            // Until the wave's cleared (`run_waves` brings them back).
-            dead.respawn_at = UNTIL_CLEARED;
-            run.waiting.extend(guest);
+        dead.respawn_at = UNTIL_CLEARED;
+        run.waiting.extend(guest);
+        commands.entity(player).insert(Downed::default());
+    }
+}
+
+/// Allies pick each other up: one standing over a downed player (`REVIVE_RADIUS`) fills their
+/// rescue, and after `REVIVE_TICKS` of it they're back on their feet where they lay, with some
+/// health. Stepping off loses it.
+pub(super) fn revive(
+    mut commands: Commands,
+    mut lobby: ResMut<Lobby>,
+    mut downed: Query<(Entity, &ControlledBy, &InRoom, &Pos, &mut Downed, &mut Health, &MaxHealth), With<Dead>>,
+    rescuers: Query<(&InRoom, &Pos), (With<ControlledBy>, InPlay)>,
+) {
+    for (player, controlled_by, room, pos, mut down, mut health, max) in &mut downed {
+        let rescued = rescuers.iter().any(|(r, p)| r == room && p.0.distance(pos.0) <= REVIVE_RADIUS);
+        let rescue = if rescued { (down.rescue + 1.0 / REVIVE_TICKS as f32).min(1.0) } else { 0.0 };
+        down.set_if_neq(Downed { rescue });
+        if rescue < 1.0 {
+            continue;
         }
+        health.0 = (max.0 as f32 * REVIVE_HEALTH).round() as i32;
+        commands.entity(player).remove::<Dead>();
+        let guest = lobby.guest_id(controlled_by.owner);
+        if let Some(run) = lobby.run_mut(room.key) {
+            run.waiting.retain(|id| Some(*id) != guest);
+        }
+        info!(room = room.key.0, ?guest, "picked back up");
     }
 }
 
@@ -480,6 +492,7 @@ pub(super) fn shelter(
     let now = timeline.tick().0;
     for player in back.read() {
         let Ok((room, at)) = players.get(player) else { continue };
+        commands.entity(player).try_remove::<Downed>();
         if !lobby.run_on(room.key) {
             continue;
         }
@@ -510,7 +523,8 @@ pub(super) fn shelter(
     }
 }
 
-/// A monster killed pays its bounty to the party (more on a Gilded wave); a boss, a life more.
+/// A monster killed pays its bounty to the party (more on a Gilded wave); a boss brings the
+/// downed back.
 /// On a Restless wave, the dead may rise again (once).
 pub(super) fn pay_bounties(timeline: Res<LocalTimeline>, mut commands: Commands, mut lobby: ResMut<Lobby>, killed: Query<(Entity, &Mob, &InRoom, &Pos, &ClassId, Option<&Might>), Added<Dead>>) {
     let now = timeline.tick().0;
@@ -531,7 +545,7 @@ pub(super) fn pay_bounties(timeline: Res<LocalTimeline>, mut commands: Commands,
         }
         if boss {
             if let Some(run) = lobby.run_mut(room.key) {
-                run.lives += 1;
+                run.raise_fallen = true;
             }
             info!(room = room.key.0, boss = class.def().name, "a boss falls");
             spawn_fx(&mut commands, *room, Fx::at(FxKind::Coins, pos.0, 3.0, now, 40));

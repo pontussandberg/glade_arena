@@ -1,6 +1,7 @@
 //! A simple sparring bot: drives `DesiredInput` instead of the mouse. Melee classes chase the
 //! nearest enemy and swing; ranged classes keep their distance and shoot. It steps out of what's
-//! about to land on it (a bomb's circle, a monster's swing winding up in reach). It clicks to attack
+//! about to land on it (a bomb's circle, a monster's swing winding up in reach), and picks up an
+//! ally who's down when no foe is near. It clicks to attack
 //! whenever it's in range (the server drops clicks until its last attack is done), and stands
 //! still while one winds up, since moving would cancel it. Turn it on with
 //! `ARENA_BOT=1` (native client) to have someone to fight when testing alone. Against the waves,
@@ -22,6 +23,8 @@ const MELEE_LEAD: f32 = 0.6;
 /// How far out of a bomb's circle or a swing's reach the bot wants to be, and how far it steps
 /// to get there.
 const DODGE_MARGIN: f32 = 0.6;
+/// How far the nearest foe must be for the bot to go and pick up an ally.
+const RESCUE_SAFE: f32 = 5.0;
 const DODGE_STEP: f32 = 3.0;
 
 /// Present when this client is played by the bot.
@@ -45,6 +48,7 @@ fn think(
     // Not the shopkeeper: no one can hurt them.
     others: Query<(&PlayerId, &Pos, &Health, Option<&Team>, (&ClassId, &AttackState)), (Without<Me>, Without<Shopkeeper>)>,
     warnings: Query<&Fx>,
+    downed: Query<(&Pos, Option<&Team>), (With<Downed>, Without<Me>)>,
     mut desired: ResMut<DesiredInput>,
     map: Res<CurrentMap>,
 ) {
@@ -88,6 +92,19 @@ fn think(
         (Some(current), Some(new)) if (new - current).abs().max_element() < 2.0 => Some(current),
         _ => wanted,
     };
+    // An ally down, with no foe near: go and pick them up (stand over them).
+    let fallen = downed
+        .iter()
+        .filter(|(_, team)| my_team.zip(*team).is_some_and(|(mine, theirs)| mine.allied(*theirs)))
+        .map(|(p, _)| p.0)
+        .min_by(|a, b| a.distance(me.0).total_cmp(&b.distance(me.0)));
+    if let Some(fallen) = fallen
+        && distance > RESCUE_SAFE
+    {
+        let move_to = (fallen.distance(me.0) > REVIVE_RADIUS * 0.5).then(|| map.walk_target(fallen, 2)).flatten();
+        desired.0 = PlayerInput { move_to, aim: to_target, ..default() };
+        return;
+    }
     // Something about to land on us: step away from it, unless we're winding up ourselves.
     let foe = |team: Option<&Team>| !my_team.zip(team).is_some_and(|(mine, theirs)| mine.allied(*theirs));
     let bomb = warnings
