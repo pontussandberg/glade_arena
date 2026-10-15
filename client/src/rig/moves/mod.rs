@@ -8,6 +8,8 @@ mod revenant;
 use revenant::*;
 mod frost_mage;
 use frost_mage::*;
+mod zombie;
+use zombie::*;
 
 /// How a rigged class moves. Keyframes are (carrying, fully drawn back, released, dashing),
 /// radians. Limbs: positive swings forward. Twist: negative turns the weapon (right, +Z)
@@ -113,6 +115,7 @@ pub(crate) fn moves(class_key: &str) -> &'static Moves {
         "javelinist" => &JAVELINIST,
         "revenant" => &REVENANT,
         "frost_mage" => &FROST_MAGE,
+        "zombie" => &ZOMBIE,
         _ => unreachable!("no moves for class {class_key:?}"),
     }
 }

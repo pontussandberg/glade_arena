@@ -99,6 +99,28 @@ pub(super) fn carried_javelin() -> Mesh {
 /// its breadth there, from where it narrows into the socket to the point.
 const SPEAR_BLADE: [(f32, f32, f32); 7] = [(0.62, 0.016, 0.028), (0.58, 0.018, 0.062), (0.5, 0.018, 0.084), (0.36, 0.017, 0.08), (0.2, 0.014, 0.06), (0.07, 0.008, 0.03), (0.0, 0.0, 0.0)];
 
+/// What glows on the held javelin while its next throw is primed (Deadeye): a thin, sharp shell
+/// of light hugging its blade, running on a little past the point to a finer one, in the
+/// spear's space (`held_spear`).
+pub(super) fn spear_aura() -> Mesh {
+    /// How far past the blade's point the light's own point reaches.
+    const PAST_POINT: f32 = 0.06;
+    let point = SPEAR_BLADE.len() - 1;
+    let sections: Vec<Section> = SPEAR_BLADE
+        .iter()
+        .enumerate()
+        .map(|(i, &(back, depth, width))| {
+            let (y, half) = if i == point {
+                (GRIP_TO_TIP + PAST_POINT, Vec2::ZERO)
+            } else {
+                (GRIP_TO_TIP - back, Vec2::new(depth * 1.15 + 0.002, width * 1.1 + 0.003))
+            };
+            Section::new(Vec3::Y * y, half, Color::WHITE).squared(1.0).exact()
+        })
+        .collect();
+    faceted(tube(&sections, 4, (true, false)))
+}
+
 /// A point `t` (0..1, from the base of its blade to its point) along an edge of the javelin
 /// held (`held_spear`), in the spear's space: its right one (the left mirrors it across Z).
 pub fn spear_edge(t: f32) -> Vec3 {
@@ -127,8 +149,12 @@ pub(super) fn javelinist_body() -> Mesh {
                 ring(0.0, 0.84, (0.145, 0.18), palette::HUNTER),
                 ring(0.01, 0.98, (0.152, 0.192), palette::HUNTER),
                 ring(0.018, 1.13, (0.16, 0.225), palette::HUNTER).squared(2.4),
-                ring(0.005, 1.3, (0.145, 0.25), palette::HUNTER).squared(2.8),
-                ring(-0.01, 1.41, (0.11, 0.19), palette::HUNTER).squared(2.2),
+                // The shoulders and clavicles: broad and level out to the arms before turning up
+                // into the neck, set a little to the right (+Z), its throwing side, more
+                // muscled; the empty left still square over its clavicle.
+                shoulder(0.005, 1.3, (0.15, 0.272)),
+                shoulder(-0.008, 1.4, (0.12, 0.25)).squared(3.4),
+                ring(-0.01, 1.455, (0.09, 0.15), palette::HUNTER).squared(2.2),
                 ring(-0.01, 1.49, (0.075, 0.1), palette::HUNTER_DARK),
                 ring(-0.01, 1.57, (0.07, 0.095), palette::HUNTER_DARK),
             ],
@@ -176,6 +202,13 @@ pub(super) fn javelinist_body() -> Mesh {
         (true, true),
     ));
     sculpted(parts)
+}
+
+/// A section of the executioner's torso at the shoulders (`ring`'s, `half` across), set toward
+/// its right (+Z) side: that side broader, more muscled from the throwing.
+fn shoulder(x: f32, y: f32, half: (f32, f32)) -> Section {
+    const RIGHT_SIDE: f32 = 0.014;
+    Section::new(Vec3::new(x, y, RIGHT_SIDE), Vec2::new(half.0, half.1), palette::HUNTER).squared(2.8)
 }
 
 /// A long knife sheathed in dark leather, hung straight down from the executioner's belt at the
@@ -269,19 +302,20 @@ fn mantle_point(u: f32, v: f32, ragged: bool) -> Vec3 {
     type Profile = [(f32, f32, f32, f32); 6];
     const OVER_ARM: Profile = [
         (0.0, 0.16, 0.19, 1.49),
-        (0.18, 0.17, 0.245, 1.468),
-        (0.36, 0.182, 0.315, 1.43),
-        (0.52, 0.19, 0.355, 1.372),
-        (0.7, 0.195, 0.372, 1.3),
-        (1.0, 0.198, 0.378, 1.19),
+        (0.18, 0.172, 0.272, 1.47),
+        (0.36, 0.184, 0.345, 1.435),
+        (0.52, 0.192, 0.38, 1.375),
+        (0.7, 0.197, 0.394, 1.3),
+        (1.0, 0.2, 0.4, 1.19),
     ];
+    // The empty side keeps its clavicle: nearly as broad, falling a little sooner.
     const EMPTY: Profile = [
         (0.0, 0.16, 0.19, 1.49),
-        (0.18, 0.168, 0.228, 1.462),
-        (0.36, 0.178, 0.262, 1.42),
-        (0.52, 0.185, 0.285, 1.37),
-        (0.7, 0.19, 0.3, 1.3),
-        (1.0, 0.193, 0.312, 1.19),
+        (0.18, 0.17, 0.258, 1.466),
+        (0.36, 0.18, 0.308, 1.427),
+        (0.52, 0.187, 0.33, 1.372),
+        (0.7, 0.192, 0.342, 1.3),
+        (1.0, 0.195, 0.35, 1.19),
     ];
     let at = |profile: &Profile| {
         let i = profile.iter().rposition(|p| p.0 <= v).unwrap_or(0).min(profile.len() - 2);
@@ -350,13 +384,14 @@ pub(super) fn javelinist_wardrobe() -> Wardrobe {
 
     Wardrobe {
         drapes,
-        trim: palette::SOUL,
+        // The hem glows with Deadeye's light.
+        trim: palette::DEADEYE,
         body: vec![
             Column { center: Vec2::ZERO, half: Vec2::new(0.152, 0.192), from: 0.3, to: 1.05, round: 2.0 },
             // The chest and shoulders, under the cowl, as squared off as the tunic there (and a
             // little more, for the cowl's own thickness).
             Column { center: Vec2::new(0.015, 0.0), half: Vec2::new(0.175, 0.24), from: 1.05, to: 1.22, round: 2.4 },
-            Column { center: Vec2::new(0.0, 0.0), half: Vec2::new(0.16, 0.26), from: 1.22, to: 1.45, round: 2.8 },
+            Column { center: Vec2::new(0.0, 0.014), half: Vec2::new(0.165, 0.285), from: 1.22, to: 1.45, round: 3.0 },
         ],
         leg_radius: 0.125,
         // The cowl lies on the top of the arm.

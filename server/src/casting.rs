@@ -2,7 +2,7 @@
 
 use super::*;
 
-use arena_shared::abilities::{self, AbilityDef, Cast, dash};
+use arena_shared::abilities::{self, AbilityDef, AbilityKind, Cast, CastOrder, dash};
 
 use crate::rooms::{InRoom, Lobby};
 
@@ -13,7 +13,7 @@ pub(super) struct DashHits(pub(super) u32, pub(super) Vec<PeerId>);
 
 /// Abilities (`abilities::step`). Thrown ones are spawned. Dashes cut whoever the dasher passes
 /// through, each target once per dash; a rooted dasher cuts no one (its dash stops). Novas hit
-/// everyone around the caster. A key press is used up after the tick, whether or not the
+/// everyone around the caster. A prime readies the next auto-attack. A key press is used up after the tick, whether or not the
 /// ability was ready (`use_up_clicks`, as in League); a dash drops the destination like an
 /// attack does.
 pub(super) fn use_abilities(
@@ -21,7 +21,7 @@ pub(super) fn use_abilities(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut users: Query<
-        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, (&mut Cooldowns, &mut Dashing), &mut DashHits, (&InRoom, &Team)),
+        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, (&mut Cooldowns, &mut Dashing), &mut DashHits, (&InRoom, &Team), &mut AttackState),
         InPlay,
     >,
     mut targets: Targets,
@@ -30,14 +30,14 @@ pub(super) fn use_abilities(
     // Read up front: `targets` holds every player's `Chilled` mutably. A root or slow landing
     // during this loop starts next tick anyway.
     let chills: Vec<(PeerId, Chilled)> = targets.iter().map(|(_, id, .., chilled, _)| (id.0, *chilled)).collect();
-    for (id, class, pos, mut input, (mut cooldowns, mut dashing), mut hits, (room, team)) in &mut users {
+    for (id, class, pos, mut input, (mut cooldowns, mut dashing), mut hits, (room, team), mut attack) in &mut users {
         let side = (*room, *team);
         let map = lobby.map(room);
         let chilled = chills.iter().find(|(p, _)| *p == id.0).map(|(_, c)| *c).unwrap_or_default();
         // What a hit by `ability` does, and its name for the log.
         let blow = |ability: &'static AbilityDef| {
             let effect = ability.kind.effect();
-            (Blow { amount: effect.damage, chill: effect.chill, can_crit: false }, (id.0, *class, ability.name.as_str()))
+            (Blow::ability(effect.damage, effect.chill), (id.0, *class, ability.name.as_str()))
         };
         // Cut whoever this tick's dash step reached (`move_players` just made it). Checked before
         // the abilities step, which ends the dash on its last tick: so every step is checked, the
@@ -59,7 +59,22 @@ pub(super) fn use_abilities(
             });
         }
         let (mut next_cooldowns, mut next_dashing) = (*cooldowns, *dashing);
-        let casts = abilities::step(now.0, id.0, *class, pos.0, &input, &chilled, &mut next_cooldowns, &mut next_dashing);
+        // Pressing the prime again while an attack is primed calls it off: the next attack (or the
+        // one winding up) is plain again, and no cooldown starts.
+        let mut orders = *input;
+        if let Some((_, speed)) = attack.primed {
+            let primes = |order: &CastOrder| matches!(class.def().ability(order.slot).map(|ability| ability.kind), Some(AbilityKind::Prime(_)));
+            if orders.casts().any(|order| primes(&order)) {
+                let winding_up = !attack.released();
+                attack.primed = None;
+                if let Some(swing) = attack.swing.as_mut().filter(|swing| swing.primed && winding_up) {
+                    swing.primed = false;
+                    swing.haste -= speed;
+                }
+            }
+            orders.casts = orders.casts.map(|order| order.filter(|order| !primes(order)));
+        }
+        let casts = abilities::step(now.0, id.0, *class, pos.0, &orders, &chilled, &mut next_cooldowns, &mut next_dashing);
         // Only on change: both are replicated.
         cooldowns.set_if_neq(next_cooldowns);
         dashing.set_if_neq(next_dashing);
@@ -67,6 +82,15 @@ pub(super) fn use_abilities(
             match cast {
                 Cast::Throw(projectile) => spawn_projectile(&mut commands, projectile, side),
                 Cast::Dash => input.move_to = None,
+                Cast::Prime { slot, prime } => {
+                    attack.primed = Some((slot, prime.attack_speed));
+                    // Pressed with the click that started an attack this tick (`attack` runs
+                    // first): that's the attack it primes.
+                    if let Some(swing) = attack.swing.as_mut().filter(|swing| swing.started_at == now.0 && !swing.primed) {
+                        swing.primed = true;
+                        swing.haste += prime.attack_speed;
+                    }
+                }
                 Cast::Nova { ability, nova } => {
                     let (blow, with) = blow(ability);
                     hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |_, at| nova.hits(map, pos.0, at));

@@ -42,12 +42,16 @@ pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, mut s
     let mut released = None;
     if let Some(Swing { dir, quick, .. }) = state.winding_up().filter(|swing| tick >= swing.releases_at(&class.def().attack)) {
         state.released_at = Some(tick);
-        // An attack going off uses up the `follow_up` (one cancelled first doesn't).
+        // An attack going off uses up the `follow_up` (one cancelled first doesn't), and a
+        // primed one the prime.
         state.quick_until = None;
+        if state.swing.is_some_and(|swing| swing.primed) {
+            state.primed = None;
+        }
         released = Some(match class.def().attack.kind {
             AttackKind::Projectile { radius, .. } => {
                 let origin = shot_spawn(pos, dir, radius);
-                Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: None })
+                Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: None, crit: false })
             }
             AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir, empowered: quick }),
         });
@@ -59,13 +63,21 @@ pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, mut s
 }
 
 /// `step_attack`'s second half: a new attack starting, if clicked for and none is in progress.
-pub fn start_attack(tick: u32, class: ClassId, input: &PlayerInput, mut state: AttackState) -> AttackState {
+pub fn start_attack(tick: u32, class: ClassId, input: &PlayerInput, state: AttackState) -> AttackState {
+    start_attack_hasted(tick, class, input, state, 0.0)
+}
+
+/// `start_attack`, a new attack `haste` faster (0.1 = 10% more attack speed) all through, and
+/// faster still if it's primed.
+pub fn start_attack_hasted(tick: u32, class: ClassId, input: &PlayerInput, mut state: AttackState, haste: f32) -> AttackState {
     let ready = state.swing.is_none_or(|swing| tick >= swing.ready_at(&class.def().attack));
     if ready
         && input.fire
         && let Some(dir) = input.aim.try_normalize()
     {
-        state.swing = Some(Swing { started_at: tick, dir, quick: state.quick_at(tick as f32), hastened: false });
+        let primed = state.primed.is_some();
+        let haste = haste + state.primed.map_or(0.0, |(_, speed)| speed);
+        state.swing = Some(Swing { started_at: tick, dir, quick: state.quick_at(tick as f32), hastened: false, haste, primed });
     }
     state
 }

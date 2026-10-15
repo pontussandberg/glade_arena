@@ -2,6 +2,8 @@
 //!
 //! - MOBA-style (the one played with): locked on your fighter, looking down from above; the
 //!   wheel zooms (in a narrow range, so you never see much farther than the fight around you).
+//!   Y (or the lock by the minimap) unlocks it: it stays where it is, and the cursor against an
+//!   edge of the screen pans it; locked again, it's back on your fighter.
 //! - Free (WoW-style), a practice tool for looking at fighters (`practice`, which switches
 //!   `CameraMode::free`): follows behind your fighter; hold the right mouse button and drag (or the
 //!   arrow keys) to turn it, wheel (or + / -) to zoom, down to arm's length to look at fighters up
@@ -20,8 +22,14 @@ use crate::arena;
 /// Camera direction and distance at zoom 1.0: 28 m up, 19 m back from the point it looks at
 /// (about 56° down).
 pub(crate) const OFFSET: Vec3 = Vec3::new(0.0, 28.2, 19.0);
-/// How far in and out the MOBA camera zooms.
-const ZOOM_RANGE: (f32, f32) = (0.3, 0.91);
+/// How far in and out the MOBA camera zooms, and how far out it may with its zoom uncapped
+/// (practice's tool, `CameraMode::uncapped`).
+const ZOOM_RANGE: (f32, f32) = (0.3, 0.819);
+const ZOOM_UNCAPPED: f32 = 1.6;
+/// The unlocked camera: how close to the screen's edge the cursor pans it (pixels), and how fast
+/// (meters per second, at zoom 1.0: further out, faster).
+const EDGE_PX: f32 = 18.0;
+const PAN_SPEED: f32 = 26.0;
 
 /// The free camera: how far it stays (meters), the height it looks at on a fighter, the pitch it
 /// can turn between (radians above the horizon), how fast dragging turns it (radians per pixel)
@@ -76,6 +84,11 @@ impl Orbit {
 #[derive(Resource)]
 pub struct CameraMode {
     pub free: bool,
+    /// The MOBA camera zooms out past `ZOOM_RANGE`, to `ZOOM_UNCAPPED` (practice only).
+    pub uncapped: bool,
+    /// The MOBA camera is off your fighter: it stays put, panned by the cursor at the screen's
+    /// edges. Locked (following you) to begin with.
+    pub unlocked: bool,
     orbit: Orbit,
     /// Whom the free camera follows instead of you (Tab), if anyone.
     watching: Option<Entity>,
@@ -87,7 +100,7 @@ pub struct CameraMode {
 
 impl Default for CameraMode {
     fn default() -> Self {
-        CameraMode { free: false, orbit: Orbit { yaw: 0.0, pitch: 0.45, distance: 9.0 }, watching: None, dragged: 0.0, grabbed_at: None }
+        CameraMode { free: false, uncapped: false, unlocked: false, orbit: Orbit { yaw: 0.0, pitch: 0.45, distance: 9.0 }, watching: None, dragged: 0.0, grabbed_at: None }
     }
 }
 
@@ -122,10 +135,11 @@ impl Plugin for CameraPlugin {
         );
         app.add_systems(Startup, spawn_camera);
         app.add_systems(Update, place_camera.after(CameraMoves).before(CameraPlaced));
+        app.add_systems(OnEnter(crate::rooms::Screen::InGame), relock_camera);
         app.add_systems(
             Update,
             (
-                (switch_camera, next_fighter).chain(),
+                (switch_camera, next_fighter, lock_camera).chain(),
                 move_camera.run_if(|mode: Res<CameraMode>| !mode.free),
                 follow_camera.run_if(|mode: Res<CameraMode>| mode.free),
             )
@@ -276,20 +290,60 @@ fn follow_camera(
     camera.set_if_neq(mode.orbit.transform(target.translation.with_y(FREE_AIM_HEIGHT)));
 }
 
+/// Y in the arena locks or unlocks the MOBA camera (the lock by the minimap does too).
+fn lock_camera(keys: Res<ButtonInput<KeyCode>>, screen: Res<State<crate::rooms::Screen>>, mut mode: ResMut<CameraMode>) {
+    if *screen.get() == crate::rooms::Screen::InGame && keys.just_pressed(KeyCode::KeyY) {
+        mode.unlocked = !mode.unlocked;
+    }
+}
+
+/// Into the arena, the camera is locked on your fighter again.
+fn relock_camera(mut mode: ResMut<CameraMode>) {
+    if mode.unlocked {
+        mode.unlocked = false;
+    }
+}
+
 /// The MOBA camera: on your fighter (or the middle of the map until it appears), zoomed by the
-/// wheel.
+/// wheel; unlocked, it stays put, panned by the cursor at the screen's edges (not while it's on a
+/// HUD control or the minimap there), within the map.
+#[allow(clippy::too_many_arguments)]
 fn move_camera(
+    time: Res<Time>,
     scroll: Res<AccumulatedMouseScroll>,
+    mode: Res<CameraMode>,
+    map: Res<crate::rooms::CurrentMap>,
+    window: Option<Single<&Window>>,
+    hud: Query<
+        (&ComputedNode, &UiGlobalTransform, &InheritedVisibility),
+        Or<(With<crate::render::HudButton>, With<crate::minimap::Minimap>)>,
+    >,
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     camera: Single<(&mut Transform, &mut CameraRig)>,
 ) {
     let (mut transform, mut rig) = camera.into_inner();
-    if let Ok(me) = me.single() {
-        rig.focus = arena::to_world(me.0, 0.0);
+    let on_hud = |at: Vec2| hud.iter().any(|(node, place, visible)| visible.get() && node.contains_point(*place, at));
+    if !mode.unlocked {
+        if let Ok(me) = me.single() {
+            rig.focus = arena::to_world(me.0, 0.0);
+        }
+    } else if let Some(window) = window
+        && let Some(cursor) = window.cursor_position()
+        && !window.physical_cursor_position().is_some_and(on_hud)
+    {
+        // Screen right is the world's +X, screen down its +Z (the camera looks down from +Z).
+        let size = window.size();
+        let push = |at: f32, far: f32| if at < EDGE_PX { -1.0 } else if at > far - EDGE_PX { 1.0 } else { 0.0 };
+        let pan = Vec3::new(push(cursor.x, size.x), 0.0, push(cursor.y, size.y));
+        let step = pan.normalize_or_zero() * PAN_SPEED * rig.zoom * time.delta_secs();
+        let half = map.map().half_extents();
+        let moved = rig.focus + step;
+        rig.focus = Vec3::new(moved.x.clamp(-half.x, half.x), 0.0, moved.z.clamp(-half.y, half.y));
     }
 
     let notches = wheel_notches(&scroll);
-    rig.zoom = (rig.zoom - notches * 0.08).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
+    let farthest = if mode.uncapped { ZOOM_UNCAPPED } else { ZOOM_RANGE.1 };
+    rig.zoom = (rig.zoom - notches * 0.08).clamp(ZOOM_RANGE.0, farthest);
 
     *transform = Transform::from_translation(rig.focus + OFFSET * rig.zoom).looking_at(rig.focus, Vec3::Y);
 }

@@ -8,12 +8,30 @@ use arena_shared::sim;
 
 use crate::rooms::{InRoom, Lobby};
 
-/// What a hit does: damage, and crowd control on top. Only an auto-attack's `can_crit`.
+/// What a hit does: damage, and crowd control on top. Only an auto-attack can crit: its
+/// `crit_roll`, rolled once for the whole attack, so a swing that crits crits everyone it hits
+/// (each target still judged against its own odds: frozen or not). `empowered` by the attack's
+/// `follow_up`, its odds are better (`Crit::empowered`); primed (`AttackState::primed`), it's a
+/// `sure_crit`.
 #[derive(Clone, Copy)]
 pub(super) struct Blow {
     pub(super) amount: i32,
     pub(super) chill: Chill,
-    pub(super) can_crit: bool,
+    pub(super) crit_roll: Option<f32>,
+    pub(super) empowered: bool,
+    pub(super) sure_crit: bool,
+}
+
+impl Blow {
+    /// An auto-attack's blow, its crit rolled (a `primed` one's sure).
+    pub(super) fn attack(amount: i32, chill: Chill, empowered: bool, primed: bool) -> Blow {
+        Blow { amount, chill, crit_roll: Some(fastrand::f32()), empowered, sure_crit: primed }
+    }
+
+    /// An ability's: never a crit.
+    pub(super) fn ability(amount: i32, chill: Chill) -> Blow {
+        Blow { amount, chill, crit_roll: None, empowered: false, sure_crit: false }
+    }
 }
 
 /// Who dealt a hit, of which class (whose crit odds it rolls), and `with` what (for the log).
@@ -38,7 +56,12 @@ pub(super) fn damage(
     blow: Blow,
     (by, class, with): Attacker,
 ) {
-    let crit = blow.can_crit && fastrand::f32() < class.def().crit.chance_against(chilled.rooted_at(now));
+    // Killed already this tick (its `Dead` is still a command to apply): later hits do nothing,
+    // so the kill stays the first killer's.
+    if health.0 == 0 {
+        return;
+    }
+    let crit = blow.sure_crit || blow.crit_roll.is_some_and(|roll| roll < class.def().crit.chance_against(chilled.rooted_at(now), blow.empowered));
     let amount = if crit { (blow.amount as f32 * common().crit_multiplier).round() as i32 } else { blow.amount };
     health.0 = (health.0 - amount).max(0);
     hits.push(amount, if crit { HitKind::Crit } else { HitKind::Damage });
@@ -48,7 +71,7 @@ pub(super) fn damage(
     debug!(target: "arena_server", attacker = ?by, victim = ?id, with, amount, crit, health = health.0, "hit");
     if health.0 == 0 {
         info!(target: "arena_server", killer = ?by, victim = ?id, with, "kill");
-        commands.entity(player).insert(Dead { respawn_at: now + RESPAWN_TICKS, placed: false });
+        commands.entity(player).insert(Dead { respawn_at: now + RESPAWN_TICKS, placed: false, killer: by });
     }
 }
 
@@ -81,7 +104,9 @@ pub(super) fn hit_foes(
 ) -> usize {
     let mut count = 0;
     for (target, target_id, (room, team), target_pos, mut health, mut chilled, mut recent) in targets {
-        if target_id.0 != attacker.0 && foes(side, (*room, *team)) && hits(target_id.0, target_pos.0) {
+        // One killed already this tick (`damage`) isn't hit: a swing that only struck a body
+        // didn't land.
+        if health.0 > 0 && target_id.0 != attacker.0 && foes(side, (*room, *team)) && hits(target_id.0, target_pos.0) {
             damage(commands, now, (target, target_id.0), (&mut health, &mut chilled, &mut recent), blow, attacker);
             count += 1;
         }
@@ -99,26 +124,36 @@ pub(super) fn attack(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut attackers: Query<
-        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team)),
+        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), &Frenzy, &mut Cooldowns),
         InPlay,
     >,
     mut targets: Targets,
     mut rifts: ResMut<Rifts>,
 ) {
     let now = timeline.tick();
-    for (id, class, pos, mut input, mut state, mut last_swing, (room, team)) in &mut attackers {
+    for (id, class, pos, mut input, mut state, mut last_swing, (room, team), frenzy, mut cooldowns) in &mut attackers {
         let side = (*room, *team);
+        // A primed attack going off this tick is a sure crit (`primer`: the ability that readied it).
+        let primer = state.primed.filter(|_| state.winding_up().is_some_and(|swing| swing.primed)).map(|(slot, _)| slot);
+        let primed = primer.is_some();
         // In two halves (`sim::step_attack`): a swing that lands arms a quick attack in between.
         let (mut next, released) = sim::release_attack(now.0, id.0, *class, pos.0, *state);
+        // The prime that readied it is used up now: its cooldown starts.
+        if released.is_some()
+            && let Some(slot) = primer
+            && let Some(ability) = class.def().ability(slot)
+        {
+            cooldowns.start_own(slot, ability, now.0);
+        }
         match released {
             None => {}
-            Some(sim::Attack::Projectile(projectile)) => spawn_projectile(&mut commands, projectile, side),
+            Some(sim::Attack::Projectile(projectile)) => spawn_projectile(&mut commands, Projectile { crit: primed, ..projectile }, side),
             Some(sim::Attack::Melee(swing)) => {
                 *last_swing = swing;
                 if let Some(rift) = sim::Rift::torn(id.0, *class, pos.0, &swing) {
                     rifts.0.push((*room, rift));
                 }
-                let blow = Blow { amount: class.def().attack.damage, chill: class.def().attack.chill, can_crit: true };
+                let blow = Blow::attack(class.def().attack.damage, class.def().attack.chill, swing.empowered, primed);
                 let with = (id.0, *class, "auto-attack");
                 let landed = hit_foes(&mut commands, now.0, &mut targets, with, side, blow, |_, at| {
                     sim::melee_hits(lobby.map(room), pos.0, swing.dir, swing.empowered, *class, at)
@@ -134,7 +169,8 @@ pub(super) fn attack(
                 }
             }
         }
-        let next = sim::start_attack(now.0, *class, &input, next);
+        // A frenzy speeds up the attack it starts, all through.
+        let next = sim::start_attack_hasted(now.0, *class, &input, next, frenzy.at(now.0 as f32));
         if next.swing.is_some_and(|w| w.started_at == now.0) {
             input.move_to = None;
         }

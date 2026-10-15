@@ -127,7 +127,10 @@ fn commands_round_trip_and_server_authoritative_hits() {
     let damaged = server_player(&mut h.server, B).1;
     let attack = &class_id(A_CLASS).def().attack;
     let (near, far) = (attack.damage_at(0.0), attack.damage_at(f32::INFINITY));
-    assert!((near..=far).contains(&(max - damaged)), "dealt {} (expected {near}..={far})", max - damaged);
+    // Or a crit of it: the class has crit odds.
+    let crit = |amount: i32| (amount as f32 * arena_shared::classes::common().crit_multiplier).round() as i32;
+    let dealt = max - damaged;
+    assert!((near..=far).contains(&dealt) || (crit(near)..=crit(far)).contains(&dealt), "dealt {dealt} (expected {near}..={far}, or a crit of it)");
     h.until(Duration::from_secs(2), "damage replicated to both clients", |h| {
         client_view(&mut h.b, B).unwrap().1 == Some(damaged)
             && client_view(&mut h.a, B).unwrap().1 == Some(damaged)

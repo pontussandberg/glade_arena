@@ -1,7 +1,9 @@
 //! Shots in flight: where each is drawn every frame (`fly_shots`), and a thrown spear's hand-off
-//! from the hand, its curve onto its real path and its rubbery wind.
+//! from the hand, its curve onto its real path and the wake of wind it leaves behind.
 
 use super::*;
+
+use bevy::light::NotShadowCaster;
 
 use arena_shared::sim;
 
@@ -29,24 +31,33 @@ const CONVERGE_METERS: f32 = 7.0;
 /// is already meters ahead of the hand. A spear never starts more than this far (meters) behind
 /// it; beyond that (a very high ping) the rest is skipped.
 const MAX_CATCH_UP: f32 = 8.0;
-/// Where a thrown spear's wind starts (just behind its butt) and how long it gets.
-pub(super) const WIND_FRONT: f32 = arena::SPEAR_LENGTH;
-const WIND_LENGTH: f32 = 2.4;
-/// The wind's rubber: its spring (stiffness rad/s, damping; loose, so it overshoots), and how
-/// much and how often (per second) it pulses.
-const RUBBER_STIFFNESS: f32 = 14.0;
-const RUBBER_DAMPING: f32 = 0.3;
-const RUBBER_PULSE: f32 = 0.18;
-const RUBBER_RATE: f32 = 3.5;
+/// How long a piece of the wake stays where it was left (seconds), and how much of that it keeps
+/// its full width before thinning away to nothing.
+const WAKE_SECONDS: f32 = 0.32;
+const WAKE_HOLDS: f32 = 0.35;
+/// How far the spear's point gets from where it left the hand before it leaves any wake: none
+/// in the thrower's face.
+const WAKE_AFTER: f32 = 1.0;
 
 /// A thrown spear as drawn: it leaves the thrower's hand where the javelin was held, then eases
-/// onto its real path (`fly_shots`), trailing its wind (a child entity).
+/// onto its real path (`fly_shots`), leaving a wake of wind behind it (`Wake`), in `wake`'s
+/// material.
 #[derive(Component)]
 pub(super) struct Thrown {
-    pub(super) wind: Entity,
     pub(super) launch: Option<Launch>,
-    /// The wind's length, on a loose spring.
-    pub(super) length: crate::spring::Spring,
+    pub(super) wake: Handle<StandardMaterial>,
+    /// Where its wake came off it last frame, where the next piece of its wake starts.
+    pub(super) wake_at: Option<Vec3>,
+}
+
+/// A piece of a thrown spear's wake: a thin, even line of wind from where it came off the spear
+/// one frame to where it did the next, left there in the world from `born` (seconds), `length` long. Piece
+/// after piece, they make one smooth line along the spear's flight, holding a moment, then thinning
+/// away from the oldest end: the wind it parted, left behind (`fade_wakes`).
+#[derive(Component)]
+pub(super) struct Wake {
+    born: f32,
+    length: f32,
 }
 
 /// A shot that turns about its flight this fast (radians per second): a frostbolt.
@@ -90,15 +101,16 @@ pub(crate) fn leaving_hand(held: &Transform) -> Transform {
 /// A hand ahead of the real path is given back more slowly, so the spear never seems to slow
 /// below 3/4 speed; one behind it is caught up within `SETTLE_SECONDS` however far behind it is,
 /// so others' spears (which reach us late, already meters down their path) shoot out of the hand
-/// fast and are where they really are almost at once. Its wind stretches back to where it left
-/// the hand, up to `WIND_LENGTH`. A thrown Q isn't the held javelin (that stays in the hand): it
+/// fast and are where they really are almost at once. It leaves its wake behind it as it goes
+/// (`Wake`). A thrown Q isn't the held javelin (that stays in the hand): it
 /// shoots straight out from where the sim threw it, already pointing the way it flies.
 pub(super) fn fly_shots(
+    mut commands: Commands,
     time: Res<Time>,
     clock: AttackClock,
+    visuals: Res<Visuals>,
     mut holders: Query<(&PlayerId, &mut HeldAt)>,
     mut shots: Query<(&Projectile, &mut Transform, &mut Visibility, Option<&mut Thrown>, Option<&Spin>), With<Mesh3d>>,
-    mut winds: Query<&mut Transform, Without<Projectile>>,
 ) {
     let now = time.elapsed_secs();
     let tick = clock.now(true);
@@ -177,18 +189,126 @@ pub(super) fn fly_shots(
         let flying = Quat::from_rotation_arc(forward_dir, heading) * along;
         let turned = 1.0 - left(SETTLE_SECONDS);
         transform.set_if_neq(Transform::from_translation(at).with_rotation(launch.held.slerp(flying, turned)).with_scale(launch.scale));
-        // The wind, rubbery like a sprint's: its length chases how far the spear has flown (up to
-        // `WIND_LENGTH`), pulsing, on a loose spring, so it stretches out past that and snaps back.
-        let flown = (at.distance(launch.from) - WIND_FRONT).clamp(0.0, WIND_LENGTH);
-        let wanted = flown * (1.0 + RUBBER_PULSE * (since * RUBBER_RATE * std::f32::consts::TAU).sin());
-        let dt = time.delta_secs();
-        let length = thrown.length.follow(wanted, dt, RUBBER_STIFFNESS, RUBBER_DAMPING, f32::INFINITY).max(0.0);
-        if let Ok(mut wind) = winds.get_mut(thrown.wind) {
-            // In meters: undoing the spear's own drawn size (`Launch::scale`).
-            let scale = Vec3::new(length / launch.scale.x, 1.0, 1.0);
-            if wind.scale != scale {
-                wind.scale = scale;
+        // A piece of wake from where it came off the spear last frame to where it does now, left in
+        // the world.
+        // Off its point: the line runs along it, and when it strikes home it reaches right there.
+        let wake_at = transform.translation;
+        if let Some(from) = thrown.wake_at
+            && at.distance(launch.from) >= WAKE_AFTER
+            && let Some(dir) = (wake_at - from).try_normalize()
+        {
+            // A touch longer than the gap, so the pieces meet without seams.
+            let length = from.distance(wake_at) * 1.05;
+            let placed = Transform::from_translation(from).with_rotation(Quat::from_rotation_arc(Vec3::X, dir)).with_scale(Vec3::new(length, 1.0, 1.0));
+            commands.spawn((Wake { born: now, length }, Mesh3d(visuals.wake.clone()), MeshMaterial3d(thrown.wake.clone()), placed, NotShadowCaster));
+        }
+        thrown.wake_at = Some(wake_at);
+    }
+}
+
+/// A thrown spear striking home: a flash at its point and splinters of light thrown back out of
+/// it, so it doesn't just vanish. How long the flash lasts and how big it gets (seconds, meters);
+/// how many splinters, how fast they fly back and up (m/s), how long they last, how big, how drawn
+/// out along their flight, and how hard they fall (m/s²).
+const FLASH_SECONDS: f32 = 0.08;
+const FLASH_SIZE: f32 = 0.055;
+const SPLINTERS: u32 = 7;
+const SPLINTER_SPEED: (f32, f32) = (2.2, 4.2);
+const SPLINTER_RISE: f32 = 1.4;
+const SPLINTER_LIFE: (f32, f32) = (0.18, 0.34);
+const SPLINTER_SIZE: (f32, f32) = (0.012, 0.022);
+const SPLINTER_STRETCH: f32 = 4.0;
+const SPLINTER_FALL: f32 = 9.0;
+/// A spear gone this much short of its range (meters) was stopped by something, not spent.
+const STOPPED_SHORT: f32 = 0.4;
+
+/// A piece of a spear's impact (`strike_home`), from `started`: the flash, or a splinter flying
+/// at `velocity`.
+#[derive(Component)]
+pub(super) struct Impact {
+    started: f32,
+    life: f32,
+    size: f32,
+    velocity: Option<Vec3>,
+}
+
+/// A thrown spear gone short of its range hit something (a fighter, a wall, a rock, a tree): a
+/// flash where its point was, and splinters thrown back the way it came, out and up. One that flew
+/// its whole range just ends, and so does every one cleared away mid-flight: at the end of a won
+/// match, or with the map changed.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn strike_home(
+    trigger: On<Remove, Projectile>,
+    mut commands: Commands,
+    time: Res<Time>,
+    room: Res<crate::rooms::CurrentRoom>,
+    map: Res<crate::rooms::CurrentMap>,
+    mut visuals: ResMut<Visuals>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    shots: Query<(&Projectile, &Transform, &Thrown, &InheritedVisibility)>,
+) {
+    let cleared = room.0.as_ref().is_some_and(|view| view.winner.is_some()) || map.is_changed();
+    let Ok((projectile, transform, thrown, visible)) = shots.get(trigger.entity) else { return };
+    if cleared {
+        return;
+    }
+    let Some(range) = projectile.class.def().shot(projectile.ability).map(|shot| shot.range) else { return };
+    let point = transform.translation;
+    let flown = arena::to_gameplay(point).distance(projectile.origin);
+    if thrown.launch.is_none() || !visible.get() || flown > range - STOPPED_SHORT {
+        return;
+    }
+    let now = time.elapsed_secs();
+    let light = visuals.material(&mut materials, projectile.owner, Look::Spark);
+    let bit = || (Mesh3d(visuals.impact.clone()), MeshMaterial3d(light.clone()), Transform::from_translation(point).with_scale(Vec3::ZERO), NotShadowCaster);
+    commands.spawn((Impact { started: now, life: FLASH_SECONDS, size: FLASH_SIZE, velocity: None }, bit()));
+    let back = -(transform.rotation * Vec3::X).with_y(0.0).normalize_or(Vec3::X);
+    let across = Vec3::new(-back.z, 0.0, back.x);
+    let seed = trigger.entity.index().index();
+    for k in 0..SPLINTERS {
+        let r = |i: u32| crate::swish::noise(seed, k * 8 + i);
+        let speed = SPLINTER_SPEED.0 + (SPLINTER_SPEED.1 - SPLINTER_SPEED.0) * r(0);
+        let velocity = (back + across * (r(1) * 2.0 - 1.0) * 1.1).normalize() * speed + Vec3::Y * SPLINTER_RISE * (0.4 + r(2));
+        let size = SPLINTER_SIZE.0 + (SPLINTER_SIZE.1 - SPLINTER_SIZE.0) * r(3);
+        let life = SPLINTER_LIFE.0 + (SPLINTER_LIFE.1 - SPLINTER_LIFE.0) * r(4);
+        commands.spawn((Impact { started: now, life, size, velocity: Some(velocity) }, bit()));
+    }
+}
+
+/// The flash swells and is gone; splinters fly, fall, and wink out.
+pub(super) fn fly_impacts(mut commands: Commands, time: Res<Time>, mut impacts: Query<(Entity, &mut Impact, &mut Transform)>) {
+    let (now, dt) = (time.elapsed_secs(), time.delta_secs().min(0.05));
+    for (entity, mut impact, mut transform) in &mut impacts {
+        let t = (now - impact.started) / impact.life;
+        if t >= 1.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let size = impact.size;
+        match impact.velocity.as_mut() {
+            None => transform.scale = Vec3::splat(size * (t * std::f32::consts::PI).sin()),
+            Some(velocity) => {
+                velocity.y -= SPLINTER_FALL * dt;
+                transform.translation += *velocity * dt;
+                transform.translation.y = transform.translation.y.max(0.02);
+                let size = size * (1.0 - t * t);
+                transform.rotation = Quat::from_rotation_arc(Vec3::Y, velocity.normalize_or(Vec3::Y));
+                transform.scale = Vec3::new(size, size * SPLINTER_STRETCH, size);
             }
         }
+    }
+}
+
+/// Each piece of wake keeps its width a moment, then thins away to nothing, and is gone.
+pub(super) fn fade_wakes(mut commands: Commands, time: Res<Time>, mut wakes: Query<(Entity, &Wake, &mut Transform)>) {
+    let now = time.elapsed_secs();
+    for (entity, wake, mut transform) in &mut wakes {
+        let age = (now - wake.born) / WAKE_SECONDS;
+        if age >= 1.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let width = (1.0 - (age - WAKE_HOLDS).max(0.0) / (1.0 - WAKE_HOLDS)).powi(2);
+        transform.scale = Vec3::new(wake.length, width, width);
     }
 }

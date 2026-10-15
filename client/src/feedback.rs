@@ -43,6 +43,13 @@ impl Plugin for FeedbackPlugin {
 
 /// Bar size in pixels, and how high above a fighter's feet it floats.
 const BAR_SIZE: Vec2 = Vec2::new(76.0, 10.0);
+/// A monster's (a zombie's): shorter and thinner, so it never reads as a player's.
+const MONSTER_BAR_SIZE: Vec2 = Vec2::new(38.0, 5.0);
+
+/// The size of `class`'s health bar: a player's, or a monster's (a class no one picks).
+fn bar_size(class: ClassId) -> Vec2 {
+    if class.def().playable { BAR_SIZE } else { MONSTER_BAR_SIZE }
+}
 const BAR_HEIGHT: f32 = 2.3;
 /// The cast bar hangs right under the health bar, as wide and a bit thinner.
 const CAST_BAR_HEIGHT: f32 = 6.0;
@@ -152,6 +159,7 @@ fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, n
         )
     };
     for (player, class, is_me) in &new {
+        let size = bar_size(*class);
         // Behind the fill (spawned before it), reaching past it to show health just lost.
         let trail = commands
             .spawn((Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(Color::WHITE)))
@@ -173,7 +181,7 @@ fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, n
         // Absolute inside the health bar's border, so shift left by it to line the two up.
         let cast = commands
             .spawn((
-                frame(Node { left: px(-1.0), top: px(BAR_SIZE.y - 1.0), width: px(BAR_SIZE.x), height: px(CAST_BAR_HEIGHT), ..default() }),
+                frame(Node { left: px(-1.0), top: px(size.y - 1.0), width: px(size.x), height: px(CAST_BAR_HEIGHT), ..default() }),
                 Visibility::Hidden,
             ))
             .add_child(cast_fill)
@@ -183,7 +191,7 @@ fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, n
                 Bars { player, health_fill, trail, cast, cast_fill },
                 HealthTrail { fraction: 1.0, last: 1.0, hit_at: 0.0, crit_at: 0.0, crit: false },
                 ChildOf(*world_ui),
-                frame(Node { width: px(BAR_SIZE.x), height: px(BAR_SIZE.y), ..default() }),
+                frame(Node { width: px(size.x), height: px(size.y), ..default() }),
                 Visibility::Hidden,
             ))
             .add_child(trail)
@@ -193,7 +201,8 @@ fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, n
     }
 }
 
-/// A health bar is in its fighter's `Relation` color: ours, an ally's or an enemy's.
+/// A health bar is in its fighter's `Relation` color: ours, an ally's, an enemy's or a
+/// monster's.
 fn color_bars(
     players: Query<&Relation>,
     changed: Query<(), Changed<Relation>>,
@@ -300,7 +309,8 @@ fn place_bars(
             continue;
         };
         visibility.set_if_neq(Visibility::Inherited);
-        let (left, top) = (px(screen.x - BAR_SIZE.x / 2.0), px(screen.y - BAR_SIZE.y / 2.0));
+        let size = bar_size(*class);
+        let (left, top) = (px(screen.x - size.x / 2.0), px(screen.y - size.y / 2.0));
         if node.left != left || node.top != top {
             node.left = left;
             node.top = top;

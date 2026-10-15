@@ -10,6 +10,11 @@
 //! room is gone when its last member leaves. A member idle for `AfkTimeout` is taken out as if
 //! they'd left.
 //!
+//! A match started from the lobby is won by the first fighter (or team) to `KILLS_TO_WIN` kills,
+//! zombies roaming the arena meanwhile (`zombies.rs`); `MATCH_OVER_AFTER` later everyone is back
+//! in the lobby, the result shown there until the next match starts. A quick-joined room's match
+//! never ends, and has no zombies.
+//!
 //! Practice is a room of one's own: never listed, no one else can join, started from the off.
 
 use std::collections::{BTreeMap, HashMap};
@@ -22,7 +27,7 @@ use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
-use crate::{NeedsSpawnPoint, Patrol, spawn_dummy, spawn_gates, spawn_pickups, spawn_player};
+use crate::{Dead, NeedsSpawnPoint, Patrol, spawn_dummy, spawn_gates, spawn_pickups, spawn_player};
 
 /// Server-only: the room a fighter, projectile, pickup or waygate is in. The map it plays on is
 /// the room's (`Lobby::map`).
@@ -48,6 +53,8 @@ pub struct AfkTimeout(pub Duration);
 const AFK_CHECK_EVERY: Duration = Duration::from_secs(5);
 /// The server browser's list is sent at most this often.
 const LIST_EVERY: Duration = Duration::from_millis(500);
+/// How long after a match is won everyone is taken back to the lobby: time to see who won.
+const MATCH_OVER_AFTER: Duration = Duration::from_secs(5);
 
 /// The systems that handle guests' messages; `place_players` goes after them, so a fighter
 /// spawned this frame is placed before its first replication.
@@ -66,7 +73,7 @@ impl Plugin for RoomsPlugin {
         app.add_systems(
             Update,
             // A class picked with a request (practice, the way in) is known when it's handled.
-            (greet, handle_class_choices, handle_requests, take_out_idle, send_updates).chain().in_set(RoomSystems),
+            (greet, handle_class_choices, handle_requests, take_out_idle, end_matches, send_updates).chain().in_set(RoomSystems),
         );
         app.add_systems(FixedUpdate, note_activity);
     }
@@ -80,8 +87,9 @@ pub struct Lobby {
     rooms: BTreeMap<RoomKey, Room>,
     next_guest: u32,
     next_room: u32,
-    /// The last target dummy's number (its `PeerId::Local`).
-    next_dummy: u64,
+    /// The last number a fighter no client controls (a target dummy, a zombie) was given: its
+    /// `PeerId::Local`.
+    next_local: u64,
     /// Lightyear rooms no longer used, to use again (there are only `u16::MAX` of them).
     free_net: Vec<RoomId>,
     /// The browser's list changed since it was last sent.
@@ -102,6 +110,9 @@ struct Guest {
     active_at: Duration,
     /// Their latest input, to notice when it changes.
     last_input: PlayerInput,
+    /// Players they killed in their room's match (or its last one), and zombies.
+    kills: u32,
+    zombie_kills: u32,
 }
 
 struct Room {
@@ -120,6 +131,14 @@ struct Room {
     things: Vec<Entity>,
     /// Target dummies, in the order they were placed (practice only).
     dummies: Vec<Entity>,
+    /// Kills that win its match; `None`: it never ends (practice, quick join).
+    goal: Option<u32>,
+    /// Each team's kills (`TEAMS` order), in teams.
+    team_kills: [u32; 2],
+    /// Who won the match (or the last one).
+    winner: Option<Winner>,
+    /// When the won match is over (`Time<Real>`), everyone back in the lobby.
+    ends_at: Option<Duration>,
     /// Members need to see it again.
     changed: bool,
 }
@@ -149,14 +168,109 @@ impl Lobby {
             .members
             .iter()
             .filter_map(|link| self.guests.get(link))
-            .map(|g| Member { guest_id: g.id, name: g.name.clone(), peer: g.peer, team: g.team, class: g.class, in_arena: g.playing && room.started })
+            .map(|g| Member { guest_id: g.id, name: g.name.clone(), peer: g.peer, team: g.team, class: g.class, in_arena: g.playing && room.started, kills: g.kills, zombie_kills: g.zombie_kills })
             .collect();
         let leader = self.guests.get(&room.leader).map_or(0, |g| g.id);
-        RoomView { key, name: room.name.clone(), mode: room.mode, map: room.map, started: room.started, practice: room.practice, leader, members }
+        RoomView {
+            key,
+            name: room.name.clone(),
+            mode: room.mode,
+            map: room.map,
+            started: room.started,
+            practice: room.practice,
+            leader,
+            members,
+            goal: room.goal,
+            team_kills: room.team_kills,
+            winner: room.winner.clone(),
+        }
     }
 
     fn list(&self) -> Vec<RoomSummary> {
         self.rooms.iter().filter(|(_, room)| !room.practice).map(|(key, room)| self.summary(*key, room)).collect()
+    }
+
+    /// A number for a new fighter no client controls (a target dummy, a zombie).
+    pub(crate) fn next_local(&mut self) -> PeerId {
+        self.next_local += 1;
+        PeerId::Local(self.next_local)
+    }
+
+    /// The rooms whose match is on and not yet won, zombies roaming them.
+    pub(crate) fn hunting(&self) -> impl Iterator<Item = InRoom> + '_ {
+        self.rooms.iter().filter(|(_, room)| room.hunting()).map(|(key, room)| room.in_room(*key))
+    }
+
+    pub(crate) fn hunts(&self, key: RoomKey) -> bool {
+        self.rooms.get(&key).is_some_and(Room::hunting)
+    }
+
+    /// Everyone's kills in room `key` back to none, and no winner.
+    fn clear_score(&mut self, key: RoomKey) {
+        let Some(room) = self.rooms.get_mut(&key) else { return };
+        room.team_kills = [0; 2];
+        room.winner = None;
+        room.changed = true;
+        for member in &room.members {
+            if let Some(guest) = self.guests.get_mut(member) {
+                guest.kills = 0;
+                guest.zombie_kills = 0;
+            }
+        }
+    }
+
+    /// `killer` killed a zombie in room `key`: counted if they're a member. How many they had
+    /// killed before it.
+    pub(crate) fn count_zombie_kill(&mut self, key: RoomKey, killer: PeerId) -> Option<u32> {
+        let room = self.rooms.get_mut(&key)?;
+        let link = room.members.iter().copied().find(|link| self.guests.get(link).is_some_and(|g| g.peer == killer))?;
+        room.changed = true;
+        let guest = self.guests.get_mut(&link).expect("a member");
+        guest.zombie_kills += 1;
+        Some(guest.zombie_kills - 1)
+    }
+
+    /// `killer` killed `victim` in room `key`, at `now`: it counts toward the match if both are
+    /// members (not zombies), not the same, and it isn't won yet. Reaching the goal wins it.
+    fn count_kill(&mut self, key: RoomKey, killer: PeerId, victim: PeerId, now: Duration) {
+        let Some(room) = self.rooms.get(&key) else { return };
+        let Some(goal) = room.goal.filter(|_| room.winner.is_none()) else { return };
+        let member = |peer: PeerId| room.members.iter().copied().find(|link| self.guests.get(link).is_some_and(|g| g.peer == peer));
+        let (Some(link), Some(_)) = (member(killer), member(victim)) else { return };
+        if killer == victim {
+            return;
+        }
+        let guest = self.guests.get_mut(&link).expect("a member");
+        guest.kills += 1;
+        let (id, team, kills) = (guest.id, guest.team, guest.kills);
+        let room = self.rooms.get_mut(&key).expect("checked");
+        room.changed = true;
+        let side = TEAMS.iter().position(|&t| t == team).filter(|_| room.mode == Mode::Teams);
+        let score = match side {
+            Some(side) => {
+                room.team_kills[side] += 1;
+                room.team_kills[side]
+            }
+            None => kills,
+        };
+        debug!(room = key.0, guest = id, kills, score, "kill counted");
+        if score >= goal {
+            // Won by a team: whoever is on its side now wins with it.
+            let winner = match side {
+                Some(_) => {
+                    let side_of = |on: bool| -> Vec<u32> {
+                        let room = &self.rooms[&key];
+                        room.members.iter().filter_map(|link| self.guests.get(link)).filter(|g| (g.team == team) == on).map(|g| g.id).collect()
+                    };
+                    Winner::Team { winners: side_of(true), losers: side_of(false) }
+                }
+                None => Winner::Guest(id),
+            };
+            let room = self.rooms.get_mut(&key).expect("checked");
+            info!(room = key.0, ?winner, "match won");
+            room.winner = Some(winner);
+            room.ends_at = Some(now + MATCH_OVER_AFTER);
+        }
     }
 }
 
@@ -219,6 +333,8 @@ fn greet(
                 playing: false,
                 active_at: ctx.time.elapsed(),
                 last_input: PlayerInput::default(),
+                kills: 0,
+                zombie_kills: 0,
             });
             ctx.send(link, LobbyEvent::Welcome { guest_id: id, name });
             let list = lobby.list();
@@ -253,6 +369,8 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             let name = clean_room_name(&name).ok_or("Give the room a name")?;
             leave(lobby, ctx, link);
             let key = create(lobby, allocator, ctx, link, name, mode, map);
+            // A lobby's match is won by kills (a quick-joined room's never ends).
+            lobby.rooms.get_mut(&key).expect("just made").goal = Some(KILLS_TO_WIN);
             join(lobby, ctx, link, key)?;
         }
         RoomRequest::Join(key) => {
@@ -347,6 +465,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                     };
                 }
             }
+            lobby.clear_score(key);
             let room = lobby.rooms.get_mut(&key).expect("checked");
             room.mode = mode;
             room.changed = true;
@@ -416,9 +535,10 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             }
             let patrol = if walks { Some(Patrol::through(room.map.map(), at).ok_or("No room for a dummy to walk there")?) } else { None };
             // Each class in turn.
-            let class = ClassId::all().nth(room.dummies.len() % ClassId::all().count()).expect("a class");
-            lobby.next_dummy += 1;
-            let dummy = spawn_dummy(&mut ctx.commands, PeerId::Local(lobby.next_dummy), class, room.in_room(key), at);
+            let class = ClassId::playable().nth(room.dummies.len() % ClassId::playable().count()).expect("a class");
+            let in_room = room.in_room(key);
+            let dummy = spawn_dummy(&mut ctx.commands, lobby.next_local(), class, in_room, at);
+            let room = lobby.rooms.get_mut(&key).expect("in it");
             if let Some(patrol) = patrol {
                 ctx.commands.entity(dummy).insert(patrol);
             }
@@ -443,10 +563,10 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                 return Ok(());
             }
             room.started = true;
-            room.changed = true;
             lobby.list_changed = true;
             info!(room = key.0, name = room.name, mode = ?room.mode, players = room.members.len(), "match started");
             let members = room.members.clone();
+            lobby.clear_score(key);
             for member in members {
                 if let Some(guest) = lobby.guests.get_mut(&member) {
                     guest.playing = true;
@@ -469,7 +589,23 @@ fn create(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, leade
     let net = lobby.free_net.pop().unwrap_or_else(|| allocator.allocate());
     let things = spawn_room_things(&mut ctx.commands, InRoom { key, net }, map);
     info!(room = key.0, name, ?mode, leader = lobby.guests[&leader].id, "room created");
-    lobby.rooms.insert(key, Room { name, mode, map, net, leader, started: false, practice: false, members: Vec::new(), things, dummies: Vec::new(), changed: true });
+    lobby.rooms.insert(key, Room {
+        name,
+        mode,
+        map,
+        net,
+        leader,
+        started: false,
+        practice: false,
+        members: Vec::new(),
+        things,
+        dummies: Vec::new(),
+        goal: None,
+        team_kills: [0; 2],
+        winner: None,
+        ends_at: None,
+        changed: true,
+    });
     key
 }
 
@@ -491,6 +627,11 @@ impl Room {
     fn in_room(&self, key: RoomKey) -> InRoom {
         InRoom { key, net: self.net }
     }
+
+    /// Its match is on and not yet won.
+    fn hunting(&self) -> bool {
+        self.started && self.goal.is_some() && self.winner.is_none()
+    }
 }
 
 /// Into room `key`, which has room for one more; on the smaller team if there are teams. In a
@@ -509,6 +650,8 @@ fn join(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity, key: RoomKey) -> Result<
     let guest = lobby.guests.get_mut(&link).expect("a guest");
     guest.room = Some(key);
     guest.team = team;
+    guest.kills = 0;
+    guest.zombie_kills = 0;
     info!(room = key.0, guest = guest.id, "joined a room");
     ctx.commands.entity(link).insert(Rooms::single(net));
     enter_arena(lobby, ctx, link);
@@ -572,7 +715,7 @@ fn handle_class_choices(
     for (link, mut receiver) in &mut links {
         for ChooseClass(class) in receiver.receive() {
             let now = ctx.time.elapsed();
-            let Some(class) = class.checked() else { continue };
+            let Some(class) = class.pickable() else { continue };
             let Some(guest) = lobby.guests.get_mut(&link) else { continue };
             guest.active_at = now;
             guest.class = Some(class);
@@ -599,6 +742,43 @@ fn note_activity(
             guest.last_input = *input;
             guest.active_at = time.elapsed();
         }
+    }
+}
+
+/// A fighter killed by another player counts toward their room's match (`Lobby::count_kill`): in
+/// the tick it happens, before the victim (or the killer) can leave.
+pub(crate) fn count_kills(time: Res<Time<Real>>, mut lobby: ResMut<Lobby>, killed: Query<(&PlayerId, &InRoom, &Dead), Added<Dead>>) {
+    for (victim, room, dead) in &killed {
+        lobby.count_kill(room.key, dead.killer, victim.0, time.elapsed());
+    }
+}
+
+/// A won match is over once its result has shown a while: every fighter leaves the arena (the
+/// zombies go too, `bury_zombies`, and shots in the air), and the room is back in its lobby, not
+/// started, its leader free to change it and start the next.
+fn end_matches(mut lobby: ResMut<Lobby>, mut ctx: Ctx) {
+    let now = ctx.time.elapsed();
+    let over: Vec<RoomKey> = lobby.rooms.iter().filter(|(_, room)| room.ends_at.is_some_and(|at| now >= at)).map(|(key, _)| *key).collect();
+    for key in over {
+        let room = lobby.rooms.get_mut(&key).expect("there");
+        room.started = false;
+        room.ends_at = None;
+        room.changed = true;
+        let in_room = room.in_room(key);
+        let members = room.members.clone();
+        lobby.list_changed = true;
+        for (projectile, _) in ctx.projectiles.iter().filter(|(_, r)| **r == in_room) {
+            ctx.commands.entity(projectile).try_despawn();
+        }
+        for member in members {
+            if let Some(guest) = lobby.guests.get_mut(&member) {
+                guest.playing = false;
+            }
+            if let Some(player) = ctx.player_of(member) {
+                ctx.commands.entity(player).try_despawn();
+            }
+        }
+        info!(room = key.0, "match over, back to the lobby");
     }
 }
 

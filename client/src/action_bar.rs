@@ -1,13 +1,15 @@
 //! Your abilities, LoL-style: a row of square icons at the bottom center of your own screen, one
 //! per ability (Q, W, E, R), each with a dark clock-wipe sweeping away clockwise and the seconds
 //! left while it cools down (over it, a quicker, paler wipe for the global cooldown, if it's on
-//! it), and your passive (if your class has one) in a smaller square left of them. Hovering one
-//! shows what it does. Only you see them.
+//! it), and your passive (if your class has one) in a smaller square left of them. Left of that,
+//! in a match with zombies, a smaller one still: how many zombies you've killed, and your frenzy
+//! (`Frenzy`) draining away. Hovering one shows what it does. Only you see them.
 
 use std::f32::consts::TAU;
 
 use arena_shared::classes::{AbilityDef, ClassDef, common};
-use arena_shared::config::TICK_HZ;
+use arena_shared::classes::{AttackKind, seconds};
+use arena_shared::config::{FRENZY_BASE, FRENZY_MELEE_TICKS, FRENZY_PER_KILL, FRENZY_RANGED_TICKS, TICK_HZ};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 
@@ -15,7 +17,8 @@ use crate::Me;
 use crate::feedback::AttackClock;
 use crate::arena::palette;
 use crate::casting::key_label;
-use crate::render::{GameUi, shown, ui_text};
+use crate::render::{GameUi, pixel_art, set_fill, shown, ui_text};
+use crate::rooms::CurrentRoom;
 use crate::stat_frame::{self, Blurb};
 use crate::tooltip::{Side, hover_shows, tip, tip_note, tip_text, tip_title};
 
@@ -23,7 +26,7 @@ pub struct ActionBarPlugin;
 
 impl Plugin for ActionBarPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (spawn_icons, update_icons).chain());
+        app.add_systems(Update, (spawn_icons, update_icons, update_passive, update_frenzy).chain());
     }
 }
 
@@ -34,6 +37,27 @@ const BOTTOM: f32 = 18.0;
 /// The passive's icon size, and its gap from the first ability's.
 const PASSIVE: f32 = 46.0;
 const PASSIVE_GAP: f32 = 10.0;
+/// The frenzy's icon size, and its gap from the passive's: set apart, not part of the class's
+/// kit.
+const FRENZY: f32 = 26.0;
+const FRENZY_GAP: f32 = 28.0;
+
+/// The frenzy's picture, old-school pixel art: a rotting skull, and its eyes burning red.
+const SKULL: &[&str] = &[
+    "..#####..",
+    ".#######.",
+    "#########",
+    "#..###..#",
+    "#..###..#",
+    "####.####",
+    ".#######.",
+    "..#.#.#..",
+    "..#####..",
+];
+const SKULL_EYES: &[&str] = &[".........", ".........", ".........", ".##...##.", ".#.....#.", ".........", ".........", ".........", "........."];
+const SKULL_PIXEL: f32 = 2.0;
+/// How often a primed ability's icon brightens and dims, per second.
+const PRIMED_PULSE_HZ: f32 = 1.2;
 /// A tooltip's width (pixels).
 const TIP_WIDTH: f32 = 280.0;
 
@@ -84,8 +108,91 @@ fn spawn_icons(mut commands: Commands, me: Query<&ClassId, Added<Me>>, parts: Qu
     for (slot, ability) in class.def().abilities() {
         spawn_icon(&mut commands, class.def(), slot, ability, first + slot.0 as f32 * (ICON + ICON_GAP));
     }
+    let mut left_edge = first;
     if let Some(blurb) = stat_frame::passive_blurb(class.def()) {
-        spawn_passive(&mut commands, blurb, first - PASSIVE_GAP - PASSIVE);
+        left_edge -= PASSIVE_GAP + PASSIVE;
+        spawn_passive(&mut commands, blurb, left_edge);
+    }
+    spawn_frenzy(&mut commands, class.def(), left_edge - FRENZY_GAP - FRENZY);
+}
+
+/// The frenzy's icon (this entity), shown in a match with zombies, and its parts that change: the
+/// zombies killed, and the bar of what's left of the frenzy.
+#[derive(Component)]
+struct FrenzyIcon {
+    kills: Entity,
+    bar: Entity,
+    /// The stack (the zombies killed) again, in the tooltip.
+    stack: Entity,
+}
+
+/// The frenzy's icon, its left edge `from_center` pixels from the middle of the screen: a pixel
+/// skull, the number of zombies we've killed in its corner, and a bar along its bottom, full as a
+/// kill sends us into a frenzy and draining as it fades.
+fn spawn_frenzy(commands: &mut Commands, class: &ClassDef, from_center: f32) {
+    let melee = matches!(class.attack.kind, AttackKind::Melee { .. });
+    let fades = seconds(if melee { FRENZY_MELEE_TICKS } else { FRENZY_RANGED_TICKS });
+    let share = |share: f32| format!("{:.0}%", share * 100.0);
+    let description = format!(
+        "Killing a zombie (landing its last hit) makes you walk and attack faster, fading away over {fades}: {} after your first, {} more with every zombie you kill after that, for the rest of the match.",
+        share(FRENZY_BASE),
+        share(FRENZY_PER_KILL),
+    );
+    // The stack, a number of its own under the name, unlabeled.
+    let stack = commands.spawn(ui_text("0", 22.0, palette::TORCH_FLAME)).id();
+    let tip = commands
+        .spawn((tip(Side::Above, (FRENZY - TIP_WIDTH) / 2.0, TIP_WIDTH), children![tip_title("Frenzy")]))
+        .add_child(stack)
+        .with_children(|tip| {
+            tip.spawn(tip_note("Buff"));
+            tip.spawn(tip_text(description));
+        })
+        .id();
+    let skull = commands.spawn(centered()).with_children(|art| pixel_art(art, SKULL, SKULL_PIXEL, palette::ROT)).id();
+    let eyes = commands.spawn(centered()).with_children(|art| pixel_art(art, SKULL_EYES, SKULL_PIXEL, palette::ENEMY)).id();
+    let kills = commands.spawn(ui_text("0", 10.0, Color::WHITE)).id();
+    let number = commands.spawn(Node { position_type: PositionType::Absolute, right: px(1.0), top: px(-2.0), ..default() }).add_child(kills).id();
+    let bar = commands.spawn((Node { height: percent(100.0), width: px(0.0), ..default() }, BackgroundColor(palette::TORCH_FLAME))).id();
+    let track = commands
+        .spawn(Node { position_type: PositionType::Absolute, left: px(0.0), right: px(0.0), bottom: px(0.0), height: px(4.0), ..default() })
+        .add_child(bar)
+        .id();
+    let mut icon = commands.spawn((FrenzyIcon { kills, bar, stack }, ActionBarPart, GameUi, icon_frame(tip, FRENZY, from_center, palette::ui::MUTED)));
+    icon.add_children(&[skull, eyes, number, track, tip]);
+    // Shown in a match with zombies only (`update_frenzy`).
+    icon.entry::<Node>().and_modify(|mut node| node.display = Display::None);
+}
+
+/// The frenzy's icon, in a match with zombies only: our zombie kills, the bar draining as our
+/// frenzy fades, and its frame lit while it lasts.
+fn update_frenzy(
+    clock: AttackClock,
+    room: Res<CurrentRoom>,
+    guest: Option<Res<crate::rooms::Me>>,
+    me: Query<&Frenzy, With<Me>>,
+    mut icons: Query<(&FrenzyIcon, &mut Node, &mut BorderColor)>,
+    mut nodes: Query<&mut Node, Without<FrenzyIcon>>,
+    mut texts: Query<&mut Text>,
+) {
+    let Ok((icon, mut node, mut border)) = icons.single_mut() else { return };
+    let zombies = room.0.as_ref().is_some_and(|view| view.goal.is_some() && view.started);
+    let display = if zombies { Display::Flex } else { Display::None };
+    if node.display != display {
+        node.display = display;
+    }
+    let Ok(frenzy) = me.single() else { return };
+    let left = frenzy.at(clock.now(true)) / frenzy.strength.max(f32::EPSILON);
+    border.set_if_neq(BorderColor::all(if left > 0.0 { palette::TORCH_FLAME } else { palette::ui::MUTED }));
+    if let Ok(mut bar) = nodes.get_mut(icon.bar) {
+        set_fill(&mut bar, left);
+    }
+    let kills = guest.and_then(|guest| room.0.as_ref()?.member(guest.guest_id).map(|member| member.zombie_kills)).unwrap_or(0).to_string();
+    for shown in [icon.kills, icon.stack] {
+        if let Ok(mut text) = texts.get_mut(shown)
+            && text.0 != kills
+        {
+            text.0.clone_from(&kills);
+        }
     }
 }
 
@@ -126,8 +233,16 @@ fn spawn_icon(commands: &mut Commands, class: &ClassDef, slot: AbilitySlot, abil
         .add_children(&[picture, wipe, global_wipe, seconds_box, key, name, tip]);
 }
 
+/// The passive's icon (this entity), and the bar along its bottom: while the attack's
+/// `follow_up` empowers the next one, a timed buff, the bar draining until it runs out (or the
+/// empowered attack is used).
+#[derive(Component)]
+struct PassiveIcon {
+    bar: Entity,
+}
+
 /// The passive's icon, its left edge `from_center` pixels from the middle of the screen, bottoms
-/// lined up with the abilities': a gold diamond in a plain frame.
+/// lined up with the abilities': a gold diamond in a plain frame, over the empty bar.
 fn spawn_passive(commands: &mut Commands, blurb: Blurb, from_center: f32) {
     let tip = tooltip(commands, blurb, PASSIVE);
     let diamond = commands
@@ -139,9 +254,37 @@ fn spawn_passive(commands: &mut Commands, blurb: Blurb, from_center: f32) {
             UiTransform::from_rotation(Rot2::degrees(45.0)),
         ))
         .id();
+    let bar = commands.spawn((Node { height: percent(100.0), width: px(0.0), ..default() }, BackgroundColor(palette::TORCH_FLAME))).id();
+    let track = commands
+        .spawn(Node { position_type: PositionType::Absolute, left: px(0.0), right: px(0.0), bottom: px(0.0), height: px(4.0), ..default() })
+        .add_child(bar)
+        .id();
     commands
-        .spawn((ActionBarPart, GameUi, icon_frame(tip, PASSIVE, from_center, palette::ui::MUTED)))
-        .add_children(&[diamond, tip]);
+        .spawn((PassiveIcon { bar }, ActionBarPart, GameUi, icon_frame(tip, PASSIVE, from_center, palette::ui::MUTED)))
+        .add_children(&[diamond, track, tip]);
+}
+
+/// While our `follow_up` empowers the next attack, the passive's icon is lit and its bar drains
+/// with the time left to use it; a quick attack winding up keeps it lit until it goes off
+/// (`AttackState::armed_at`).
+fn update_passive(
+    clock: AttackClock,
+    me: Query<(&ClassId, &AttackState), With<Me>>,
+    mut icons: Query<(&PassiveIcon, &mut BorderColor)>,
+    mut nodes: Query<&mut Node>,
+) {
+    let (Ok((class, attack)), Ok((icon, mut border))) = (me.single(), icons.single_mut()) else { return };
+    let Some(follow_up) = class.def().attack.follow_up else { return };
+    let now = clock.now(true);
+    let left = match attack.quick_until {
+        Some(until) if attack.armed_at(now) => ((until as f32 - now) / follow_up.within_ticks as f32).clamp(0.0, 1.0),
+        _ => 0.0,
+    };
+    let lit = attack.armed_at(now);
+    border.set_if_neq(BorderColor::all(if lit { palette::TORCH_FLAME } else { palette::ui::MUTED }));
+    if let Ok(mut bar) = nodes.get_mut(icon.bar) {
+        set_fill(&mut bar, left);
+    }
 }
 
 /// An icon's square frame, `size` pixels, its left edge `from_center` pixels from the middle of
@@ -204,19 +347,27 @@ const WIPE_STEPS: f32 = 256.0;
 /// While an ability cools down: the wipe (dark over the part of the circle still to go, clockwise
 /// from twelve o'clock) and the seconds left (tenths under one). Over it, while the global
 /// cooldown runs (if it's on it), its own quicker wipe, pale, so the cooldown shows through. When
-/// it's ready, a bright frame. Only writes what visibly changed.
+/// it's ready, a bright frame; a prime's glows gold while the attack it readied is still to come.
+/// Only writes what visibly changed.
 fn update_icons(
     clock: AttackClock,
-    me: Query<(&ClassId, &Cooldowns), With<Me>>,
-    mut icons: Query<(&AbilityIcon, &mut IconShown, &mut BorderColor)>,
+    me: Query<(&ClassId, &Cooldowns, &AttackState), With<Me>>,
+    mut icons: Query<(&AbilityIcon, &mut IconShown, &mut BorderColor, &mut BackgroundColor)>,
     mut wipes: Query<(&mut BackgroundGradient, &mut Visibility)>,
     mut texts: Query<&mut Text>,
 ) {
-    let Ok((class, cooldowns)) = me.single() else { return };
+    let Ok((class, cooldowns, attack)) = me.single() else { return };
     let now = clock.now(true);
-    for (icon, shown, border) in &mut icons {
+    for (icon, shown, mut border, mut fill) in &mut icons {
         let Some(ability) = class.def().ability(icon.slot) else { continue };
-        update_icon(icon, shown.into_inner(), border, (now, cooldowns, ability), &mut wipes, &mut texts);
+        let primed = attack.primed.is_some_and(|(slot, _)| slot == icon.slot);
+        update_icon(icon, shown.into_inner(), border.reborrow(), (now, cooldowns, ability), &mut wipes, &mut texts);
+        // Primed: filled gold, its edge slowly brightening and dimming, until the attack goes off.
+        fill.set_if_neq(BackgroundColor(if primed { palette::TORCH_FLAME.with_alpha(0.3) } else { palette::ui::PANEL }));
+        if primed {
+            let breath = 0.5 + 0.5 * (now / TICK_HZ as f32 * PRIMED_PULSE_HZ * TAU).sin();
+            border.set_if_neq(BorderColor::all(palette::TORCH_FLAME.lighter(0.2 * breath)));
+        }
     }
 }
 

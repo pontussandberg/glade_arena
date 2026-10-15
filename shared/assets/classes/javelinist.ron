@@ -15,15 +15,17 @@
     ),
     abilities: [
         (
-            name: "Spirit Spear",
-            description: "Instantly hurl a fast spectral spear for {ability_damage} damage. No windup: throw on the move.",
-            cooldown_ticks: 192,
-            kind: Projectile(speed: 32.0, radius: 0.2, range: 13.0, damage: 22),
+            name: "Deadeye",
+            description: "Your next auto-attack gains +{ability_attack_speed} attack speed and will critically strike. Press again to call it off. The cooldown starts once it's thrown.",
+            cooldown_ticks: 480,
+            // Off the global cooldown: priming (or calling it off) never holds up the next ability.
+            global_cooldown: false,
+            kind: Prime(attack_speed: 0.5),
         ),
     ],
     passive: Some(
         name: "Long Shot",
-        description: "Your auto-attacks hit harder the farther they fly, up to {far_scale} damage at full range.",
+        description: "Auto-attacks deal more damage the farther they fly, up to {far_scale} at full range.",
     ),
     crit: (chance: 0.1),
 )

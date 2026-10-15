@@ -31,11 +31,10 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use crate::ChosenClass;
-use crate::browser::LobbiesButton;
 use crate::camera::{CameraControl, CameraMoves, Orbit};
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::{self, palette, to_world};
-use crate::render::{GameUi, ui_text};
+use crate::render::{ButtonFill, GameUi, ui_text};
 use crate::rooms::{Me, Picking, Screen};
 
 mod stage;
@@ -106,8 +105,13 @@ struct FighterTile(ClassId);
 #[derive(Component)]
 struct NameTag;
 
+/// The big button: at home it opens the lobbies; in a room it's the way into the match.
 #[derive(Component)]
 struct EnterButton;
+
+/// The small button over it, at home only: practice.
+#[derive(Component)]
+struct PracticeButton;
 
 /// The way in's text, and the hint under it.
 #[derive(Component)]
@@ -147,7 +151,7 @@ fn open_lobby(
 ) {
     **shadows = arena::sun_shadows(VISTA_SHADOWS);
     // The fighter we last went in as.
-    let selected = chosen.0.unwrap_or_else(|| ClassId::all().next().expect("at least one class"));
+    let selected = chosen.0.unwrap_or_else(|| ClassId::playable().next().expect("at least one class"));
     let front = FRONT + stage_turn();
     let view = Orbit { yaw: front, pitch: STAGE_RISE.atan2(STAGE_BACK), distance: STAGE_BACK.hypot(STAGE_RISE) };
     // The fighter stands at `STAGE` under the lift, facing +x as every fighter starts out: the
@@ -255,8 +259,8 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
             screen.spawn(Node { align_items: AlignItems::FlexEnd, ..default() }).with_children(|bottom| {
                 bottom.spawn(side(JustifyContent::FlexStart));
                 bottom.spawn(Node { column_gap: px(GAP * 1.5), ..default() }).with_children(|tiles| {
-                    for (n, id) in ClassId::all().enumerate() {
-                        spawn_tile(tiles, n + 1, id);
+                    for id in ClassId::playable() {
+                        spawn_tile(tiles, id);
                     }
                 });
                 bottom.spawn(side(JustifyContent::FlexEnd)).with_children(|right| {
@@ -266,8 +270,9 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                             column.spawn((Status, ui_text("", 12.0, palette::ui::MUTED), Node { align_self: AlignSelf::FlexEnd, ..default() }));
                             column
                                 .spawn((
-                                    LobbiesButton,
+                                    PracticeButton,
                                     Button,
+                                    ButtonFill(palette::ui::PANEL),
                                     Node {
                                         padding: UiRect::axes(px(36.0), px(12.0)),
                                         justify_content: JustifyContent::Center,
@@ -277,7 +282,7 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                                     BorderColor::all(palette::ui::MUTED.with_alpha(0.5)),
                                     BackgroundColor(palette::ui::PANEL),
                                 ))
-                                .with_child(ui_text("CREATE / JOIN LOBBY", 14.0, palette::ui::TEXT));
+                                .with_child(ui_text("PRACTICE", 14.0, palette::ui::TEXT));
                             column
                                 .spawn((
                                     EnterButton,
@@ -285,7 +290,7 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                                     Node { padding: UiRect::axes(px(36.0), px(16.0)), justify_content: JustifyContent::Center, ..default() },
                                     BackgroundColor(ACCENT),
                                 ))
-                                .with_child((EnterLabel, ui_text("PRACTICE", 18.0, palette::ui::PANEL)));
+                                .with_child((EnterLabel, ui_text("CREATE / JOIN LOBBY", 18.0, palette::ui::PANEL)));
                         });
                 });
             });
