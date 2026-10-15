@@ -441,6 +441,8 @@ pub enum FxKind {
     /// Rime left on the ground out to `radius` round `at` until `until` (Hoarfrost Boots): a
     /// frost rune, ice shards bursting up and sinking again as it thaws, a cold mist.
     Rime,
+    /// An Echo Stone's echo going off out to `radius` round `at`: the ability's hit, again.
+    Echo,
 }
 
 /// A passing effect of an item or a monster, for the client to draw: what, where, and from when

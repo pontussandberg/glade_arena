@@ -332,7 +332,7 @@ pub(super) fn do_deeds(
             }
             Deed::Mortar { by, from, at, radius, damage, fuse } => {
                 spawn_fx(&mut commands, by.side.0, Fx::between(FxKind::Lob(FxColor::Poison), from, at, radius, now, fuse));
-                let bomb = Delayed { by, at, radius, damage, chill: Chill::default(), fire_at: now + fuse, color: FxColor::Poison };
+                let bomb = Delayed { by, at, radius, damage, chill: Chill::default(), fire_at: now + fuse, look: FxKind::Blast(FxColor::Poison) };
                 arm(&mut commands, &mut pending, now, bomb, FxKind::Warn(FxColor::Poison));
             }
             Deed::Shots { side, shots, might } => {

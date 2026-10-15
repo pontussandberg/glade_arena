@@ -27,6 +27,7 @@ pub(super) fn play_new(
         let c = &mut commands;
         match fx.kind {
             FxKind::Rime => rime(c, &art, &scene),
+            FxKind::Echo => echo_burst(c, &art, &scene),
             FxKind::Zone(FxColor::Frost) => blizzard(c, &art, &scene),
             FxKind::Zone(FxColor::Void) => vortex(c, &art, &scene),
             FxKind::Zone(color) => glow_zone(c, &art, &scene, color),
@@ -276,7 +277,7 @@ fn frost_shatter(c: &mut Commands, art: &FxArt, s: &Scene) {
     motes(c, art, s, 5, Ink::Glint, 0.05, 0.6, 0.6, 0.15);
 }
 
-/// A spirit's burst (an echo, a decoy shattering, a comeback): a ripple of spirit light racing
+/// A spirit's burst (a decoy shattering, a comeback): a ripple of spirit light racing
 /// out over the ground, cracks onto the spirit realm glowing under it, a breath of mist, and
 /// wisps rising.
 fn spirit_burst(c: &mut Commands, art: &FxArt, s: &Scene, color: FxColor) {
@@ -361,17 +362,42 @@ fn doom_mark(c: &mut Commands, art: &FxArt, s: &Scene) {
     }
 }
 
-/// An Echo Stone's echo gathering where the ability hit: spirit light welling up in the ground,
-/// wisps of it spiralling in, until it bursts (`spirit_burst`).
+/// An Echo Stone's echo gathering where the ability hit: the ground remembering the blow, its
+/// afterimage flickering up faint and coming clearer, ripples of spirit light running back in
+/// toward it (the hit's own, played backward), wisps of it drawn in. It goes off as `echo_burst`.
 fn echo(c: &mut Commands, art: &FxArt, s: &Scene) {
     let (r, lasts) = (s.radius, s.lasts.max(0.2));
-    put(c, art, s.pick(1, &art.splotch), Part::new(s.start, [lasts, lasts, lasts + 0.1], Ink::SpiritMist, ground(s.at, 0.025)).size(r).grow(0.15));
-    put(c, art, s.pick(2, &art.frost), Part::new(s.start, [lasts, lasts, lasts + 0.1], Ink::Spirit, ground(s.at, 0.03)).sized(Vec3::new(r * 0.8, 1.0, r * 0.8)).facing(s.r(3) * TAU).grow(0.1).flicker(0.2));
+    let end = [lasts, lasts, lasts + 0.08];
+    put(c, art, s.pick(1, &art.cracks), Part::new(s.start, end, Ink::Spirit, ground(s.at, 0.03)).sized(Vec3::new(r * 0.7, 1.0, r * 0.7)).facing(s.r(2) * TAU).grow(0.6).flicker(0.5));
+    put(c, art, s.pick(3, &art.splotch), Part::new(s.start, end, Ink::SpiritMist, ground(s.at, 0.025)).size(r * 0.6).grow(0.3));
+    // Ripples running in, one after another, each gone as it reaches the middle.
+    for i in 0..3 {
+        let born = s.start + lasts * i as f32 / 3.0;
+        let left = (s.start + lasts - born).max(0.1);
+        let ripple = Part::new(born, [left, left, left + 0.05], Ink::Spirit, ground(s.at, 0.05 + 0.002 * i as f32)).sized(Vec3::new(r * 0.15, 1.0, r * 0.15)).grow(8.0);
+        put(c, art, &art.band, ripple);
+    }
     for i in 0..10 {
         let k = 50 + i * 6;
-        let motion = Motion::Orbit { center: s.at, angle: s.r(k) * TAU, speed: 3.0, radius: (r, 0.1), height: (0.2 + 0.8 * s.r(k + 1), 0.1) };
+        let motion = Motion::Orbit { center: s.at, angle: s.r(k) * TAU, speed: 3.0, radius: (r * 1.1, 0.1), height: (0.2 + 0.8 * s.r(k + 1), 0.15) };
         put(c, art, &art.mote, Part::new(s.start + lasts * 0.5 * s.r(k + 2), [0.1, lasts * 0.4, lasts * 0.5], Ink::Spirit, s.at).size(0.06).motion(motion).flicker(0.3));
     }
+}
+
+/// An echo going off: the blow struck again out of nowhere, a flash where it lands, its cracks
+/// flaring, and three ripples of spirit light racing out one after the other, each fainter and
+/// shorter than the last (the echo, echoing), wisps rising after.
+fn echo_burst(c: &mut Commands, art: &FxArt, s: &Scene) {
+    let r = s.radius;
+    put(c, art, &art.glint, Part::new(s.start, [0.02, 0.06, 0.25], Ink::Glint, s.at + Vec3::Y * 0.5).size(r * 0.8).facing(s.r(1) * TAU).grow(0.3).shrink(0.5));
+    put(c, art, s.pick(2, &art.cracks), Part::new(s.start, [0.03, 0.3, 0.9], Ink::Spirit, ground(s.at, 0.03)).sized(Vec3::new(r * 0.75, 1.0, r * 0.75)).facing(s.r(3) * TAU).grow(0.4).shrink(0.85));
+    put(c, art, s.pick(4, &art.splotch), Part::new(s.start, [0.06, 0.25, 0.8], Ink::SpiritMist, ground(s.at, 0.025)).size(r * 0.85).grow(0.3));
+    for (i, (reach, ink)) in [(1.0, Ink::Spirit), (0.8, Ink::Spirit), (0.6, Ink::SpiritMist)].into_iter().enumerate() {
+        let born = s.start + 0.14 * i as f32;
+        let ripple = Part::new(born, [0.2, 0.22, 0.5], ink, ground(s.at, 0.06 - 0.003 * i as f32)).sized(Vec3::new(r * reach, 1.0, r * reach)).grow(0.12).shrink(1.15);
+        put(c, art, &art.band, ripple);
+    }
+    motes(c, art, s, 10, Ink::Spirit, 0.07, 1.8, 1.0, 0.4);
 }
 
 /// Thunder Crown's bolt gathering: the air over the mark charging, sparks crackling in toward it

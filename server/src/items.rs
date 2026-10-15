@@ -114,7 +114,7 @@ impl By {
 }
 
 /// A blast set to go off at `fire_at`: `damage` (and `chill`) to `by`'s foes within `radius` of
-/// `at`, in `color`.
+/// `at`, looking like `look`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Delayed {
     pub(crate) by: By,
@@ -123,7 +123,7 @@ pub(crate) struct Delayed {
     pub(crate) damage: i32,
     pub(crate) chill: Chill,
     pub(crate) fire_at: u32,
-    pub(crate) color: FxColor,
+    pub(crate) look: FxKind,
 }
 
 /// Server-only: blasts set to go off.
@@ -162,7 +162,13 @@ fn strike(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut Tar
 /// How many it hit.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn blast(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut Targets, by: By, at: Vec2, radius: f32, damage: i32, chill: Chill, color: FxColor) -> usize {
-    spawn_fx(commands, by.side.0, Fx::at(FxKind::Blast(color), at, radius, now, 10));
+    blast_as(commands, log, now, targets, by, at, radius, damage, chill, FxKind::Blast(color))
+}
+
+/// A `blast` looking like `look` (an echo's own, say).
+#[allow(clippy::too_many_arguments)]
+fn blast_as(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut Targets, by: By, at: Vec2, radius: f32, damage: i32, chill: Chill, look: FxKind) -> usize {
+    spawn_fx(commands, by.side.0, Fx::at(look, at, radius, now, 10));
     strike(commands, log, now, targets, by, Blow::ability(damage, chill), |_, p| p.distance(at) <= radius + PLAYER_RADIUS)
 }
 
@@ -254,7 +260,7 @@ pub(super) fn tick_items(
                     let Some((_, at)) = nearest_foe(&targets, side, pos.0, reach, |p| p == id.0) else { continue };
                     state.keg_at = now + every;
                     spawn_fx(&mut commands, side.0, Fx::between(FxKind::Lob(FxColor::Fire), pos.0, at, radius, now, fuse));
-                    pending.0.push(Delayed { by: by(item), at, radius, damage, chill: Chill::default(), fire_at: now + fuse, color: FxColor::Fire });
+                    pending.0.push(Delayed { by: by(item), at, radius, damage, chill: Chill::default(), fire_at: now + fuse, look: FxKind::Blast(FxColor::Fire) });
                 }
                 Item::HoarfrostBoots if now >= state.trail.0 && pos.0.distance(state.trail.1) >= 0.8 => {
                     let (slow, lasts, every) = items::hoarfrost_boots(level);
@@ -298,7 +304,7 @@ pub(super) fn tick_items(
     let due: Vec<Delayed> = pending.0.iter().filter(|d| d.fire_at <= now).copied().collect();
     pending.0.retain(|d| d.fire_at > now);
     for d in due {
-        blast(&mut commands, &mut log, now, &mut targets, d.by, d.at, d.radius, d.damage, d.chill, d.color);
+        blast_as(&mut commands, &mut log, now, &mut targets, d.by, d.at, d.radius, d.damage, d.chill, d.look);
     }
     // Decoys shatter when their time's up, or they're killed.
     for (entity, decoy, class, pos, side, dead) in &decoys {
@@ -390,7 +396,7 @@ fn ability_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (E
         match item {
             Item::EchoStone => {
                 let (damage, radius, delay) = items::echo_stone(level);
-                let echo = Delayed { by: by(item), at: hit.at, radius, damage, chill: Chill::default(), fire_at: now + delay, color: FxColor::Spirit };
+                let echo = Delayed { by: by(item), at: hit.at, radius, damage, chill: Chill::default(), fire_at: now + delay, look: FxKind::Echo };
                 arm(&mut r.commands, &mut r.pending, now, echo, FxKind::Warn(FxColor::Spirit));
             }
             Item::VoidOrb => {
@@ -532,7 +538,7 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
             Item::ThunderCrown => {
                 let (every, damage, radius, delay) = items::thunder_crown(level);
                 if hits % every == 0 {
-                    let bolt = Delayed { by: by(item), at: hit.at, radius, damage, chill: Chill::default(), fire_at: now + delay, color: FxColor::Storm };
+                    let bolt = Delayed { by: by(item), at: hit.at, radius, damage, chill: Chill::default(), fire_at: now + delay, look: FxKind::Blast(FxColor::Storm) };
                     arm(&mut r.commands, &mut r.pending, now, bolt, FxKind::Bolt);
                 }
             }
@@ -623,7 +629,7 @@ fn monster_hit(r: &mut Reacting, now: u32, hit: &Landed) {
         _ => None,
     };
     if let Some(brain::Boom { fuse, radius, damage }) = boom {
-        let blast = Delayed { by, at: hit.at, radius, damage: mighty(damage, might), chill: Chill::default(), fire_at: now + fuse, color: FxColor::Fire };
+        let blast = Delayed { by, at: hit.at, radius, damage: mighty(damage, might), chill: Chill::default(), fire_at: now + fuse, look: FxKind::Blast(FxColor::Fire) };
         arm(&mut r.commands, &mut r.pending, now, blast, FxKind::Warn(FxColor::Fire));
     }
     if elite == Some(Affix::Splitting)

@@ -518,7 +518,7 @@ fn bounces_dont_set_off_on_hit_items() {
 
     // Javelins until the second dummy's taken more bounces than the crown needs hits.
     let mut bolts = std::collections::HashSet::new();
-    let mut watch = |p: &mut Party, bolts: &mut std::collections::HashSet<Entity>| {
+    let watch = |p: &mut Party, bolts: &mut std::collections::HashSet<Entity>| {
         place(&mut p.server, 1, me);
         let world = p.server.world_mut();
         bolts.extend(world.query::<(Entity, &Fx)>().iter(world).filter(|(_, fx)| fx.kind == FxKind::Bolt).map(|(e, _)| e));
