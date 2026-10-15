@@ -80,7 +80,37 @@ impl Mode {
 pub const MAX_FFA: usize = 10;
 pub const MAX_PER_TEAM: usize = 10;
 /// The most who fight the waves together.
-pub const MAX_PARTY: usize = 6;
+pub const MAX_PARTY: usize = 5;
+/// Runs shown on each leaderboard (one a party size).
+pub const LEADERBOARD_ROWS: usize = 10;
+
+/// A run against the waves that came to an end, for the leaderboards: the furthest wave it
+/// reached, where, who fought it (their names and classes, as the last wave came), and when (unix
+/// seconds). There's a board for each party size.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct HighScore {
+    pub wave: u32,
+    pub map: MapId,
+    pub party: Vec<(String, ClassId)>,
+    pub at: u64,
+}
+
+impl HighScore {
+    /// Better first: further, then sooner.
+    pub fn rank(a: &HighScore, b: &HighScore) -> core::cmp::Ordering {
+        b.wave.cmp(&a.wave).then(a.at.cmp(&b.at))
+    }
+}
+
+/// What a leaderboard for `size` fighters is called.
+pub fn party_label(size: usize) -> String {
+    match size {
+        1 => "Solo".into(),
+        2 => "Duo".into(),
+        3 => "Trio".into(),
+        n => format!("{n} players"),
+    }
+}
 /// Longest room name, in characters.
 pub const ROOM_NAME_MAX: usize = 24;
 /// A member who hasn't touched anything for this long is taken out of the room.

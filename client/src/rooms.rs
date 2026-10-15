@@ -51,6 +51,10 @@ pub struct Me {
 #[derive(Resource, Default, Debug)]
 pub struct RoomList(pub Vec<RoomSummary>);
 
+/// The leaderboards, as the server last sent them: each party size's best runs, best first.
+#[derive(Resource, Default)]
+pub struct Leaderboards(pub Vec<arena_shared::rooms::HighScore>);
+
 /// The room we're in, if any.
 #[derive(Resource, Default, Debug)]
 pub struct CurrentRoom(pub Option<RoomView>);
@@ -119,7 +123,7 @@ pub struct RoomsNetPlugin {
 impl Plugin for RoomsNetPlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<Screen>().add_computed_state::<Picking>();
-        app.init_resource::<RoomList>().init_resource::<CurrentRoom>().init_resource::<CurrentMap>();
+        app.init_resource::<RoomList>().init_resource::<Leaderboards>().init_resource::<CurrentRoom>().init_resource::<CurrentMap>();
         app.init_resource::<Notice>().init_resource::<Leaving>();
         app.insert_resource(QuickJoin(self.quick_join.clone()));
         app.insert_resource(StoredName(self.guest_name.clone()));
@@ -151,7 +155,7 @@ fn read_lobby_events(
     mut commands: Commands,
     mut client: Query<(&mut MessageReceiver<LobbyEvent>, &mut MessageSender<RoomRequest>), With<Client>>,
     quick_join: Res<QuickJoin>,
-    mut list: ResMut<RoomList>,
+    (mut list, mut boards): (ResMut<RoomList>, ResMut<Leaderboards>),
     mut room: ResMut<CurrentRoom>,
     mut current_map: ResMut<CurrentMap>,
     mut notice: ResMut<Notice>,
@@ -174,6 +178,7 @@ fn read_lobby_events(
                 }
             }
             LobbyEvent::RoomList(rooms) => list.0 = rooms,
+            LobbyEvent::HighScores(scores) => boards.0 = scores,
             LobbyEvent::Room(view) => {
                 // Practice goes straight in: home until our fighter's there.
                 if room.0.is_none() {

@@ -722,6 +722,9 @@ pub enum LobbyEvent {
     Left(LeaveReason),
     /// A request that couldn't be done.
     Refused(String),
+    /// The leaderboards: the best runs against the waves for each party size
+    /// (`LEADERBOARD_ROWS` of each at most), on arrival and whenever a run makes them.
+    HighScores(Vec<crate::rooms::HighScore>),
 }
 
 /// Reliable, ordered channel for the few messages we send.

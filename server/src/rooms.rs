@@ -120,6 +120,10 @@ pub struct Lobby {
     lingering: Vec<Linger>,
     /// The browser's list changed since it was last sent.
     list_changed: bool,
+    /// Every run against the waves that ended (`highscores`), and whether one has since everyone
+    /// was last sent the leaderboards.
+    pub(crate) scores: crate::highscores::HighScores,
+    scores_changed: bool,
 }
 
 struct Guest {
@@ -177,6 +181,19 @@ struct Room {
     run_sent_at: u32,
     /// The furthest wave it's reached.
     best: u32,
+}
+
+impl Room {
+    /// Its run came to an end (lost, or everyone left it): onto the leaderboards, if it was run
+    /// from the first wave and any came. Once.
+    fn score_run(&mut self, scores: &mut crate::highscores::HighScores) -> bool {
+        let Some(run) = self.run.as_mut().filter(|run| !run.scored && run.fought && run.from == 1 && !run.party.is_empty()) else { return false };
+        run.scored = true;
+        // Shopping for the next: the last one fought is as far as it got.
+        let wave = if matches!(run.phase, RunPhase::Shop { .. }) { run.wave - 1 } else { run.wave };
+        scores.record(HighScore { wave, map: self.map, party: run.party.clone(), at: crate::highscores::now() });
+        true
+    }
 }
 
 impl Lobby {
@@ -358,6 +375,7 @@ impl Lobby {
             if let Some(run) = &room.run {
                 room.best = room.best.max(run.wave);
             }
+            self.scores_changed |= room.score_run(&mut self.scores);
             room.ends_at = Some(ends_at);
             room.changed = true;
         }
@@ -529,6 +547,7 @@ fn greet(
             ctx.send(link, LobbyEvent::Welcome { guest_id: id, name });
             let list = lobby.list();
             ctx.send(link, LobbyEvent::RoomList(list));
+            ctx.send(link, LobbyEvent::HighScores(lobby.scores.boards()));
         }
     }
 }
@@ -1043,6 +1062,8 @@ fn leave(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity) -> bool {
     match room.members.first() {
         None => {
             let mut room = lobby.rooms.remove(&key).expect("there");
+            // A run left under way ends here.
+            lobby.scores_changed |= room.score_run(&mut lobby.scores);
             room.clear_things(&mut ctx.commands);
             // And whatever else was in it: monsters, decoys, shots still flying, effects.
             for (thing, _) in ctx.in_rooms.iter().filter(|(_, r)| r.key == key) {
@@ -1171,6 +1192,13 @@ fn send_updates(mut lobby: ResMut<Lobby>, mut list_sent_at: Local<Option<Duratio
         }
         lobby.rooms.get_mut(&key).expect("there").changed = false;
     }
+    // A run made the leaderboards: everyone sees them again.
+    if std::mem::take(&mut lobby.scores_changed) {
+        let boards = lobby.scores.boards();
+        for link in lobby.guests.keys().copied().collect::<Vec<_>>() {
+            ctx.send(link, LobbyEvent::HighScores(boards.clone()));
+        }
+    }
     let now = ctx.time.elapsed();
     if lobby.list_changed && list_sent_at.is_none_or(|at| now >= at + LIST_EVERY) {
         lobby.list_changed = false;
@@ -1184,6 +1212,12 @@ fn send_updates(mut lobby: ResMut<Lobby>, mut list_sent_at: Local<Option<Duratio
 }
 
 impl Lobby {
+    /// Who in room `key` is fighting: their names and classes.
+    pub(crate) fn roster(&self, key: RoomKey) -> Vec<(String, ClassId)> {
+        let Some(room) = self.rooms.get(&key) else { return Vec::new() };
+        room.members.iter().filter_map(|link| self.guests.get(link)).filter(|g| g.playing).filter_map(|g| Some((g.name.clone(), g.class?))).collect()
+    }
+
     /// The lightyear rooms `link` is sent: the room they're in (`now`, if it's just been decided)
     /// and any they've just left (`Linger`).
     fn nets_of(&self, link: Entity, now: Option<RoomId>) -> Rooms {

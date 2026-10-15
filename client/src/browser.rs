@@ -5,11 +5,13 @@
 //! how full, whether its match is on), each with a way in, the ones for fighting each other (PvP)
 //! apart from the ones against the waves (PvE); and below them a form to create one: a name
 //! (click it to type), then the game (PvP or PvE), its mode (PvP: free for all or teams) and its
-//! map, shown behind as it's picked. Before home, while connecting, a plain screen saying so.
+//! map, shown behind as it's picked. Under it, the leaderboards, folding open and shut too (one
+//! open at a time, the other folding as it opens): the best runs against the waves, a board for
+//! each party size, picked by its tab. Before home, while connecting, a plain screen saying so.
 
 use arena_shared::map::MapId;
 use arena_shared::protocol::RoomRequest;
-use arena_shared::rooms::{Mode, ROOM_NAME_MAX, RoomKey, RoomSummary, first_name};
+use arena_shared::rooms::{HighScore, MAX_PARTY, Mode, ROOM_NAME_MAX, RoomKey, RoomSummary, first_name, party_label};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
@@ -19,14 +21,14 @@ use lightyear::prelude::*;
 use crate::arena::palette;
 use crate::lobby::{SidePanel, card, fold_chip, label, pane_header};
 use crate::render::{ButtonFill, button, clicked, key_chip, ui_text};
-use crate::rooms::{CurrentMap, HOME_MAP, Me, RoomList, Screen, request};
+use crate::rooms::{CurrentMap, HOME_MAP, Leaderboards, Me, RoomList, Screen, request};
 use crate::arena::palette::ui::ACCENT;
 
 pub struct BrowserPlugin;
 
 impl Plugin for BrowserPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Typing>().init_resource::<LobbiesOpen>().init_resource::<HeaderFlash>();
+        app.init_resource::<Typing>().init_resource::<LobbiesOpen>().init_resource::<HeaderFlash>().init_resource::<BoardsOpen>();
         app.add_systems(OnEnter(Screen::Connecting), spawn_connecting);
         app.add_systems(OnExit(Screen::Connecting), despawn::<ConnectingPart>);
         app.add_systems(Update, show_connecting.run_if(in_state(Screen::Connecting)));
@@ -115,6 +117,27 @@ fn show_connecting(client: Query<Has<Disconnected>, With<Client>>, mut text: Sin
 /// Whether the lobbies pane is open; it stays as it was left, coming home again.
 #[derive(Resource, Default)]
 pub(crate) struct LobbiesOpen(bool);
+
+/// Whether the leaderboards are open (folding the lobbies), and which party size's is shown.
+#[derive(Resource)]
+pub(crate) struct BoardsOpen {
+    open: bool,
+    size: usize,
+}
+
+impl Default for BoardsOpen {
+    fn default() -> Self {
+        BoardsOpen { open: false, size: 1 }
+    }
+}
+
+/// The leaderboards' header: a click opens or folds them.
+#[derive(Component)]
+struct BoardsHeader;
+
+/// A leaderboard's tab: the board for this many fighters.
+#[derive(Component)]
+struct BoardTab(usize);
 
 /// When the header last flashed (`Time` seconds), to say "it's here" to a click on the button that
 /// opens the pane, while it's open.
@@ -245,13 +268,30 @@ fn lobby_buttons(
     joins: Query<(Ref<Interaction>, &JoinButton)>,
     (games, modes, maps): (Query<(Ref<Interaction>, &GameButton)>, Query<(Ref<Interaction>, &ModeButton)>, Query<(Ref<Interaction>, &MapButton)>),
     create_button: Query<Ref<Interaction>, With<CreateButton>>,
+    (boards_header, tabs): (Query<Ref<Interaction>, With<BoardsHeader>>, Query<(Ref<Interaction>, &BoardTab)>),
     mut home: ResMut<Home>,
     mut shown: ResMut<CurrentMap>,
-    mut open: ResMut<LobbiesOpen>,
+    (mut open, mut boards): (ResMut<LobbiesOpen>, ResMut<BoardsOpen>),
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
     if header.iter().any(clicked) {
         open.0 = !open.0;
+    }
+    if boards_header.iter().any(clicked) {
+        boards.open = !boards.open;
+        if boards.open {
+            open.0 = false;
+        }
+    }
+    // One open at a time: the lobbies opening (here, or from the character select) fold the
+    // leaderboards.
+    if open.is_changed() && open.0 && boards.open {
+        boards.open = false;
+    }
+    for (interaction, tab) in &tabs {
+        if clicked(interaction) && boards.size != tab.0 {
+            boards.size = tab.0;
+        }
     }
     for (interaction, join) in &joins {
         if clicked(interaction) {
@@ -295,6 +335,7 @@ fn show_lobbies(
     home: Res<Home>,
     open: Res<LobbiesOpen>,
     list: Res<RoomList>,
+    (boards_open, boards): (Res<BoardsOpen>, Res<Leaderboards>),
     panel: Single<(Entity, Ref<SidePanel>, &mut Visibility)>,
     mut built_for: Local<Option<(bool, MapId)>>,
 ) {
@@ -302,7 +343,7 @@ fn show_lobbies(
     // The form's rows change with the game picked (its modes, its maps).
     let form = Some((home.mode.pve(), home.mode.maps()[0]));
     let form_changed = std::mem::replace(&mut *built_for, form) != form;
-    if !(open.is_changed() || home.is_added() || fresh.is_added() || list.is_changed() || form_changed) {
+    if !(open.is_changed() || home.is_added() || fresh.is_added() || list.is_changed() || form_changed || boards_open.is_changed() || boards.is_changed()) {
         return;
     }
     visibility.set_if_neq(Visibility::Inherited);
@@ -311,6 +352,7 @@ fn show_lobbies(
     panel.with_children(|panel| {
         spawn_header(panel, &list.0, open.0);
         if !open.0 {
+            spawn_boards(panel, &boards.0, &boards_open);
             return;
         }
 
@@ -387,6 +429,62 @@ fn show_lobbies(
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
             card.spawn((CreateButton, button("CREATE LOBBY", 14.0, ACCENT, palette::ui::PANEL, ACCENT)));
         });
+        spawn_boards(panel, &boards.0, &boards_open);
+    });
+}
+
+/// The leaderboards: their header, and open, a tab for each party size and its board.
+fn spawn_boards(panel: &mut ChildSpawnerCommands, scores: &[HighScore], open: &BoardsOpen) {
+    panel.spawn((BoardsHeader, pane_header(open.open))).with_children(|header| {
+        header.spawn(ui_text("Leaderboards", 18.0, palette::ui::TEXT));
+        header.spawn(fold_chip(open.open));
+    });
+    if !open.open {
+        return;
+    }
+    panel.spawn(card()).with_children(|card| {
+        card.spawn(Node { column_gap: px(GAP * 0.5), ..default() }).with_children(|row| {
+            for size in 1..=MAX_PARTY {
+                let picked = size == open.size;
+                let (edge, fill) = if picked { (ACCENT, palette::ui::SELECTED) } else { (palette::ui::MUTED.with_alpha(0.3), palette::ui::BACKDROP) };
+                row.spawn((BoardTab(size), Button, choice(GAP * 0.5), BorderColor::all(edge), BackgroundColor(fill)))
+                    .with_child(ui_text(party_label(size), 12.0, palette::ui::TEXT));
+            }
+        });
+        let board: Vec<&HighScore> = scores.iter().filter(|s| s.party.len() == open.size).collect();
+        if board.is_empty() {
+            card.spawn((
+                Node { justify_content: JustifyContent::Center, padding: UiRect::all(px(GAP * 2.0)), border: UiRect::all(px(1.0)), ..default() },
+                BorderColor::all(palette::ui::MUTED.with_alpha(0.2)),
+            ))
+            .with_child(ui_text("No runs yet", 12.0, palette::ui::MUTED));
+        }
+        for (rank, score) in board.into_iter().enumerate() {
+            spawn_score(card, rank + 1, score);
+        }
+    });
+}
+
+/// A run on a leaderboard: its place, the wave it reached, who fought it (as what), and where.
+fn spawn_score(card: &mut ChildSpawnerCommands, rank: usize, score: &HighScore) {
+    let first = rank == 1;
+    card.spawn((
+        Node { align_items: AlignItems::Center, padding: UiRect::axes(px(GAP * 1.5), px(GAP * 0.75)), column_gap: px(GAP * 1.5), border: UiRect::left(px(2.0)), ..default() },
+        BorderColor::all(if first { ACCENT } else { palette::ui::MUTED.with_alpha(0.4) }),
+        BackgroundColor(palette::ui::BACKDROP),
+    ))
+    .with_children(|row| {
+        row.spawn((Node { width: px(22.0), ..default() }, children![ui_text(format!("{rank}."), 13.0, if first { ACCENT } else { palette::ui::MUTED })]));
+        row.spawn(Node { flex_direction: FlexDirection::Column, flex_grow: 1.0, row_gap: px(2.0), ..default() }).with_children(|left| {
+            for (name, class) in &score.party {
+                left.spawn(Node { column_gap: px(GAP * 0.75), align_items: AlignItems::Baseline, ..default() }).with_children(|member| {
+                    member.spawn(ui_text(name.clone(), 12.0, palette::ui::TEXT));
+                    member.spawn(ui_text(class.def().name.clone(), 10.0, palette::ui::MUTED));
+                });
+            }
+            left.spawn(ui_text(score.map.label(), 10.0, palette::ui::MUTED));
+        });
+        row.spawn(ui_text(format!("Wave {}", score.wave), 15.0, if first { ACCENT } else { palette::ui::TEXT }));
     });
 }
 

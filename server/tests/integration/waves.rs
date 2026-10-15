@@ -770,3 +770,21 @@ fn your_decoy_is_never_your_foe() {
     }
     assert!(lobbed, "no keg was lobbed at all");
 }
+
+/// A run left under way ends on the leaderboards, on the solo board, and everyone's sent them.
+#[test]
+fn a_run_left_under_way_makes_the_leaderboards() {
+    let mut p = Party::new(5900, "revenant", false);
+    let boards = |p: &Party| p.client.world().resource::<arena_client::rooms::Leaderboards>().0.clone();
+    assert!(boards(&p).is_empty(), "a fresh server has no runs on record");
+    p.ask(RoomRequest::QuickJoin("Waves".into()));
+    p.until(Duration::from_secs(10), "in the run", |p| p.run().is_some());
+    p.ask(RoomRequest::Ready(true));
+    p.until(Duration::from_secs(10), "the wave comes", |p| p.run().is_some_and(|r| r.phase == Phase::Fight));
+    p.ask(RoomRequest::Leave);
+    p.until(Duration::from_secs(5), "on the leaderboards", |p| !boards(p).is_empty());
+    let board = boards(&p);
+    assert_eq!(board.len(), 1);
+    assert_eq!((board[0].wave, board[0].party.len(), board[0].map), (1, 1, MapId::Wilds));
+    assert_eq!(board[0].party[0].1, class_id("revenant"));
+}

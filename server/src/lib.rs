@@ -45,6 +45,7 @@ mod items;
 use items::*;
 mod waves;
 use waves::*;
+mod highscores;
 
 pub mod logging;
 pub mod rooms;
@@ -52,6 +53,8 @@ pub mod rooms;
 pub struct ServerSettings {
     pub port: u16,
     pub certificate: Certificate,
+    /// The CSV file the leaderboards are kept in (`highscores`); none: only in memory.
+    pub high_scores: Option<PathBuf>,
 }
 
 /// The TLS certificate WebTransport runs on.
@@ -76,6 +79,7 @@ pub fn build_server_app(settings: ServerSettings) -> App {
     ));
     app.add_plugins(ServerPlugins { tick_duration: TICK_DURATION });
     app.add_plugins(ServerGamePlugin);
+    app.world_mut().resource_mut::<rooms::Lobby>().scores = highscores::HighScores::load(settings.high_scores.clone());
     spawn_server_entity(&mut app, settings);
     app
 }

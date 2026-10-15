@@ -59,7 +59,7 @@ the same Rust code compiled to WASM, talking WebTransport to the server.
 
 ## Waves (PvE)
 
-Besides fighting each other (PvP: free-for-all or teams), a lobby can fight **Waves**: up to six
+Besides fighting each other (PvP: free-for-all or teams), a lobby can fight **Waves**: up to five
 players together, against endless waves of monsters, on a map of their own, **Hollow Wilds**.
 It's far bigger than the PvP maps, with a walled camp in the middle and places all around it: a
 graveyard and ruined chapel, a hedge maze, a lake with an island, a quarry with a burned
@@ -151,6 +151,12 @@ rings of fire, and blinks away from anyone who closes in, the spot it left blowi
 later; the Plague Mother (25) lumbers after you, slams out a wave of rot that slows, lobs volleys
 of plague bombs and births bloaters. The server runs them (`server/src/brain.rs`), the waves (`server/src/waves.rs`, where
 all the tuning is) and the items (`server/src/items.rs`).
+
+**Leaderboards**: every run against the waves that ends (lost, or left under way) and was played
+from the first wave goes on the leaderboards, one for each party size (solo up to five), shown on
+the home screen under the lobbies. There's no database yet: the server appends each run to a CSV
+file (`ARENA_HIGHSCORES`, default `highscores.csv` where it runs; on the server,
+`/var/lib/arena/highscores.csv`) and reads it back when it starts (`server/src/highscores.rs`).
 
 **Measuring performance** (native): `ARENA_PERF=perf.txt` turns vsync off, notes every frame's
 time and counts what's in the world each second (entities, meshes drawn, effect parts, lights, UI

@@ -186,7 +186,7 @@ fn idle_members_are_taken_out() {
         server.insert_resource(AfkTimeout(Duration::from_secs(2)));
     });
     g.ask(0, RoomRequest::QuickJoin("Idle".into()));
-    g.until(Duration::from_secs(10), "in the arena", |g| player::<Health>(&mut g.server, A).is_some());
+    g.until(Duration::from_secs(10), "in the arena", |g| player::<Health>(&mut g.server, A).is_some() && g.room(0).is_some());
     g.until(Duration::from_secs(10), "taken out for idling", |g| g.room(0).is_none());
     assert!(player::<Health>(&mut g.server, A).is_none(), "the idle fighter is still in the arena");
     assert!(g.clients[0].world().resource::<Notice>().0.is_some(), "no word on why");
@@ -198,7 +198,8 @@ fn idle_members_are_taken_out() {
 fn practice_is_unlisted_and_fighters_step_out_to_the_lobby() {
     let mut g = guests(5874, &["revenant", "javelinist"], |_| {});
     g.ask(0, RoomRequest::Practice(MapId::default()));
-    g.until(Duration::from_secs(10), "A practicing", |g| player::<Health>(&mut g.server, A).is_some());
+    // (Its room reaches A's client a moment after its fighter is up on the server.)
+    g.until(Duration::from_secs(10), "A practicing", |g| player::<Health>(&mut g.server, A).is_some() && g.room(0).is_some());
     assert!(g.room(0).unwrap().practice);
     g.run(Duration::from_millis(700));
     assert!(g.rooms_listed(1).is_empty(), "practice is listed");

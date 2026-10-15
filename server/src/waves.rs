@@ -153,6 +153,12 @@ pub(crate) struct Run {
     /// Everyone was ready: the wave comes at this tick (sooner than the shop's own end), unless
     /// someone isn't any more.
     ready_by: Option<u32>,
+    /// The wave it started at: only a run from the first makes the leaderboards.
+    pub(crate) from: u32,
+    /// Who fought it (names and classes), as the last wave came: who it's on the leaderboards as.
+    pub(crate) party: Vec<(String, ClassId)>,
+    /// It's on the leaderboards already (it ended).
+    pub(crate) scored: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +190,9 @@ impl Run {
             deaths: 0,
             fought: false,
             ready_by: None,
+            from: wave,
+            party: Vec::new(),
+            scored: false,
         }
     }
 
@@ -392,6 +401,11 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now,
             info!(room = key.0, wave, party = size, "a wave comes");
             if closing {
                 lobby.close_run();
+            }
+            // Who's fighting it, for the leaderboards.
+            let roster = lobby.roster(key);
+            if let Some(run) = lobby.run_mut(key) {
+                run.party = roster;
             }
         }
         RunPhase::Fight => {
