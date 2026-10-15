@@ -1267,17 +1267,16 @@ impl Lobby {
         room.members.iter().filter_map(|link| self.guests.get(link)).filter(|g| g.playing).filter_map(|g| Some((g.id, g.name.clone(), g.class?))).collect()
     }
 
-    /// A run went onto the leaderboards (`Room::score_run`): everyone sees them again, and if it
-    /// made its board, each who fought it is asked what their entry goes by.
+    /// A run went onto the leaderboards (`Room::score_run`): everyone sees them again, and each
+    /// who fought it is asked what their entry goes by (whether or not it made its board).
     fn scored(&mut self, scored: Option<(usize, Vec<u32>)>) {
         let Some((index, fought)) = scored else { return };
         self.scores_changed = true;
-        let Some(place) = self.scores.place(index) else { return };
-        let Some(score) = self.scores.get(index).cloned() else { return };
+        let Some(((place, of), score)) = self.scores.standing(index).zip(self.scores.get(index).cloned()) else { return };
         for (member, id) in fought.into_iter().enumerate() {
             self.naming.insert(id, (index, member));
             let name = score.party[member].0.clone();
-            self.prompts.push((id, LobbyEvent::NameYourScore { wave: score.wave, place, size: score.party.len(), name }));
+            self.prompts.push((id, LobbyEvent::NameYourScore { wave: score.wave, place, of, size: score.party.len(), name }));
         }
     }
 

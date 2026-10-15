@@ -731,9 +731,10 @@ pub enum LobbyEvent {
     /// The leaderboards: the best runs against the waves for each party size
     /// (`LEADERBOARD_ROWS` of each at most), on arrival and whenever a run makes them.
     HighScores(Vec<crate::rooms::HighScore>),
-    /// Our run made a leaderboard: `place` on the board for `size` fighters, at `wave`. We may
-    /// name our entry (`RoomRequest::NameScore`); it goes by `name` until we do.
-    NameYourScore { wave: u32, place: usize, size: usize, name: String },
+    /// Our run ended, at `wave`, and is kept: `place` of all `of` runs by `size` fighters (1: the
+    /// best; on the board if within `LEADERBOARD_ROWS`). We may name our entry
+    /// (`RoomRequest::NameScore`); it goes by `name` until we do.
+    NameYourScore { wave: u32, place: usize, of: usize, size: usize, name: String },
 }
 
 /// Reliable, ordered channel for the few messages we send.

@@ -89,12 +89,19 @@ pub enum Answer {
 impl TextPrompt {
     /// The server's `LobbyEvent::NameYourScore`.
     pub(crate) fn asked(&mut self, event: &LobbyEvent) {
-        if let LobbyEvent::NameYourScore { wave, place, size, name } = event {
+        if let LobbyEvent::NameYourScore { wave, place, of, size, name } = event {
+            // On the board (its top few), or where it stands among them all.
+            let board = arena_shared::rooms::party_label(*size);
+            let (kicker, title) = if *place <= arena_shared::rooms::LEADERBOARD_ROWS {
+                ("New high score".to_string(), format!("#{place} on the {board} board"))
+            } else {
+                ("Run over".to_string(), format!("#{place} of {of}, {board}"))
+            };
             self.0 = Some(Asking {
-                kicker: "New high score".into(),
-                title: format!("#{place} on the {} board", arena_shared::rooms::party_label(*size)),
+                kicker,
+                title,
                 body: format!("You reached wave {wave}."),
-                field: "Your name on the board".into(),
+                field: "Your name for the leaderboards".into(),
                 text: name.clone(),
                 max: arena_shared::rooms::SCORE_NAME_MAX,
                 secret: false,

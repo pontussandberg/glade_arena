@@ -160,8 +160,9 @@ left. A run's (or match's) end shows until each player leaves with its **Leave**
 
 **Leaderboards**: every run against the waves that ends (lost, or left under way) and was played
 from the first wave goes on the leaderboards, one for each party size (solo up to five), shown on
-the home screen under the lobbies: each entry's name, hero, map and wave. A run that makes its
-board asks each player, once they're out of the arena, for the name their entry goes by. There's
+the home screen under the lobbies: the top five of each, with each entry's name, hero, map and
+wave. Every run that ends asks each player, once they're out of the arena, for the name their
+entry goes by (all runs are kept, on the board or not). There's
 no database yet: the server appends each run to a CSV file (`ARENA_HIGHSCORES`, default
 `highscores.csv` where it runs; on the server, `/var/lib/arena/highscores.csv`) and reads it back
 when it starts (`server/src/highscores.rs`). Each line: the date (UTC), the game's version (the

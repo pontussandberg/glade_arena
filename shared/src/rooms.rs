@@ -82,7 +82,7 @@ pub const MAX_PER_TEAM: usize = 10;
 /// The most who fight the waves together.
 pub const MAX_PARTY: usize = 5;
 /// Runs shown on each leaderboard (one a party size).
-pub const LEADERBOARD_ROWS: usize = 10;
+pub const LEADERBOARD_ROWS: usize = 5;
 
 /// Longest name a player gives their entry on the leaderboards, in characters.
 pub const SCORE_NAME_MAX: usize = 20;
