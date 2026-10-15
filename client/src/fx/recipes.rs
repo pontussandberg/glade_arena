@@ -362,14 +362,13 @@ fn doom_mark(c: &mut Commands, art: &FxArt, s: &Scene) {
     }
 }
 
-/// An Echo Stone's echo gathering where the ability hit: the ground remembering the blow, its
-/// afterimage flickering up faint and coming clearer, ripples of spirit light running back in
-/// toward it (the hit's own, played backward), wisps of it drawn in. It goes off as `echo_burst`.
+/// An Echo Stone's echo gathering where the ability hit: a pale glow welling up there, wavering,
+/// ripples of spirit light running back in toward it (the hit's own, played backward), wisps of
+/// it drawn in. It goes off as `echo_burst`.
 fn echo(c: &mut Commands, art: &FxArt, s: &Scene) {
     let (r, lasts) = (s.radius, s.lasts.max(0.2));
     let end = [lasts, lasts, lasts + 0.08];
-    put(c, art, s.pick(1, &art.cracks), Part::new(s.start, end, Ink::Spirit, ground(s.at, 0.03)).sized(Vec3::new(r * 0.7, 1.0, r * 0.7)).facing(s.r(2) * TAU).grow(0.6).flicker(0.5));
-    put(c, art, s.pick(3, &art.splotch), Part::new(s.start, end, Ink::SpiritMist, ground(s.at, 0.025)).size(r * 0.6).grow(0.3));
+    put(c, art, s.pick(3, &art.splotch), Part::new(s.start, end, Ink::SpiritMist, ground(s.at, 0.025)).size(r * 0.6).grow(0.3).flicker(0.4));
     // Ripples running in, one after another, each gone as it reaches the middle.
     for i in 0..3 {
         let born = s.start + lasts * i as f32 / 3.0;
@@ -384,13 +383,12 @@ fn echo(c: &mut Commands, art: &FxArt, s: &Scene) {
     }
 }
 
-/// An echo going off: the blow struck again out of nowhere, a flash where it lands, its cracks
-/// flaring, and three ripples of spirit light racing out one after the other, each fainter and
+/// An echo going off: the blow struck again out of nowhere, a flash where it lands, a breath of
+/// spirit light, and three ripples of spirit light racing out one after the other, each fainter and
 /// shorter than the last (the echo, echoing), wisps rising after.
 fn echo_burst(c: &mut Commands, art: &FxArt, s: &Scene) {
     let r = s.radius;
     put(c, art, &art.glint, Part::new(s.start, [0.02, 0.06, 0.25], Ink::Glint, s.at + Vec3::Y * 0.5).size(r * 0.8).facing(s.r(1) * TAU).grow(0.3).shrink(0.5));
-    put(c, art, s.pick(2, &art.cracks), Part::new(s.start, [0.03, 0.3, 0.9], Ink::Spirit, ground(s.at, 0.03)).sized(Vec3::new(r * 0.75, 1.0, r * 0.75)).facing(s.r(3) * TAU).grow(0.4).shrink(0.85));
     put(c, art, s.pick(4, &art.splotch), Part::new(s.start, [0.06, 0.25, 0.8], Ink::SpiritMist, ground(s.at, 0.025)).size(r * 0.85).grow(0.3));
     for (i, (reach, ink)) in [(1.0, Ink::Spirit), (0.8, Ink::Spirit), (0.6, Ink::SpiritMist)].into_iter().enumerate() {
         let born = s.start + 0.14 * i as f32;
