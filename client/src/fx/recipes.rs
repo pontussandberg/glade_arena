@@ -28,6 +28,8 @@ pub(super) fn play_new(
         match fx.kind {
             FxKind::Rime => rime(c, &art, &scene),
             FxKind::Echo => echo_burst(c, &art, &scene),
+            FxKind::Meteor => meteor(c, &art, &scene),
+            FxKind::Blink => blink(c, &art, &scene),
             FxKind::Zone(FxColor::Frost) => blizzard(c, &art, &scene),
             FxKind::Zone(FxColor::Void) => vortex(c, &art, &scene),
             FxKind::Zone(color) => glow_zone(c, &art, &scene, color),
@@ -54,6 +56,7 @@ pub(super) fn play_new(
 
 /// Where and when an effect plays: from `start` (seconds), at `at` (and toward `to`, in the
 /// world), `radius` round, `lasts` seconds; broken by `seed`.
+#[derive(Clone, Copy)]
 struct Scene {
     start: f32,
     seed: u32,
@@ -396,6 +399,53 @@ fn echo_burst(c: &mut Commands, art: &FxArt, s: &Scene) {
         put(c, art, &art.band, ripple);
     }
     motes(c, art, s, 10, Ink::Spirit, 0.07, 1.8, 1.0, 0.4);
+}
+
+/// A meteor coming down: first its burning shadow on the ground where it'll land (`warning`'s
+/// fire, spreading as it nears), then the rock itself, falling steep out of the sky ablaze,
+/// streaming fire and sparks, landing as it goes off (its blast is `fire_blast`).
+fn meteor(c: &mut Commands, art: &FxArt, s: &Scene) {
+    warning(c, art, s, FxColor::Fire);
+    let lasts = s.lasts.max(0.3);
+    // In sight for the end of its fall only: out of the sky, steeply, from a side of its own.
+    let fall = (lasts * 0.6).max(0.25);
+    let born = s.start + lasts - fall;
+    let side = s.out(1) * 3.0;
+    let from = s.at + side + Vec3::Y * 14.0;
+    let tumble = Vec3::new(s.r(2) - 0.5, s.r(3) - 0.5, s.r(4) - 0.5) * 12.0;
+    let falling = |tumble| Motion::Arc { from, to: s.at + Vec3::Y * 0.2, height: 0.0, tumble };
+    let life = [0.02, fall, fall + 0.02];
+    put(c, art, &art.chunk, Part::new(born, life, Ink::Ember, from).size(0.5).motion(falling(tumble)).shrink(1.0));
+    put(c, art, &art.mote, Part::new(born, life, Ink::Flame, from).size(1.1).motion(falling(Vec3::ZERO)).flicker(0.3).shrink(1.0));
+    // Fire streaming off it: each bit of the trail a little behind it on its fall.
+    for i in 1..8 {
+        let lag = fall * 0.06 * i as f32;
+        let part = Part::new(born + lag, [0.02, fall, fall + 0.02], if i % 2 == 0 { Ink::Spark } else { Ink::Flame }, from);
+        put(c, art, &art.mote, part.size(0.7 - 0.07 * i as f32).motion(falling(Vec3::ZERO)).flicker(0.5).shrink(1.0));
+    }
+}
+
+/// A monster blinking: it's sucked into a knot of the void where it stood (motes of it drawn in,
+/// a dark ripple closing), and bursts back out of one where it lands (motes thrown out, a ripple
+/// opening, a flash).
+fn blink(c: &mut Commands, art: &FxArt, s: &Scene) {
+    let gone = Scene { radius: 1.0, ..*s };
+    put(c, art, s.pick(1, &art.splotch), Part::new(s.start, [0.04, 0.2, 0.6], Ink::Void, ground(s.at, 0.02)).size(0.9).grow(1.6));
+    put(c, art, &art.band, Part::new(s.start, [0.18, 0.18, 0.3], Ink::VoidLight, ground(s.at, 0.05)).sized(Vec3::new(0.3, 1.0, 0.3)).grow(4.0).shrink(0.2));
+    for i in 0..10 {
+        let k = 40 + i * 6;
+        let motion = Motion::Orbit { center: s.at, angle: gone.r(k) * TAU, speed: 5.0, radius: (1.2, 0.05), height: (0.3 + 1.4 * gone.r(k + 1), 0.9) };
+        put(c, art, &art.mote, Part::new(s.start, [0.02, 0.2, 0.3], Ink::VoidLight, s.at).size(0.07).motion(motion).flicker(0.3));
+    }
+    let there = Scene { at: s.to, radius: 1.2, seed: s.seed ^ 0x55, ..*s };
+    put(c, art, &art.glint, Part::new(s.start + 0.05, [0.02, 0.06, 0.25], Ink::Glint, s.to + Vec3::Y * 1.0).size(1.4).facing(s.r(9) * TAU).shrink(0.4));
+    put(c, art, &art.band, Part::new(s.start + 0.05, [0.12, 0.12, 0.4], Ink::VoidLight, ground(s.to, 0.05)).sized(Vec3::new(1.4, 1.0, 1.4)).grow(0.15).shrink(1.2));
+    put(c, art, there.pick(1, &art.splotch), Part::new(s.start + 0.05, [0.05, 0.25, 0.7], Ink::VoidMist, ground(s.to, 0.025)).size(1.2).grow(0.3));
+    for i in 0..10 {
+        let k = 80 + i * 6;
+        let velocity = there.out(k) * (2.0 + 2.0 * there.r(k + 1)) + Vec3::Y * (1.0 + 2.0 * there.r(k + 2));
+        put(c, art, &art.mote, Part::new(s.start + 0.05, [0.01, 0.2, 0.45], Ink::VoidLight, s.to + Vec3::Y * 0.9).size(0.06).motion(Motion::Thrown { velocity, gravity: 4.0, tumble: Vec3::ZERO }).flicker(0.4));
+    }
 }
 
 /// Thunder Crown's bolt gathering: the air over the mark charging, sparks crackling in toward it

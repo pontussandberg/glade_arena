@@ -106,7 +106,7 @@ pub(super) fn resolve_projectile_hits(
         }
     }
     for (burst, at, struck, projectile, amount, chill, side) in bursts {
-        crate::fx::spawn_fx(&mut commands, side.0, Fx::at(FxKind::Blast(FxColor::Frost), at, burst.radius, now.0, 10));
+        crate::fx::spawn_fx(&mut commands, side.0, Fx::at(FxKind::Blast(burst.color), at, burst.radius, now.0, 10));
         let reach = burst.radius + PLAYER_RADIUS;
         let blow = Blow::attack(amount, chill, false, projectile.crit);
         hit_foes(&mut commands, &mut log, now.0, &mut targets, (projectile.owner, projectile.class, "auto-attack"), (side, Source::Splash), blow, |id, p| id != struck && p.distance(at) <= reach);

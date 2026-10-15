@@ -191,6 +191,10 @@ pub(crate) enum Look {
     Frost,
     /// Brighter, bluer see-through glow: the frost under a slowed fighter's feet.
     Chill,
+    /// Casters' bolts: a fireball, a bolt of the void, a spark.
+    Ember,
+    Void,
+    Storm,
 }
 
 impl Visuals {
@@ -224,6 +228,9 @@ impl Visuals {
                     Look::Range => arena::translucent(Color::WHITE, 0.2, 1.0),
                     Look::Frost => arena::translucent(palette::ICE, 0.45, 1.6),
                     Look::Chill => arena::translucent(palette::FROST_GLOW, 0.75, 2.5),
+                    Look::Ember => arena::glow(palette::TORCH_FLAME, 7.0),
+                    Look::Void => arena::glow(Color::srgb_u8(0xA0, 0x60, 0xFF), 6.0),
+                    Look::Storm => arena::glow(Color::srgb_u8(0xC8, 0xE4, 0xFF), 8.0),
                 })
             })
             .clone()
@@ -403,6 +410,9 @@ fn add_visuals(
             arena::ShotGlow::Spirit => Look::Spirit,
             arena::ShotGlow::Ice => Look::Ice,
             arena::ShotGlow::Pale => Look::Shot,
+            arena::ShotGlow::Ember => Look::Ember,
+            arena::ShotGlow::Void => Look::Void,
+            arena::ShotGlow::Storm => Look::Storm,
         };
         let body = visuals.material(&mut materials, projectile.owner, look);
         let mut shot = commands.entity(entity);

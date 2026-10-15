@@ -618,9 +618,9 @@ fn monster_hit(r: &mut Reacting, now: u32, hit: &Landed) {
     let side = (*room, *team);
     let by = By { id: hit.victim_id, class, side, source: Source::Trick };
     if !burst
-        && let Some(Trick::Burst { damage, radius, .. }) = class.def().mob.as_ref().and_then(|m| m.tricks.iter().find(|t| matches!(t, Trick::Burst { .. })))
+        && let Some(Trick::Burst { damage, radius, color, .. }) = class.def().mob.as_ref().and_then(|m| m.tricks.iter().find(|t| matches!(t, Trick::Burst { .. })))
     {
-        blast(&mut r.commands, &mut r.log, now, &mut r.targets, by, hit.at, *radius, mighty(*damage, might), Chill::default(), FxColor::Poison);
+        blast(&mut r.commands, &mut r.log, now, &mut r.targets, by, hit.at, *radius, mighty(*damage, might), Chill::default(), *color);
     }
     let volatile_wave = r.lobby.run(side.0.key).and_then(|run| run.omen).is_some_and(|omen| omen.bursts());
     let boom = match elite {

@@ -581,3 +581,40 @@ fn practice_places_three_slow_zombies() {
     let nearer = |zs: &[Vec2]| zs.iter().map(|z| z.distance(me)).sum::<f32>();
     assert!(nearer(&moved) < nearer(&placed), "they didn't come for us: {placed:?} -> {moved:?}");
 }
+
+/// A Void Acolyte blinks away from whoever comes close: gone from beside them, back well away.
+#[test]
+fn acolytes_blink_away_when_closed_in_on() {
+    let mut p = Party::new(5878, "revenant", false);
+    p.ask(RoomRequest::QuickJoin("Waves 13".into()));
+    p.until(Duration::from_secs(10), "in the run", |p| p.satchel().is_some_and(|s| s.gold > 0));
+    p.ask(RoomRequest::Ready(true));
+    let acolyte = class_id("void_acolyte");
+    let find = |p: &mut Party| {
+        let world = p.server.world_mut();
+        world.query::<(Entity, &ClassId, &Pos, &Health)>().iter(world).find(|(_, c, _, h)| **c == acolyte && h.alive()).map(|(e, _, pos, _)| (e, pos.0))
+    };
+    p.until(Duration::from_secs(60), "an acolyte about", |p| find(p).is_some());
+    let (entity, _) = find(&mut p).unwrap();
+    let pos = |p: &mut Party| p.server.world().get::<Pos>(entity).map(|pos| pos.0);
+    // Up close (and kept from harm), until it's gone from there.
+    let mut jumped = None;
+    p.until(Duration::from_secs(8), "the acolyte blinks", |p| {
+        let Some(before) = pos(p) else { return false };
+        let map = MapId::Wilds.map();
+        let beside = [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y].map(|d| before + d * 1.5).into_iter().find(|s| map.walkable_at(*s)).unwrap_or(before);
+        place(&mut p.server, 1, beside);
+        if let Some(mut health) = p.server.world_mut().query::<(&PlayerId, &mut Health)>().iter_mut(p.server.world_mut()).find(|(id, _)| id.0 == peer(1)).map(|(_, h)| h) {
+            health.0 = health.0.max(100);
+        }
+        p.update();
+        let after = pos(p).unwrap_or(before);
+        if after.distance(before) > 4.0 {
+            jumped = Some((before, after));
+        }
+        jumped.is_some()
+    });
+    let (before, after) = jumped.unwrap();
+    assert!(after.distance(before) > 5.0, "blinked only {}", after.distance(before));
+    assert!(effects(&mut p.server, FxKind::Blink) > 0, "no blink to be seen");
+}

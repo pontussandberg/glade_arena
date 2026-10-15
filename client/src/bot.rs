@@ -109,7 +109,7 @@ fn think(
     let foe = |team: Option<&Team>| !my_team.zip(team).is_some_and(|(mine, theirs)| mine.allied(*theirs));
     let bomb = warnings
         .iter()
-        .find(|fx| matches!(fx.kind, FxKind::Warn(FxColor::Poison | FxColor::Fire)) && fx.at.distance(me.0) < fx.radius + DODGE_MARGIN)
+        .find(|fx| matches!(fx.kind, FxKind::Warn(FxColor::Poison | FxColor::Fire | FxColor::Void) | FxKind::Meteor | FxKind::Bolt) && fx.at.distance(me.0) < fx.radius + DODGE_MARGIN)
         .map(|fx| fx.at);
     let swing = others
         .iter()

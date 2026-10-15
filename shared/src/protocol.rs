@@ -443,6 +443,10 @@ pub enum FxKind {
     Rime,
     /// An Echo Stone's echo going off out to `radius` round `at`: the ability's hit, again.
     Echo,
+    /// A meteor falling burning out of the sky onto `at`, landing at `until` (out to `radius`).
+    Meteor,
+    /// A monster vanishing at `at` and reappearing at `to` (a blink).
+    Blink,
 }
 
 /// A passing effect of an item or a monster, for the client to draw: what, where, and from when

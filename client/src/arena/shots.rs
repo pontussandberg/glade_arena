@@ -40,6 +40,10 @@ pub enum ShotGlow {
     Ice,
     /// A plain pale glow.
     Pale,
+    /// Fire (a fireball), the void, a storm's sparks: casters' bolts.
+    Ember,
+    Void,
+    Storm,
 }
 
 /// Turns a mesh pointing up (+Y) to point along +X: how a shot flies.
@@ -51,6 +55,16 @@ pub(super) const ALONG_X: Quat = Quat::from_xyzw(0.0, 0.0, -std::f32::consts::FR
 /// the shot's radius.
 pub fn shot_look(class: &ClassDef, shot: Shot, ability: bool) -> ShotLook {
     let plain = |mesh, glow| ShotLook { mesh, glow, thrown: false, aura: None, spin: 0.0 };
+    // Casters borrowing another's figure throw their own: fire, the void, sparks.
+    let own = match class.id.as_str() {
+        "ember_archmage" => Some(ShotGlow::Ember),
+        "void_acolyte" | "bonecaller" => Some(ShotGlow::Void),
+        "storm_caller" => Some(ShotGlow::Storm),
+        _ => None,
+    };
+    if let Some(glow) = own.filter(|_| !ability) {
+        return plain(gem_mesh(shot.radius), glow);
+    }
     match (class.figure(), ability) {
         ("javelinist", false) => ShotLook {
             thrown: true,

@@ -13,11 +13,12 @@ use serde::{Deserialize, Serialize};
 pub use crate::abilities::{AbilityDef, AbilityKind, AbilitySlot};
 use crate::abilities::MAX_ABILITIES;
 use crate::config::{PLAYER_RADIUS, TICK_HZ};
+use crate::protocol::FxColor;
 
 /// The class files, compiled into both server and client so they can't disagree. Their order is
 /// the classes' order everywhere: the class picker and its number keys, the default pick, and the
 /// order target dummies come in. The ones no one picks (`ClassDef::playable`) go last.
-const CLASS_FILES: [&str; 18] = [
+const CLASS_FILES: [&str; 23] = [
     include_str!("../assets/classes/revenant.ron"),
     include_str!("../assets/classes/javelinist.ron"),
     include_str!("../assets/classes/frost_mage.ron"),
@@ -32,9 +33,14 @@ const CLASS_FILES: [&str; 18] = [
     include_str!("../assets/classes/rot_priest.ron"),
     include_str!("../assets/classes/death_knight.ron"),
     include_str!("../assets/classes/bombardier.ron"),
+    include_str!("../assets/classes/void_acolyte.ron"),
+    include_str!("../assets/classes/ember_imp.ron"),
+    include_str!("../assets/classes/storm_caller.ron"),
     include_str!("../assets/classes/butcher.ron"),
     include_str!("../assets/classes/pale_lich.ron"),
     include_str!("../assets/classes/grave_lord.ron"),
+    include_str!("../assets/classes/ember_archmage.ron"),
+    include_str!("../assets/classes/plague_mother.ron"),
     include_str!("../assets/classes/merchant.ron"),
 ];
 
@@ -153,8 +159,14 @@ pub enum Trick {
     /// Uses the ability in `slot` (a nova) once its prey is nearer than `within`.
     Slam { slot: u8, within: f32 },
     /// Swells and bursts once its prey is nearer than `within`, and as it dies: `damage` to its
-    /// foes within `radius`.
-    Burst { within: f32, damage: i32, radius: f32 },
+    /// foes within `radius`, in `color` (a plague's by default).
+    Burst {
+        within: f32,
+        damage: i32,
+        radius: f32,
+        #[serde(default = "plague")]
+        color: FxColor,
+    },
     /// Every `every_ticks`, `count` of `class` rise around it, while it has fewer than `max` up.
     Summon { class: String, count: u32, every_ticks: u32, max: u32 },
     /// Every `every_ticks`, monsters within `radius` (itself too) heal `amount`.
@@ -165,9 +177,51 @@ pub enum Trick {
     Fan { count: u32, spread: f32, every_ticks: u32 },
     /// Below `below` of its health, it rages: always hasted, hitting harder.
     Enrage { below: f32 },
-    /// Every `every_ticks`, lobs a bomb at where its prey stands: `damage` to its foes within
-    /// `radius` there, `fuse_ticks` later (time to step out).
-    Mortar { damage: i32, radius: f32, fuse_ticks: u32, every_ticks: u32 },
+    /// Every `every_ticks`, `count` shells (one by default) at where its prey stands, the rest
+    /// scattered up to `scatter` round it: `damage` to its foes within `radius` of each,
+    /// `fuse_ticks` later (time to step out). What comes down is its `shell`'s.
+    Mortar {
+        damage: i32,
+        radius: f32,
+        fuse_ticks: u32,
+        every_ticks: u32,
+        #[serde(default = "one_u32")]
+        count: u32,
+        #[serde(default)]
+        scatter: f32,
+        #[serde(default)]
+        shell: Shell,
+    },
+    /// Once its prey is nearer than `within`, vanishes and reappears `distance` away from it (at
+    /// most every `every_ticks`), leaving `leaves` damage behind (none by default): a burst of the
+    /// void where it stood, a moment later.
+    Blink {
+        within: f32,
+        distance: f32,
+        every_ticks: u32,
+        #[serde(default)]
+        leaves: i32,
+    },
+}
+
+/// What a monster's mortar (`Trick::Mortar`) brings down.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default)]
+pub enum Shell {
+    /// A bomb of plague, lobbed.
+    #[default]
+    Bomb,
+    /// Lightning, called down out of the sky.
+    Lightning,
+    /// A meteor, falling burning out of the sky.
+    Meteor,
+}
+
+fn plague() -> FxColor {
+    FxColor::Poison
+}
+
+fn frost() -> FxColor {
+    FxColor::Frost
 }
 
 /// The odds that an auto-attack hit this class deals is critical (an ability's never is), for
@@ -227,6 +281,9 @@ pub struct AttackDef {
 pub struct BurstDef {
     pub radius: f32,
     pub share: f32,
+    /// What it bursts in: frost by default (a frostbolt shattering), fire (a fireball).
+    #[serde(default = "frost")]
+    pub color: FxColor,
 }
 
 /// The ground a strike tears open over its lane (`AttackDef::lane`, empowered or not): it lasts
@@ -643,7 +700,9 @@ mod tests {
                             assert!(ClassId::by_key(class).is_some_and(|s| s.def().mob.is_some()), "{}: summons {class}, no monster", c.id)
                         }
                         Trick::Ring { .. } | Trick::Fan { .. } => assert!(c.attack.kind.shot().is_some(), "{}: shots it can't fire", c.id),
-                        Trick::Burst { .. } | Trick::Mend { .. } | Trick::Enrage { .. } | Trick::Mortar { .. } => {}
+                        Trick::Mortar { count, .. } => assert!(*count >= 1, "{}: a mortar of no shells", c.id),
+                        Trick::Blink { distance, .. } => assert!(*distance > 1.0, "{}: blinks nowhere", c.id),
+                        Trick::Burst { .. } | Trick::Mend { .. } | Trick::Enrage { .. } => {}
                     }
                 }
             }

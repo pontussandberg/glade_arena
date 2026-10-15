@@ -11,7 +11,7 @@ use std::f32::consts::TAU;
 use super::*;
 
 use arena_shared::abilities::AbilitySlot;
-use arena_shared::classes::{Brain, Chill, Trick};
+use arena_shared::classes::{Brain, Chill, Shell, Trick};
 use arena_shared::map::{FlowField, Map};
 use arena_shared::rooms::{RoomKey, ZOMBIES};
 
@@ -75,7 +75,8 @@ fn trick_every(trick: &Trick) -> Option<u32> {
         | Trick::Mend { every_ticks, .. }
         | Trick::Ring { every_ticks, .. }
         | Trick::Fan { every_ticks, .. }
-        | Trick::Mortar { every_ticks, .. } => Some(*every_ticks),
+        | Trick::Mortar { every_ticks, .. }
+        | Trick::Blink { every_ticks, .. } => Some(*every_ticks),
         _ => None,
     }
 }
@@ -88,6 +89,11 @@ pub(crate) struct Fields(HashMap<RoomKey, (u32, Vec<IVec2>, FlowField)>);
 /// How far a mortar throws.
 const MORTAR_REACH: f32 = 14.0;
 
+/// What a blinking monster leaves behind (`Trick::Blink::leaves`): how far its burst reaches,
+/// and how soon it goes off.
+const BLINK_LEAVES_RADIUS: f32 = 2.4;
+const BLINK_LEAVES_FUSE: u32 = 20;
+
 /// How long a kiter backs off at a time, and how often it may.
 const RETREAT_TICKS: u32 = 48;
 const RETREAT_EVERY_TICKS: u32 = 160;
@@ -97,11 +103,13 @@ const FIELD_EVERY_TICKS: u32 = 12;
 
 /// What a monster's trick does to others: done by `do_deeds`.
 pub(crate) enum Deed {
-    Burst { by: By, entity: Entity, at: Vec2, radius: f32, damage: i32 },
+    Burst { by: By, entity: Entity, at: Vec2, radius: f32, damage: i32, color: FxColor },
     Mend { room: InRoom, at: Vec2, radius: f32, amount: i32 },
     Summon { room: InRoom, class: ClassId, count: u32, at: Vec2, might: f32, raiser: Entity },
     Shots { side: Side, shots: Vec<Projectile>, might: f32 },
-    Mortar { by: By, from: Vec2, at: Vec2, radius: f32, damage: i32, fuse: u32 },
+    Mortar { by: By, from: Vec2, at: Vec2, radius: f32, damage: i32, fuse: u32, shell: Shell },
+    /// Gone from `from`, there at `to`, leaving `leaves` damage behind (`Trick::Blink`).
+    Blink { by: By, entity: Entity, from: Vec2, to: Vec2, leaves: i32 },
 }
 
 /// Server-only: deeds to do this tick.
@@ -235,10 +243,10 @@ pub(super) fn think(
                         input.order_cast(slot, to);
                     }
                 }
-                Trick::Burst { within, damage, radius } if dist < *within && !mob.burst => {
+                Trick::Burst { within, damage, radius, color } if dist < *within && !mob.burst => {
                     mob.burst = true;
                     let by = By { id: id.0, class: *class, side, source: Source::Trick };
-                    deeds.0.push(Deed::Burst { by, entity, at: pos.0, radius: *radius, damage: mighty(*damage, might) });
+                    deeds.0.push(Deed::Burst { by, entity, at: pos.0, radius: *radius, damage: mighty(*damage, might), color: *color });
                 }
                 Trick::Burst { .. } => {}
                 Trick::Summon { class: kind, count, max, .. } => {
@@ -270,14 +278,35 @@ pub(super) fn think(
                         .collect();
                     deeds.0.push(Deed::Shots { side, shots, might });
                 }
-                Trick::Mortar { damage, radius, fuse_ticks, .. } => {
+                Trick::Mortar { damage, radius, fuse_ticks, count, scatter, shell, .. } => {
                     // Only at prey it can reach with a throw.
                     if dist < MORTAR_REACH {
                         fired = true;
                         let by = By { id: id.0, class: *class, side, source: Source::Trick };
-                        deeds.0.push(Deed::Mortar { by, from: pos.0, at: target, radius: *radius, damage: mighty(*damage, might), fuse: *fuse_ticks });
+                        // The first right where its prey stands, the rest evenly round it.
+                        for n in 0..*count {
+                            let at = if n == 0 { target } else { target + Vec2::from_angle(mob.flank + TAU * n as f32 / (*count - 1) as f32) * *scatter };
+                            let at = if map.walkable_at(at) { at } else { target };
+                            deeds.0.push(Deed::Mortar { by, from: pos.0, at, radius: *radius, damage: mighty(*damage, might), fuse: *fuse_ticks, shell: *shell });
+                        }
                     }
                 }
+                Trick::Blink { within, distance, leaves, .. } if dist < *within => {
+                    // Away from its prey, else off to a side: wherever there's open ground in reach.
+                    let away = (-to).normalize_or(Vec2::X);
+                    let spot = [away, away.rotate(Vec2::from_angle(0.6)), away.rotate(Vec2::from_angle(-0.6)), away.perp(), -away.perp()]
+                        .into_iter()
+                        .map(|dir| pos.0 + dir * *distance)
+                        .find(|spot| map.walkable_at(*spot));
+                    if let Some(to) = spot {
+                        fired = true;
+                        input.move_to = None;
+                        input.fire = false;
+                        let by = By { id: id.0, class: *class, side, source: Source::Trick };
+                        deeds.0.push(Deed::Blink { by, entity, from: pos.0, to, leaves: mighty(*leaves, might) });
+                    }
+                }
+                Trick::Blink { .. } => {}
                 Trick::Enrage { below } => {
                     if !mob.enraged && (health.0 as f32) < below * max.0 as f32 {
                         mob.enraged = true;
@@ -308,8 +337,8 @@ pub(super) fn do_deeds(
     let now = timeline.tick().0;
     for deed in std::mem::take(&mut deeds.0) {
         match deed {
-            Deed::Burst { by, entity, at, radius, damage: burst } => {
-                blast(&mut commands, &mut log, now, &mut targets, by, at, radius, burst, Chill::default(), FxColor::Poison);
+            Deed::Burst { by, entity, at, radius, damage: burst, color } => {
+                blast(&mut commands, &mut log, now, &mut targets, by, at, radius, burst, Chill::default(), color);
                 // It's spent: it bursts itself, a blow of all it has left.
                 if let Ok((_, id, _, pos, mut health, mut chilled, mut hits, ..)) = targets.get_mut(entity) {
                     let (id, at, rest) = (id.0, pos.0, health.0);
@@ -330,10 +359,26 @@ pub(super) fn do_deeds(
                     crate::waves::spawn_mob(&mut commands, &mut lobby, now, room, class, spot, 1.0, might, Some(raiser));
                 }
             }
-            Deed::Mortar { by, from, at, radius, damage, fuse } => {
-                spawn_fx(&mut commands, by.side.0, Fx::between(FxKind::Lob(FxColor::Poison), from, at, radius, now, fuse));
-                let bomb = Delayed { by, at, radius, damage, chill: Chill::default(), fire_at: now + fuse, look: FxKind::Blast(FxColor::Poison) };
-                arm(&mut commands, &mut pending, now, bomb, FxKind::Warn(FxColor::Poison));
+            Deed::Mortar { by, from, at, radius, damage, fuse, shell } => {
+                // What's coming shows where it'll land, until it does.
+                let (warning, look) = match shell {
+                    Shell::Bomb => {
+                        spawn_fx(&mut commands, by.side.0, Fx::between(FxKind::Lob(FxColor::Poison), from, at, radius, now, fuse));
+                        (FxKind::Warn(FxColor::Poison), FxKind::Blast(FxColor::Poison))
+                    }
+                    Shell::Lightning => (FxKind::Bolt, FxKind::Blast(FxColor::Storm)),
+                    Shell::Meteor => (FxKind::Meteor, FxKind::Blast(FxColor::Fire)),
+                };
+                let shell = Delayed { by, at, radius, damage, chill: Chill::default(), fire_at: now + fuse, look };
+                arm(&mut commands, &mut pending, now, shell, warning);
+            }
+            Deed::Blink { by, entity, from, to, leaves } => {
+                commands.entity(entity).insert(Pos(to));
+                spawn_fx(&mut commands, by.side.0, Fx::between(FxKind::Blink, from, to, 1.0, now, 12));
+                if leaves > 0 {
+                    let left = Delayed { by, at: from, radius: BLINK_LEAVES_RADIUS, damage: leaves, chill: Chill::default(), fire_at: now + BLINK_LEAVES_FUSE, look: FxKind::Blast(FxColor::Void) };
+                    arm(&mut commands, &mut pending, now, left, FxKind::Warn(FxColor::Void));
+                }
             }
             Deed::Shots { side, shots, might } => {
                 for shot in shots {

@@ -190,6 +190,21 @@ pub enum Omen {
 
 impl Omen {
     pub const ALL: [Omen; 6] = [Omen::Horde, Omen::BloodMoon, Omen::Frenzy, Omen::Gilded, Omen::Restless, Omen::Volatile];
+    /// The order they come in (`Omen::of_wave`): a Gilded wave first, then the rest.
+    const IN_TURN: [Omen; 6] = [Omen::Gilded, Omen::Horde, Omen::Frenzy, Omen::Restless, Omen::BloodMoon, Omen::Volatile];
+
+    /// What's strange about `wave`, always the same: from wave 4, the second and fourth wave
+    /// after each boss (4, 7, 9, 12, 14, 17, 19, ...), each in turn (`IN_TURN`).
+    pub fn of_wave(wave: u32) -> Option<Omen> {
+        let n = match wave % 5 {
+            2 => 2 * (wave / 5),
+            4 => 2 * (wave / 5) + 1,
+            _ => return None,
+        };
+        // The first, wave 4, is the first in turn (wave 2 has none).
+        let n = n.checked_sub(1).filter(|_| wave >= 4)?;
+        Some(Self::IN_TURN[n as usize % Self::IN_TURN.len()])
+    }
 
     pub fn label(self) -> &'static str {
         match self {
@@ -238,7 +253,7 @@ impl Omen {
             Omen::BloodMoon => "Elites everywhere",
             Omen::Frenzy => "Every monster is hasted",
             Omen::Gilded => "Every bounty is doubled",
-            Omen::Restless => "The dead may rise again",
+            Omen::Restless => "Every third monster to die rises again",
             Omen::Volatile => "Everything bursts as it dies",
         }
     }

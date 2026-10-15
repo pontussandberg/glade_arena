@@ -1,0 +1,27 @@
+#![enable(unwrap_variant_newtypes)]
+// A Void Acolyte (field reference: README.md): a caster that keeps its distance, throws fans of
+// void bolts, and blinks away whenever anyone gets close, in the waves mode. Corner it, or shoot it.
+(
+    id: "void_acolyte",
+    name: "Void Acolyte",
+    role: "Monster",
+    blurb: "It is never quite where you swung.",
+    playable: false,
+    max_hp: 70,
+    move_speed: 3.2,
+    attack: (
+        damage: 9,
+        attack_ticks: 40,
+        windup: 0.35,
+        kind: Projectile(speed: 14.0, radius: 0.26, range: 11.0),
+    ),
+    abilities: [],
+    look: Some(figure: "frost_mage", size: 0.95, tint: (0.75, 0.5, 1.3), cloth: false),
+    mob: Some(
+        brain: Kite(keep: 7.5),
+        tricks: [Blink(within: 3.5, distance: 7.0, every_ticks: 160), Fan(count: 3, spread: 0.5, every_ticks: 128)],
+        bounty: 14,
+        cost: 2.5,
+        from_wave: 13,
+    ),
+)

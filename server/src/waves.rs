@@ -9,7 +9,10 @@
 //! them up (`revive`), or the wave is cleared, or a boss falls. If the whole party is down, the
 //! run is over: alone, one life is all there is.
 //!
-//! How hard a wave is, and what it's worth, is all in the tuning below.
+//! How hard a wave is, and what it's worth, is all in the tuning below, and it's the same every
+//! run: which monsters come, which of them are elites and as what, and the wave's omen are all
+//! the wave's own (its `Run::rng` is seeded by its number; omens come in a fixed turn,
+//! `Omen::of_wave`). Only where they come out, and where chests turn up, changes.
 
 use std::collections::HashMap;
 use std::f32::consts::TAU;
@@ -102,11 +105,8 @@ fn most_about(wave: u32, party: usize) -> usize {
 /// What an elite is, against its kind: (toughness, might, bounty).
 const ELITE: (f32, f32, u32) = (2.5, 1.3, 3);
 
-/// From which wave omens may come, and how likely one is.
-const OMENS_FROM: u32 = 4;
-const OMEN_ODDS: f32 = 0.5;
-/// The odds that a monster dying on a Restless wave rises again, and as what.
-const RISE_ODDS: f32 = 0.3;
+/// On a Restless wave, every how many monsters to die one rises again, and as what.
+const RISES_EVERY: u32 = 3;
 const RISES_AS: &str = "zombie";
 
 /// The bosses, in the order they come.
@@ -121,10 +121,6 @@ pub(crate) fn boss_of(wave: u32) -> Option<ClassId> {
     (wave % BOSS_EVERY == 0 && !BOSSES.is_empty()).then(|| BOSSES[((wave / BOSS_EVERY - 1) as usize) % BOSSES.len()])
 }
 
-/// Whatever's strange about `wave`, if anything: never the first few, nor a boss's.
-fn roll_omen(wave: u32) -> Option<Omen> {
-    (wave >= OMENS_FROM && boss_of(wave).is_none() && fastrand::f32() < OMEN_ODDS).then(|| Omen::ALL[fastrand::usize(..Omen::ALL.len())])
-}
 
 /// A room's run, on the server.
 #[derive(Debug)]
@@ -146,8 +142,13 @@ pub(crate) struct Run {
     alive: u32,
     /// Chests lying out this wave.
     chests: Vec<Entity>,
-    /// What's strange about this wave (rolled as the shop opens before it).
+    /// What's strange about this wave (`Omen::of_wave`, shown as the shop opens before it).
     pub(crate) omen: Option<Omen>,
+    /// This wave's own chances: which monsters come, and which are elites. Seeded by the wave's
+    /// number as it comes, so a wave is the same every run.
+    rng: fastrand::Rng,
+    /// Monsters that have died this wave (on a Restless wave every `RISES_EVERY`th rises).
+    deaths: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,7 +174,9 @@ impl Run {
             raise_fallen: false,
             alive: 0,
             chests: Vec::new(),
-            omen: None,
+            omen: Omen::of_wave(wave),
+            rng: fastrand::Rng::with_seed(wave as u64),
+            deaths: 0,
         }
     }
 
@@ -273,11 +276,11 @@ fn roster(wave: u32) -> Vec<(ClassId, f32)> {
         .collect()
 }
 
-fn pick(roster: &[(ClassId, f32)], budget: f32) -> Option<ClassId> {
+fn pick(rng: &mut fastrand::Rng, roster: &[(ClassId, f32)], budget: f32) -> Option<ClassId> {
     let fits: Vec<&(ClassId, f32)> = roster.iter().filter(|(c, _)| c.def().mob.as_ref().is_some_and(|m| m.cost * m.pack as f32 <= budget + 0.5)).collect();
     let fits = if fits.is_empty() { roster.iter().collect() } else { fits };
     let total: f32 = fits.iter().map(|(_, w)| w).sum();
-    let mut roll = fastrand::f32() * total;
+    let mut roll = rng.f32() * total;
     for (class, weight) in &fits {
         roll -= weight;
         if roll <= 0.0 {
@@ -356,6 +359,9 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now,
             run.phase = RunPhase::Fight;
             run.ready.clear();
             run.budget = budget(wave, size) * run.omen.map_or(1.0, Omen::budget_scale);
+            // The wave's own chances, the same whenever it comes.
+            run.rng = fastrand::Rng::with_seed(wave as u64);
+            run.deaths = 0;
             run.next_pack_at = now;
             run.boss_out = boss_of(wave).is_none();
             run.chests = scatter_chests(commands, room, map, &party_at, wave);
@@ -387,13 +393,15 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now,
             }
             if run.budget > 0.0 && now >= run.next_pack_at && (alive as usize) < most_about(wave, size) {
                 run.next_pack_at = now + spawn_every(wave);
-                let (Some(class), Some(lair)) = (pick(&roster(wave), run.budget), pick_lair(&map.lairs, &party_at)) else { return };
+                let (Some(class), Some(lair)) = (pick(&mut run.rng, &roster(wave), run.budget), pick_lair(&map.lairs, &party_at)) else { return };
                 let mob = class.def().mob.as_ref().expect("on the roster");
                 run.budget -= mob.cost * mob.pack as f32;
                 let odds = run.omen.map_or(elite_odds(wave), |omen| omen.elite_odds(elite_odds(wave)));
                 let radius = if mob.pack > 1 { 1.2 } else { 0.0 };
-                for at in ring_spots(map, lair, mob.pack, radius).collect::<Vec<_>>() {
-                    let elite = (fastrand::f32() < odds).then(|| Affix::ALL[fastrand::usize(..Affix::ALL.len())]);
+                // Which are elites, and as what, by the wave's own chances.
+                let pack: Vec<(Vec2, Option<Affix>)> =
+                    ring_spots(map, lair, mob.pack, radius).map(|at| (at, (run.rng.f32() < odds).then(|| Affix::ALL[run.rng.usize(..Affix::ALL.len())]))).collect();
+                for (at, elite) in pack {
                     spawn_mob_as(commands, lobby, now, room, class, at, toughness(wave, size), might(wave), None, elite);
                 }
                 return;
@@ -405,7 +413,7 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now,
             let pay = WAVE_PAY + WAVE_PAY_GROWTH * wave;
             run.wave += 1;
             run.phase = RunPhase::Shop { until: now + SHOP_TICKS };
-            run.omen = roll_omen(run.wave);
+            run.omen = Omen::of_wave(run.wave);
             run.waiting.clear();
             run.clear_chests(commands);
             info!(room = key.0, wave, pay, "wave cleared");
@@ -525,18 +533,22 @@ pub(super) fn shelter(
 
 /// A monster killed pays its bounty to the party (more on a Gilded wave); a boss brings the
 /// downed back.
-/// On a Restless wave, the dead may rise again (once).
+/// On a Restless wave, every `RISES_EVERY`th to die rises again (once).
 pub(super) fn pay_bounties(timeline: Res<LocalTimeline>, mut commands: Commands, mut lobby: ResMut<Lobby>, killed: Query<(Entity, &Mob, &InRoom, &Pos, &ClassId, Option<&Might>), Added<Dead>>) {
     let now = timeline.tick().0;
     for (entity, mob, room, pos, class, might) in &killed {
         let omen = lobby.run(room.key).and_then(|run| run.omen);
         lobby.give_gold(room.key, mob.bounty * omen.map_or(1, Omen::bounty_scale));
         let boss = class.def().is_boss();
+        let deaths = lobby.run_mut(room.key).map_or(0, |run| {
+            run.deaths += 1;
+            run.deaths
+        });
         // Risen ones (raised by another) don't rise again.
         if omen.is_some_and(Omen::raises)
             && !boss
             && mob.raised_by.is_none()
-            && fastrand::f32() < RISE_ODDS
+            && deaths.is_multiple_of(RISES_EVERY)
             && let Some(risen) = ClassId::by_key(RISES_AS)
         {
             let wave = lobby.run(room.key).map_or(1, |run| run.wave);
@@ -592,15 +604,50 @@ mod tests {
         assert!(budget(5, 4) > budget(5, 1) * 2.0);
         assert!(toughness(20, 1) > 2.0 && toughness(1, 1) == 1.0);
         assert_eq!(boss_of(4), None);
-        let [first, second, third] = [5, 10, 15].map(|w| boss_of(w).expect("a boss wave"));
-        assert!(first != second && second != third);
-        assert_eq!(boss_of(20), Some(first), "the bosses come round again");
-        assert!(boss_toughness(20, 1) > boss_toughness(5, 1));
+        let bosses = [5, 10, 15, 20, 25].map(|w| boss_of(w).expect("a boss wave"));
+        assert_eq!(bosses.map(|b| b.def().id.clone()), ["butcher", "pale_lich", "grave_lord", "ember_archmage", "plague_mother"]);
+        assert_eq!(boss_of(30), Some(bosses[0]), "the bosses come round again");
+        assert!(boss_toughness(30, 1) > boss_toughness(5, 1) * 1.8);
         assert_eq!(elite_odds(3), 0.0);
         assert!(roster(1).iter().all(|(c, _)| c.def().mob.as_ref().unwrap().from_wave <= 1) && !roster(1).is_empty());
         assert!(roster(12).len() > roster(3).len());
         assert!(ClassId::by_key(RISES_AS).is_some_and(|c| c.def().mob.is_some()));
         assert!(ClassId::by_key(crate::brain::SPLITS_INTO).is_some_and(|c| c.def().mob.is_some()));
+    }
+
+    /// A wave is the same every run: the same monsters, in the same order, the same elites, the
+    /// same omen.
+    #[test]
+    fn a_wave_is_the_same_every_time() {
+        let sequence = |wave: u32| {
+            let mut run = Run::new(0, wave);
+            let mut budget = budget(wave, 1);
+            let mut picks = Vec::new();
+            while budget > 0.0 {
+                let class = pick(&mut run.rng, &roster(wave), budget).unwrap();
+                let mob = class.def().mob.as_ref().unwrap();
+                budget -= mob.cost * mob.pack as f32;
+                let elite = (run.rng.f32() < elite_odds(wave)).then(|| run.rng.usize(..Affix::ALL.len()));
+                picks.push((class, elite));
+            }
+            (picks, run.omen)
+        };
+        for wave in [1, 7, 12, 23, 40] {
+            assert_eq!(sequence(wave), sequence(wave), "wave {wave} came out differently");
+        }
+        assert_ne!(sequence(12).0, sequence(13).0, "every wave the same as the next");
+        // Omens in turn, between the bosses, from wave 4.
+        let omens: Vec<(u32, Omen)> = (1..=20).filter_map(|w| Omen::of_wave(w).map(|o| (w, o))).collect();
+        assert_eq!(
+            omens,
+            [(4, Omen::Gilded), (7, Omen::Horde), (9, Omen::Frenzy), (12, Omen::Restless), (14, Omen::BloodMoon), (17, Omen::Volatile), (19, Omen::Gilded)]
+        );
+        assert!((1..200).all(|w| boss_of(w).is_none() || Omen::of_wave(w).is_none()), "an omen on a boss wave");
+        // The newer kinds come later on.
+        for (key, from) in [("void_acolyte", 13), ("ember_imp", 16), ("storm_caller", 19)] {
+            let class = ClassId::by_key(key).unwrap();
+            assert!(roster(from).iter().any(|(c, _)| *c == class) && !roster(from - 1).iter().any(|(c, _)| *c == class), "{key}");
+        }
     }
 
     #[test]

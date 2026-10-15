@@ -72,15 +72,22 @@ with some gold, and every kill pays its bounty to the whole party (no kill steal
 cleared wave pays more, and **chests** turn up out in the wilds during a wave (gold for everyone,
 if someone goes and gets them). Press F (or the banner's button) once you're ready; the next wave
 comes once everyone is, or when the countdown runs out. A boss leads every fifth wave (The
-Butcher, The Pale Lich, The Grave Lord, round again, tougher each time), and from wave 6 a few
+Butcher, The Pale Lich, The Grave Lord, The Ember Archmage, The Plague Mother, then round again,
+tougher each time), and from wave 6 a few
 **elites** come along, bigger, tougher, worth more, and with a twist: Swift, Vampiric, Volatile
 (blows up where it dies), Frostbound or Splitting. Everyone has **one life**: a fallen player is
 **down** where they fell (marked by a ring of spirit light) until an ally stands over them for 3
 seconds to pick them up, the wave is cleared, or a boss falls; if everyone is down, the run is
-over (alone, the first fall ends it). Shrines (blood-red stones) send you into a frenzy. From
-wave 4, about half the waves come with an **omen**, known while you shop for them: a Horde, a
-Blood Moon (elites everywhere), a Frenzy (every monster hasted), Gilded (double bounties), the
-Restless Dead (who may rise again) or Volatile (everything bursts as it dies). Players' auto-attacks
+over (alone, the first fall ends it). Shrines (blood-red stones) send you into a frenzy.
+
+Every wave is the same every run: which monsters come, in what order, which are elites, and its
+omen are all the wave's own (only where they come out of, and where chests turn up, changes).
+From wave 4 the second and fourth wave after each boss (4, 7, 9, 12, 14, 17, 19, ...) come with
+an **omen**, in turn, shown while you shop for it: Gilded (double bounties), a Horde (half as many
+again), a Frenzy (every monster hasted), the Restless Dead (every third to die rises again), a
+Blood Moon (elites everywhere), Volatile (everything bursts as it dies), and round again.
+
+Players' auto-attacks
 knock monsters (zombies too) back a little, bosses aside, and the Jav's javelins pierce straight
 through monsters (never players).
 
@@ -135,7 +142,14 @@ its tricks, its bounty and when it first comes), wearing the players' and the zo
 sized and tinted (`look`): zombies, packs of gnawers, pouncing ghouls, spear-throwing grave
 hunters that keep their distance, bloaters that burst, grave ogres that slam the ground, frost
 wraiths, bonecallers raising gnawers, rot priests mending the others, plague bombardiers lobbing
-bombs where you stand (keep moving), and death knights charging through you. The server runs them (`server/src/brain.rs`), the waves (`server/src/waves.rs`, where
+bombs where you stand (keep moving), and death knights charging through you. Later on: void
+acolytes (13) that throw fans of void bolts and blink away from anyone who closes in, packs of
+ember imps (16) that throw themselves at you and burst into flame, and storm callers (19) that
+call lightning down where you stand (the air crackles there first). The Ember Archmage (20)
+throws fireballs that burst, rains meteors round you (their burning shadows show where), throws
+rings of fire, and blinks away from anyone who closes in, the spot it left blowing up a moment
+later; the Plague Mother (25) lumbers after you, slams out a wave of rot that slows, lobs volleys
+of plague bombs and births bloaters. The server runs them (`server/src/brain.rs`), the waves (`server/src/waves.rs`, where
 all the tuning is) and the items (`server/src/items.rs`).
 
 To try a later wave natively: `ARENA_ROOM="Waves 10" cargo run -p arena-client -- 11 revenant`
