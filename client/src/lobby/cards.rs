@@ -36,11 +36,12 @@ pub(crate) fn pane(open: bool) -> impl Bundle {
 #[derive(Component)]
 pub(crate) struct Scrolls;
 
-/// An open pane's body, under its header: what doesn't fit scrolls.
-pub(crate) fn pane_body() -> impl Bundle {
+/// An open pane's body, under its header: what doesn't fit scrolls, from `scrolled` down (as far
+/// as it goes).
+pub(crate) fn pane_body(scrolled: f32) -> impl Bundle {
     (
         Scrolls,
-        ScrollPosition::default(),
+        ScrollPosition(Vec2::new(0.0, scrolled)),
         bevy::ui::RelativeCursorPosition::default(),
         Node { flex_direction: FlexDirection::Column, min_height: px(0.0), flex_shrink: 1.0, overflow: Overflow::scroll_y(), ..default() },
     )

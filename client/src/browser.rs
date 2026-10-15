@@ -416,8 +416,8 @@ fn spawn_lobbies(panel: &mut ChildSpawnerCommands, home: &Home, list: &[RoomSumm
         return;
     }
     // Opened, the form shows at once: scrolled to the end (as far as it goes).
-    let scrolled = if home.form_open { ScrollPosition(Vec2::new(0.0, 10_000.0)) } else { ScrollPosition::default() };
-    panel.spawn((pane_body(), scrolled)).with_children(|panel| {
+    let scrolled = if home.form_open { 10_000.0 } else { 0.0 };
+    panel.spawn(pane_body(scrolled)).with_children(|panel| {
         panel.spawn(card()).with_children(|card| {
             card.spawn(ui_text("Join a lobby", 20.0, palette::ui::TEXT));
             if list.is_empty() {
@@ -520,7 +520,7 @@ fn spawn_boards(panel: &mut ChildSpawnerCommands, scores: &[HighScore], open: &B
         if !open.open {
             return;
         }
-        panel.spawn(pane_body()).with_children(|panel| {
+        panel.spawn(pane_body(0.0)).with_children(|panel| {
             panel.spawn(card()).with_children(|card| {
                 card.spawn(Node { column_gap: px(GAP * 0.5), ..default() }).with_children(|row| {
                     for size in 1..=MAX_PARTY {
