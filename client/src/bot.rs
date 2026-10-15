@@ -1,5 +1,6 @@
 //! A simple sparring bot: drives `DesiredInput` instead of the mouse. Melee classes chase the
-//! nearest enemy and swing; ranged classes keep their distance and shoot. It clicks to attack
+//! nearest enemy and swing; ranged classes keep their distance and shoot. It steps out of what's
+//! about to land on it (a bomb's circle, a monster's swing winding up in reach). It clicks to attack
 //! whenever it's in range (the server drops clicks until its last attack is done), and stands
 //! still while one winds up, since moving would cancel it. Turn it on with
 //! `ARENA_BOT=1` (native client) to have someone to fight when testing alone. Against the waves,
@@ -18,6 +19,10 @@ use crate::{DesiredInput, Me, PlayerControls, SendCommands};
 
 /// How far inside its lane's ends (`AttackDef::hit_span`) a melee bot starts a swing.
 const MELEE_LEAD: f32 = 0.6;
+/// How far out of a bomb's circle or a swing's reach the bot wants to be, and how far it steps
+/// to get there.
+const DODGE_MARGIN: f32 = 0.6;
+const DODGE_STEP: f32 = 3.0;
 
 /// Present when this client is played by the bot.
 #[derive(Resource)]
@@ -38,7 +43,8 @@ fn think(
     me: Query<(&PlayerId, &ClassId, &Pos, &AttackState, &Cooldowns, Option<&Team>), With<Me>>,
     server: Query<&RemoteTimeline, With<Client>>,
     // Not the shopkeeper: no one can hurt them.
-    others: Query<(&PlayerId, &Pos, &Health, Option<&Team>), (Without<Me>, Without<Shopkeeper>)>,
+    others: Query<(&PlayerId, &Pos, &Health, Option<&Team>, (&ClassId, &AttackState)), (Without<Me>, Without<Shopkeeper>)>,
+    warnings: Query<&Fx>,
     mut desired: ResMut<DesiredInput>,
     map: Res<CurrentMap>,
 ) {
@@ -49,7 +55,7 @@ fn think(
     let Some(target) = others
         .iter()
         // Foes only: not allies (the party, against the waves).
-        .filter(|(id, _, health, team)| id.0 != my_id.0 && health.alive() && !my_team.zip(*team).is_some_and(|(mine, theirs)| mine.allied(*theirs)))
+        .filter(|(id, _, health, team, _)| id.0 != my_id.0 && health.alive() && !my_team.zip(*team).is_some_and(|(mine, theirs)| mine.allied(*theirs)))
         .map(|(_, p, ..)| p.0)
         .min_by(|a, b| a.distance(me.0).total_cmp(&b.distance(me.0)))
     else {
@@ -82,6 +88,27 @@ fn think(
         (Some(current), Some(new)) if (new - current).abs().max_element() < 2.0 => Some(current),
         _ => wanted,
     };
+    // Something about to land on us: step away from it, unless we're winding up ourselves.
+    let foe = |team: Option<&Team>| !my_team.zip(team).is_some_and(|(mine, theirs)| mine.allied(*theirs));
+    let bomb = warnings
+        .iter()
+        .find(|fx| matches!(fx.kind, FxKind::Warn(FxColor::Poison | FxColor::Fire)) && fx.at.distance(me.0) < fx.radius + DODGE_MARGIN)
+        .map(|fx| fx.at);
+    let swing = others
+        .iter()
+        .filter(|(id, _, health, team, _)| id.0 != my_id.0 && health.alive() && foe(*team))
+        .find(|(_, p, _, _, (class, state))| {
+            state.winding_up().is_some() && class.def().attack.hit_span(false).is_some_and(|(_, far)| p.0.distance(me.0) < far + DODGE_MARGIN)
+        })
+        .map(|(_, p, ..)| p.0);
+    if let Some(from) = bomb.or(swing)
+        && attack.winding_up().is_none()
+    {
+        let away = (me.0 - from).normalize_or(-to_target.normalize_or_zero());
+        let to = [away, away.perp(), -away.perp()].into_iter().find_map(|dir| map.walk_target(me.0 + dir * DODGE_STEP, 2));
+        desired.0 = PlayerInput { move_to: to, aim: to_target, ..default() };
+        return;
+    }
     let clear = map.shot_clear(me.0, target);
     let fire = in_reach && clear;
     let move_to = move_to.filter(|_| !fire && attack.winding_up().is_none());

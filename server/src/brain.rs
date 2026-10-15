@@ -253,7 +253,7 @@ pub(super) fn think(
                         mob.enraged = true;
                         hasted.0 = Span { from: now + 1, until: u32::MAX };
                         commands.entity(entity).insert(Might(might * 1.3));
-                        spawn_fx(&mut commands, *room, Fx { kind: FxKind::Blast(Hue::Blood), at: pos.0, to: pos.0, radius: 3.0, from: now, until: now + 16 });
+                        spawn_fx(&mut commands, *room, Fx { kind: FxKind::Blast(FxColor::Blood), at: pos.0, to: pos.0, radius: 3.0, from: now, until: now + 16 });
                     }
                 }
             }
@@ -280,7 +280,7 @@ pub(super) fn do_deeds(
     for deed in std::mem::take(&mut deeds.0) {
         match deed {
             Deed::Burst { by, entity, at, radius, damage } => {
-                blast(&mut commands, &mut log, now, &mut targets, by, at, radius, damage, Chill::default(), Hue::Poison);
+                blast(&mut commands, &mut log, now, &mut targets, by, at, radius, damage, Chill::default(), FxColor::Poison);
                 // It's spent: it bursts itself.
                 if let Ok((_, id, _, _, mut health, _, mut hits)) = targets.get_mut(entity)
                     && health.0 > 0
@@ -291,7 +291,7 @@ pub(super) fn do_deeds(
                 }
             }
             Deed::Mend { room, at, radius, amount } => {
-                spawn_fx(&mut commands, room, Fx { kind: FxKind::Blast(Hue::Poison), at, to: at, radius, from: now, until: now + 14 });
+                spawn_fx(&mut commands, room, Fx { kind: FxKind::Blast(FxColor::Poison), at, to: at, radius, from: now, until: now + 14 });
                 for (entity, _, (r, team), pos, mut health, _, mut hits) in &mut targets {
                     if *r != room || team.0 != ZOMBIES || health.0 <= 0 || pos.0.distance(at) > radius {
                         continue;
@@ -314,8 +314,8 @@ pub(super) fn do_deeds(
             }
             Deed::Mortar { by, from, at, radius, damage, fuse } => {
                 spawn_fx(&mut commands, by.side.0, Fx { kind: FxKind::Lob, at: from, to: at, radius, from: now, until: now + fuse });
-                spawn_fx(&mut commands, by.side.0, Fx { kind: FxKind::Warn(Hue::Poison), at, to: at, radius, from: now, until: now + fuse });
-                pending.0.push(crate::items::Delayed { by, at, radius, damage, chill: Chill::default(), fire_at: now + fuse, hue: Hue::Poison });
+                spawn_fx(&mut commands, by.side.0, Fx { kind: FxKind::Warn(FxColor::Poison), at, to: at, radius, from: now, until: now + fuse });
+                pending.0.push(crate::items::Delayed { by, at, radius, damage, chill: Chill::default(), fire_at: now + fuse, hue: FxColor::Poison });
             }
             Deed::Shots { side, shots, might } => {
                 for shot in shots {

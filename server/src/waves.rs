@@ -39,8 +39,10 @@ const SHOP_TICKS: u32 = 30 * TICK_HZ as u32;
 const READY_TICKS: u32 = 3 * TICK_HZ as u32;
 /// Lives a run starts with; a boss killed gives one more.
 const START_LIVES: u32 = 3;
-/// How long a player coming back can't be hurt (nor is gone for), so they're not caught at once.
-const SHELTER_TICKS: u32 = 2 * TICK_HZ as u32;
+/// How long a player coming back can't be hurt (nor is gone for), so they're not caught at once,
+/// and how far round them monsters are flung back as they do.
+const SHELTER_TICKS: u32 = 3 * TICK_HZ as u32;
+const REBIRTH_REACH: f32 = 6.0;
 /// How much of their health players in the camp get back a second, in a run, and how often.
 const CAMP_MENDS: f32 = 0.04;
 const MEND_EVERY_TICKS: u32 = TICK_HZ as u32 / 2;
@@ -458,21 +460,42 @@ pub(crate) struct Sheltered {
     until: u32,
 }
 
-/// Players coming back in a run are sheltered a moment; the shelter ends in time.
+/// Players coming back in a run are sheltered a moment, and burst out of the ground: monsters
+/// near are flung back out of reach, so a comeback among them isn't over at once. The shelter
+/// ends in time.
 pub(super) fn shelter(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut back: RemovedComponents<Dead>,
-    players: Query<&InRoom, With<ControlledBy>>,
+    players: Query<(&InRoom, &Pos), With<ControlledBy>>,
+    mut monsters: Query<(&InRoom, &mut Pos), (With<Mob>, Without<ControlledBy>)>,
     sheltered: Query<(Entity, &Sheltered)>,
 ) {
     let now = timeline.tick().0;
     for player in back.read() {
-        if let Ok(room) = players.get(player)
-            && lobby.run(room.key).is_some_and(Run::on)
-        {
-            commands.entity(player).try_insert((Untouchable, Sheltered { until: now + SHELTER_TICKS }));
+        let Ok((room, at)) = players.get(player) else { continue };
+        if !lobby.run(room.key).is_some_and(Run::on) {
+            continue;
+        }
+        commands.entity(player).try_insert((Untouchable, Sheltered { until: now + SHELTER_TICKS }));
+        spawn_fx(&mut commands, *room, Fx { kind: FxKind::Blast(FxColor::Spirit), at: at.0, to: at.0, radius: REBIRTH_REACH, from: now, until: now + 14 });
+        let map = lobby.map(room);
+        for (monster_room, mut pos) in &mut monsters {
+            let away = pos.0 - at.0;
+            if monster_room != room || away.length() >= REBIRTH_REACH {
+                continue;
+            }
+            // Out along the way it was from us, as far as the ground goes.
+            let dir = away.try_normalize().unwrap_or(Vec2::X);
+            let to = (1..=(REBIRTH_REACH * 4.0) as i32)
+                .map(|step| at.0 + dir * step as f32 * 0.25)
+                .filter(|p| p.distance(at.0) > away.length())
+                .take_while(|p| map.line_walkable(pos.0, *p))
+                .last();
+            if let Some(to) = to {
+                pos.0 = to;
+            }
         }
     }
     for (player, shelter) in &sheltered {

@@ -348,14 +348,25 @@ fn place(node: &mut Node, map: &Map, at: Vec2, size: f32) {
     }
 }
 
+/// A dot in its own color whoever its fighter is to us (the merchant's gold).
+#[derive(Component)]
+struct KeepsColor;
+
 /// Each fighter gets a dot once it has a body.
 fn spawn_dots(
     mut commands: Commands,
     minimap: Single<Entity, With<Minimap>>,
-    new: Query<(Entity, &ClassId, Has<Me>), (With<PlayerId>, Added<Mesh3d>)>,
+    new: Query<(Entity, &ClassId, Has<Me>, Has<Shopkeeper>), (With<PlayerId>, Added<Mesh3d>)>,
 ) {
-    for (player, class, is_me) in &new {
-        let size = if class.def().playable { DOT } else { MONSTER_DOT };
+    for (player, class, is_me, shopkeeper) in &new {
+        // The merchant and bosses stand out: bigger, the merchant in gold.
+        let boss = class.def().mob.as_ref().is_some_and(|m| m.boss);
+        let size = match () {
+            _ if shopkeeper || boss => DOT * 1.6,
+            _ if class.def().playable => DOT,
+            _ => MONSTER_DOT,
+        };
+        let fill = if shopkeeper { palette::GOLD } else { Relation::of(is_me, false).color() };
         let dot = commands
             .spawn((
                 Dot { player, size },
@@ -367,10 +378,13 @@ fn spawn_dots(
                     border_radius: BorderRadius::MAX,
                     ..default()
                 },
-                BackgroundColor(Relation::of(is_me, false).color()),
+                BackgroundColor(fill),
                 BorderColor::all(palette::ui::PANEL),
             ))
             .id();
+        if shopkeeper {
+            commands.entity(dot).insert(KeepsColor);
+        }
         commands.entity(*minimap).add_child(dot);
     }
 }
@@ -379,7 +393,7 @@ fn spawn_dots(
 fn color_dots(
     players: Query<&Relation>,
     changed: Query<(), Changed<Relation>>,
-    mut dots: Query<(Ref<Dot>, &mut BackgroundColor)>,
+    mut dots: Query<(Ref<Dot>, &mut BackgroundColor), Without<KeepsColor>>,
 ) {
     for (dot, mut fill) in &mut dots {
         if !(changed.contains(dot.player) || dot.is_added()) {

@@ -391,7 +391,7 @@ pub const SHOP_RADIUS: f32 = 4.0;
 
 /// What an effect looks like: its color and feel.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
-pub enum Hue {
+pub enum FxColor {
     Fire,
     Spirit,
     Frost,
@@ -408,13 +408,13 @@ pub enum FxKind {
     /// An arc of lightning from `at` to `to`.
     Arc,
     /// A burst out to `radius` around `at`, at once.
-    Blast(Hue),
+    Blast(FxColor),
     /// Ground marked out to `radius` around `at` until `until`: a frost patch, a blizzard, a
     /// vortex, a healing circle.
-    Zone(Hue),
+    Zone(FxColor),
     /// Something about to land at `at` (out to `radius`) at `until`: a keg's fuse, a strike from
     /// the sky, a bloater swelling. Drawn filling up until then.
-    Warn(Hue),
+    Warn(FxColor),
     /// A keg flying from `at` to `to`, landing at `until`.
     Lob,
     /// Lightning down from the sky onto `at`.

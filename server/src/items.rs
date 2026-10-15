@@ -102,7 +102,7 @@ pub(crate) struct Delayed {
     pub(crate) damage: i32,
     pub(crate) chill: Chill,
     pub(crate) fire_at: u32,
-    pub(crate) hue: Hue,
+    pub(crate) hue: FxColor,
 }
 
 /// Server-only: blasts set to go off.
@@ -129,7 +129,7 @@ pub(crate) struct Zones(Vec<Zone>);
 /// Deals `damage` (and `chill`) to `by`'s foes within `radius` of `at`, shown as a blast in `hue`.
 /// How many it hit.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn blast(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut Targets, by: By, at: Vec2, radius: f32, damage: i32, chill: Chill, hue: Hue) -> usize {
+pub(crate) fn blast(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut Targets, by: By, at: Vec2, radius: f32, damage: i32, chill: Chill, hue: FxColor) -> usize {
     spawn_fx(commands, by.side.0, Fx { kind: FxKind::Blast(hue), at, to: at, radius, from: now, until: now + 10 });
     let blow = Blow::ability(damage, chill);
     hit_foes(commands, log, now, targets, (by.id, by.class, by.name()), (by.side, by.source), blow, |_, p| p.distance(at) <= radius + PLAYER_RADIUS)
@@ -202,14 +202,14 @@ pub(super) fn tick_items(
                     let Some((_, at)) = nearest_foe(&targets, side, pos.0, reach, |_| false) else { continue };
                     state.keg_at = now + every;
                     spawn_fx(&mut commands, side.0, Fx { kind: FxKind::Lob, at: pos.0, to: at, radius, from: now, until: now + fuse });
-                    pending.0.push(Delayed { by: by(item), at, radius, damage, chill: Chill::default(), fire_at: now + fuse, hue: Hue::Fire });
+                    pending.0.push(Delayed { by: by(item), at, radius, damage, chill: Chill::default(), fire_at: now + fuse, hue: FxColor::Fire });
                 }
                 Item::HoarfrostBoots if now >= state.trail.0 && pos.0.distance(state.trail.1) >= 0.8 => {
                     let (slow, damage, lasts, every) = items::hoarfrost_boots(level);
                     state.trail = (now + every, pos.0);
                     let radius = items::FROST_PATCH_RADIUS;
                     zones.0.push(Zone { by: by(item), at: pos.0, radius, damage, slow, pull: 0.0, until: now + lasts });
-                    spawn_fx(&mut commands, side.0, Fx { kind: FxKind::Zone(Hue::Frost), at: pos.0, to: pos.0, radius, from: now, until: now + lasts });
+                    spawn_fx(&mut commands, side.0, Fx { kind: FxKind::Zone(FxColor::Frost), at: pos.0, to: pos.0, radius, from: now, until: now + lasts });
                 }
                 Item::GravecallerRift if pulse => {
                     let damage = items::gravecaller_rift(level);
@@ -259,7 +259,7 @@ pub(super) fn tick_items(
     for (entity, decoy, class, pos, side, dead) in &decoys {
         if now >= decoy.until || dead {
             let by = By { id: decoy.owner, class: *class, side: (*side.0, *side.1), source: Source::Item(Item::MirrorShard) };
-            blast(&mut commands, &mut log, now, &mut targets, by, pos.0, decoy.radius, decoy.damage, Chill::default(), Hue::Spirit);
+            blast(&mut commands, &mut log, now, &mut targets, by, pos.0, decoy.radius, decoy.damage, Chill::default(), FxColor::Spirit);
             commands.entity(entity).try_despawn();
         }
     }
@@ -275,7 +275,7 @@ pub(super) fn tick_items(
         }
         let Ok((_, victim, ..)) = targets.get(entity) else { continue };
         let victim = victim.0;
-        spawn_fx(&mut commands, doom.side.0, Fx { kind: FxKind::Blast(Hue::Void), at: pos.0, to: pos.0, radius: 1.2, from: now, until: now + 12 });
+        spawn_fx(&mut commands, doom.side.0, Fx { kind: FxKind::Blast(FxColor::Void), at: pos.0, to: pos.0, radius: 1.2, from: now, until: now + 12 });
         let by = By { id: doom.by, class: doom.class, side: doom.side, source: Source::Item(Item::DoomBell) };
         hit_foes(&mut commands, &mut log, now, &mut targets, (by.id, by.class, by.name()), (by.side, by.source), Blow::ability(toll, Chill::default()), |p, _| p == victim);
     }
@@ -329,8 +329,8 @@ fn on_cast(r: &mut Reacting, now: u32, cast: Used) {
         match item {
             Item::EchoStone => {
                 let (damage, radius, delay) = items::echo_stone(level);
-                spawn_fx(&mut r.commands, cast.side.0, Fx { kind: FxKind::Warn(Hue::Spirit), at: cast.at, to: cast.at, radius, from: now, until: now + delay });
-                r.pending.0.push(Delayed { by: by(item), at: cast.at, radius, damage, chill: Chill::default(), fire_at: now + delay, hue: Hue::Spirit });
+                spawn_fx(&mut r.commands, cast.side.0, Fx { kind: FxKind::Warn(FxColor::Spirit), at: cast.at, to: cast.at, radius, from: now, until: now + delay });
+                r.pending.0.push(Delayed { by: by(item), at: cast.at, radius, damage, chill: Chill::default(), fire_at: now + delay, hue: FxColor::Spirit });
             }
             Item::VoidOrb => {
                 let (radius, pull, damage, lasts) = items::void_orb(level);
@@ -339,7 +339,7 @@ fn on_cast(r: &mut Reacting, now: u32, cast: Used) {
                 let at = cast.at + cast.aim.clamp_length_max(9.0);
                 let at = map.nearest_walkable(Map::tile_of(at), 3).map_or(cast.at, Map::center);
                 r.zones.0.push(Zone { by: by(item), at, radius, damage, slow: 0.0, pull, until: now + lasts });
-                spawn_fx(&mut r.commands, cast.side.0, Fx { kind: FxKind::Zone(Hue::Void), at, to: at, radius, from: now, until: now + lasts });
+                spawn_fx(&mut r.commands, cast.side.0, Fx { kind: FxKind::Zone(FxColor::Void), at, to: at, radius, from: now, until: now + lasts });
             }
             Item::MirrorShard if now >= state.mirror_at => {
                 let (lasts, damage, radius, recharge) = items::mirror_shard(level);
@@ -354,12 +354,12 @@ fn on_cast(r: &mut Reacting, now: u32, cast: Used) {
                     Replicate::to_clients(NetworkTarget::All),
                     InterpolationTarget::to_clients(NetworkTarget::All),
                 ));
-                spawn_fx(&mut r.commands, cast.side.0, Fx { kind: FxKind::Blast(Hue::Spirit), at: cast.at, to: cast.at, radius: 1.0, from: now, until: now + 8 });
+                spawn_fx(&mut r.commands, cast.side.0, Fx { kind: FxKind::Blast(FxColor::Spirit), at: cast.at, to: cast.at, radius: 1.0, from: now, until: now + 8 });
             }
             Item::HeartOfWinter if matches!(cast.class.def().ability(cast.slot).map(|a| a.kind), Some(AbilityKind::Nova(_))) => {
                 let (radius, slow, damage, lasts) = items::heart_of_winter(level);
                 r.zones.0.push(Zone { by: by(item), at: cast.at, radius, damage, slow, pull: 0.0, until: now + lasts });
-                spawn_fx(&mut r.commands, cast.side.0, Fx { kind: FxKind::Zone(Hue::Frost), at: cast.at, to: cast.at, radius, from: now, until: now + lasts });
+                spawn_fx(&mut r.commands, cast.side.0, Fx { kind: FxKind::Zone(FxColor::Frost), at: cast.at, to: cast.at, radius, from: now, until: now + lasts });
             }
             _ => {}
         }
@@ -378,7 +378,7 @@ fn on_hit(r: &mut Reacting, now: u32, hit: Landed) {
             match item {
                 Item::EmberHeart if hit.killed => {
                     let (damage, radius) = items::ember_heart(level);
-                    blast(&mut r.commands, &mut r.log, now, &mut r.targets, by(item), hit.at, radius, damage, Chill::default(), Hue::Fire);
+                    blast(&mut r.commands, &mut r.log, now, &mut r.targets, by(item), hit.at, radius, damage, Chill::default(), FxColor::Fire);
                 }
                 Item::BerserkerTotem if hit.killed => {
                     let (each, most, fade) = items::berserker_totem(level);
@@ -425,7 +425,7 @@ fn on_hit(r: &mut Reacting, now: u32, hit: Landed) {
                         let (every, damage, radius, delay) = items::thunder_crown(level);
                         if count % every == 0 {
                             spawn_fx(&mut r.commands, hit.side.0, Fx { kind: FxKind::Bolt, at: hit.at, to: hit.at, radius, from: now, until: now + delay });
-                            r.pending.0.push(Delayed { by: by(item), at: hit.at, radius, damage, chill: Chill::default(), fire_at: now + delay, hue: Hue::Storm });
+                            r.pending.0.push(Delayed { by: by(item), at: hit.at, radius, damage, chill: Chill::default(), fire_at: now + delay, hue: FxColor::Storm });
                         }
                     }
                 }
@@ -438,7 +438,7 @@ fn on_hit(r: &mut Reacting, now: u32, hit: Landed) {
                         Err(_) => {
                             let doom = Doomed { by: hit.attacker, class: hit.class, side: hit.side, at: now + lasts, stored: hit.amount, share };
                             r.commands.entity(hit.victim).try_insert(doom);
-                            spawn_fx(&mut r.commands, hit.side.0, Fx { kind: FxKind::Warn(Hue::Void), at: hit.at, to: hit.at, radius: 0.9, from: now, until: now + lasts });
+                            spawn_fx(&mut r.commands, hit.side.0, Fx { kind: FxKind::Warn(FxColor::Void), at: hit.at, to: hit.at, radius: 0.9, from: now, until: now + lasts });
                         }
                     }
                 }
@@ -509,7 +509,7 @@ fn on_hit(r: &mut Reacting, now: u32, hit: Landed) {
                 });
                 if ready {
                     let (damage, radius, _) = items::bramble_mantle(level);
-                    blast(&mut r.commands, &mut r.log, now, &mut r.targets, by(item), hit.at, radius, damage, Chill::default(), Hue::Thorn);
+                    blast(&mut r.commands, &mut r.log, now, &mut r.targets, by(item), hit.at, radius, damage, Chill::default(), FxColor::Thorn);
                 }
             }
             Item::PhoenixFeather if hit.killed => {
@@ -530,7 +530,7 @@ fn on_hit(r: &mut Reacting, now: u32, hit: Landed) {
                     hits.push(health.0, HitKind::Heal);
                     r.commands.entity(entity).remove::<Dead>();
                 }
-                blast(&mut r.commands, &mut r.log, now, &mut r.targets, by(item), hit.at, radius, damage, Chill::default(), Hue::Fire);
+                blast(&mut r.commands, &mut r.log, now, &mut r.targets, by(item), hit.at, radius, damage, Chill::default(), FxColor::Fire);
             }
             _ => {}
         }
@@ -563,20 +563,20 @@ fn monster_hit(r: &mut Reacting, now: u32, hit: &Landed) {
     if !mob.burst
         && let Some(Trick::Burst { damage, radius, .. }) = class.def().mob.as_ref().and_then(|m| m.tricks.iter().find(|t| matches!(t, Trick::Burst { .. })))
     {
-        blast(&mut r.commands, &mut r.log, now, &mut r.targets, by, hit.at, *radius, (*damage as f32 * might).round() as i32, Chill::default(), Hue::Poison);
+        blast(&mut r.commands, &mut r.log, now, &mut r.targets, by, hit.at, *radius, (*damage as f32 * might).round() as i32, Chill::default(), FxColor::Poison);
     }
     let volatile_wave = r.lobby.run(side.0.key).and_then(|run| run.omen) == Some(arena_shared::rooms::Omen::Volatile);
     match elite {
         _ if volatile_wave && elite != Some(Affix::Volatile) => {
             let (fuse, radius) = (20, 2.0);
-            spawn_fx(&mut r.commands, side.0, Fx { kind: FxKind::Warn(Hue::Fire), at: hit.at, to: hit.at, radius, from: now, until: now + fuse });
-            r.pending.0.push(Delayed { by, at: hit.at, radius, damage: (14.0 * might).round() as i32, chill: Chill::default(), fire_at: now + fuse, hue: Hue::Fire });
+            spawn_fx(&mut r.commands, side.0, Fx { kind: FxKind::Warn(FxColor::Fire), at: hit.at, to: hit.at, radius, from: now, until: now + fuse });
+            r.pending.0.push(Delayed { by, at: hit.at, radius, damage: (14.0 * might).round() as i32, chill: Chill::default(), fire_at: now + fuse, hue: FxColor::Fire });
         }
         Some(Affix::Volatile) => {
             let fuse = 26;
             let radius = 2.6;
-            spawn_fx(&mut r.commands, side.0, Fx { kind: FxKind::Warn(Hue::Fire), at: hit.at, to: hit.at, radius, from: now, until: now + fuse });
-            r.pending.0.push(Delayed { by, at: hit.at, radius, damage: (24.0 * might).round() as i32, chill: Chill::default(), fire_at: now + fuse, hue: Hue::Fire });
+            spawn_fx(&mut r.commands, side.0, Fx { kind: FxKind::Warn(FxColor::Fire), at: hit.at, to: hit.at, radius, from: now, until: now + fuse });
+            r.pending.0.push(Delayed { by, at: hit.at, radius, damage: (24.0 * might).round() as i32, chill: Chill::default(), fire_at: now + fuse, hue: FxColor::Fire });
         }
         Some(Affix::Splitting) => {
             if let Some(brood) = ClassId::by_key("gnawer") {

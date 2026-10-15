@@ -6,7 +6,6 @@
 
 use arena_shared::items::{self, Item, MAX_LEVEL, SLOTS, Satchel};
 use arena_shared::protocol::*;
-use arena_shared::protocol::Hue;
 use arena_shared::rooms::{Phase, RunView};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
@@ -597,17 +596,17 @@ fn load_fx_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     });
 }
 
-pub(crate) fn hue_color(hue: Hue) -> Color {
+pub(crate) fn hue_color(hue: FxColor) -> Color {
     match hue {
-        Hue::Fire => palette::TORCH_FLAME,
-        Hue::Spirit => palette::SPIRIT,
-        Hue::Frost => palette::ICE,
-        Hue::Gold => palette::GOLD,
-        Hue::Blood => palette::BLOOD,
-        Hue::Poison => Color::srgb_u8(0x9C, 0xE0, 0x50),
-        Hue::Void => Color::srgb_u8(0xA0, 0x60, 0xFF),
-        Hue::Storm => Color::srgb_u8(0xB4, 0xDC, 0xFF),
-        Hue::Thorn => Color::srgb_u8(0x8C, 0xC0, 0x5A),
+        FxColor::Fire => palette::TORCH_FLAME,
+        FxColor::Spirit => palette::SPIRIT,
+        FxColor::Frost => palette::ICE,
+        FxColor::Gold => palette::GOLD,
+        FxColor::Blood => palette::BLOOD,
+        FxColor::Poison => Color::srgb_u8(0x9C, 0xE0, 0x50),
+        FxColor::Void => Color::srgb_u8(0xA0, 0x60, 0xFF),
+        FxColor::Storm => Color::srgb_u8(0xB4, 0xDC, 0xFF),
+        FxColor::Thorn => Color::srgb_u8(0x8C, 0xC0, 0x5A),
     }
 }
 
@@ -634,7 +633,7 @@ fn add_fx(mut commands: Commands, looks: Res<FxLooks>, mut materials: ResMut<Ass
             }
             FxKind::Arc => {
                 // Three jagged pieces from one end to the other, high over the ground.
-                let c = hue_color(Hue::Storm);
+                let c = hue_color(FxColor::Storm);
                 let (a, b) = (to_world(fx.at, 1.0), to_world(fx.to, 1.0));
                 let side = (b - a).cross(Vec3::Y).normalize_or_zero() * 0.3;
                 let points = [a, a.lerp(b, 0.33) + side, a.lerp(b, 0.66) - side, b];
@@ -651,7 +650,7 @@ fn add_fx(mut commands: Commands, looks: Res<FxLooks>, mut materials: ResMut<Ass
             }
             FxKind::Lob => vec![part(&mut commands, &looks.ball, palette::BARK.darker(0.1), 1.0, 0.2, Transform::from_scale(Vec3::splat(0.22)))],
             FxKind::Bolt => {
-                let c = hue_color(Hue::Storm);
+                let c = hue_color(FxColor::Storm);
                 vec![
                     part(&mut commands, &looks.ring, c, 0.8, 3.0, ground(0.07, fx.radius)),
                     part(&mut commands, &looks.bolt, c, 0.95, 9.0, Transform::from_xyz(0.0, 4.0, 0.0).with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new(8.0, 3.0, 3.0))),

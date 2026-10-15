@@ -132,7 +132,12 @@ pub(super) fn damage(
     debug!(target: "arena_server", attacker = ?by, victim = ?id, with, amount, crit, health = health.0, "hit");
     let killed = health.0 == 0;
     if killed {
-        debug!(target: "arena_server", killer = ?by, victim = ?id, with, "kill");
+        // A player's falls are worth knowing (and a monster's kills of them); monsters' deaths aren't.
+        if matches!(id, PeerId::Netcode(_)) {
+            info!(target: "arena_server", killer = ?by, killer_class = class.def().name, victim = ?id, with, amount, "kill");
+        } else {
+            debug!(target: "arena_server", killer = ?by, victim = ?id, with, "kill");
+        }
         commands.entity(player).insert(Dead { respawn_at: now + RESPAWN_TICKS, placed: false, killer: by });
     }
     log.0.push(Landed { attacker: by, class, side, victim: player, victim_id: id, at, amount, killed, source, shot });

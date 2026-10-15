@@ -13,8 +13,6 @@ use std::time::Duration;
 
 use arena_shared::config::*;
 use arena_shared::protocol::*;
-// Over the prelude's color trait of the same name.
-use arena_shared::protocol::Hue;
 use bevy::prelude::*;
 use lightyear::netcode::NetcodeServer;
 use lightyear::prelude::server::*;
