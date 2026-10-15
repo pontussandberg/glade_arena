@@ -76,8 +76,11 @@ Butcher, The Pale Lich, The Grave Lord, round again, tougher each time), and fro
 **elites** come along, bigger, tougher, worth more, and with a twist: Swift, Vampiric, Volatile
 (blows up where it dies), Frostbound or Splitting. The party shares **lives**: a fallen player
 comes back at once while there are lives left; with none, they wait for the wave to be cleared,
-and if everyone is down, the run is over. A boss killed is a life more. Shrines (blood-red stones)
-send you into a frenzy.
+and if everyone is down, the run is over. A boss killed is a life more, and the merchant sells
+more (a Spirit Candle, dearer each time). Shrines (blood-red stones) send you into a frenzy. From
+wave 4, about half the waves come with an **omen**, known while you shop for them: a Horde, a
+Blood Moon (elites everywhere), a Frenzy (every monster hasted), Gilded (double bounties), the
+Restless Dead (who may rise again) or Volatile (everything bursts as it dies).
 
 **Items** (`shared/src/items.rs`) never give stats: each does something. Six at most; buying one
 you have raises it a level (up to 3), selling gives back half.
@@ -112,8 +115,8 @@ more bursts and feed a Berserker Totem, a Void Orb gathers a pack for Thunder Cr
 its tricks, its bounty and when it first comes), wearing the players' and the zombie's figures
 sized and tinted (`look`): zombies, packs of gnawers, pouncing ghouls, spear-throwing grave
 hunters that keep their distance, bloaters that burst, grave ogres that slam the ground, frost
-wraiths, bonecallers raising gnawers, rot priests mending the others, and death knights charging
-through you. The server runs them (`server/src/brain.rs`), the waves (`server/src/waves.rs`, where
+wraiths, bonecallers raising gnawers, rot priests mending the others, plague bombardiers lobbing
+bombs where you stand (keep moving), and death knights charging through you. The server runs them (`server/src/brain.rs`), the waves (`server/src/waves.rs`, where
 all the tuning is) and the items (`server/src/items.rs`).
 
 To try a later wave natively: `ARENA_ROOM="Waves 10" cargo run -p arena-client -- 11 revenant`

@@ -47,8 +47,9 @@ const COMEBACK_TICKS: u32 = 5 * TICK_HZ as u32;
 pub(crate) const BOSS_EVERY: u32 = 5;
 /// How long a lost run's end shows before everyone's back in the lobby.
 const OVER_SHOWS: std::time::Duration = std::time::Duration::from_secs(8);
-/// How near the party a lair may be to send out monsters (if any are that far off).
+/// How near the party a lair may be to send out monsters, and how far (if any are between).
 const LAIR_NEAREST: f32 = 18.0;
+const LAIR_FARTHEST: f32 = 42.0;
 
 /// A wave's budget: how much of it there is to spawn, by what its monsters cost.
 fn budget(wave: u32, party: usize) -> f32 {
@@ -188,6 +189,11 @@ impl Run {
         self.alive + (self.budget.max(0.0) / 1.2).ceil() as u32 + u32::from(!self.boss_out)
     }
 
+    /// The chests lying out, for whoever ends the run (or the room) to clear away.
+    pub(crate) fn take_chests(&mut self) -> Vec<Entity> {
+        std::mem::take(&mut self.chests)
+    }
+
     /// The gold a player joining now starts with: what they'd have earned by now, more or less.
     pub(crate) fn catch_up_gold(&self) -> u32 {
         START_GOLD + (1..self.wave).map(|w| WAVE_PAY + WAVE_PAY_GROWTH * w + 5 * budget(w, 1) as u32).sum::<u32>()
@@ -268,7 +274,7 @@ fn pick(roster: &[(ClassId, f32)], budget: f32) -> Option<ClassId> {
 /// else the farthest.
 fn pick_lair(lairs: &[Vec2], party: &[Vec2]) -> Option<Vec2> {
     let nearest = |lair: Vec2| party.iter().map(|p| p.distance(lair)).fold(f32::MAX, f32::min);
-    let fine: Vec<Vec2> = lairs.iter().copied().filter(|&l| (LAIR_NEAREST..LAIR_NEAREST * 3.0).contains(&nearest(l))).collect();
+    let fine: Vec<Vec2> = lairs.iter().copied().filter(|&l| (LAIR_NEAREST..LAIR_FARTHEST).contains(&nearest(l))).collect();
     if !fine.is_empty() {
         return Some(fine[fastrand::usize(..fine.len())]);
     }
@@ -354,6 +360,9 @@ pub(super) fn run_waves(
                 // Lost: everyone in the arena down, with no lives to spend.
                 if !fighters.is_empty() && fighters.iter().all(|(.., dead)| *dead) && run.lives == 0 {
                     run.phase = RunPhase::Over { reached: wave };
+                    for chest in run.take_chests() {
+                        commands.entity(chest).try_despawn();
+                    }
                     info!(room = key.0, wave, "the run is lost");
                     lobby.lose_run(key, time.elapsed() + OVER_SHOWS);
                     continue;

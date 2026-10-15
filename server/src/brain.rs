@@ -53,6 +53,7 @@ impl Mob {
 fn trick_every(trick: &Trick) -> Option<u32> {
     match trick {
         Trick::Summon { every_ticks, .. } | Trick::Mend { every_ticks, .. } | Trick::Ring { every_ticks, .. } | Trick::Fan { every_ticks, .. } => Some(*every_ticks),
+        Trick::Mortar { every_ticks, .. } => Some(*every_ticks),
         _ => None,
     }
 }
@@ -60,6 +61,9 @@ fn trick_every(trick: &Trick) -> Option<u32> {
 /// Server-only: each room's flow field toward its prey, and when it was made.
 #[derive(Resource, Default)]
 pub(crate) struct Fields(HashMap<RoomKey, (u32, FlowField)>);
+
+/// How far a mortar throws.
+const MORTAR_REACH: f32 = 14.0;
 
 /// How long a kiter backs off at a time, and how often it may.
 const RETREAT_TICKS: u32 = 48;
@@ -74,6 +78,7 @@ pub(crate) enum Deed {
     Mend { room: InRoom, at: Vec2, radius: f32, amount: i32 },
     Summon { room: InRoom, class: ClassId, count: u32, at: Vec2, might: f32, raiser: Entity },
     Shots { side: Side, shots: Vec<Projectile>, might: f32 },
+    Mortar { by: By, from: Vec2, at: Vec2, radius: f32, damage: i32, fuse: u32 },
 }
 
 /// Server-only: deeds to do this tick.
@@ -234,6 +239,15 @@ pub(super) fn think(
                         .collect();
                     deeds.0.push(Deed::Shots { side, shots, might });
                 }
+                Trick::Mortar { damage, radius, fuse_ticks, .. } => {
+                    // Only at prey it can reach with a throw.
+                    if dist < MORTAR_REACH {
+                        fired = true;
+                        let by = By { id: id.0, class: *class, side, source: Source::Trick };
+                        let damage = (*damage as f32 * might).round() as i32;
+                        deeds.0.push(Deed::Mortar { by, from: pos.0, at: target, radius: *radius, damage, fuse: *fuse_ticks });
+                    }
+                }
                 Trick::Enrage { below } => {
                     if !mob.enraged && (health.0 as f32) < below * max.0 as f32 {
                         mob.enraged = true;
@@ -258,6 +272,7 @@ pub(super) fn do_deeds(
     mut lobby: ResMut<Lobby>,
     mut deeds: ResMut<Deeds>,
     mut log: ResMut<HitLog>,
+    mut pending: ResMut<crate::items::Pending>,
     mut targets: Targets,
     maxes: Query<&MaxHealth>,
 ) {
@@ -296,6 +311,11 @@ pub(super) fn do_deeds(
                     let spot = if map.walkable_at(spot) && map.line_walkable(at, spot) { spot } else { at };
                     crate::waves::spawn_mob(&mut commands, &mut lobby, room, class, spot, None, might, Some(raiser));
                 }
+            }
+            Deed::Mortar { by, from, at, radius, damage, fuse } => {
+                spawn_fx(&mut commands, by.side.0, Fx { kind: FxKind::Lob, at: from, to: at, radius, from: now, until: now + fuse });
+                spawn_fx(&mut commands, by.side.0, Fx { kind: FxKind::Warn(Hue::Poison), at, to: at, radius, from: now, until: now + fuse });
+                pending.0.push(crate::items::Delayed { by, at, radius, damage, chill: Chill::default(), fire_at: now + fuse, hue: Hue::Poison });
             }
             Deed::Shots { side, shots, might } => {
                 for shot in shots {

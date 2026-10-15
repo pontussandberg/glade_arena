@@ -909,6 +909,9 @@ fn leave(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity) -> bool {
         None => {
             let mut room = lobby.rooms.remove(&key).expect("there");
             room.clear_things(&mut ctx.commands);
+            for chest in room.run.as_mut().map(Run::take_chests).unwrap_or_default() {
+                ctx.commands.entity(chest).try_despawn();
+            }
             lobby.free_net.push(room.net);
             info!(room = key.0, "room closed");
         }

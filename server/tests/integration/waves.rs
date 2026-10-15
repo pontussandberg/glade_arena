@@ -136,7 +136,15 @@ fn long_run() {
     // `ARENA_PORT` to run several at once.
     let port = std::env::var("ARENA_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(5861);
     let mut p = Party::new(port, &class, true);
-    p.start_run();
+    // `ARENA_FROM_WAVE` starts the run at a later wave.
+    match std::env::var("ARENA_FROM_WAVE").ok().and_then(|w| w.parse::<u32>().ok()) {
+        Some(wave) => {
+            p.ask(RoomRequest::QuickJoin(format!("Waves {wave}")));
+            p.until(Duration::from_secs(10), "in the run", |p| p.satchel().is_some_and(|s| s.gold > 0));
+        }
+        None => p.start_run(),
+    }
+    let mut reported = Instant::now();
     let wishlist = [Item::StormCoil, Item::EmberHeart, Item::Bloodfang, Item::WispLantern, Item::ThunderCrown, Item::BrambleMantle];
     let mut wave_started = Instant::now();
     let mut last_wave = 0;
@@ -151,6 +159,19 @@ fn long_run() {
         if run.wave >= 30 {
             println!("reached wave 30 after {:.0}s", started.elapsed().as_secs_f32());
             return;
+        }
+        // A wave dragging on: who's left, and where.
+        if run.phase == Phase::Fight && wave_started.elapsed() > Duration::from_secs(60) && reported.elapsed() > Duration::from_secs(30) {
+            reported = Instant::now();
+            let me = server_player(&mut p.server, 1).0;
+            let world = p.server.world_mut();
+            let mut q = world.query::<(&ClassId, &Team, &Pos, &Health)>();
+            let left: Vec<String> = q
+                .iter(world)
+                .filter(|(_, team, _, health)| team.0 == ZOMBIES && health.alive())
+                .map(|(class, _, pos, health)| format!("{} at {:.0},{:.0} ({})", class.def().name, pos.x, pos.y, health.0))
+                .collect();
+            println!("wave {} dragging ({:.0}s), me at {:.0},{:.0}: {left:?}", run.wave, wave_started.elapsed().as_secs_f32(), me.x, me.y);
         }
         if run.wave != last_wave && matches!(run.phase, Phase::Shop { .. }) {
             let health = player::<Health>(&mut p.client, 1).map_or(0, |h| h.0);

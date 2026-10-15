@@ -17,7 +17,7 @@ use crate::config::{PLAYER_RADIUS, TICK_HZ};
 /// The class files, compiled into both server and client so they can't disagree. Their order is
 /// the classes' order everywhere: the class picker and its number keys, the default pick, and the
 /// order target dummies come in. The ones no one picks (`ClassDef::playable`) go last.
-const CLASS_FILES: [&str; 17] = [
+const CLASS_FILES: [&str; 18] = [
     include_str!("../assets/classes/revenant.ron"),
     include_str!("../assets/classes/javelinist.ron"),
     include_str!("../assets/classes/frost_mage.ron"),
@@ -31,6 +31,7 @@ const CLASS_FILES: [&str; 17] = [
     include_str!("../assets/classes/bonecaller.ron"),
     include_str!("../assets/classes/rot_priest.ron"),
     include_str!("../assets/classes/death_knight.ron"),
+    include_str!("../assets/classes/bombardier.ron"),
     include_str!("../assets/classes/butcher.ron"),
     include_str!("../assets/classes/pale_lich.ron"),
     include_str!("../assets/classes/grave_lord.ron"),
@@ -164,6 +165,9 @@ pub enum Trick {
     Fan { count: u32, spread: f32, every_ticks: u32 },
     /// Below `below` of its health, it rages: always hasted, hitting harder.
     Enrage { below: f32 },
+    /// Every `every_ticks`, lobs a bomb at where its prey stands: `damage` to its foes within
+    /// `radius` there, `fuse_ticks` later (time to step out).
+    Mortar { damage: i32, radius: f32, fuse_ticks: u32, every_ticks: u32 },
 }
 
 /// The odds that an auto-attack hit this class deals is critical (an ability's never is), for
@@ -616,7 +620,7 @@ mod tests {
                             assert!(ClassId::by_key(class).is_some_and(|s| s.def().mob.is_some()), "{}: summons {class}, no monster", c.id)
                         }
                         Trick::Ring { .. } | Trick::Fan { .. } => assert!(c.attack.kind.shot().is_some(), "{}: shots it can't fire", c.id),
-                        Trick::Burst { .. } | Trick::Mend { .. } | Trick::Enrage { .. } => {}
+                        Trick::Burst { .. } | Trick::Mend { .. } | Trick::Enrage { .. } | Trick::Mortar { .. } => {}
                     }
                 }
             }

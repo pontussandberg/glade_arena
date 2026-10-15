@@ -1,6 +1,6 @@
 #![enable(unwrap_variant_newtypes)]
-// The Butcher (field reference: README.md): the first boss of the waves. Charges, cleaves, and
-// calls its little ones; rages when it is nearly done.
+// The Butcher (field reference: README.md): the first boss of the waves. Charges, cleaves, throws
+// cleavers, and calls its little ones; rages when it is nearly done.
 (
     id: "butcher",
     name: "The Butcher",
@@ -26,7 +26,12 @@
     look: Some(figure: "zombie", size: 2.3, tint: (1.0, 0.55, 0.5)),
     mob: Some(
         brain: Chase,
-        tricks: [Lunge(slot: 0, within: 10.0), Summon(class: "gnawer", count: 4, every_ticks: 320, max: 8), Enrage(below: 0.35)],
+        tricks: [
+            Lunge(slot: 0, within: 10.0),
+            Summon(class: "gnawer", count: 4, every_ticks: 320, max: 8),
+            Mortar(damage: 30, radius: 2.5, fuse_ticks: 36, every_ticks: 192),
+            Enrage(below: 0.35),
+        ],
         bounty: 150,
         cost: 0.0,
         from_wave: 5,
