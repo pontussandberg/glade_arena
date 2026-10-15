@@ -93,7 +93,9 @@ an auto-attack's own hits set off the on-hit items (a Hydra Spear's barrage coun
 thrown); what items deal (a ricochet's bounce, an arc, a burst), and a frostbolt's shatter round
 the one it struck, doesn't.
 
-Every map has a merchant. In practice everything is free, to try items out on the target dummies.
+Every map has a merchant. In practice everything is free, to try items out on the target dummies,
+or on three slow zombies placed side by side ("3 slow zombies" in the practice tools; they walk at
+half speed and come for you).
 In a PvP match everyone starts with nothing and earns gold only by their own kills (25 a zombie,
 60 a player), so items there are few and far between.
 

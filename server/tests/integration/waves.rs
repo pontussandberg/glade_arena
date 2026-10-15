@@ -539,3 +539,45 @@ fn bounces_dont_set_off_on_hit_items() {
     assert!(bounces > every, "the javelins didn't bounce: {bounces}");
     assert_eq!(bolts.len() as u32, javelins / every, "{javelins} javelins and {bounces} bounces called down {} bolts", bolts.len());
 }
+
+/// Practice's slow zombies: three side by side where asked, coming for us (not for a target
+/// dummy nearer them) at half a zombie's pace.
+#[test]
+fn practice_places_three_slow_zombies() {
+    let mut p = Party::new(5877, "revenant", false);
+    p.ask(RoomRequest::Practice(MapId::Keep));
+    p.until(Duration::from_secs(10), "practicing", |p| p.room().is_some_and(|r| r.practice) && player::<Health>(&mut p.server, 1).is_some());
+    let shop = MapId::Keep.map().shop.unwrap();
+    let me = open_near(MapId::Keep, shop + Vec2::new(-1.0, 0.0));
+    let at = open_near(MapId::Keep, me + Vec2::new(0.0, -6.0));
+    let dummy = open_near(MapId::Keep, at + Vec2::new(0.0, -2.0));
+    for _ in 0..5 {
+        place(&mut p.server, 1, me);
+        p.update();
+    }
+    p.ask(RoomRequest::PlaceDummy { at: dummy, walks: false });
+    p.ask(RoomRequest::PlaceZombies { at });
+    let zombies = |p: &mut Party| {
+        let world = p.server.world_mut();
+        world.query::<(&Team, &Pos)>().iter(world).filter(|(t, _)| t.0 == ZOMBIES).map(|(_, pos)| pos.0).collect::<Vec<_>>()
+    };
+    p.until(Duration::from_secs(3), "three zombies", |p| zombies(p).len() == 3);
+    let placed = zombies(&mut p);
+    assert!(placed.iter().all(|z| z.distance(at) < 1.5), "not where asked: {placed:?}");
+    let apart = placed.iter().flat_map(|a| placed.iter().map(move |b| a.distance(*b))).filter(|d| *d > 0.0).fold(f32::MAX, f32::min);
+    assert!(apart > 0.5, "on top of each other: {placed:?}");
+
+    // A second and a half's walk: toward us, at half a zombie's speed.
+    let start = Instant::now();
+    p.until(Duration::from_secs(3), "a while gone by", |p| {
+        place(&mut p.server, 1, me);
+        start.elapsed() >= Duration::from_millis(1500)
+    });
+    let moved = zombies(&mut p);
+    let walked = placed.iter().zip(&moved).map(|(a, b)| a.distance(*b)).fold(0.0f32, f32::max) / start.elapsed().as_secs_f32();
+    let speed = class_id("zombie").def().move_speed;
+    assert!(walked > speed * 0.25, "they didn't walk: {walked} m/s");
+    assert!(walked < speed * 0.7, "not slow: {walked} m/s, a zombie walks {speed} m/s");
+    let nearer = |zs: &[Vec2]| zs.iter().map(|z| z.distance(me)).sum::<f32>();
+    assert!(nearer(&moved) < nearer(&placed), "they didn't come for us: {placed:?} -> {moved:?}");
+}

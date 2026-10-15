@@ -671,6 +671,8 @@ pub enum RoomRequest {
     /// Practice only: a target dummy at this point, the next class in turn: standing there, or
     /// (`walks`) walking back and forth along a line through it.
     PlaceDummy { at: Vec2, walks: bool },
+    /// Practice only: three slow zombies side by side at this point, coming for us.
+    PlaceZombies { at: Vec2 },
     /// Practice only: our abilities with no cooldowns of their own (ready again the moment
     /// they're used), or back to normal.
     NoCooldowns(bool),

@@ -18,6 +18,18 @@ use crate::rooms::{InRoom, Lobby};
 #[derive(Component)]
 pub(crate) struct Zombie;
 
+/// Server-only: walks at this share of its speed (practice's slow zombies).
+#[derive(Component, Clone, Copy)]
+pub(crate) struct Sluggish(pub(crate) f32);
+
+/// How fast practice's slow zombies walk, of a zombie's speed.
+pub(crate) const PRACTICE_ZOMBIE_SPEED: f32 = 0.5;
+
+/// A zombie standing `at` in `room`, coming for whoever's nearest.
+pub(crate) fn spawn_zombie(commands: &mut Commands, id: PeerId, room: InRoom, at: Vec2) -> Entity {
+    commands.spawn((Name::from("Zombie"), Zombie, fighter(id, zombie_class(), room, Team(ZOMBIES), at), PlayerInput::default())).id()
+}
+
 /// How long into a match the first zombie rises, and how often another may after that.
 const FIRST_ZOMBIE_TICKS: u32 = 8 * TICK_HZ as u32;
 const ZOMBIE_EVERY_TICKS: u32 = 7 * TICK_HZ as u32;
@@ -62,13 +74,8 @@ pub(super) fn raise_zombies(
             continue;
         }
         let id = lobby.next_local();
-        commands.spawn((
-            Name::from("Zombie"),
-            Zombie,
-            fighter(id, zombie_class(), room, Team(ZOMBIES), Vec2::ZERO),
-            NeedsSpawnPoint,
-            PlayerInput::default(),
-        ));
+        let zombie = spawn_zombie(&mut commands, id, room, Vec2::ZERO);
+        commands.entity(zombie).insert(NeedsSpawnPoint);
         debug!(room = room.key.0, roaming = roaming + 1, "a zombie rises");
     }
 }
@@ -79,7 +86,8 @@ pub(super) fn raise_zombies(
 pub(super) fn chase(
     // The waves' monsters think for themselves (`brain.rs`).
     mut zombies: Query<(&Pos, &ClassId, &InRoom, &mut PlayerInput), (With<Zombie>, Without<Mob>, InPlay)>,
-    prey: Query<(&Pos, &InRoom), (With<PlayerId>, Without<Zombie>, Without<Untouchable>, InPlay)>,
+    // Fighters, not practice's target dummies.
+    prey: Query<(&Pos, &InRoom), (With<PlayerId>, Without<Zombie>, Without<Untouchable>, Without<crate::dummies::Dummy>, InPlay)>,
 ) {
     for (pos, class, room, mut input) in &mut zombies {
         let nearest = prey

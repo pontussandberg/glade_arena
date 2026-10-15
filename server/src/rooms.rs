@@ -246,7 +246,7 @@ impl Lobby {
 
     /// Whether monsters belong in room `key` now: zombies on the hunt, or a run on.
     pub(crate) fn keeps_monsters(&self, key: RoomKey) -> bool {
-        self.rooms.get(&key).is_some_and(|room| room.hunting() || room.live_run().is_some())
+        self.rooms.get(&key).is_some_and(|room| room.hunting() || room.live_run().is_some() || room.practice)
     }
 
     /// The rooms with a run on.
@@ -419,6 +419,7 @@ struct Ctx<'w, 's> {
     timeline: Res<'w, LocalTimeline>,
     players: Query<'w, 's, (Entity, &'static ControlledBy, &'static Pos, &'static ClassId), With<PlayerId>>,
     projectiles: Query<'w, 's, (Entity, &'static InRoom), With<Projectile>>,
+    zombies: Query<'w, 's, &'static InRoom, With<crate::Zombie>>,
     senders: Query<'w, 's, &'static mut MessageSender<LobbyEvent>>,
 }
 
@@ -558,7 +559,9 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                     // starts at wave 10 (for trying later waves out).
                     let mode = if name.to_lowercase().starts_with("waves") { Mode::Waves } else { Mode::Ffa };
                     let from_wave = name.split_whitespace().nth(1).and_then(|n| n.parse::<u32>().ok()).filter(|n| (1..=200).contains(n));
-                    let key = create(lobby, allocator, ctx, link, name, mode, mode.maps()[0]);
+                    // The default map, if it's one of the mode's; else the mode's own (the wilds).
+                    let map = mode.maps().iter().copied().find(|&map| map == MapId::default()).unwrap_or(mode.maps()[0]);
+                    let key = create(lobby, allocator, ctx, link, name, mode, map);
                     let now = ctx.now();
                     let room = lobby.rooms.get_mut(&key).expect("just made");
                     room.started = true;
@@ -704,6 +707,32 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             room.dummies.push(dummy);
             info!(room = key.0, class = class.def().name, walks, "target dummy placed");
         }
+        RoomRequest::PlaceZombies { at } => {
+            let key = room_key.ok_or("You're not in a room")?;
+            let room = lobby.rooms.get(&key).expect("in it");
+            if !room.practice {
+                return Err("Zombies to order are for practice");
+            }
+            if ctx.zombies.iter().filter(|r| r.key == key).count() + 3 > MAX_PRACTICE_ZOMBIES {
+                return Err("That's enough zombies");
+            }
+            let map = room.map.map();
+            if !at.is_finite() || !map.walkable_at(at) {
+                return Err("Zombies can't stand there");
+            }
+            let in_room = room.in_room(key);
+            // Side by side, across the way to us (each where there's room, else on the spot).
+            let toward = ctx.fighter_of(link).and_then(|(pos, _)| (pos - at).try_normalize()).unwrap_or(Vec2::Y);
+            let side = toward.perp() * 1.1;
+            for spot in [at - side, at, at + side] {
+                let spot = if map.walkable_at(spot) && map.line_walkable(at, spot) { spot } else { at };
+                let zombie = crate::zombies::spawn_zombie(&mut ctx.commands, lobby.next_local(), in_room, spot);
+                ctx.commands.entity(zombie).insert(crate::zombies::Sluggish(crate::zombies::PRACTICE_ZOMBIE_SPEED));
+                // Gone with the map's things when practice moves to another map.
+                lobby.rooms.get_mut(&key).expect("in it").things.push(zombie);
+            }
+            info!(room = key.0, "practice zombies placed");
+        }
         RoomRequest::NoCooldowns(on) => {
             let key = room_key.ok_or("You're not in a room")?;
             if !lobby.rooms[&key].practice {
@@ -773,6 +802,8 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
 
 /// The most target dummies a practice room may have.
 const MAX_DUMMIES: usize = 12;
+/// The most zombies a practice room may have about.
+const MAX_PRACTICE_ZOMBIES: usize = 12;
 
 /// A new room on `map`, led by `leader` (who still has to `join` it).
 #[allow(clippy::too_many_arguments)]
