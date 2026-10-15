@@ -181,10 +181,17 @@ pub(super) type Targets<'w, 's> = Query<
         &'static mut Chilled,
         &'static mut RecentHits,
         &'static MaxHealth,
-        Has<Sheltered>,
+        // Kept from harm (just back), and whose decoy it is if it's one: never its owner's foe.
+        (Has<Sheltered>, Option<&'static crate::items::Decoy>),
     ),
     (InPlay, Without<Untouchable>),
 >;
+
+/// Whether `decoy` (a target's, if it's one) is `by`'s own: never hit by them, whatever the
+/// sides (with no team, everyone is everyone's foe).
+pub(crate) fn owns(by: PeerId, decoy: Option<&crate::items::Decoy>) -> bool {
+    decoy.is_some_and(|decoy| decoy.owner == by)
+}
 
 /// Deals `blow` to every foe of `attacker` (on `side`) that `hits` says is hit, judged against
 /// where they are now (no lag compensation, as in League: what the server sees is what counts).
@@ -201,7 +208,10 @@ pub(super) fn hit_foes(
     mut hits: impl FnMut(PeerId, Vec2) -> bool,
 ) -> usize {
     let mut count = 0;
-    for (target, target_id, (room, team), target_pos, mut health, mut chilled, mut recent, _, sheltered) in targets {
+    for (target, target_id, (room, team), target_pos, mut health, mut chilled, mut recent, _, (sheltered, decoy)) in targets {
+        if owns(attacker.0, decoy) {
+            continue;
+        }
         // One killed already this tick (`damage`) isn't hit: a swing that only struck a body
         // didn't land. Nor is one just back and sheltered.
         if health.0 > 0 && !sheltered && target_id.0 != attacker.0 && foes(side, (*room, *team)) && hits(target_id.0, target_pos.0) {

@@ -697,3 +697,76 @@ fn a_fury_stone_quickens_attacks_only() {
     assert_eq!(player::<Hasted>(&mut p.server, 1).unwrap().speed_factor(now), 1.0, "it hasted walking");
     assert_eq!(player::<Frenzy>(&mut p.server, 1).unwrap().at(now as f32), 0.0, "it frenzied");
 }
+
+/// Everyone ready brings the wave on soon; someone no longer ready gives the shop its time back.
+#[test]
+fn unreadying_gives_the_shop_its_time_back() {
+    let mut p = Party::new(5886, "revenant", false);
+    p.ask(RoomRequest::QuickJoin("Waves".into()));
+    p.until(Duration::from_secs(10), "in the run", |p| p.run().is_some_and(|r| matches!(r.phase, Phase::Shop { .. })));
+    let secs = |p: &Party| match p.run().map(|r| r.phase) {
+        Some(Phase::Shop { secs_left }) => Some(secs_left),
+        _ => None,
+    };
+    let open = secs(&p).unwrap();
+    assert!(open > 10, "the shop's barely open: {open}s");
+    p.ask(RoomRequest::Ready(true));
+    p.until(Duration::from_secs(3), "soon", |p| secs(p).is_some_and(|s| s <= 3));
+    p.ask(RoomRequest::Ready(false));
+    p.until(Duration::from_secs(3), "the shop's time back", |p| secs(p).is_some_and(|s| s > 5));
+    // And it stays open past when the wave would have come.
+    let end = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < end {
+        p.update();
+    }
+    assert!(secs(&p).is_some(), "the wave came anyway");
+}
+
+/// With no team (practice), your own decoy is still yours: your kegs go for the dummy, never it.
+#[test]
+fn your_decoy_is_never_your_foe() {
+    let mut p = Party::new(5863, "frost_mage", false);
+    p.ask(RoomRequest::Practice(MapId::Keep));
+    p.until(Duration::from_secs(10), "practicing", |p| p.room().is_some_and(|r| r.practice) && p.satchel().is_some());
+    let shop = MapId::Keep.map().shop.unwrap();
+    let me = open_near(MapId::Keep, shop + Vec2::new(-1.0, 0.0));
+    for _ in 0..5 {
+        place(&mut p.server, 1, me);
+        p.update();
+    }
+    for item in [Item::MirrorShard, Item::PowderKeg] {
+        p.ask(RoomRequest::Buy(item));
+        p.until(Duration::from_secs(3), "given it", |p| p.satchel().is_some_and(|s| s.level(item) == 1));
+    }
+    // A dummy beside us, for Frost Nova to hit (its damage leaves the decoy) and the kegs to go for.
+    let map = MapId::Keep.map();
+    let target = [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y].map(|d| me + d * 2.0).into_iter().find(|s| map.walkable_at(*s)).unwrap();
+    p.ask(RoomRequest::PlaceDummy { at: target, walks: false });
+    p.until(Duration::from_secs(3), "the dummy", |p| {
+        let world = p.server.world_mut();
+        world.query_filtered::<&Pos, Without<Shopkeeper>>().iter(world).any(|pos| pos.0.distance(target) < 0.5)
+    });
+    let decoy = |p: &mut Party| {
+        let world = p.server.world_mut();
+        world.query::<(&Name, &Health)>().iter(world).find(|(n, _)| n.as_str() == "Decoy").map(|(_, h)| h.0)
+    };
+    p.until(Duration::from_secs(3), "the decoy left", |p| {
+        place(&mut p.server, 1, me);
+        edit_input(&mut p.client, |i| i.order_cast(arena_shared::abilities::AbilitySlot(0), target - me));
+        decoy(p).is_some()
+    });
+    let full = decoy(&mut p).unwrap();
+    // A keg goes (every few seconds): at the dummy, never the decoy standing right by us.
+    let mut lobbed = false;
+    let end = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < end && decoy(&mut p).is_some() {
+        place(&mut p.server, 1, me);
+        let world = p.server.world_mut();
+        lobbed |= world.query::<&Fx>().iter(world).any(|fx| matches!(fx.kind, FxKind::Lob(_)));
+        p.update();
+        if let Some(now) = decoy(&mut p) {
+            assert_eq!(now, full, "our own decoy was hurt");
+        }
+    }
+    assert!(lobbed, "no keg was lobbed at all");
+}

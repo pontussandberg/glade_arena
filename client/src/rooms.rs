@@ -66,10 +66,11 @@ impl CurrentRoom {
         self.0.as_ref().is_some_and(|view| view.practice)
     }
 
-    /// The merchant trades now: in practice, while a PvP match is on, or in a run not yet lost.
+    /// The merchant trades now: in practice, while a PvP match is on (not yet won), or in a run
+    /// not yet lost.
     pub fn shopping(&self) -> bool {
         let Some(view) = &self.0 else { return false };
-        view.practice || (view.started && !view.mode.pve()) || self.run().is_some_and(|run| !matches!(run.phase, arena_shared::rooms::Phase::Over { .. }))
+        view.practice || (view.started && !view.mode.pve() && view.goal.is_some() && view.winner.is_none()) || self.run().is_some_and(|run| !matches!(run.phase, arena_shared::rooms::Phase::Over { .. }))
     }
 }
 

@@ -57,9 +57,10 @@ pub(super) fn resolve_projectile_hits(
     for (projectile_entity, projectile_pos, projectile, room, team, might, spares, (bounces, mut pierced)) in &mut projectiles {
         let pierces = projectile.ability.is_none() && projectile.class.def().attack.pierces;
         let mut through: Vec<PeerId> = pierced.as_ref().map_or_else(Vec::new, |p| p.0.clone());
-        for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent, _, sheltered) in &mut targets {
+        for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent, _, (sheltered, decoy)) in &mut targets {
             if target_id.0 == projectile.owner
                 || sheltered
+                || owns(projectile.owner, decoy)
                 || spares.is_some_and(|s| s.0 == target_id.0)
                 || through.contains(&target_id.0)
                 || health.0 == 0

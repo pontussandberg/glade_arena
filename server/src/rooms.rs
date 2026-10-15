@@ -97,6 +97,9 @@ struct Linger {
     until: u32,
 }
 
+/// The fewest ticks between sending a run again only for the count of monsters left changing.
+const RUN_COUNT_EVERY: u32 = 8;
+
 /// How many ticks a client still gets a room's news after leaving it (`Linger`).
 const LINGER_TICKS: u32 = 4;
 
@@ -170,6 +173,8 @@ struct Room {
     /// last sent of it.
     run: Option<Run>,
     shown_run: Option<RunView>,
+    /// When its run was last sent (a tick), for the count of monsters left (`RUN_COUNT_EVERY`).
+    run_sent_at: u32,
     /// The furthest wave it's reached.
     best: u32,
 }
@@ -239,10 +244,17 @@ impl Lobby {
     pub(crate) fn refresh_run(&mut self, key: RoomKey, now: u32) {
         let Some(room) = self.rooms.get_mut(&key) else { return };
         let view = Lobby::run_view(room, now);
-        if room.shown_run != view {
-            room.shown_run = view;
-            room.changed = true;
+        if room.shown_run == view {
+            return;
         }
+        // Only the count of monsters left (kill after kill, in a big wave): not every tick.
+        let only_count = matches!((&room.shown_run, &view), (Some(was), Some(is)) if RunView { enemies_left: is.enemies_left, ..was.clone() } == *is);
+        if only_count && now < room.run_sent_at + RUN_COUNT_EVERY {
+            return;
+        }
+        room.shown_run = view;
+        room.run_sent_at = now;
+        room.changed = true;
     }
 
     fn list(&self) -> Vec<RoomSummary> {
@@ -330,12 +342,17 @@ impl Lobby {
         }
     }
 
-    /// Room `key`'s run is lost: everyone back in the lobby at `ends_at` (`Time<Real>`).
+    /// Whether room `key` is still open.
+    pub(crate) fn has_room(&self, key: RoomKey) -> bool {
+        self.rooms.contains_key(&key)
+    }
+
     /// A run is under way: the lobby list is sent again, showing it closed.
     pub(crate) fn close_run(&mut self) {
         self.list_changed = true;
     }
 
+    /// Room `key`'s run is lost: everyone back in the lobby at `ends_at` (`Time<Real>`).
     pub(crate) fn lose_run(&mut self, key: RoomKey, ends_at: Duration) {
         if let Some(room) = self.rooms.get_mut(&key) {
             if let Some(run) = &room.run {
@@ -614,6 +631,11 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             if !lobby.rooms[&key].started {
                 return Err("The match hasn't started");
             }
+            // Down in a wave stays down (one life a wave): back once it's cleared.
+            let guest = lobby.guests[&link].id;
+            if lobby.rooms[&key].live_run().is_some_and(|run| run.phase == RunPhase::Fight && run.waiting.contains(&guest)) {
+                return Err("You're down: back once the wave is cleared");
+            }
             // In now, or once the class arrives.
             lobby.guests.get_mut(&link).expect("checked").playing = true;
             lobby.rooms.get_mut(&key).expect("in it").changed = true;
@@ -857,6 +879,7 @@ fn create(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, leade
         changed: true,
         run: None,
         shown_run: None,
+        run_sent_at: 0,
         best: 0,
     });
     key
@@ -958,8 +981,9 @@ fn join(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity, key: RoomKey) -> Result<
         Mode::Teams => lobby.smaller_team(room),
         mode => mode_team(mode, 0),
     };
-    // Into a run under way: with about what everyone else has earned.
-    let gold = room.live_run().map(Run::catch_up_gold);
+    // Into a run (before its first wave: `joinable`): with its starting gold, more for one that
+    // starts later on.
+    let gold = room.live_run().map(Run::starting_gold);
     let net = room.net;
     let room = lobby.rooms.get_mut(&key).expect("checked");
     room.members.push(link);

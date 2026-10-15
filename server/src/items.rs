@@ -57,7 +57,7 @@ fn ready(at: &mut u32, now: u32, recharge: u32) -> bool {
 /// for, shattering for `damage` around it when its time is up or it's killed.
 #[derive(Component)]
 pub(crate) struct Decoy {
-    owner: PeerId,
+    pub(crate) owner: PeerId,
     until: u32,
     damage: i32,
     radius: f32,
@@ -175,10 +175,12 @@ fn blast_as(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut T
 /// The foe of `side` nearest `at` within `reach`, alive, other than those `skip` says: who and
 /// where. Callers skip whoever's looking too: with no team (practice, a free-for-all), everyone
 /// is everyone's foe, themselves included.
-fn nearest_foe(targets: &Targets, side: Side, at: Vec2, reach: f32, skip: impl Fn(PeerId) -> bool) -> Option<(PeerId, Vec2)> {
+fn nearest_foe(targets: &Targets, (by, side): (PeerId, Side), at: Vec2, reach: f32, skip: impl Fn(PeerId) -> bool) -> Option<(PeerId, Vec2)> {
     targets
         .iter()
-        .filter(|(_, id, (room, team), pos, health, .., sheltered)| health.0 > 0 && !sheltered && !skip(id.0) && foes(side, (**room, **team)) && pos.0.distance(at) <= reach)
+        .filter(|(_, id, (room, team), pos, health, .., (sheltered, decoy))| {
+            health.0 > 0 && !sheltered && id.0 != by && !owns(by, *decoy) && !skip(id.0) && foes(side, (**room, **team)) && pos.0.distance(at) <= reach
+        })
         .map(|(_, id, _, pos, ..)| (id.0, pos.0))
         .min_by(|a, b| a.1.distance_squared(at).total_cmp(&b.1.distance_squared(at)))
 }
@@ -211,6 +213,11 @@ pub(super) fn tick_items(
 ) {
     let now = timeline.tick().0;
     let pulse = now % items::ZONE_PULSE_TICKS == 0;
+    // A closed room's fuses, ground and javelins still to come go with it (its lightyear room may
+    // soon be another's: nothing of it goes off there).
+    pending.0.retain(|d| lobby.has_room(d.by.side.0.key));
+    zones.0.retain(|z| lobby.has_room(z.by.side.0.key));
+    barrages.0.retain(|v| lobby.has_room(v.side.0.key));
     // A Hydra Spear's holder's auto-attack: the rest of its barrage follows the first javelin.
     for (shot, room, team, might) in &thrown {
         if shot.ability.is_some() || shot.extra {
@@ -257,7 +264,7 @@ pub(super) fn tick_items(
                 }
                 Item::PowderKeg if now >= state.keg_at => {
                     let (every, damage, radius, fuse, reach) = items::powder_keg(level);
-                    let Some((_, at)) = nearest_foe(&targets, side, pos.0, reach, |p| p == id.0) else { continue };
+                    let Some((_, at)) = nearest_foe(&targets, (id.0, side), pos.0, reach, |_| false) else { continue };
                     state.keg_at = now + every;
                     spawn_fx(&mut commands, side.0, Fx::between(FxKind::Lob(FxColor::Fire), pos.0, at, radius, now, fuse));
                     pending.0.push(Delayed { by: by(item), at, radius, damage, chill: Chill::default(), fire_at: now + fuse, look: FxKind::Blast(FxColor::Fire) });
@@ -285,8 +292,8 @@ pub(super) fn tick_items(
     for zone in &zones.0 {
         if zone.pull > 0.0 {
             // Only its maker's foes, as its pulse hurts (never them, nor the sheltered).
-            for (entity, id, (room, team), pos, health, .., sheltered) in targets.iter() {
-                if health.0 > 0 && !sheltered && id.0 != zone.by.id && foes(zone.by.side, (*room, *team)) && pos.0.distance(zone.at) <= zone.radius + PLAYER_RADIUS {
+            for (entity, id, (room, team), pos, health, .., (sheltered, decoy)) in targets.iter() {
+                if health.0 > 0 && !sheltered && id.0 != zone.by.id && !owns(zone.by.id, decoy) && foes(zone.by.side, (*room, *team)) && pos.0.distance(zone.at) <= zone.radius + PLAYER_RADIUS {
                     let next = pos.0.move_towards(zone.at, zone.pull * TICK_DT);
                     if lobby.map(room).line_walkable(pos.0, next) {
                         commands.entity(entity).insert(Pos(next));
@@ -512,7 +519,7 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                 if left == 0 {
                     continue;
                 }
-                let Some((_, at)) = nearest_foe(&r.targets, hit.side, hit.at, reach, |p| p == hit.victim_id || p == hit.attacker) else { continue };
+                let Some((_, at)) = nearest_foe(&r.targets, (hit.attacker, hit.side), hit.at, reach, |p| p == hit.victim_id) else { continue };
                 let Some(dir) = (at - hit.at).try_normalize() else { continue };
                 let projectile = Projectile { origin: hit.at, dir, spawn_tick: now, crit: false, extra: true, ..shot.projectile };
                 let spawned = spawn_projectile(&mut r.commands, projectile, hit.side, shot.might * keeps);
@@ -524,7 +531,7 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                 let mut struck = vec![hit.victim_id];
                 let mut from = hit.at;
                 for _ in 0..jumps {
-                    let Some((next, at)) = nearest_foe(&r.targets, hit.side, from, reach, |p| p == hit.attacker || struck.contains(&p)) else { break };
+                    let Some((next, at)) = nearest_foe(&r.targets, (hit.attacker, hit.side), from, reach, |p| struck.contains(&p)) else { break };
                     spawn_fx(&mut r.commands, hit.side.0, Fx::between(FxKind::Arc, from, at, 0.0, now, 8));
                     strike(&mut r.commands, &mut r.log, now, &mut r.targets, by(item), Blow::ability(damage, Chill::default()), |p, _| p == next);
                     struck.push(next);
@@ -562,6 +569,8 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                 let (below, gold) = items::midas_coin(level);
                 // Monsters only (zombies too), never bosses or players.
                 let monster = r.zombies.get(hit.victim).is_ok_and(|class| !class.def().is_boss());
+                // What another called up is finished all the same, but pays nothing (as its bounty).
+                let called_up = r.mobs.get(hit.victim).is_ok_and(|(mob, ..)| mob.raised_by.is_some());
                 let Ok((entity, id, _, pos, mut health, mut chilled, mut hits, max, _)) = r.targets.get_mut(hit.victim) else { continue };
                 if !monster || health.0 <= 0 || health.0 as f32 > below * max.0 as f32 || id.0 == hit.attacker {
                     continue;
@@ -570,7 +579,9 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                 let (id, at, rest) = (id.0, pos.0, health.0);
                 let by = (hit.attacker, hit.class, item.name());
                 damage(&mut r.commands, &mut r.log, now, (entity, id, at), (&mut health, &mut chilled, &mut hits), Blow::ability(rest, Chill::default()), by, (hit.side, Source::Item(item), None));
-                r.lobby.reward(hit.side.0.key, hit.attacker, gold);
+                if !called_up {
+                    r.lobby.reward(hit.side.0.key, hit.attacker, gold);
+                }
                 spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Coins, at, 1.0, now, 20));
             }
             _ => {}

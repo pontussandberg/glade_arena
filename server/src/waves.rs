@@ -150,6 +150,9 @@ pub(crate) struct Run {
     deaths: u32,
     /// A wave has come: the run is under way, and no one joins it any more.
     pub(crate) fought: bool,
+    /// Everyone was ready: the wave comes at this tick (sooner than the shop's own end), unless
+    /// someone isn't any more.
+    ready_by: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,7 +183,13 @@ impl Run {
             rng: wave_chances(wave),
             deaths: 0,
             fought: false,
+            ready_by: None,
         }
+    }
+
+    /// When the shop (open until `until`) closes: then, or sooner if everyone's ready.
+    fn shop_ends(&self, until: u32) -> u32 {
+        self.ready_by.map_or(until, |soon| soon.min(until))
     }
 
     /// Monsters are about (or may come): the run's on and not lost.
@@ -190,7 +199,7 @@ impl Run {
 
     pub(crate) fn phase_view(&self, now: u32) -> Phase {
         match self.phase {
-            RunPhase::Shop { until } => Phase::Shop { secs_left: until.saturating_sub(now).div_ceil(TICK_HZ as u32) },
+            RunPhase::Shop { until } => Phase::Shop { secs_left: self.shop_ends(until).saturating_sub(now).div_ceil(TICK_HZ as u32) },
             RunPhase::Fight => Phase::Fight,
             RunPhase::Over { reached } => Phase::Over { reached },
         }
@@ -208,8 +217,9 @@ impl Run {
         }
     }
 
-    /// The gold a player joining now starts with: what they'd have earned by now, more or less.
-    pub(crate) fn catch_up_gold(&self) -> u32 {
+    /// The gold a player starts the run with: `START_GOLD`, and for a run started at a later wave
+    /// (to try it out, "Waves 10"), about what they'd have earned by then.
+    pub(crate) fn starting_gold(&self) -> u32 {
         START_GOLD + (1..self.wave).map(|w| WAVE_PAY + WAVE_PAY_GROWTH * w + 5 * budget(w, 1) as u32).sum::<u32>()
     }
 }
@@ -358,11 +368,16 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, (now,
             // Everyone in the arena ready: soon.
             let in_arena = members.iter().filter(|(link, _)| fighters.iter().any(|(f, ..)| f == link));
             let all_ready = in_arena.clone().next().is_some() && in_arena.into_iter().all(|(_, id)| run.ready.contains(id));
-            let until = if all_ready { until.min(now + READY_TICKS) } else { until };
-            run.phase = RunPhase::Shop { until };
-            if now < until {
+            // Soon once everyone's ready; the shop's own time again if someone isn't any more.
+            run.ready_by = match (all_ready, run.ready_by) {
+                (true, None) => Some(now + READY_TICKS),
+                (true, soon) => soon,
+                (false, _) => None,
+            };
+            if now < run.shop_ends(until) {
                 return;
             }
+            run.ready_by = None;
             // The wave comes, and chests with it.
             run.phase = RunPhase::Fight;
             run.ready.clear();
