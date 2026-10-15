@@ -40,6 +40,8 @@ pub mod feedback;
 #[cfg(feature = "render")]
 pub mod fx;
 #[cfg(feature = "render")]
+mod item_icons;
+#[cfg(feature = "render")]
 pub mod arena;
 #[cfg(feature = "render")]
 pub mod lobby;

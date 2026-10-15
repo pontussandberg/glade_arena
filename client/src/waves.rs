@@ -16,6 +16,7 @@ use crate::Me;
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::{self, palette, to_world};
 use crate::feedback::AttackClock;
+use crate::item_icons::{ICON_PIXELS, ItemIcons, load_item_icons};
 use crate::render::{GameUi, HudButton, button, clicked, set_fill, shown, ui_text};
 use crate::rooms::{CurrentRoom, request};
 use crate::tooltip::{Side, hover_shows, tip, tip_note, tip_text, tip_title};
@@ -24,7 +25,7 @@ pub struct WavesPlugin;
 
 impl Plugin for WavesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (spawn_hud, load_fx_looks));
+        app.add_systems(Startup, (spawn_hud, load_fx_looks, load_item_icons));
         app.add_systems(
             Update,
             (
@@ -277,28 +278,35 @@ fn ready_up(
     }
 }
 
-/// An item's tile: its initials on its trigger's color, its level in pips, `size` square.
-fn item_tile(parent: &mut ChildSpawnerCommands, item: Item, level: u8, size: f32) -> Entity {
-    let initials: String = item.name().split(' ').filter_map(|w| w.chars().next()).take(2).collect();
+/// An item's tile: its icon on its trigger's color, its level in pips over its corner, `size`
+/// square.
+fn item_tile(parent: &mut ChildSpawnerCommands, icons: &ItemIcons, item: Item, level: u8, size: f32) -> Entity {
+    // The icon's pixels drawn whole: as big a multiple of them as fits.
+    let pixel = ((size - 4.0) / ICON_PIXELS as f32).floor().max(1.0);
     parent
         .spawn((
             Node {
                 width: px(size),
                 height: px(size),
-                flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 border: UiRect::all(px(if item.class().is_some() { 2.0 } else { 1.0 })),
                 ..default()
             },
-            BackgroundColor(trigger_color(item).with_alpha(0.35)),
+            BackgroundColor(trigger_color(item).with_alpha(0.3)),
             // A class's own item is rimmed in gold.
             BorderColor::all(if item.class().is_some() { palette::GOLD } else { trigger_color(item) }),
         ))
         .with_children(|tile| {
-            tile.spawn(ui_text(initials, size * 0.36, palette::ui::TEXT));
+            let side = px(pixel * ICON_PIXELS as f32);
+            tile.spawn((Node { width: side, height: side, ..default() }, ImageNode::new(icons.of(item)), Pickable::IGNORE));
             if level > 0 {
-                tile.spawn(ui_text("*".repeat(level as usize), size * 0.26, palette::GOLD));
+                tile.spawn((
+                    Node { position_type: PositionType::Absolute, right: px(1.0), bottom: px(-2.0), ..default() },
+                    ui_text("*".repeat(level as usize), (size * 0.26).max(8.0), palette::GOLD),
+                    TextShadow { offset: Vec2::splat(1.0), color: palette::ui::PANEL },
+                    Pickable::IGNORE,
+                ));
             }
         })
         .id()
@@ -349,6 +357,7 @@ fn show_satchel(
     mut commands: Commands,
     room: Res<CurrentRoom>,
     open: Res<ShopOpen>,
+    icons: Res<ItemIcons>,
     me: Query<Ref<Satchel>, With<Me>>,
     bar: Single<(Entity, &mut Node), With<SatchelBar>>,
 ) {
@@ -371,7 +380,7 @@ fn show_satchel(
         for slot in 0..SLOTS {
             match satchel.slots[slot] {
                 Some(owned) => {
-                    let tile = item_tile(bar, owned.item, owned.level, SLOT);
+                    let tile = item_tile(bar, &icons, owned.item, owned.level, SLOT);
                     let mut tile_commands = bar.commands();
                     let mut tile_entity = tile_commands.entity(tile);
                     item_tip(&mut tile_entity, owned.item, owned.level, false);
@@ -418,6 +427,7 @@ fn show_shop(
     mut commands: Commands,
     room: Res<CurrentRoom>,
     open: Res<ShopOpen>,
+    icons: Res<ItemIcons>,
     me: Query<(Ref<Satchel>, &ClassId), With<Me>>,
     panel: Single<(Entity, &mut Node), With<ShopPanel>>,
 ) {
@@ -460,7 +470,7 @@ fn show_shop(
                         BorderColor::all(palette::GOLD),
                     ))
                     .with_children(|row| {
-                        let tile = item_tile(row, item, level, 28.0);
+                        let tile = item_tile(row, &icons, item, level, 32.0);
                         let mut commands = row.commands();
                         item_tip(&mut commands.entity(tile), item, level, true);
                         row.spawn(Node { flex_direction: FlexDirection::Column, flex_grow: 1.0, flex_basis: px(0.0), ..default() }).with_children(|words| {

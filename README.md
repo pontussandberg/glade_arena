@@ -84,7 +84,8 @@ Restless Dead (who may rise again) or Volatile (everything bursts as it dies). P
 knock monsters (zombies too) back a little, bosses aside, and the Jav's javelins pierce straight
 through monsters (never players).
 
-**Items** (`shared/src/items.rs`) never give stats: each does something. Six at most; buying one
+**Items** (`shared/src/items.rs`) never give stats: each does something, and each has its own
+pixel icon (`client/src/item_icons.rs`). Six at most; buying one
 you have raises it a level (up to 3), selling gives back half. A few are one class's own: the shop
 lists them first under "<class> ONLY", and their tiles are rimmed in gold. Items that go off on an
 ability go off when the ability deals damage (once a use; Deadeye's primed javelin counts).
