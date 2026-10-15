@@ -240,9 +240,10 @@ fn mirrored(right: Vec3) -> Vec3 {
 fn add_rigs(
     mut commands: Commands,
     assets: Res<RigAssets>,
-    new: Query<(Entity, &ClassId, &Pos, &MeshMaterial3d<StandardMaterial>, Option<&Elite>), Added<Mesh3d>>,
+    new: Query<(Entity, &ClassId, &Pos, &MeshMaterial3d<StandardMaterial>, Option<&Elite>, Has<Shopkeeper>), Added<Mesh3d>>,
+    map: Res<crate::rooms::CurrentMap>,
 ) {
-    for (player, class, pos, body, elite) in &new {
+    for (player, class, pos, body, elite, shopkeeper) in &new {
         let Some(handles) = assets.meshes.get(class) else { continue };
         let class_moves = moves(class.def().figure());
         let size = drawn_size(*class, elite.is_some());
@@ -313,7 +314,8 @@ fn add_rigs(
         }
         commands.entity(player).insert((
             rig,
-            Facing { look: Vec2::X, last_pos: pos.0, moved: Vec2::ZERO, turned: 0.0, dash_seen: None, steady: None },
+            // The merchant looks out from their stall at whoever comes to trade.
+            Facing { look: if shopkeeper { map.map().shop_faces } else { Vec2::X }, last_pos: pos.0, moved: Vec2::ZERO, turned: 0.0, dash_seen: None, steady: None },
             HeldAt::default(),
             SeenThrows::default(),
         ));

@@ -64,6 +64,9 @@ pub mod palette {
     pub const MERCHANT_FEATHER: Color = Color::srgb_u8(0xD8, 0x3A, 0x30);
     pub const CANVAS: Color = Color::srgb_u8(0xA8, 0x96, 0x72);
     pub const MERCHANT_RUG: Color = Color::srgb_u8(0x8C, 0x2E, 0x52);
+    /// The stall's awning, striped.
+    pub const AWNING_RED: Color = Color::srgb_u8(0xA8, 0x32, 0x2E);
+    pub const AWNING_CREAM: Color = Color::srgb_u8(0xE6, 0xD8, 0xB6);
     pub const DARK_LEATHER: Color = Color::srgb_u8(0x17, 0x14, 0x14);
     /// Ashen fur trim (mantles, tails).
     pub const FUR: Color = Color::srgb_u8(0x55, 0x55, 0x52);

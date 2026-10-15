@@ -156,6 +156,10 @@ pub struct Map {
     pub chests: Vec<Vec2>,
     /// Where the shopkeeper stands, if the map has a shop.
     pub shop: Option<Vec2>,
+    /// Which way the shopkeeper faces: toward whoever comes to trade.
+    pub shop_faces: Vec2,
+    /// The tiles of the shopkeeper's counter, behind them (walls), drawn as their stall.
+    pub counter: Vec<IVec2>,
     /// The camp around the shop, where the fire mends the party in a run: its middle and
     /// half-width (a square).
     pub camp: Option<(Vec2, f32)>,
@@ -198,6 +202,8 @@ impl Map {
             lairs: Vec::new(),
             chests: Vec::new(),
             shop: None,
+            shop_faces: Vec2::NEG_Y,
+            counter: Vec::new(),
             camp: None,
             edge,
             beyond,
