@@ -320,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "arena-client"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arena-shared",
  "bevy",
@@ -334,7 +334,7 @@ dependencies = [
 
 [[package]]
 name = "arena-server"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arena-client",
  "arena-shared",
@@ -347,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "arena-shared"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bevy",
  "lightyear",

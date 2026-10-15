@@ -55,12 +55,13 @@ impl Plugin for LobbyPlugin {
         app.configure_sets(Update, CameraControl.run_if(in_state(Screen::InGame)));
         app.configure_sets(Update, crate::PlayerControls.run_if(in_state(Screen::InGame)));
         app.insert_resource(DetailsOpen(true));
+        app.init_resource::<room::RoomOpen>();
         app.add_systems(OnEnter(Picking), open_lobby);
         app.add_systems(OnExit(Picking), close_lobby);
         app.add_systems(
             Update,
             (
-                (pick_fighter, fold_details, show_fighter, show_details, (show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena).chain(),
+                (pick_fighter, fold_details, show_fighter, show_details, (fold_room, show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena, scroll_panel).chain(),
                 show_status,
                 (turn_stage_camera, place_name_tag).chain().in_set(CameraMoves),
                 liven_stage,
@@ -235,8 +236,11 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
             screen.spawn((
                 SidePanel,
                 Visibility::Hidden,
-                // Down to just above the buttons at the bottom, never over them: what doesn't fit is
-                // cut off (the lobbies listed are few anyway).
+                Scrolls,
+                ScrollPosition::default(),
+                bevy::ui::RelativeCursorPosition::default(),
+                // Down to just above the buttons at the bottom, never over them: what doesn't fit
+                // scrolls (the mouse wheel over it).
                 Node {
                     position_type: PositionType::Absolute,
                     top: px(MARGIN),
@@ -245,7 +249,7 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                     width: px(SIDE_WIDTH),
                     flex_direction: FlexDirection::Column,
                     row_gap: px(GAP * 1.5),
-                    overflow: Overflow::clip_y(),
+                    overflow: Overflow::scroll_y(),
                     ..default()
                 },
             ));
@@ -298,7 +302,7 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                                     Node { padding: UiRect::axes(px(36.0), px(16.0)), justify_content: JustifyContent::Center, ..default() },
                                     BackgroundColor(ACCENT),
                                 ))
-                                .with_child((EnterLabel, ui_text("LOBBIES", 18.0, palette::ui::PANEL)));
+                                .with_child((EnterLabel, ui_text("PLAY SOLO", 18.0, palette::ui::PANEL)));
                             });
                         });
                 });
@@ -316,5 +320,35 @@ fn hide_game_ui(mut game_ui: Query<&mut Visibility, With<GameUi>>) {
 fn show_game_ui(mut game_ui: Query<&mut Visibility, With<GameUi>>) {
     for mut visibility in &mut game_ui {
         visibility.set_if_neq(Visibility::Inherited);
+    }
+}
+
+/// How far (pixels) a notch of the mouse wheel scrolls the side panel.
+const WHEEL_STEP: f32 = 48.0;
+
+/// The mouse wheel scrolls what's under it (the side panel, a pane's body), never past its ends.
+pub(super) fn scroll_panel(
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    mut scrolling: Query<(&mut ScrollPosition, &bevy::ui::RelativeCursorPosition, &ComputedNode), With<Scrolls>>,
+) {
+    let mut by = 0.0;
+    for event in wheel.read() {
+        by -= match event.unit {
+            bevy::input::mouse::MouseScrollUnit::Line => event.y * WHEEL_STEP,
+            bevy::input::mouse::MouseScrollUnit::Pixel => event.y,
+        };
+    }
+    if by == 0.0 {
+        return;
+    }
+    for (mut scroll, cursor, node) in &mut scrolling {
+        if !cursor.cursor_over() {
+            continue;
+        }
+        let most = ((node.content_size.y - node.size.y) * node.inverse_scale_factor).max(0.0);
+        let y = (scroll.y + by).clamp(0.0, most);
+        if scroll.y != y {
+            scroll.y = y;
+        }
     }
 }

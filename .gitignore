@@ -4,3 +4,4 @@
 /target-test
 /.env.local
 /.claude/settings.local.json
+/highscores.csv

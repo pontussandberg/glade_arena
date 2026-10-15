@@ -63,12 +63,14 @@ pub(crate) enum Ink {
     PoisonMist,
     Blood,
     Heal,
+    /// A heal's glow pooled on the ground, faint.
+    HealMist,
     Wisp,
     Haste,
 }
 
 impl Ink {
-    const ALL: [Ink; 26] = [
+    const ALL: [Ink; 27] = [
         Ink::Scorch,
         Ink::Smoke,
         Ink::Earth,
@@ -93,6 +95,7 @@ impl Ink {
         Ink::PoisonMist,
         Ink::Blood,
         Ink::Heal,
+        Ink::HealMist,
         Ink::Wisp,
         Ink::Haste,
     ];
@@ -125,6 +128,7 @@ impl Ink {
             Ink::PoisonMist => (rgb(0x8C, 0xC8, 0x50), 0.22, 1.5, 1),
             Ink::Blood => (rgb(0x6E, 0x0E, 0x16), 0.85, 0.4, 1),
             Ink::Heal => (palette::HEAL, 0.9, 4.0, 3),
+            Ink::HealMist => (palette::HEAL, 0.22, 2.0, 1),
             Ink::Wisp => (palette::WISP, 0.85, 6.0, 4),
             Ink::Haste => (palette::HASTE, 0.9, 5.0, 4),
         }
@@ -145,6 +149,10 @@ pub(crate) struct FxArt {
     frost: Vec<Handle<Mesh>>,
     whirl: Vec<Handle<Mesh>>,
     band: Handle<Mesh>,
+    /// A cross lying flat (`shapes::cross`): where the downed lie.
+    cross: Handle<Mesh>,
+    /// A round glow lying flat (`shapes::disc`).
+    disc: Handle<Mesh>,
     pub(crate) tongue: Handle<Mesh>,
     glint: Handle<Mesh>,
     /// Solid bits: a chunk, a mote, a coin, a keg, an ice shard (leaning out along +X, 1 tall),
@@ -191,6 +199,8 @@ fn load_art(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materi
         frost,
         whirl,
         band: meshes.add(shapes::band(0.3)),
+        cross: meshes.add(shapes::cross(0.32)),
+        disc: meshes.add(shapes::disc()),
         tongue: meshes.add(shapes::tongue()),
         glint: meshes.add(shapes::glint()),
         chunk: meshes.add(Cuboid::new(1.0, 0.7, 0.85)),

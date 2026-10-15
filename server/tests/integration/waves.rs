@@ -77,7 +77,7 @@ impl Party {
 
     /// Into a fresh waves room, started, in the arena.
     fn start_run(&mut self) {
-        self.ask(RoomRequest::Create { name: "Waves".into(), mode: Mode::Waves, map: MapId::Crossing });
+        self.ask(RoomRequest::Create { name: "Waves".into(), mode: Mode::Waves, map: MapId::Crossing, password: None });
         self.until(Duration::from_secs(5), "in the room", |p| p.room().is_some());
         let room = self.room().unwrap();
         assert_eq!((room.mode, room.map), (Mode::Waves, MapId::Wilds), "the waves are on the wilds, whatever map was asked for");
@@ -236,12 +236,12 @@ fn coop_picks_the_fallen_up() {
         assert!(Instant::now() < end, "no one was picked up");
         step(&mut server, &mut clients);
         let run = clients[0].world().resource::<CurrentRoom>().0.as_ref().and_then(|r| r.run.clone().filter(|_| r.started));
-        let Some(run) = run else {
-            if clients[0].world().resource::<CurrentRoom>().0.as_ref().is_some_and(|r| !r.started) {
-                join(&mut clients);
-            }
+        let Some(run) = run else { continue };
+        // A lost run's room stays until each leaves: into a new one.
+        if matches!(run.phase, Phase::Over { .. }) {
+            join(&mut clients);
             continue;
-        };
+        }
         if run.phase != Phase::Fight {
             continue;
         }
@@ -431,7 +431,7 @@ fn practice_shops_free_and_deadeye_sets_off_ability_items() {
 #[test]
 fn pvp_has_a_merchant_and_kills_pay_their_killer() {
     let mut p = Party::new(5868, "revenant", false);
-    p.ask(RoomRequest::Create { name: "Brawl".into(), mode: Mode::Ffa, map: MapId::Keep });
+    p.ask(RoomRequest::Create { name: "Brawl".into(), mode: Mode::Ffa, map: MapId::Keep, password: None });
     p.until(Duration::from_secs(5), "in the room", |p| p.room().is_some());
     p.ask(RoomRequest::Start);
     p.until(Duration::from_secs(10), "fighting", |p| player::<Health>(&mut p.server, 1).is_some() && p.satchel().is_some());
@@ -769,4 +769,35 @@ fn your_decoy_is_never_your_foe() {
         }
     }
     assert!(lobbed, "no keg was lobbed at all");
+}
+
+/// A run left under way ends on the leaderboards, on the solo board, and everyone's sent them.
+#[test]
+fn a_run_left_under_way_makes_the_leaderboards() {
+    let mut p = Party::new(5900, "revenant", false);
+    let boards = |p: &Party| p.client.world().resource::<arena_client::rooms::Leaderboards>().0.clone();
+    assert!(boards(&p).is_empty(), "a fresh server has no runs on record");
+    p.ask(RoomRequest::QuickJoin("Waves".into()));
+    p.until(Duration::from_secs(10), "in the run", |p| p.run().is_some());
+    p.ask(RoomRequest::Ready(true));
+    p.until(Duration::from_secs(10), "the wave comes", |p| p.run().is_some_and(|r| r.phase == Phase::Fight));
+    p.ask(RoomRequest::Leave);
+    p.until(Duration::from_secs(5), "on the leaderboards", |p| !boards(p).is_empty());
+    let board = boards(&p);
+    assert_eq!(board.len(), 1);
+    assert_eq!((board[0].wave, board[0].party.len(), board[0].map), (1, 1, MapId::Wilds));
+    assert_eq!(board[0].party[0].1, class_id("revenant"));
+    assert_eq!(board[0].version, arena_shared::config::GAME_VERSION);
+
+    // It made the (empty) solo board: we're asked to name it, and the board shows the name.
+    p.until(Duration::from_secs(5), "asked to name it", |p| p.client.world().resource::<arena_client::rooms::TextPrompt>().0.is_some());
+    p.ask(RoomRequest::NameScore("  Tester  ".into()));
+    p.until(Duration::from_secs(5), "named", |p| boards(p).first().is_some_and(|s| s.party[0].0 == "Tester"));
+    // Once only.
+    p.ask(RoomRequest::NameScore("Again".into()));
+    let end = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < end {
+        p.update();
+    }
+    assert_eq!(boards(&p)[0].party[0].0, "Tester");
 }

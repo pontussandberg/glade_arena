@@ -51,6 +51,82 @@ pub struct Me {
 #[derive(Resource, Default, Debug)]
 pub struct RoomList(pub Vec<RoomSummary>);
 
+
+/// A question put to us in a box over everything, once we're out of the arena (`prompt` draws
+/// it): what it's about, and the answer as typed so far. Asked by the server (name a score that
+/// made a leaderboard) or by us (a lobby's password, to join it or to make one with).
+#[derive(Resource, Default)]
+pub struct TextPrompt(pub Option<Asking>);
+
+pub struct Asking {
+    /// What it's about: a small label, a heading, a line under it.
+    pub kicker: String,
+    pub title: String,
+    pub body: String,
+    /// Over the box: what to type.
+    pub field: String,
+    pub text: String,
+    /// Characters at most, and whether they're shown as stars.
+    pub max: usize,
+    pub secret: bool,
+    /// The buttons: the answer's (Enter), and the one that lets it be (Esc).
+    pub confirm: &'static str,
+    pub dismiss: &'static str,
+    pub answer: Answer,
+}
+
+/// What an answer is for.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Answer {
+    /// The name our entry on the leaderboards goes by.
+    ScoreName,
+    /// The password into this lobby.
+    JoinRoom(RoomKey),
+    /// The password the lobby we make will have (none if left empty).
+    RoomPassword,
+}
+
+impl TextPrompt {
+    /// The server's `LobbyEvent::NameYourScore`.
+    pub(crate) fn asked(&mut self, event: &LobbyEvent) {
+        if let LobbyEvent::NameYourScore { wave, place, of, size, name } = event {
+            // On the board (its top few), or where it stands among them all.
+            let board = arena_shared::rooms::party_label(*size);
+            let (kicker, title) = if *place <= arena_shared::rooms::LEADERBOARD_ROWS {
+                ("New high score".to_string(), format!("#{place} on the {board} board"))
+            } else {
+                ("Run over".to_string(), format!("#{place} of {of}, {board}"))
+            };
+            self.0 = Some(Asking {
+                kicker,
+                title,
+                body: format!("You reached wave {wave}."),
+                field: "Your name for the leaderboards".into(),
+                text: name.clone(),
+                max: arena_shared::rooms::SCORE_NAME_MAX,
+                secret: false,
+                confirm: "SAVE",
+                dismiss: "Skip",
+                answer: Answer::ScoreName,
+            });
+        }
+    }
+
+    /// Whether the box is up (keys go into it).
+    pub fn open(&self, screen: &Screen) -> bool {
+        self.0.is_some() && shown_on(screen)
+    }
+}
+
+/// Out of the arena and connected: where the box comes up.
+fn shown_on(screen: &Screen) -> bool {
+    matches!(screen, Screen::Home | Screen::Room)
+}
+
+/// The leaderboards, as the server last sent them: each party size's best runs, best first.
+#[derive(Resource, Default)]
+pub struct Leaderboards(pub Vec<arena_shared::rooms::HighScore>);
+
 /// The room we're in, if any.
 #[derive(Resource, Default, Debug)]
 pub struct CurrentRoom(pub Option<RoomView>);
@@ -119,7 +195,7 @@ pub struct RoomsNetPlugin {
 impl Plugin for RoomsNetPlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<Screen>().add_computed_state::<Picking>();
-        app.init_resource::<RoomList>().init_resource::<CurrentRoom>().init_resource::<CurrentMap>();
+        app.init_resource::<RoomList>().init_resource::<Leaderboards>().init_resource::<TextPrompt>().init_resource::<CurrentRoom>().init_resource::<CurrentMap>();
         app.init_resource::<Notice>().init_resource::<Leaving>();
         app.insert_resource(QuickJoin(self.quick_join.clone()));
         app.insert_resource(StoredName(self.guest_name.clone()));
@@ -151,7 +227,7 @@ fn read_lobby_events(
     mut commands: Commands,
     mut client: Query<(&mut MessageReceiver<LobbyEvent>, &mut MessageSender<RoomRequest>), With<Client>>,
     quick_join: Res<QuickJoin>,
-    mut list: ResMut<RoomList>,
+    (mut list, mut boards, mut prompt): (ResMut<RoomList>, ResMut<Leaderboards>, ResMut<TextPrompt>),
     mut room: ResMut<CurrentRoom>,
     mut current_map: ResMut<CurrentMap>,
     mut notice: ResMut<Notice>,
@@ -174,11 +250,13 @@ fn read_lobby_events(
                 }
             }
             LobbyEvent::RoomList(rooms) => list.0 = rooms,
+            LobbyEvent::HighScores(scores) => boards.0 = scores,
+            LobbyEvent::NameYourScore { .. } => prompt.asked(&event),
             LobbyEvent::Room(view) => {
                 // Practice goes straight in: home until our fighter's there.
                 if room.0.is_none() {
                     notice.0 = None;
-                    if !view.practice {
+                    if !view.practice && !view.solo {
                         next.set(Screen::Room);
                     }
                 }

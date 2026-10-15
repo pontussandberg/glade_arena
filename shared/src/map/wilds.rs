@@ -360,7 +360,6 @@ pub(super) fn build() -> Map {
     map.lairs = LAIRS.iter().map(|&p| walkable_near(&map, p)).collect();
     map.chests = CHESTS.iter().map(|&p| walkable_near(&map, p)).collect();
     map.shop = Some(Vec2::new(0.5, 1.5));
-    map.camp = Some((Vec2::ZERO, PALISADE));
     // The merchant's stall: a counter behind them, the merchant facing out over the camp.
     map.line(Vec2::new(-0.5, 2.5), Vec2::new(1.5, 2.5), Tile::Wall);
     map.counter = [-0.5, 0.5, 1.5].map(|x| Map::tile_of(Vec2::new(x, 2.5))).to_vec();

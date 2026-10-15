@@ -29,7 +29,7 @@ impl Plugin for WavesPlugin {
         app.add_systems(
             Update,
             (
-                (show_banner, show_boss, show_over, ready_up).chain(),
+                (show_banner, show_boss, show_over, ready_up, leave_when_over).chain(),
                 (show_satchel, open_shop, show_shop, trade).chain(),
                 circle_wisps,
                 (name_in_world, place_names).chain(),
@@ -184,9 +184,6 @@ fn show_banner(mut commands: Commands, room: Res<CurrentRoom>, me: Option<Res<cr
                 if let Some(omen) = run.omen {
                     banner.spawn(ui_text(format!("OMEN: {}  -  {}", omen.label().to_uppercase(), omen.blurb()), 12.0, palette::BLOOD));
                 }
-                banner.spawn(Node { column_gap: px(GAP * 2.0), align_items: AlignItems::Center, ..default() }).with_children(|row| {
-                    row.spawn(ui_text("Shop at the merchant in the camp; its fire mends you", 12.0, palette::ui::MUTED));
-                });
                 let ready = run.ready.contains(&my_id);
                 let label = if ready { format!("READY  {}/{}", run.ready.len(), party) } else { "READY (F)".to_string() };
                 let fill = if ready { palette::ui::SELECTED } else { palette::ui::BACKDROP };
@@ -240,7 +237,32 @@ fn show_boss(
     }
 }
 
-/// A lost run's end, across the middle, until everyone's back in the lobby.
+/// The way out of a room whose run (or match) is over, on its end's banner: out of the room, home.
+#[derive(Component)]
+pub(crate) struct LeaveOverButton;
+
+/// The button out of a room whose run or match is over (`scoreboard.rs` puts one on a won
+/// match's banner too).
+pub(crate) fn leave_over_button() -> impl Bundle {
+    let leave = (LeaveOverButton, HudButton, button("LEAVE", 14.0, ACCENT, palette::ui::PANEL, ACCENT));
+    (Node { margin: UiRect::top(px(GAP * 1.5)), ..default() }, children![leave])
+}
+
+/// A click on `leave_over_button` leaves the room (home, where a score that made a leaderboard
+/// is named).
+fn leave_when_over(
+    mut mouse: ResMut<ButtonInput<MouseButton>>,
+    buttons: Query<Ref<Interaction>, With<LeaveOverButton>>,
+    mut leaving: ResMut<crate::rooms::Leaving>,
+    mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
+) {
+    if buttons.iter().any(clicked) {
+        mouse.reset(MouseButton::Left);
+        crate::rooms::leave_room(&mut sender, &mut leaving);
+    }
+}
+
+/// A lost run's end, across the middle, until each leaves the room.
 fn show_over(mut commands: Commands, room: Res<CurrentRoom>, banner: Single<(Entity, &mut Node), With<OverBanner>>) {
     if !room.is_changed() {
         return;
@@ -256,7 +278,7 @@ fn show_over(mut commands: Commands, room: Res<CurrentRoom>, banner: Single<(Ent
         commands.entity(banner).with_children(|banner| {
             banner.spawn(ui_text("THE PARTY HAS FALLEN", 34.0, palette::ENEMY));
             banner.spawn(ui_text(format!("You reached wave {reached}"), 16.0, palette::ui::TEXT));
-            banner.spawn(ui_text("Back to the lobby in a moment", 12.0, palette::ui::MUTED));
+            banner.spawn(leave_over_button());
         });
     }
 }

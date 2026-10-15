@@ -19,7 +19,7 @@ pub fn map() -> &'static Map {
 
 /// A started server. `setup` can add test-only systems or resources before it starts.
 pub fn start_server(port: u16, setup: impl FnOnce(&mut App)) -> App {
-    let mut server = build_server_app(ServerSettings { port, certificate: Certificate::SelfSigned { digest_out: None } });
+    let mut server = build_server_app(ServerSettings { port, certificate: Certificate::SelfSigned { digest_out: None }, high_scores: None });
     setup(&mut server);
     server.finish();
     server.cleanup();

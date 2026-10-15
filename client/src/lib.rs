@@ -59,6 +59,8 @@ pub mod rig;
 pub mod rooms;
 #[cfg(feature = "render")]
 pub mod scoreboard;
+#[cfg(feature = "render")]
+pub mod prompt;
 #[cfg(all(test, feature = "render"))]
 mod preview;
 #[cfg(feature = "render")]
