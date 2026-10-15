@@ -64,10 +64,11 @@ pub(crate) enum Ink {
     Blood,
     Heal,
     Wisp,
+    Haste,
 }
 
 impl Ink {
-    const ALL: [Ink; 25] = [
+    const ALL: [Ink; 26] = [
         Ink::Scorch,
         Ink::Smoke,
         Ink::Earth,
@@ -93,6 +94,7 @@ impl Ink {
         Ink::Blood,
         Ink::Heal,
         Ink::Wisp,
+        Ink::Haste,
     ];
 
     /// (color, opacity at most, glow, layer).
@@ -124,6 +126,7 @@ impl Ink {
             Ink::Blood => (rgb(0x6E, 0x0E, 0x16), 0.85, 0.4, 1),
             Ink::Heal => (palette::HEAL, 0.9, 4.0, 3),
             Ink::Wisp => (palette::WISP, 0.85, 6.0, 4),
+            Ink::Haste => (palette::HASTE, 0.9, 5.0, 4),
         }
     }
 }
@@ -389,6 +392,50 @@ fn drive_parts(
 pub(crate) fn wisp_wake(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3) {
     let rise = Motion::Thrown { velocity: Vec3::Y * 0.3, gravity: -0.2, tumble: Vec3::ZERO };
     put(commands, art, &art.mote, Part::new(now, [0.0, 0.08, 0.4], Ink::Wisp, at).size(0.09).motion(rise).shrink(0.2));
+}
+
+/// What a pickup lying out gives off (`sparkle`).
+#[derive(Clone, Copy)]
+pub(crate) enum Sparkle {
+    /// A heal: green sparks rising off the ground under it.
+    Heal,
+    /// A haste: motes of wind whipping round it.
+    Haste,
+    /// A shrine: blood dripping off its stone.
+    Blood,
+    /// A chest: light glinting off its gold.
+    Gold,
+}
+
+/// One bit of `sparkle` off a pickup floating at `at` (its middle, in the world), the `k`th (for
+/// where and how).
+pub(crate) fn sparkle(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3, sparkle: Sparkle, k: u32) {
+    let r = |n: u32| crate::swish::noise(k, n);
+    let round = |n: u32, out: f32| {
+        let angle = r(n) * std::f32::consts::TAU;
+        Vec3::new(angle.cos() * out, 0.0, -angle.sin() * out)
+    };
+    let part = match sparkle {
+        Sparkle::Heal => {
+            let from = at.with_y(0.1) + round(1, 0.55 * r(2).sqrt());
+            let rise = Motion::Thrown { velocity: Vec3::Y * (0.7 + 0.6 * r(3)), gravity: -0.3, tumble: Vec3::ZERO };
+            (art.mote.clone(), Part::new(now, [0.15, 0.7, 1.3], Ink::Heal, from).size(0.05 + 0.04 * r(4)).motion(rise).flicker(0.4).shrink(0.2))
+        }
+        Sparkle::Haste => {
+            let motion = Motion::Orbit { center: at.with_y(0.0), angle: r(1) * std::f32::consts::TAU, speed: 7.0, radius: (0.6, 0.3), height: (at.y - 0.4 + 0.5 * r(2), at.y + 0.3) };
+            (art.mote.clone(), Part::new(now, [0.05, 0.3, 0.5], Ink::Haste, at).size(0.045).motion(motion).flicker(0.3).shrink(0.3))
+        }
+        Sparkle::Blood => {
+            let from = at + round(1, 0.12) - Vec3::Y * 0.2;
+            let drip = Motion::Thrown { velocity: round(2, 0.15) - Vec3::Y * 0.2, gravity: 5.0, tumble: Vec3::ZERO };
+            (art.mote.clone(), Part::new(now, [0.05, 0.45, 0.6], Ink::Blood, from).size(0.06 + 0.03 * r(3)).motion(drip).shrink(0.5))
+        }
+        Sparkle::Gold => {
+            let from = at + round(1, 0.35) + Vec3::Y * (0.3 * r(2) - 0.3);
+            (art.glint.clone(), Part::new(now, [0.08, 0.1, 0.35], Ink::Glint, from).size(0.25 + 0.15 * r(3)).facing(r(4) * std::f32::consts::TAU).grow(0.2).shrink(0.2).spin(3.0))
+        }
+    };
+    put(commands, art, &part.0, part.1);
 }
 
 /// Seconds `ticks` server ticks are.

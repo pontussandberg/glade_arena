@@ -12,7 +12,8 @@ use bevy::prelude::*;
 
 use crate::Me;
 use crate::feedback::AttackClock;
-use crate::arena::{self, palette, to_world};
+use crate::arena::{self, FlatMesh, palette, to_world};
+use crate::fx::{FxArt, Sparkle, sparkle};
 use crate::render::shown;
 
 pub struct PickupsPlugin;
@@ -35,6 +36,12 @@ const BOB_RATE: f32 = 2.2;
 const TURN_RATE: f32 = 1.4;
 /// How brightly pickups glow.
 const GLOW: f32 = 3.0;
+/// How often (seconds) a pickup lying out may give off a sparkle (`fx::sparkle`), and the odds,
+/// each time, that it does: a haste's wind always, the rest now and then.
+const SPARKLE_EVERY: f32 = 0.05;
+/// How fast a heal breathes and a shrine's stone beats (a second), and by how much.
+const PULSE_RATE: f32 = 1.3;
+const PULSE: f32 = 0.08;
 
 /// A heal's burst: how long it lasts (seconds), how wide its ring spreads (meters), and its
 /// sparks: how many, how far out from the fighter they start, how high they rise and how far
@@ -132,7 +139,7 @@ fn load_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mate
         wood: materials.add(arena::matte(palette::BARK)),
         shrine_stone: meshes.add(Cuboid::new(0.42, 0.42, 0.42)),
         bar: meshes.add(Cuboid::new(0.14, 0.5, 0.14)),
-        ground: meshes.add(Circle::new(0.6).mesh().resolution(24).build()),
+        ground: meshes.add(soft_glow(0.75)),
         heal,
         haste,
         boot_shaft: meshes.add(Cuboid::new(0.16, 0.32, 0.17)),
@@ -204,13 +211,7 @@ fn add_pickup_visuals(mut commands: Commands, looks: Res<PickupLooks>, new: Quer
                 });
             }
         }
-        let ground = commands
-            .spawn((
-                Mesh3d(looks.ground.clone()),
-                MeshMaterial3d(glow),
-                Transform::from_xyz(0.0, 0.03, 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)),
-            ))
-            .id();
+        let ground = commands.spawn((Mesh3d(looks.ground.clone()), MeshMaterial3d(glow), Transform::from_xyz(0.0, 0.03, 0.0))).id();
         commands
             .entity(entity)
             .insert((Transform::from_translation(to_world(pickup.at, 0.0)), Visibility::Hidden, Floating(floating)))
@@ -218,26 +219,80 @@ fn add_pickup_visuals(mut commands: Commands, looks: Res<PickupLooks>, new: Quer
     }
 }
 
-/// Bobs and turns the pickups that are lying there; hides the taken ones.
+/// A soft glow on the ground, `radius` round: bright in the middle, fading to nothing at its
+/// edge (no rim).
+fn soft_glow(radius: f32) -> Mesh {
+    let mut b = FlatMesh::default();
+    let segments = 28;
+    for i in 0..segments {
+        let at = |i: u32| {
+            let a = i as f32 / segments as f32 * std::f32::consts::TAU;
+            Vec3::new(a.cos() * radius, 0.0, -a.sin() * radius)
+        };
+        b.tri_faded_both([Vec3::ZERO, at(i), at(i + 1)], [1.0, 0.0, 0.0]);
+    }
+    b.build()
+}
+
+/// What each kind gives off as it lies there, and the odds it does each `SPARKLE_EVERY`.
+fn sparkles(kind: PickupKind) -> (Sparkle, f32) {
+    match kind {
+        PickupKind::Heal => (Sparkle::Heal, 0.4),
+        PickupKind::Haste => (Sparkle::Haste, 1.0),
+        PickupKind::Shrine => (Sparkle::Blood, 0.3),
+        PickupKind::Chest => (Sparkle::Gold, 0.12),
+    }
+}
+
+/// Bobs and turns the pickups that are lying there, a heal breathing and a shrine's stone
+/// beating like a heart, each giving off its sparkles; hides the taken ones.
 fn float_pickups(
+    mut commands: Commands,
     time: Res<Time>,
-    mut pickups: Query<(&Pickup, &Floating, &mut Visibility)>,
+    art: Res<FxArt>,
+    mut pickups: Query<(Entity, &Pickup, &Floating, &mut Visibility)>,
     mut floating: Query<&mut Transform>,
+    mut next: Local<(f32, u32)>,
 ) {
     let t = time.elapsed_secs();
-    for (pickup, float, mut visibility) in &mut pickups {
+    let sparkling = t >= next.0;
+    if sparkling {
+        *next = (t + SPARKLE_EVERY, next.1.wrapping_add(1));
+    }
+    for (entity, pickup, float, mut visibility) in &mut pickups {
         let there = pickup.back_at.is_none();
         visibility.set_if_neq(shown(there));
         if !there {
             continue;
         }
+        let height = if pickup.kind == PickupKind::Chest { 0.4 } else { FLOAT_HEIGHT };
+        let middle = to_world(pickup.at, height);
+        if sparkling {
+            let (kind, odds) = sparkles(pickup.kind);
+            let k = (entity.to_bits() as u32).wrapping_mul(7919).wrapping_add(next.1);
+            if crate::swish::noise(k, 99) < odds {
+                sparkle(&mut commands, &art, t, middle, kind, k);
+            }
+        }
         // A chest sits still on the ground.
         if pickup.kind == PickupKind::Chest {
             continue;
         }
+        let pulse = match pickup.kind {
+            PickupKind::Heal => 1.0 + PULSE * (t * PULSE_RATE * std::f32::consts::TAU).sin(),
+            // Two quick beats, then a rest.
+            PickupKind::Shrine => {
+                let beat = (t * PULSE_RATE).fract();
+                1.0 + 2.0 * PULSE * ((-((beat - 0.08) / 0.05).powi(2)).exp() + 0.7 * (-((beat - 0.28) / 0.05).powi(2)).exp())
+            }
+            _ => 1.0,
+        };
+        // A haste spins faster, eager to go.
+        let turn = if pickup.kind == PickupKind::Haste { TURN_RATE * 2.2 } else { TURN_RATE };
         if let Ok(mut transform) = floating.get_mut(float.0) {
             transform.translation.y = FLOAT_HEIGHT + BOB * (t * BOB_RATE).sin();
-            transform.rotation = Quat::from_rotation_y(t * TURN_RATE);
+            transform.rotation = Quat::from_rotation_y(t * turn);
+            transform.scale = Vec3::splat(pulse);
         }
     }
 }
