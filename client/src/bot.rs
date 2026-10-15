@@ -178,7 +178,7 @@ fn go_shopping(
         return;
     }
     // Its class's own items first, then the cheapest it can afford.
-    let mut wanted: Vec<(Item, u32)> = Item::ALL.into_iter().filter_map(|item| Some((item, satchel.price_of(item, *class).ok()?))).filter(|(_, cost)| *cost <= satchel.gold).collect();
+    let mut wanted: Vec<(Item, u32)> = Item::ALL.into_iter().filter_map(|item| Some((item, satchel.price_of(item, *class, false).ok()?))).filter(|(_, cost)| *cost <= satchel.gold).collect();
     wanted.sort_by_key(|(item, cost)| (item.class().is_none(), *cost));
     let ready = guest.is_some_and(|guest| run.ready.contains(&guest.guest_id));
     match wanted.first() {

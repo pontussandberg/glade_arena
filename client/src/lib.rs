@@ -38,6 +38,8 @@ pub mod practice;
 #[cfg(feature = "render")]
 pub mod feedback;
 #[cfg(feature = "render")]
+pub mod fx;
+#[cfg(feature = "render")]
 pub mod arena;
 #[cfg(feature = "render")]
 pub mod lobby;

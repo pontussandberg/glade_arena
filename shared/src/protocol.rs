@@ -428,8 +428,10 @@ pub enum FxKind {
     /// Something about to land at `at` (out to `radius`) at `until`: a keg's fuse, a strike from
     /// the sky, a bloater swelling. Drawn filling up until then.
     Warn(FxColor),
-    /// A keg flying from `at` to `to`, landing at `until`.
-    Lob,
+    /// Something thrown from `at` to `to`, landing at `until`: a keg (fire), a plague bomb (poison).
+    Lob(FxColor),
+    /// Monsters out to `radius` round `at` mended (a rot priest's prayer).
+    Mend,
     /// Lightning down from the sky onto `at`.
     Bolt,
     /// Gold flying up from `at`.

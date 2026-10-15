@@ -30,7 +30,7 @@ impl Plugin for WavesPlugin {
             (
                 (show_banner, show_boss, show_over, ready_up).chain(),
                 (show_satchel, open_shop, show_shop, trade).chain(),
-                (add_fx, play_fx, circle_wisps),
+                circle_wisps,
                 (name_in_world, place_names).chain(),
                 mark_downed,
             ),
@@ -353,7 +353,7 @@ fn show_satchel(
     bar: Single<(Entity, &mut Node), With<SatchelBar>>,
 ) {
     let (bar, mut node) = bar.into_inner();
-    let satchel = me.single().ok().filter(|_| room.run().is_some());
+    let satchel = me.single().ok().filter(|_| room.run().is_some() || room.practice());
     let display = if satchel.is_some() { Display::Flex } else { Display::None };
     if node.display != display {
         node.display = display;
@@ -407,7 +407,7 @@ fn open_shop(
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     merchant: Query<&Pos, With<Shopkeeper>>,
 ) {
-    let near = room.run().is_some_and(|run| !matches!(run.phase, Phase::Over { .. }))
+    let near = (room.practice() || room.run().is_some_and(|run| !matches!(run.phase, Phase::Over { .. })))
         && me.single().ok().zip(merchant.iter().next()).is_some_and(|(me, merchant)| me.distance(merchant.0) <= SHOP_RADIUS);
     open.set_if_neq(ShopOpen(near));
 }
@@ -416,6 +416,7 @@ fn open_shop(
 /// when it opens, or our gold or items change.
 fn show_shop(
     mut commands: Commands,
+    room: Res<CurrentRoom>,
     open: Res<ShopOpen>,
     me: Query<(Ref<Satchel>, &ClassId), With<Me>>,
     panel: Single<(Entity, &mut Node), With<ShopPanel>>,
@@ -435,13 +436,15 @@ fn show_shop(
             head.spawn(ui_text("THE MERCHANT", 18.0, palette::ui::TEXT));
             head.spawn(ui_text(format!("{} gold", satchel.gold), 14.0, palette::GOLD));
         });
-        panel.spawn(ui_text("Items do things, never stats. Buy one again to raise it.", 10.0, palette::ui::MUTED));
+        let free = room.practice();
+        let note = if free { "Practice: everything's free. Items do things, never stats." } else { "Items do things, never stats. Buy one again to raise it." };
+        panel.spawn(ui_text(note, 10.0, palette::ui::MUTED));
         // Two columns of items, so the whole stock fits on a short screen.
         let grid = Node { display: Display::Grid, grid_template_columns: RepeatedGridTrack::flex(2, 1.0), column_gap: px(GAP), row_gap: px(3.0), ..default() };
         panel.spawn(grid).with_children(|grid| {
             for item in Item::ALL.into_iter().filter(|item| item.fits(*class)) {
                 let level = satchel.level(item);
-                let price = satchel.price_of(item, *class);
+                let price = satchel.price_of(item, *class, free);
                 grid.spawn((
                     Node { column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::all(px(3.0)), ..default() },
                     BackgroundColor(palette::ui::BACKDROP.with_alpha(0.5)),
@@ -459,7 +462,8 @@ fn show_shop(
                         Ok(cost) => {
                             let affordable = satchel.gold >= cost;
                             let (fill, text) = if affordable { (palette::ui::SELECTED, palette::GOLD) } else { (palette::ui::BACKDROP, palette::ui::MUTED) };
-                            row.spawn((BuyButton(item), HudButton, button(cost.to_string(), 10.0, fill, text, palette::GOLD.with_alpha(0.5))));
+                            let label = if free { "FREE".to_string() } else { cost.to_string() };
+                            row.spawn((BuyButton(item), HudButton, button(label, 10.0, fill, text, palette::GOLD.with_alpha(0.5))));
                         }
                         Err(why) => {
                             let why = if level >= MAX_LEVEL { "MAX" } else if why.starts_with("No room") { "FULL" } else { "-" };
@@ -604,17 +608,13 @@ fn place_names(
 
 // Effects.
 
-/// The meshes effects are made of.
+/// The meshes the downed's marks and the wisps are made of (the effects themselves are `fx`'s).
 #[derive(Resource)]
 struct FxLooks {
     disc: Handle<Mesh>,
     ring: Handle<Mesh>,
     bolt: Handle<Mesh>,
     ball: Handle<Mesh>,
-    bit: Handle<Mesh>,
-    /// Rime's: the frost rune (as under a slowed fighter's feet) and an ice shard, 1 m tall.
-    rune: Handle<Mesh>,
-    shard: Handle<Mesh>,
 }
 
 fn load_fx_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
@@ -623,253 +623,7 @@ fn load_fx_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
         ring: meshes.add(Annulus::new(0.88, 1.0).mesh().resolution(40).build()),
         bolt: meshes.add(Cuboid::new(1.0, 0.07, 0.07)),
         ball: meshes.add(Sphere::new(1.0).mesh().ico(1).expect("a small ico sphere")),
-        bit: meshes.add(Cuboid::new(0.14, 0.14, 0.14)),
-        rune: meshes.add(arena::frost_rune_mesh()),
-        shard: meshes.add(arena::nova_meshes(1.0).shard),
     });
-}
-
-pub(crate) fn hue_color(hue: FxColor) -> Color {
-    match hue {
-        FxColor::Fire => palette::TORCH_FLAME,
-        FxColor::Spirit => palette::SPIRIT,
-        FxColor::Frost => palette::ICE,
-        FxColor::Gold => palette::GOLD,
-        FxColor::Blood => palette::BLOOD,
-        FxColor::Poison => Color::srgb_u8(0x9C, 0xE0, 0x50),
-        FxColor::Void => Color::srgb_u8(0xA0, 0x60, 0xFF),
-        FxColor::Storm => Color::srgb_u8(0xB4, 0xDC, 0xFF),
-        FxColor::Thorn => Color::srgb_u8(0x8C, 0xC0, 0x5A),
-    }
-}
-
-/// An effect's parts (its children), each with its own material, to fade.
-#[derive(Component)]
-struct FxParts(Vec<(Entity, Handle<StandardMaterial>, f32)>);
-
-/// A part's own place in its effect, for one that moves from there as it plays (rime's shards
-/// and mist).
-#[derive(Component)]
-struct FxBase(Transform);
-
-/// The frost rune's radius in its mesh (`arena::frost_rune_mesh`).
-const RUNE_RADIUS: f32 = 0.64;
-/// Rime's shards and its mist: how many, and how long (ticks) they take to burst up and to sink.
-const RIME_SHARDS: usize = 6;
-const RIME_MOTES: usize = 5;
-const RIME_BURST_TICKS: f32 = 4.0;
-const RIME_THAW_TICKS: f32 = 18.0;
-
-/// Gives each effect its look as it arrives.
-fn add_fx(mut commands: Commands, looks: Res<FxLooks>, mut materials: ResMut<Assets<StandardMaterial>>, new: Query<(Entity, &Fx), Added<Fx>>) {
-    let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
-    for (entity, fx) in &new {
-        let mut parts = Vec::new();
-        // Parts that fade alike share a material.
-        let mut shared: Option<(Handle<StandardMaterial>, f32)> = None;
-        let mut part = |commands: &mut Commands, mesh: &Handle<Mesh>, color: Color, alpha: f32, glow: f32, transform: Transform| {
-            let material = match &shared {
-                Some((material, _)) if matches!(fx.kind, FxKind::Arc | FxKind::Coins) => material.clone(),
-                _ => materials.add(arena::translucent(color, alpha, glow)),
-            };
-            shared = Some((material.clone(), alpha));
-            let id = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), transform, NotShadowCaster)).id();
-            parts.push((id, material, alpha));
-            id
-        };
-        let ground = |height: f32, radius: f32| Transform::from_xyz(0.0, height, 0.0).with_rotation(flat).with_scale(Vec3::new(radius, radius, 1.0));
-        let children: Vec<Entity> = match fx.kind {
-            FxKind::Blast(hue) | FxKind::Zone(hue) | FxKind::Warn(hue) => {
-                let c = hue_color(hue);
-                vec![part(&mut commands, &looks.disc, c, 0.28, 1.5, ground(0.06, fx.radius)), part(&mut commands, &looks.ring, c, 0.8, 3.0, ground(0.07, fx.radius))]
-            }
-            FxKind::Arc => {
-                // Three jagged pieces from one end to the other, high over the ground.
-                let c = hue_color(FxColor::Storm);
-                let (a, b) = (to_world(fx.at, 1.0), to_world(fx.to, 1.0));
-                let side = (b - a).cross(Vec3::Y).normalize_or_zero() * 0.3;
-                let points = [a, a.lerp(b, 0.33) + side, a.lerp(b, 0.66) - side, b];
-                points
-                    .windows(2)
-                    .map(|w| {
-                        let mid = (w[0] + w[1]) / 2.0;
-                        let along = w[1] - w[0];
-                        let transform = Transform::from_translation(mid).looking_to(along.normalize_or(Vec3::X), Vec3::Y) * Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new(along.length(), 1.0, 1.0));
-                        part(&mut commands, &looks.bolt, c, 0.95, 8.0, transform)
-                    })
-                    .collect()
-            }
-            FxKind::Lob => vec![part(&mut commands, &looks.ball, palette::BARK.darker(0.1), 1.0, 0.2, Transform::from_scale(Vec3::splat(0.22)))],
-            FxKind::Bolt => {
-                let c = hue_color(FxColor::Storm);
-                vec![
-                    part(&mut commands, &looks.ring, c, 0.8, 3.0, ground(0.07, fx.radius)),
-                    part(&mut commands, &looks.bolt, c, 0.95, 9.0, Transform::from_xyz(0.0, 4.0, 0.0).with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new(8.0, 3.0, 3.0))),
-                ]
-            }
-            FxKind::Coins => (0..8).map(|_| part(&mut commands, &looks.bit, palette::GOLD, 1.0, 5.0, Transform::default())).collect(),
-            FxKind::Rise => {
-                let c = palette::ROT_DARK;
-                vec![part(&mut commands, &looks.disc, c, 0.6, 0.2, ground(0.05, fx.radius)), part(&mut commands, &looks.ring, palette::MONSTER, 0.6, 2.0, ground(0.06, fx.radius))]
-            }
-            FxKind::Rime => {
-                // Frost over the ground, the rune glowing in it; shards of ice round it, leaning
-                // out, and a few motes of cold mist (placed by `play_fx` from their own places).
-                let rune = Transform::from_xyz(0.0, 0.05, 0.0).with_scale(Vec3::splat(fx.radius / RUNE_RADIUS));
-                let mut children = vec![
-                    part(&mut commands, &looks.disc, palette::ICE, 0.22, 1.2, ground(0.04, fx.radius)),
-                    part(&mut commands, &looks.rune, palette::FROST_GLOW, 0.85, 3.5, rune),
-                ];
-                commands.entity(children[1]).insert(FxBase(rune));
-                let seed = (fx.at.x * 7.13 + fx.at.y * 3.71).abs();
-                for n in 0..RIME_SHARDS + RIME_MOTES {
-                    let turn = n as f32 * 2.399 + seed;
-                    let out = fx.radius * (0.3 + 0.55 * ((seed + n as f32 * 0.618).fract()));
-                    let at = Vec3::new(turn.cos() * out, 0.0, turn.sin() * out);
-                    let (mesh, color, alpha, glow, transform) = if n < RIME_SHARDS {
-                        let tall = 0.35 + 0.35 * ((seed * 1.7 + n as f32 * 0.37).fract());
-                        let lean = Quat::from_rotation_y(-turn);
-                        (&looks.shard, palette::ICE, 0.75, 2.5, Transform::from_translation(at).with_rotation(lean).with_scale(Vec3::splat(tall)))
-                    } else {
-                        (&looks.bit, palette::RIME, 0.6, 2.0, Transform::from_translation(at * 0.8).with_scale(Vec3::splat(0.5)))
-                    };
-                    let id = part(&mut commands, mesh, color, alpha, glow, transform);
-                    commands.entity(id).insert(FxBase(transform));
-                    children.push(id);
-                }
-                children
-            }
-        };
-        let root = if fx.kind == FxKind::Arc || fx.kind == FxKind::Lob { Vec3::ZERO } else { to_world(fx.at, 0.0) };
-        commands.entity(entity).insert((Transform::from_translation(root), Visibility::Inherited, FxParts(parts))).add_children(&children);
-    }
-}
-
-/// Effects play out on the timeline others' fighters are drawn on: blasts spread and fade, zones
-/// breathe and fade at their end, warnings fill until they land, kegs fly, bolts flash, coins
-/// fly up.
-fn play_fx(
-    clock: AttackClock,
-    fx: Query<(&Fx, &FxParts)>,
-    bases: Query<&FxBase>,
-    mut transforms: Query<&mut Transform>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut visibility: Query<&mut Visibility>,
-) {
-    let now = clock.now(false);
-    for (fx, parts) in &fx {
-        let span = (fx.until as f32 - fx.from as f32).max(1.0);
-        let t = ((now - fx.from as f32) / span).clamp(0.0, 1.0);
-        let over = now > fx.until as f32;
-        // Only a real change touches the material: a touched one goes to the GPU again.
-        let mut fade = |i: usize, strength: f32| {
-            let Some((_, material, alpha)) = parts.0.get(i) else { return };
-            let wanted = alpha * strength.clamp(0.0, 1.0);
-            if materials.get(material).is_some_and(|m| (m.base_color.alpha() - wanted).abs() > 0.004)
-                && let Some(mut m) = materials.get_mut(material)
-            {
-                m.base_color.set_alpha(wanted);
-            }
-        };
-        match fx.kind {
-            FxKind::Blast(_) => {
-                let out = 1.0 - (1.0 - t) * (1.0 - t);
-                for (i, (part, ..)) in parts.0.iter().enumerate() {
-                    if let Ok(mut transform) = transforms.get_mut(*part) {
-                        let r = fx.radius * (0.3 + 0.7 * out);
-                        transform.scale = Vec3::new(r, r, 1.0);
-                    }
-                    fade(i, 1.0 - t);
-                }
-            }
-            FxKind::Zone(_) => {
-                let end = ((fx.until as f32 - now) / 8.0).clamp(0.0, 1.0);
-                let breath = 0.75 + 0.25 * (now * 0.4).sin();
-                fade(0, breath * end);
-                fade(1, end);
-            }
-            FxKind::Warn(_) => {
-                if let Some((part, ..)) = parts.0.first()
-                    && let Ok(mut transform) = transforms.get_mut(*part)
-                {
-                    let r = fx.radius * t;
-                    transform.scale = Vec3::new(r, r, 1.0);
-                }
-                fade(0, if over { 0.0 } else { 1.0 });
-                fade(1, if over { 0.0 } else { 0.5 + 0.5 * t });
-            }
-            FxKind::Arc => {
-                for i in 0..parts.0.len() {
-                    fade(i, 1.0 - t);
-                }
-            }
-            FxKind::Lob => {
-                if let Some((part, ..)) = parts.0.first()
-                    && let Ok(mut transform) = transforms.get_mut(*part)
-                {
-                    let ground = fx.at.lerp(fx.to, t);
-                    transform.translation = to_world(ground, 0.4 + 3.0 * t * (1.0 - t) * 4.0 * 0.5);
-                }
-                fade(0, if over { 0.0 } else { 1.0 });
-            }
-            FxKind::Bolt => {
-                // The ring warns; the bolt strikes at the end, then fades.
-                fade(0, if over { 0.0 } else { 0.4 + 0.6 * t });
-                let struck = ((now - fx.until as f32) / 6.0).clamp(0.0, 1.0);
-                let lit = now >= fx.until as f32;
-                if let Some((bolt, ..)) = parts.0.get(1)
-                    && let Ok(mut v) = visibility.get_mut(*bolt)
-                {
-                    v.set_if_neq(shown(lit && struck < 1.0));
-                }
-                fade(1, 1.0 - struck);
-            }
-            FxKind::Coins => {
-                for (i, (part, ..)) in parts.0.iter().enumerate() {
-                    if let Ok(mut transform) = transforms.get_mut(*part) {
-                        let angle = i as f32 * std::f32::consts::TAU / parts.0.len() as f32 + t * 2.0;
-                        let out = fx.radius * t;
-                        transform.translation = Vec3::new(angle.cos() * out, 0.4 + 2.2 * t - 1.6 * t * t, angle.sin() * out);
-                        transform.rotation = Quat::from_rotation_y(angle * 3.0);
-                    }
-                    fade(i, 1.0 - t * t);
-                }
-            }
-            FxKind::Rise => {
-                fade(0, 1.0 - t);
-                fade(1, 1.0 - t);
-            }
-            FxKind::Rime => {
-                // Bursting up, holding, sinking as it thaws: the shards grow out of the ground and
-                // back in, the rune turns slowly and fades, the mist rises and fades on a loop.
-                let burst = ((now - fx.from as f32) / RIME_BURST_TICKS).clamp(0.0, 1.0);
-                let thaw = ((fx.until as f32 - now) / RIME_THAW_TICKS).clamp(0.0, 1.0);
-                let up = 1.0 - (1.0 - burst.min(thaw)).powi(3);
-                fade(0, thaw);
-                fade(1, thaw);
-                for (i, (part, ..)) in parts.0.iter().enumerate().skip(1) {
-                    let (Ok(base), Ok(mut transform)) = (bases.get(*part), transforms.get_mut(*part)) else { continue };
-                    let base = base.0;
-                    match i {
-                        1 => transform.rotation = base.rotation * Quat::from_rotation_y(now * 0.02),
-                        _ if i <= RIME_SHARDS + 1 => {
-                            // Overshooting a touch as they burst, as ice cracks up.
-                            let height = up * (1.0 + 0.15 * (1.0 - burst) * burst * 4.0);
-                            transform.scale = base.scale * Vec3::new(1.0, height.max(0.01), 1.0);
-                        }
-                        _ => {
-                            let rise = (now * 0.025 + i as f32 * 0.37).fract();
-                            transform.translation = base.translation + Vec3::Y * (0.1 + 1.1 * rise);
-                            transform.scale = base.scale * (1.0 - rise) * up.max(0.01);
-                        }
-                    }
-                    if i > 1 {
-                        fade(i, thaw);
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// Wisps circling a fighter that carries a Wisp Lantern, as many as its level gives.

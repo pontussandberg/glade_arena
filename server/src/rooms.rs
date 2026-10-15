@@ -701,7 +701,8 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             let key = room_key.ok_or("You're not in a room")?;
             // For the fighter they are, whatever they've picked to be next.
             let class = near_the_shop(lobby, ctx, link, key)?;
-            lobby.guests.get_mut(&link).expect("checked").satchel.buy(item, class)?;
+            let free = lobby.rooms[&key].practice;
+            lobby.guests.get_mut(&link).expect("checked").satchel.buy(item, class, free)?;
             info!(room = key.0, guest = lobby.guests[&link].id, item = item.name(), level = lobby.guests[&link].satchel.level(item), "bought");
         }
         RoomRequest::Sell(slot) => {
@@ -831,8 +832,8 @@ fn mode_team(mode: Mode, n: usize) -> u8 {
 /// Whether `link` may trade now: in a run, their fighter by the shopkeeper. What it fights as.
 fn near_the_shop(lobby: &Lobby, ctx: &Ctx, link: Entity, key: RoomKey) -> Result<ClassId, &'static str> {
     let room = &lobby.rooms[&key];
-    if room.live_run().is_none() {
-        return Err("The shop is open in a run against the waves");
+    if room.live_run().is_none() && !room.practice {
+        return Err("The shop is open in a run against the waves, and in practice");
     }
     let shop = room.map.map().shop.ok_or("There's no shop here")?;
     let (pos, class) = ctx.fighter_of(link).ok_or("You're not in the arena")?;

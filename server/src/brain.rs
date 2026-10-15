@@ -318,7 +318,7 @@ pub(super) fn do_deeds(
                 }
             }
             Deed::Mend { room, at, radius, amount } => {
-                spawn_fx(&mut commands, room, Fx::at(FxKind::Blast(FxColor::Poison), at, radius, now, 14));
+                spawn_fx(&mut commands, room, Fx::at(FxKind::Mend, at, radius, now, 24));
                 for (_, _, (r, team), pos, mut health, _, mut hits, max, _) in &mut targets {
                     if *r == room && team.0 == ZOMBIES && pos.0.distance(at) <= radius {
                         mend(&mut health, max, &mut hits, amount);
@@ -331,7 +331,7 @@ pub(super) fn do_deeds(
                 }
             }
             Deed::Mortar { by, from, at, radius, damage, fuse } => {
-                spawn_fx(&mut commands, by.side.0, Fx::between(FxKind::Lob, from, at, radius, now, fuse));
+                spawn_fx(&mut commands, by.side.0, Fx::between(FxKind::Lob(FxColor::Poison), from, at, radius, now, fuse));
                 let bomb = Delayed { by, at, radius, damage, chill: Chill::default(), fire_at: now + fuse, color: FxColor::Poison };
                 arm(&mut commands, &mut pending, now, bomb, FxKind::Warn(FxColor::Poison));
             }

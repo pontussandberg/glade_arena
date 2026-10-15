@@ -85,7 +85,14 @@ knock monsters (zombies too) back a little, bosses aside, and the Jav's javelins
 through monsters (never players).
 
 **Items** (`shared/src/items.rs`) never give stats: each does something. Six at most; buying one
-you have raises it a level (up to 3), selling gives back half.
+you have raises it a level (up to 3), selling gives back half. In practice on Hollow Wilds the
+merchant is there too, and everything is free, to try items out on the target dummies.
+
+What items and monsters do is drawn as little scenes, not marker circles (`client/src/fx/`):
+frost growing over the ground and thawing, scorched earth with glowing cracks and flames licking
+out, thorns bursting up, a void vortex, lightning, coins thrown, a ring of runes where something
+is about to land. Each effect is made of parts (`recipes.rs`) that live and fade on their own, in
+procedural shapes (`shapes.rs`).
 
 | Item | What it does |
 |---|---|
@@ -97,7 +104,7 @@ you have raises it a level (up to 3), selling gives back half.
 | Echo Stone | Your ability echoes where you stood, as a burst |
 | Powder Keg | Lobs kegs at the nearest enemy now and then |
 | Wisp Lantern | Wisps circle you, burning what they touch |
-| Hoarfrost Boots | You leave rime behind that slows (a frost rune, ice bursting up) |
+| Hoarfrost Boots | You leave hoarfrost behind that slows |
 | Doom Bell | Marks enemies; the bell tolls back a share of what you dealt them |
 | Midas Coin | Hits finish enemies low on health, for gold (not bosses) |
 | Phoenix Feather | A killing blow raises you instead, in fire (recharges) |

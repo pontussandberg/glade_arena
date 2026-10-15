@@ -437,9 +437,9 @@ impl Satchel {
         self.slots.iter().flatten().map(|o| (o.item, o.level))
     }
 
-    /// What buying `item` now costs (raising it, if it's carried), or why it can't be bought by a
-    /// fighter of `class`.
-    pub fn price_of(&self, item: Item, class: ClassId) -> Result<u32, &'static str> {
+    /// What buying `item` now costs (raising it, if it's carried; nothing if `free`, as in
+    /// practice), or why it can't be bought by a fighter of `class`.
+    pub fn price_of(&self, item: Item, class: ClassId, free: bool) -> Result<u32, &'static str> {
         if !item.fits(class) {
             return Err("Not for your class");
         }
@@ -450,12 +450,12 @@ impl Satchel {
         if level == 0 && self.slots.iter().all(Option::is_some) {
             return Err("No room: sell something first");
         }
-        Ok(item.cost(level))
+        Ok(if free { 0 } else { item.cost(level) })
     }
 
-    /// Buys `item` (or raises it a level) for a fighter of `class`.
-    pub fn buy(&mut self, item: Item, class: ClassId) -> Result<(), &'static str> {
-        let cost = self.price_of(item, class)?;
+    /// Buys `item` (or raises it a level) for a fighter of `class`, for nothing if `free`.
+    pub fn buy(&mut self, item: Item, class: ClassId, free: bool) -> Result<(), &'static str> {
+        let cost = self.price_of(item, class, free)?;
         if self.gold < cost {
             return Err("Not enough gold");
         }
@@ -518,26 +518,30 @@ mod tests {
         let jav = ClassId::by_key("javelinist").unwrap();
         let revenant = ClassId::by_key("revenant").unwrap();
         let mut satchel = Satchel { gold: 10_000, ..default() };
-        satchel.buy(Item::StormCoil, jav).unwrap();
-        satchel.buy(Item::StormCoil, jav).unwrap();
+        satchel.buy(Item::StormCoil, jav, false).unwrap();
+        satchel.buy(Item::StormCoil, jav, false).unwrap();
         assert_eq!(satchel.level(Item::StormCoil), 2);
-        satchel.buy(Item::StormCoil, jav).unwrap();
-        assert!(satchel.buy(Item::StormCoil, jav).is_err(), "past the highest level");
-        assert!(satchel.buy(Item::HydraSpear, revenant).is_err(), "another class's item");
-        assert!(satchel.buy(Item::RicochetCharm, revenant).is_err(), "a melee fighter's ricochet");
+        satchel.buy(Item::StormCoil, jav, false).unwrap();
+        assert!(satchel.buy(Item::StormCoil, jav, false).is_err(), "past the highest level");
+        assert!(satchel.buy(Item::HydraSpear, revenant, false).is_err(), "another class's item");
+        assert!(satchel.buy(Item::RicochetCharm, revenant, false).is_err(), "a melee fighter's ricochet");
         let spent = 10_000 - satchel.gold;
         assert_eq!(satchel.sell(0), Some(spent / 2));
         // Back as a revenant: the jav's ricochet goes, all it cost given back.
-        satchel.buy(Item::RicochetCharm, jav).unwrap();
+        satchel.buy(Item::RicochetCharm, jav, false).unwrap();
         let gold = satchel.gold;
         assert_eq!(satchel.refund_unfit(revenant), Item::RicochetCharm.cost(0));
         assert_eq!((satchel.level(Item::RicochetCharm), satchel.gold), (0, gold + Item::RicochetCharm.cost(0)));
         assert_eq!(satchel.level(Item::StormCoil), 0);
         for item in [Item::EmberHeart, Item::RimeSigil, Item::Bloodfang, Item::EchoStone, Item::PowderKeg, Item::VoidOrb] {
-            satchel.buy(item, jav).unwrap();
+            satchel.buy(item, jav, false).unwrap();
         }
-        assert_eq!(satchel.buy(Item::DoomBell, jav), Err("No room: sell something first"));
+        assert_eq!(satchel.buy(Item::DoomBell, jav, false), Err("No room: sell something first"));
         satchel.gold = 0;
-        assert_eq!(satchel.buy(Item::VoidOrb, jav), Err("Not enough gold"));
+        assert_eq!(satchel.buy(Item::VoidOrb, jav, false), Err("Not enough gold"));
+        // In practice it's all free.
+        let level = satchel.level(Item::VoidOrb);
+        satchel.buy(Item::VoidOrb, jav, true).unwrap();
+        assert_eq!((satchel.level(Item::VoidOrb), satchel.gold), (level + 1, 0));
     }
 }

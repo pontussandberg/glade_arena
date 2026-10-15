@@ -216,7 +216,7 @@ pub(super) fn tick_items(
                     let (every, damage, radius, fuse, reach) = items::powder_keg(level);
                     let Some((_, at)) = nearest_foe(&targets, side, pos.0, reach, |_| false) else { continue };
                     state.keg_at = now + every;
-                    spawn_fx(&mut commands, side.0, Fx::between(FxKind::Lob, pos.0, at, radius, now, fuse));
+                    spawn_fx(&mut commands, side.0, Fx::between(FxKind::Lob(FxColor::Fire), pos.0, at, radius, now, fuse));
                     pending.0.push(Delayed { by: by(item), at, radius, damage, chill: Chill::default(), fire_at: now + fuse, color: FxColor::Fire });
                 }
                 Item::HoarfrostBoots if now >= state.trail.0 && pos.0.distance(state.trail.1) >= 0.8 => {

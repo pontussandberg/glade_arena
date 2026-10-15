@@ -60,6 +60,11 @@ impl CurrentRoom {
     pub fn run(&self) -> Option<&RunView> {
         self.0.as_ref().filter(|view| view.started && view.mode.pve()).and_then(|view| view.run.as_ref())
     }
+
+    /// We're practicing (where items are free, if the map has a shop).
+    pub fn practice(&self) -> bool {
+        self.0.as_ref().is_some_and(|view| view.practice)
+    }
 }
 
 /// The map our room plays on; out of a room, the one picked at home (`map_pick.rs`, the default
