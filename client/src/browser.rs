@@ -1,17 +1,15 @@
-//! Home's lobbies: a pane beside the character select that folds open and shut. Its header is
-//! always there (how many lobbies are open, how many live), and a click on it opens or folds it.
-//! "Lobbies" (the character select's big button, at home, beside "Practice") only ever opens it: a click
-//! on it while it's open flashes the header. Open, it shows every lobby there is (name, mode,
-//! how full, whether its match is on), each with a way in, the ones for fighting each other (PvP)
-//! apart from the ones against the waves (PvE); and below them a form to create one: a name
-//! (click it to type), then the game (PvP or PvE), its mode (PvP: free for all or teams) and its
-//! map, shown behind as it's picked. Under it, the leaderboards, folding open and shut too (one
-//! open at a time, the other folding as it opens): the best runs against the waves, a board for
-//! each party size, picked by its tab. Before home, while connecting, a plain screen saying so.
+//! Home's side panel: two panes, each one block that folds open and shut by its header, both
+//! open to begin with and never hidden. "Play with friends": every lobby there is (name, mode, how
+//! full, whether its match is on, whether it has a password), each with a way in, the ones against
+//! the waves (PvE) apart from the ones for fighting each other (PvP); and under them a form to
+//! create one: a name (click it to type), the game (PvE first: the obvious choice), its mode (PvP:
+//! free for all or teams), its map (shown behind as it's picked) and an optional password.
+//! "Leaderboards": the best runs against the waves, a board for each party size, picked by its tab.
+//! Before home, while connecting, a plain screen saying so.
 
 use arena_shared::map::MapId;
 use arena_shared::protocol::RoomRequest;
-use arena_shared::rooms::{HighScore, MAX_PARTY, Mode, ROOM_NAME_MAX, RoomKey, RoomSummary, first_name, party_label};
+use arena_shared::rooms::{HighScore, MAX_PARTY, Mode, PASSWORD_MAX, ROOM_NAME_MAX, RoomKey, RoomSummary, clean_password, first_name, party_label};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
@@ -19,16 +17,17 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use crate::arena::palette;
-use crate::lobby::{SidePanel, card, fold_chip, label, pane_header};
-use crate::render::{ButtonFill, button, clicked, key_chip, ui_text};
-use crate::rooms::{CurrentMap, HOME_MAP, Leaderboards, Me, RoomList, Screen, request};
+use crate::lobby::{SidePanel, card, divider, fold_chip, label, pane, pane_body, pane_header};
+use crate::prompt::Answered;
+use crate::render::{button, clicked, key_chip, ui_text};
+use crate::rooms::{Answer, Asking, CurrentMap, HOME_MAP, Leaderboards, Me, RoomList, Screen, TextPrompt, request};
 use crate::arena::palette::ui::ACCENT;
 
 pub struct BrowserPlugin;
 
 impl Plugin for BrowserPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Typing>().init_resource::<LobbiesOpen>().init_resource::<HeaderFlash>().init_resource::<BoardsOpen>();
+        app.init_resource::<Typing>().init_resource::<LobbiesOpen>().init_resource::<BoardsOpen>();
         app.add_systems(OnEnter(Screen::Connecting), spawn_connecting);
         app.add_systems(OnExit(Screen::Connecting), despawn::<ConnectingPart>);
         app.add_systems(Update, show_connecting.run_if(in_state(Screen::Connecting)));
@@ -36,7 +35,7 @@ impl Plugin for BrowserPlugin {
         app.add_systems(OnExit(Screen::Home), close_home);
         app.add_systems(
             Update,
-            (focus_name, type_name, lobby_buttons, show_lobbies, show_form, flash_header)
+            (focus_name, type_name, lobby_buttons, show_lobbies, show_form)
                 .chain()
                 .run_if(in_state(Screen::Home)),
         );
@@ -114,11 +113,18 @@ fn show_connecting(client: Query<Has<Disconnected>, With<Client>>, mut text: Sin
     }
 }
 
-/// Whether the lobbies pane is open; it stays as it was left, coming home again.
-#[derive(Resource, Default)]
+/// Whether the lobbies pane is open (to begin with, it is); it stays as it was left, coming home
+/// again.
+#[derive(Resource)]
 pub(crate) struct LobbiesOpen(bool);
 
-/// Whether the leaderboards are open (folding the lobbies), and which party size's is shown.
+impl Default for LobbiesOpen {
+    fn default() -> Self {
+        LobbiesOpen(true)
+    }
+}
+
+/// Whether the leaderboards are open (to begin with, they are), and which party size's is shown.
 #[derive(Resource)]
 pub(crate) struct BoardsOpen {
     open: bool,
@@ -127,7 +133,7 @@ pub(crate) struct BoardsOpen {
 
 impl Default for BoardsOpen {
     fn default() -> Self {
-        BoardsOpen { open: false, size: 1 }
+        BoardsOpen { open: true, size: 1 }
     }
 }
 
@@ -139,30 +145,14 @@ struct BoardsHeader;
 #[derive(Component)]
 struct BoardTab(usize);
 
-/// When the header last flashed (`Time` seconds), to say "it's here" to a click on the button that
-/// opens the pane, while it's open.
-#[derive(Resource, Default)]
-pub(crate) struct HeaderFlash(Option<f32>);
-
-/// "Lobbies" clicked at `now` (`Time` seconds): the pane opens, or, open already, its
-/// header flashes.
-pub(crate) fn open_lobbies(open: &mut LobbiesOpen, flash: &mut HeaderFlash, now: f32) {
-    if open.0 {
-        flash.0 = Some(now);
-    } else {
-        open.0 = true;
-    }
-}
-
-/// How long the header's flash takes to fade.
-const FLASH_SECS: f32 = 0.45;
-
-/// The lobby about to be created, while home: against the waves on Hollow Wilds, to begin with.
+/// The lobby about to be created, while home: against the waves on Hollow Wilds, open to anyone,
+/// to begin with.
 #[derive(Resource)]
 struct Home {
     name: String,
     mode: Mode,
     map: MapId,
+    password: Option<String>,
 }
 
 /// Typing goes into the new lobby's name, not to the character select's keys.
@@ -173,8 +163,16 @@ pub struct Typing(pub bool);
 #[derive(Component)]
 struct PaneHeader;
 
+/// A lobby's way in, and whether it asks for a password.
 #[derive(Component)]
-struct JoinButton(RoomKey);
+struct JoinButton(RoomKey, bool);
+
+/// The new lobby's password: set (or change) it, or take it off.
+#[derive(Component)]
+struct PasswordButton;
+
+#[derive(Component)]
+struct NoPasswordButton;
 
 /// The new lobby's name (its box, and the text in it), mode, and the create button.
 #[derive(Component)]
@@ -199,7 +197,7 @@ struct CreateButton;
 fn open_home(mut commands: Commands, me: Option<Res<Me>>, mut map: ResMut<CurrentMap>) {
     // The first name only: a whole one with its byname can be too long for a lobby's.
     let first = me.as_ref().map_or("Guest", |me| first_name(&me.name));
-    commands.insert_resource(Home { name: format!("{first}'s lobby"), mode: Mode::Waves, map: HOME_MAP });
+    commands.insert_resource(Home { name: format!("{first}'s lobby"), mode: Mode::Waves, map: HOME_MAP, password: None });
     // Home shows Hollow Wilds again, whatever the last room was on.
     map.set_if_neq(CurrentMap(HOME_MAP));
 }
@@ -215,9 +213,9 @@ fn focus_name(
     keys: Res<ButtonInput<KeyCode>>,
     name_box: Query<&Interaction, With<NameBox>>,
     mut typing: ResMut<Typing>,
-    prompt: Res<crate::rooms::ScorePrompt>,
+    prompt: Res<TextPrompt>,
 ) {
-    // Naming a score: the keys are its (`score_name`).
+    // A question's box is up: the keys are its (`prompt`).
     if prompt.0.is_some() {
         return;
     }
@@ -238,7 +236,7 @@ fn type_name(
     typing: Res<Typing>,
     mut home: ResMut<Home>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
-    prompt: Res<crate::rooms::ScorePrompt>,
+    prompt: Res<TextPrompt>,
 ) {
     for key in typed.read() {
         if key.state != ButtonState::Pressed || !typing.0 || prompt.0.is_some() {
@@ -265,7 +263,7 @@ fn type_name(
 
 /// A new lobby, as picked.
 fn create(home: &Home, sender: &mut MessageSender<RoomRequest>) {
-    request(sender, RoomRequest::Create { name: home.name.clone(), mode: home.mode, map: home.mode.fit_map(home.map) });
+    request(sender, RoomRequest::Create { name: home.name.clone(), mode: home.mode, map: home.mode.fit_map(home.map), password: home.password.clone() });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -275,9 +273,11 @@ fn lobby_buttons(
     (games, modes, maps): (Query<(Ref<Interaction>, &GameButton)>, Query<(Ref<Interaction>, &ModeButton)>, Query<(Ref<Interaction>, &MapButton)>),
     create_button: Query<Ref<Interaction>, With<CreateButton>>,
     (boards_header, tabs): (Query<Ref<Interaction>, With<BoardsHeader>>, Query<(Ref<Interaction>, &BoardTab)>),
+    (set_password, no_password): (Query<Ref<Interaction>, With<PasswordButton>>, Query<Ref<Interaction>, With<NoPasswordButton>>),
     mut home: ResMut<Home>,
     mut shown: ResMut<CurrentMap>,
     (mut open, mut boards): (ResMut<LobbiesOpen>, ResMut<BoardsOpen>),
+    (mut prompt, mut answered): (ResMut<TextPrompt>, ResMut<Answered>),
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
     if header.iter().any(clicked) {
@@ -285,14 +285,6 @@ fn lobby_buttons(
     }
     if boards_header.iter().any(clicked) {
         boards.open = !boards.open;
-        if boards.open {
-            open.0 = false;
-        }
-    }
-    // One open at a time: the lobbies opening (here, or from the character select) fold the
-    // leaderboards.
-    if open.is_changed() && open.0 && boards.open {
-        boards.open = false;
     }
     for (interaction, tab) in &tabs {
         if clicked(interaction) && boards.size != tab.0 {
@@ -300,9 +292,24 @@ fn lobby_buttons(
         }
     }
     for (interaction, join) in &joins {
-        if clicked(interaction) {
-            request(&mut sender, RoomRequest::Join(join.0));
+        if !clicked(interaction) {
+            continue;
         }
+        match join.1 {
+            // Its password first.
+            true => prompt.0 = Some(password_asked("Join a lobby", "This lobby has a password.", "JOIN", Answer::JoinRoom(join.0))),
+            false => request(&mut sender, RoomRequest::Join(join.0, None)),
+        }
+    }
+    // The new lobby's password: asked for in the box (left empty, none), or taken off.
+    if set_password.iter().any(clicked) {
+        prompt.0 = Some(password_asked("Create a lobby", "Only those who give it can join.", "SET", Answer::RoomPassword));
+    }
+    if no_password.iter().any(clicked) {
+        home.password = None;
+    }
+    if let Some((Answer::RoomPassword, password)) = answered.0.take() {
+        home.password = clean_password(&password);
     }
     // The game, then its mode, then its map (shown behind as it's picked): a game or mode played
     // elsewhere takes the map with it.
@@ -334,8 +341,25 @@ fn lobby_buttons(
     }
 }
 
-/// The pane, rebuilt when it opens or folds, or the list changes. The header always; open, two
-/// cards under it, plainly apart: the lobbies to join, then a new one to create.
+/// A question for a lobby's password (`prompt`), its answer for `answer`.
+fn password_asked(title: &str, body: &str, confirm: &'static str, answer: Answer) -> Asking {
+    Asking {
+        kicker: "Password".into(),
+        title: title.into(),
+        body: body.into(),
+        field: "Password".into(),
+        text: String::new(),
+        max: PASSWORD_MAX,
+        secret: true,
+        confirm,
+        dismiss: "Cancel",
+        answer,
+    }
+}
+
+/// The panel, rebuilt when a pane opens or folds, or the list, the form's rows or the
+/// leaderboards change. The lobbies' pane: its header always; open, under it the lobbies to join,
+/// then a new one to create. Then the leaderboards' pane.
 fn show_lobbies(
     mut commands: Commands,
     home: Res<Home>,
@@ -343,11 +367,11 @@ fn show_lobbies(
     list: Res<RoomList>,
     (boards_open, boards): (Res<BoardsOpen>, Res<Leaderboards>),
     panel: Single<(Entity, Ref<SidePanel>, &mut Visibility)>,
-    mut built_for: Local<Option<(bool, MapId)>>,
+    mut built_for: Local<Option<(bool, MapId, bool)>>,
 ) {
     let (panel, fresh, mut visibility) = panel.into_inner();
-    // The form's rows change with the game picked (its modes, its maps).
-    let form = Some((home.mode.pve(), home.mode.maps()[0]));
+    // The form's rows change with the game picked (its modes, its maps), and the password set.
+    let form = Some((home.mode.pve(), home.mode.maps()[0], home.password.is_some()));
     let form_changed = std::mem::replace(&mut *built_for, form) != form;
     if !(open.is_changed() || home.is_added() || fresh.is_added() || list.is_changed() || form_changed || boards_open.is_changed() || boards.is_changed()) {
         return;
@@ -356,24 +380,31 @@ fn show_lobbies(
     let mut panel = commands.entity(panel);
     panel.despawn_children();
     panel.with_children(|panel| {
-        spawn_header(panel, &list.0, open.0);
-        if !open.0 {
-            spawn_boards(panel, &boards.0, &boards_open);
-            return;
-        }
+        panel.spawn(pane(open.0)).with_children(|panel| spawn_lobbies(panel, &home, &list.0, open.0));
+        spawn_boards(panel, &boards.0, &boards_open);
+    });
+}
 
+/// The lobbies' pane: its header; open, the lobbies to join, then the form for a new one.
+fn spawn_lobbies(panel: &mut ChildSpawnerCommands, home: &Home, list: &[RoomSummary], open: bool) {
+    spawn_header(panel, list, open);
+    if !open {
+        return;
+    }
+    panel.spawn(pane_body()).with_children(|panel| {
+        panel.spawn(divider());
         panel.spawn(card()).with_children(|card| {
             card.spawn(ui_text("Join a lobby", 20.0, palette::ui::TEXT));
-            if list.0.is_empty() {
+            if list.is_empty() {
                 card.spawn((
                     Node { justify_content: JustifyContent::Center, padding: UiRect::all(px(GAP * 2.0)), border: UiRect::all(px(1.0)), ..default() },
                     BorderColor::all(palette::ui::MUTED.with_alpha(0.2)),
                 ))
                 .with_child(ui_text("No lobbies yet", 12.0, palette::ui::MUTED));
             }
-            // Fights apart from the waves, as many of each as fit.
-            for (title, pve) in [("PvP", false), ("PvE", true)] {
-                let rooms: Vec<&RoomSummary> = list.0.iter().filter(|room| room.mode.pve() == pve).collect();
+            // The waves apart from fights, as many of each as fit.
+            for (title, pve) in [("PvE", true), ("PvP", false)] {
+                let rooms: Vec<&RoomSummary> = list.iter().filter(|room| room.mode.pve() == pve).collect();
                 if rooms.is_empty() {
                     continue;
                 }
@@ -387,6 +418,7 @@ fn show_lobbies(
             }
         });
 
+        panel.spawn(divider());
         panel.spawn(card()).with_children(|card| {
             card.spawn(ui_text("Create a lobby", 20.0, palette::ui::TEXT));
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
@@ -399,14 +431,16 @@ fn show_lobbies(
                 BackgroundColor(palette::ui::BACKDROP),
             ))
             .with_child((NameField, ui_text("", 15.0, palette::ui::TEXT)));
-            // First the game: two big choices, plainly apart.
+            // First the game: the waves together first and bigger (the obvious choice), then
+            // fighting each other.
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
             card.spawn(label("Game"));
             card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
-                for (pve, title, blurb) in [(false, "PvP", "Fight each other"), (true, "PvE", "Survive endless waves together")] {
-                    row.spawn((GameButton(pve), Button, choice(GAP), BorderColor::all(palette::ui::MUTED.with_alpha(0.3)), BackgroundColor(palette::ui::BACKDROP)))
+                for (pve, title, blurb, grow) in [(true, "PvE", "Survive endless waves together", 2.0), (false, "PvP", "Fight each other", 1.0)] {
+                    let node = Node { flex_grow: grow, ..choice(GAP) };
+                    row.spawn((GameButton(pve), Button, node, BorderColor::all(palette::ui::MUTED.with_alpha(0.3)), BackgroundColor(palette::ui::BACKDROP)))
                         .with_children(|button| {
-                            button.spawn(ui_text(title, 18.0, palette::ui::TEXT));
+                            button.spawn(ui_text(title, if pve { 20.0 } else { 15.0 }, palette::ui::TEXT));
                             button.spawn(ui_text(blurb, 11.0, SUBTITLE));
                         });
                 }
@@ -432,42 +466,56 @@ fn show_lobbies(
                         .with_child(ui_text(map.label(), 13.0, palette::ui::TEXT));
                 }
             });
+            // Last, who may join: anyone, or only those with the password.
+            card.spawn(label("Password (optional)"));
+            card.spawn(Node { column_gap: px(GAP), ..default() }).with_children(|row| {
+                let (text, color) = if home.password.is_some() { ("Password set: change", palette::ui::TEXT) } else { ("Add a password", palette::ui::MUTED) };
+                let mut set = row.spawn((PasswordButton, button(text, 12.0, palette::ui::BACKDROP, color, palette::ui::MUTED.with_alpha(0.4))));
+                set.entry::<Node>().and_modify(|mut node| node.flex_grow = 1.0);
+                if home.password.is_some() {
+                    row.spawn((NoPasswordButton, button("Remove", 12.0, palette::ui::BACKDROP, palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.4))));
+                }
+            });
             card.spawn(Node { height: px(GAP * 0.5), ..default() });
             card.spawn((CreateButton, button("CREATE LOBBY", 14.0, ACCENT, palette::ui::PANEL, ACCENT)));
         });
-        spawn_boards(panel, &boards.0, &boards_open);
     });
 }
 
 /// The leaderboards: their header, and open, a tab for each party size and its board.
 fn spawn_boards(panel: &mut ChildSpawnerCommands, scores: &[HighScore], open: &BoardsOpen) {
-    panel.spawn((BoardsHeader, pane_header(open.open))).with_children(|header| {
-        header.spawn(ui_text("Leaderboards", 18.0, palette::ui::TEXT));
-        header.spawn(fold_chip(open.open));
-    });
-    if !open.open {
-        return;
-    }
-    panel.spawn(card()).with_children(|card| {
-        card.spawn(Node { column_gap: px(GAP * 0.5), ..default() }).with_children(|row| {
-            for size in 1..=MAX_PARTY {
-                let picked = size == open.size;
-                let (edge, fill) = if picked { (ACCENT, palette::ui::SELECTED) } else { (palette::ui::MUTED.with_alpha(0.3), palette::ui::BACKDROP) };
-                row.spawn((BoardTab(size), Button, choice(GAP * 0.5), BorderColor::all(edge), BackgroundColor(fill)))
-                    .with_child(ui_text(party_label(size), 12.0, palette::ui::TEXT));
-            }
+    panel.spawn(pane(open.open)).with_children(|panel| {
+        panel.spawn((BoardsHeader, pane_header())).with_children(|header| {
+            header.spawn(ui_text("Leaderboards", 18.0, palette::ui::TEXT));
+            header.spawn(fold_chip(open.open));
         });
-        let board: Vec<&HighScore> = scores.iter().filter(|s| s.party.len() == open.size).collect();
-        if board.is_empty() {
-            card.spawn((
-                Node { justify_content: JustifyContent::Center, padding: UiRect::all(px(GAP * 2.0)), border: UiRect::all(px(1.0)), ..default() },
-                BorderColor::all(palette::ui::MUTED.with_alpha(0.2)),
-            ))
-            .with_child(ui_text("No runs yet", 12.0, palette::ui::MUTED));
+        if !open.open {
+            return;
         }
-        for (rank, score) in board.into_iter().enumerate() {
-            spawn_score(card, rank + 1, score);
-        }
+        panel.spawn(pane_body()).with_children(|panel| {
+            panel.spawn(divider());
+            panel.spawn(card()).with_children(|card| {
+                card.spawn(Node { column_gap: px(GAP * 0.5), ..default() }).with_children(|row| {
+                    for size in 1..=MAX_PARTY {
+                        let picked = size == open.size;
+                        let (edge, fill) = if picked { (ACCENT, palette::ui::SELECTED) } else { (palette::ui::MUTED.with_alpha(0.3), palette::ui::BACKDROP) };
+                        row.spawn((BoardTab(size), Button, choice(GAP * 0.5), BorderColor::all(edge), BackgroundColor(fill)))
+                            .with_child(ui_text(party_label(size), 12.0, palette::ui::TEXT));
+                    }
+                });
+                let board: Vec<&HighScore> = scores.iter().filter(|s| s.party.len() == open.size).collect();
+                if board.is_empty() {
+                    card.spawn((
+                        Node { justify_content: JustifyContent::Center, padding: UiRect::all(px(GAP * 2.0)), border: UiRect::all(px(1.0)), ..default() },
+                        BorderColor::all(palette::ui::MUTED.with_alpha(0.2)),
+                    ))
+                    .with_child(ui_text("No runs yet", 12.0, palette::ui::MUTED));
+                }
+                for (rank, score) in board.into_iter().enumerate() {
+                    spawn_score(card, rank + 1, score);
+                }
+            });
+        });
     });
 }
 
@@ -494,25 +542,13 @@ fn spawn_score(card: &mut ChildSpawnerCommands, rank: usize, score: &HighScore) 
     });
 }
 
-/// The header's flash: lit, fading back to its own fill.
-fn flash_header(time: Res<Time>, mut flash: ResMut<HeaderFlash>, header: Query<(&ButtonFill, &mut BackgroundColor), With<PaneHeader>>) {
-    let Some(at) = flash.0 else { return };
-    let t = ((time.elapsed_secs() - at) / FLASH_SECS).clamp(0.0, 1.0);
-    for (fill, mut background) in header {
-        background.set_if_neq(BackgroundColor(ACCENT.with_alpha(0.55).mix(&fill.0, t)));
-    }
-    if t >= 1.0 {
-        flash.0 = None;
-    }
-}
-
-/// The pane's header (`pane_header`), one line: "Lobbies" and how many are open, how many of them
-/// are live if any, and whether a click shows or hides the rest.
+/// The lobbies' header (`pane_header`), one line: "Play with friends" and how many lobbies are
+/// open, how many of them are live if any, and whether a click shows or hides the rest.
 fn spawn_header(panel: &mut ChildSpawnerCommands, list: &[RoomSummary], open: bool) {
     let live = list.iter().filter(|room| room.started).count();
-    panel.spawn((PaneHeader, pane_header(open))).with_children(|header| {
+    panel.spawn((PaneHeader, pane_header())).with_children(|header| {
         header.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Center, ..default() }).with_children(|left| {
-            left.spawn(ui_text("Lobbies", 18.0, palette::ui::TEXT));
+            left.spawn(ui_text("Play with friends", 18.0, palette::ui::TEXT));
             left.spawn(key_chip(list.len().to_string(), 11.0, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5)));
         });
         header.spawn(Node { column_gap: px(GAP * 1.5), align_items: AlignItems::Center, ..default() }).with_children(|right| {
@@ -547,7 +583,10 @@ fn spawn_row(card: &mut ChildSpawnerCommands, room: &RoomSummary) {
             left.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Center, ..default() }).with_children(|line| {
                 let (state, color) = if room.started { ("LIVE", ACCENT) } else { ("WAITING", palette::ui::MUTED) };
                 line.spawn(ui_text(state, 10.0, color));
-                line.spawn(ui_text(format!("{}  ·  {}  ·  {}/{}", room.mode.label(), room.map.label(), room.players, room.mode.capacity()), 11.0, palette::ui::MUTED));
+                line.spawn(ui_text(format!("{}  |  {}  |  {}/{}", room.mode.label(), room.map.label(), room.players, room.mode.capacity()), 11.0, palette::ui::MUTED));
+                if room.locked {
+                    line.spawn(ui_text("PASSWORD", 10.0, palette::TORCH_FLAME));
+                }
             });
         });
         if room.closed {
@@ -555,7 +594,7 @@ fn spawn_row(card: &mut ChildSpawnerCommands, room: &RoomSummary) {
         } else if room.full() {
             row.spawn(ui_text("Full", 12.0, palette::ui::MUTED));
         } else {
-            row.spawn((JoinButton(room.key), button("Join", 12.0, palette::ui::SELECTED, palette::ui::TEXT, ACCENT)));
+            row.spawn((JoinButton(room.key, room.locked), button("Join", 12.0, palette::ui::SELECTED, palette::ui::TEXT, ACCENT)));
         }
     });
 }

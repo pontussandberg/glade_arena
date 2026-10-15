@@ -162,6 +162,15 @@ pub struct RoomSummary {
     pub started: bool,
     /// No way in: a run against the waves under way.
     pub closed: bool,
+    /// Only those with its password may join.
+    pub locked: bool,
+}
+
+impl RoomView {
+    /// Everyone but the leader is ready (the leader may start).
+    pub fn all_ready(&self) -> bool {
+        self.members.iter().all(|m| m.ready || m.guest_id == self.leader)
+    }
 }
 
 impl RoomSummary {
@@ -180,6 +189,8 @@ pub struct RoomView {
     pub started: bool,
     /// A practice room: ours alone, never listed.
     pub practice: bool,
+    /// A run against the waves of our own (`RoomRequest::PlaySolo`): never listed.
+    pub solo: bool,
     /// The leader's `Member::guest_id`.
     pub leader: u32,
     /// In the order they joined.
@@ -363,6 +374,8 @@ pub struct Member {
     /// Players they killed this match (or the last one, until the next starts), and zombies.
     pub kills: u32,
     pub zombie_kills: u32,
+    /// Ready to start (in the room's lobby, before the start).
+    pub ready: bool,
 }
 
 /// Why we're no longer in a room.
@@ -372,6 +385,17 @@ pub enum LeaveReason {
     Left,
     /// Idle for `AFK_TIMEOUT`.
     Afk,
+}
+
+/// Longest room password, in characters.
+pub const PASSWORD_MAX: usize = 24;
+
+/// A room password as typed: trimmed, printable only, at most `PASSWORD_MAX` characters. `None`
+/// (no password) if nothing is left.
+pub fn clean_password(password: &str) -> Option<String> {
+    let clean: String = password.chars().filter(|c| !c.is_control()).take(PASSWORD_MAX).collect();
+    let clean = clean.trim();
+    (!clean.is_empty()).then(|| clean.to_string())
 }
 
 /// A room name as typed, made fit to show: trimmed, printable only, at most `ROOM_NAME_MAX`

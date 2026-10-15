@@ -166,6 +166,8 @@ pub mod palette {
         pub const TEXT: Color = Color::srgb_u8(0xD6, 0xBC, 0x98);
         /// The one accent: the role, what's selected, the main button.
         pub const ACCENT: Color = Color::srgb_u8(0xAD, 0x7A, 0x32);
+        /// Go: playing solo, and being ready.
+        pub const GO: Color = Color::srgb_u8(0x4E, 0x8A, 0x3E);
     }
 }
 

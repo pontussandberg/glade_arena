@@ -52,23 +52,56 @@ pub struct Me {
 pub struct RoomList(pub Vec<RoomSummary>);
 
 
-/// Our run made a leaderboard (`score_name` puts the box up), and we've yet to name our entry: where it placed, and the name
-/// as typed so far.
+/// A question put to us in a box over everything, once we're out of the arena (`prompt` draws
+/// it): what it's about, and the answer as typed so far. Asked by the server (name a score that
+/// made a leaderboard) or by us (a lobby's password, to join it or to make one with).
 #[derive(Resource, Default)]
-pub struct ScorePrompt(pub Option<Prompt>);
+pub struct TextPrompt(pub Option<Asking>);
 
-pub struct Prompt {
-    pub wave: u32,
-    pub place: usize,
-    pub size: usize,
-    pub name: String,
+pub struct Asking {
+    /// What it's about: a small label, a heading, a line under it.
+    pub kicker: String,
+    pub title: String,
+    pub body: String,
+    /// Over the box: what to type.
+    pub field: String,
+    pub text: String,
+    /// Characters at most, and whether they're shown as stars.
+    pub max: usize,
+    pub secret: bool,
+    /// The buttons: the answer's (Enter), and the one that lets it be (Esc).
+    pub confirm: &'static str,
+    pub dismiss: &'static str,
+    pub answer: Answer,
 }
 
-impl ScorePrompt {
+/// What an answer is for.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Answer {
+    /// The name our entry on the leaderboards goes by.
+    ScoreName,
+    /// The password into this lobby.
+    JoinRoom(RoomKey),
+    /// The password the lobby we make will have (none if left empty).
+    RoomPassword,
+}
+
+impl TextPrompt {
     /// The server's `LobbyEvent::NameYourScore`.
     pub(crate) fn asked(&mut self, event: &LobbyEvent) {
         if let LobbyEvent::NameYourScore { wave, place, size, name } = event {
-            self.0 = Some(Prompt { wave: *wave, place: *place, size: *size, name: name.clone() });
+            self.0 = Some(Asking {
+                kicker: "New high score".into(),
+                title: format!("#{place} on the {} board", arena_shared::rooms::party_label(*size)),
+                body: format!("You reached wave {wave}."),
+                field: "Your name on the board".into(),
+                text: name.clone(),
+                max: arena_shared::rooms::SCORE_NAME_MAX,
+                secret: false,
+                confirm: "SAVE",
+                dismiss: "Skip",
+                answer: Answer::ScoreName,
+            });
         }
     }
 
@@ -155,7 +188,7 @@ pub struct RoomsNetPlugin {
 impl Plugin for RoomsNetPlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<Screen>().add_computed_state::<Picking>();
-        app.init_resource::<RoomList>().init_resource::<Leaderboards>().init_resource::<ScorePrompt>().init_resource::<CurrentRoom>().init_resource::<CurrentMap>();
+        app.init_resource::<RoomList>().init_resource::<Leaderboards>().init_resource::<TextPrompt>().init_resource::<CurrentRoom>().init_resource::<CurrentMap>();
         app.init_resource::<Notice>().init_resource::<Leaving>();
         app.insert_resource(QuickJoin(self.quick_join.clone()));
         app.insert_resource(StoredName(self.guest_name.clone()));
@@ -187,7 +220,7 @@ fn read_lobby_events(
     mut commands: Commands,
     mut client: Query<(&mut MessageReceiver<LobbyEvent>, &mut MessageSender<RoomRequest>), With<Client>>,
     quick_join: Res<QuickJoin>,
-    (mut list, mut boards, mut prompt): (ResMut<RoomList>, ResMut<Leaderboards>, ResMut<ScorePrompt>),
+    (mut list, mut boards, mut prompt): (ResMut<RoomList>, ResMut<Leaderboards>, ResMut<TextPrompt>),
     mut room: ResMut<CurrentRoom>,
     mut current_map: ResMut<CurrentMap>,
     mut notice: ResMut<Notice>,
@@ -216,7 +249,7 @@ fn read_lobby_events(
                 // Practice goes straight in: home until our fighter's there.
                 if room.0.is_none() {
                     notice.0 = None;
-                    if !view.practice {
+                    if !view.practice && !view.solo {
                         next.set(Screen::Room);
                     }
                 }

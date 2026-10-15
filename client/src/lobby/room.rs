@@ -7,7 +7,6 @@ use arena_shared::protocol::RoomRequest;
 use arena_shared::map::MapId;
 use arena_shared::rooms::{MAX_PER_TEAM, Member, Mode, NO_TEAM, Phase, RoomView, TEAMS};
 
-use crate::browser::{HeaderFlash, LobbiesOpen};
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::palette;
 use crate::render::{button, clicked, shown, ui_text};
@@ -37,11 +36,14 @@ pub(super) fn show_room(
         panel.spawn(card()).with_children(|card| {
             card.spawn(label("Lobby"));
             card.spawn(ui_text(view.name.clone(), 24.0, palette::ui::TEXT));
-            // The leader needs no telling: the start button is theirs.
+            // Before the start: the leader waits for everyone to be ready, then starts.
+            let ready = view.member(my_id).is_some_and(|m| m.ready);
             let status = match (view.started, leading) {
                 (true, _) => Some(("Match in progress", ACCENT)),
+                (false, true) if !view.all_ready() => Some(("Waiting for everyone to be ready", palette::ui::MUTED)),
                 (false, true) => None,
-                (false, false) => Some(("Waiting for the leader", palette::ui::MUTED)),
+                (false, false) if ready => Some(("Ready: waiting for the leader", palette::ui::GO)),
+                (false, false) => Some(("Ready up when you are", palette::ui::MUTED)),
             };
             if let Some((line, color)) = status {
                 card.spawn(ui_text(line, 12.0, color));
@@ -218,6 +220,8 @@ fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, me
     parent.spawn((row, BackgroundColor(tint))).with_children(|row| {
         if member.guest_id == view.leader {
             row.spawn(ui_text("LEADER", 9.0, palette::TORCH_FLAME));
+        } else if !view.started && member.ready {
+            row.spawn(ui_text("READY", 9.0, palette::ui::GO));
         }
         // Ours in the accent, so it reads as "you" on either side.
         row.spawn(ui_text(member.name.clone(), 13.0, if is_me { ACCENT } else { palette::ui::TEXT }));
@@ -268,28 +272,33 @@ pub(super) fn show_status(
 /// How often the start button breathes, per second.
 const START_PULSE_HZ: f32 = 0.9;
 
-/// What the big button does: at home, open the lobbies; in a room, into the arena once the match
-/// is on, the start for the leader, or nothing while waiting for the leader.
+/// What the big button does: at home, a run against the waves of our own; in a room, into the
+/// arena once the match is on; before it, the start for the leader once everyone else is ready
+/// (nothing until then), and for everyone else, ready (or not, again).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WayIn {
-    Lobbies,
+    Solo,
     Enter,
     Start,
-    Wait,
+    WaitReady,
+    Ready(bool),
 }
 
 fn way_in(screen: Screen, view: Option<&RoomView>, me: Option<&Me>) -> WayIn {
+    let my_id = me.map_or(0, |me| me.guest_id);
     match view {
-        _ if screen == Screen::Home => WayIn::Lobbies,
+        _ if screen == Screen::Home => WayIn::Solo,
+        None => WayIn::Solo,
         Some(view) if view.started => WayIn::Enter,
-        Some(view) if me.is_some_and(|me| me.guest_id == view.leader) => WayIn::Start,
-        _ => WayIn::Wait,
+        Some(view) if view.leader == my_id && view.all_ready() => WayIn::Start,
+        Some(view) if view.leader == my_id => WayIn::WaitReady,
+        Some(view) => WayIn::Ready(view.member(my_id).is_some_and(|m| m.ready)),
     }
 }
 
-/// The big button: at home, it opens the lobbies (flashing their header, if they're open already);
-/// in a room, the leader starts the match (everyone goes in as what they picked), and once it's
-/// on, in we go. The small one over it, at home only, practices as the selected fighter on Hollow
+/// The big button: at home, green, a run against the waves of our own; in a room, ready (or not),
+/// and the leader starts the match once everyone is (everyone goes in as what they picked); once
+/// it's on, in we go. The small one over it, at home only, practices as the selected fighter on Hollow
 /// Wilds. We're taken to the arena when our fighter appears.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn enter_arena(
@@ -299,26 +308,28 @@ pub(super) fn enter_arena(
     me: Option<Res<Me>>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
     button: Single<(Ref<Interaction>, &mut BackgroundColor), With<EnterButton>>,
-    mut label: Single<&mut Text, With<EnterLabel>>,
+    label: Single<(&mut Text, &mut TextColor), With<EnterLabel>>,
     practice: Single<(Ref<Interaction>, &mut Visibility), With<PracticeButton>>,
     time: Res<Time>,
-    (mut lobbies_open, mut flash): (ResMut<LobbiesOpen>, ResMut<HeaderFlash>),
 ) {
     let way = way_in(*screen.get(), room.0.as_ref(), me.as_deref());
     let (practice_click, mut practice_shown) = practice.into_inner();
-    practice_shown.set_if_neq(shown(way == WayIn::Lobbies));
-    if way == WayIn::Lobbies && clicked(practice_click) {
+    practice_shown.set_if_neq(shown(way == WayIn::Solo));
+    if way == WayIn::Solo && clicked(practice_click) {
         // In on the press, as the big button goes: forget the held button.
         mouse.reset(MouseButton::Left);
         // Always on Hollow Wilds (its tools switch maps).
         request(&mut sender, RoomRequest::Practice(crate::rooms::HOME_MAP));
     }
     let text = match way {
-        WayIn::Lobbies => "LOBBIES",
+        WayIn::Solo => "PLAY SOLO",
         WayIn::Enter => "ENTER THE ARENA",
         WayIn::Start => "START THE MATCH",
-        WayIn::Wait => "WAITING FOR THE LEADER",
+        WayIn::WaitReady => "WAITING FOR PLAYERS",
+        WayIn::Ready(false) => "READY",
+        WayIn::Ready(true) => "READY!",
     };
+    let (mut label, mut label_color) = label.into_inner();
     if label.0 != text {
         label.0 = text.to_string();
     }
@@ -326,10 +337,17 @@ pub(super) fn enter_arena(
     // Starting the match is what the leader is here for: the button slowly brightens and dims
     // until it's pressed.
     let breath = if way == WayIn::Start { 0.5 + 0.5 * (time.elapsed_secs() * START_PULSE_HZ * std::f32::consts::TAU).sin() } else { 0.0 };
+    // Playing solo and being ready are green; the rest in the accent.
+    let base = match way {
+        WayIn::Solo | WayIn::Ready(true) => palette::ui::GO,
+        _ => ACCENT,
+    };
+    // Light on green, dark on the accent.
+    label_color.set_if_neq(TextColor(if base == palette::ui::GO { palette::ui::TEXT.lighter(0.1) } else { palette::ui::PANEL }));
     let fill = match (way, *interaction) {
-        (WayIn::Wait, _) => palette::ui::MUTED.with_alpha(0.5),
-        (_, Interaction::None) => ACCENT.lighter(0.12 * breath),
-        _ => ACCENT.lighter(0.16),
+        (WayIn::WaitReady, _) => palette::ui::MUTED.with_alpha(0.5),
+        (_, Interaction::None) => base.lighter(0.12 * breath),
+        _ => base.lighter(0.16),
     };
     background.set_if_neq(BackgroundColor(fill));
     if !clicked(interaction) {
@@ -339,9 +357,10 @@ pub(super) fn enter_arena(
     // it's still down and take the click for an attack.
     mouse.reset(MouseButton::Left);
     match way {
-        WayIn::Lobbies => crate::browser::open_lobbies(&mut lobbies_open, &mut flash, time.elapsed_secs()),
+        WayIn::Solo => request(&mut sender, RoomRequest::PlaySolo),
         WayIn::Enter => request(&mut sender, RoomRequest::EnterArena),
         WayIn::Start => request(&mut sender, RoomRequest::Start),
-        WayIn::Wait => {}
+        WayIn::WaitReady => {}
+        WayIn::Ready(ready) => request(&mut sender, RoomRequest::Ready(!ready)),
     }
 }
