@@ -347,8 +347,17 @@ pub(super) struct Rifts(pub(super) Vec<(InRoom, sim::Rift)>);
 /// Rifts close when their time is up.
 /// Rifts burn their striker's foes standing in them (`RiftDef::burn`), every
 /// `ZONE_PULSE_TICKS` (once, in however many of their rifts), and heal the striker `leech` of
-/// what they burned.
-pub(super) fn burn_rifts(mut commands: Commands, timeline: Res<LocalTimeline>, rifts: Res<Rifts>, mut targets: Targets, classes: Query<&ClassId>, mut log: ResMut<HitLog>) {
+/// what they burned (the fractions of a point carried over to the next pulse).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn burn_rifts(
+    mut commands: Commands,
+    timeline: Res<LocalTimeline>,
+    rifts: Res<Rifts>,
+    mut targets: Targets,
+    classes: Query<&ClassId>,
+    mut log: ResMut<HitLog>,
+    mut owed: Local<std::collections::HashMap<PeerId, f32>>,
+) {
     let now = timeline.tick().0;
     if !now.is_multiple_of(arena_shared::items::ZONE_PULSE_TICKS) {
         return;
@@ -364,7 +373,10 @@ pub(super) fn burn_rifts(mut commands: Commands, timeline: Res<LocalTimeline>, r
         let burned = hit_foes(&mut commands, &mut log, now, &mut targets, (owner, class, "rift"), (side, Source::Passive), Blow::ability(burn, Chill::default()), |_, at| {
             theirs.iter().any(|rift| rift.holds(at, now))
         });
-        let healing = (burn as f32 * burned as f32 * leech).round() as i32;
+        let owed = owed.entry(owner).or_default();
+        *owed += burn as f32 * burned as f32 * leech;
+        let healing = owed.floor() as i32;
+        *owed -= healing as f32;
         if healing > 0
             && let Ok((.., mut health, _, mut hits, max, _)) = targets.get_mut(entity)
         {
