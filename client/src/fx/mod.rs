@@ -14,6 +14,7 @@ use bevy::prelude::*;
 use crate::arena::{self, palette};
 use crate::feedback::AttackClock;
 
+mod downed;
 mod recipes;
 mod shapes;
 
@@ -22,7 +23,7 @@ pub struct FxPlugin;
 impl Plugin for FxPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_art);
-        app.add_systems(Update, (recipes::play_new, drive_parts).chain());
+        app.add_systems(Update, ((recipes::play_new, downed::mark_downed), drive_parts).chain());
     }
 }
 
@@ -47,21 +48,26 @@ pub(crate) enum Ink {
     Glaze,
     Glint,
     Thorn,
+    /// A thorn itself: pale bark, catching the light.
+    Bark,
     Spirit,
     SpiritMist,
     Void,
     VoidLight,
+    VoidMist,
     Storm,
     StormMist,
     Gold,
     Poison,
     PoisonLight,
+    PoisonMist,
     Blood,
     Heal,
+    Wisp,
 }
 
 impl Ink {
-    const ALL: [Ink; 21] = [
+    const ALL: [Ink; 25] = [
         Ink::Scorch,
         Ink::Smoke,
         Ink::Earth,
@@ -72,17 +78,21 @@ impl Ink {
         Ink::Glaze,
         Ink::Glint,
         Ink::Thorn,
+        Ink::Bark,
         Ink::Spirit,
         Ink::SpiritMist,
         Ink::Void,
         Ink::VoidLight,
+        Ink::VoidMist,
         Ink::Storm,
         Ink::StormMist,
         Ink::Gold,
         Ink::Poison,
         Ink::PoisonLight,
+        Ink::PoisonMist,
         Ink::Blood,
         Ink::Heal,
+        Ink::Wisp,
     ];
 
     /// (color, opacity at most, glow, layer).
@@ -99,17 +109,21 @@ impl Ink {
             Ink::Glaze => (palette::RIME, 0.32, 1.0, 1),
             Ink::Glint => (Color::WHITE, 1.0, 9.0, 5),
             Ink::Thorn => (rgb(0x3A, 0x48, 0x22), 1.0, 0.3, 2),
+            Ink::Bark => (rgb(0xB4, 0xA0, 0x6A), 1.0, 0.6, 3),
             Ink::Spirit => (palette::SPIRIT, 0.9, 4.0, 3),
             Ink::SpiritMist => (palette::SPIRIT, 0.22, 2.0, 1),
             Ink::Void => (rgb(0x16, 0x0C, 0x1E), 0.85, 0.0, 1),
             Ink::VoidLight => (rgb(0xA0, 0x60, 0xFF), 0.9, 5.0, 3),
+            Ink::VoidMist => (rgb(0x9A, 0x5C, 0xF0), 0.38, 3.0, 2),
             Ink::Storm => (rgb(0xDC, 0xEE, 0xFF), 1.0, 10.0, 5),
             Ink::StormMist => (rgb(0x8C, 0xB8, 0xFF), 0.3, 3.0, 2),
             Ink::Gold => (palette::GOLD, 1.0, 2.5, 3),
             Ink::Poison => (rgb(0x5A, 0x86, 0x22), 0.75, 0.6, 1),
             Ink::PoisonLight => (rgb(0xA4, 0xE6, 0x54), 0.9, 3.0, 3),
+            Ink::PoisonMist => (rgb(0x8C, 0xC8, 0x50), 0.22, 1.5, 1),
             Ink::Blood => (rgb(0x6E, 0x0E, 0x16), 0.85, 0.4, 1),
             Ink::Heal => (palette::HEAL, 0.9, 4.0, 3),
+            Ink::Wisp => (palette::WISP, 0.85, 6.0, 4),
         }
     }
 }
@@ -126,7 +140,6 @@ pub(crate) struct FxArt {
     streaks: Vec<Handle<Mesh>>,
     cracks: Vec<Handle<Mesh>>,
     frost: Vec<Handle<Mesh>>,
-    runes: Vec<Handle<Mesh>>,
     whirl: Vec<Handle<Mesh>>,
     band: Handle<Mesh>,
     tongue: Handle<Mesh>,
@@ -166,15 +179,13 @@ fn load_art(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materi
     let streaks = variants(&|seed| shapes::streaks(seed, 14, 0.05));
     let cracks = variants(&|seed| shapes::cracks(seed, 7));
     let frost = variants(&|seed| shapes::frost(seed));
-    let runes = variants(&|seed| shapes::runes(seed));
-    let whirl = variants(&|seed| shapes::whirl(seed, 4));
+    let whirl = variants(&|seed| shapes::whirl(seed, 6, 0.045));
     commands.insert_resource(FxArt {
         inks,
         splotch,
         streaks,
         cracks,
         frost,
-        runes,
         whirl,
         band: meshes.add(shapes::band(0.3)),
         tongue: meshes.add(shapes::tongue()),
@@ -372,6 +383,12 @@ fn drive_parts(
             }
         }
     }
+}
+
+/// A wisp's wake: a mote of its light left `at` (in the world), drifting up as it fades.
+pub(crate) fn wisp_wake(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3) {
+    let rise = Motion::Thrown { velocity: Vec3::Y * 0.3, gravity: -0.2, tumble: Vec3::ZERO };
+    put(commands, art, &art.mote, Part::new(now, [0.0, 0.08, 0.4], Ink::Wisp, at).size(0.09).motion(rise).shrink(0.2));
 }
 
 /// Seconds `ticks` server ticks are.

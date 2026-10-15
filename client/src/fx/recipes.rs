@@ -36,9 +36,12 @@ pub(super) fn play_new(
             FxKind::Blast(FxColor::Storm) => thunder_strike(c, &art, &mut meshes, &scene),
             FxKind::Blast(FxColor::Poison) => splatter(c, &art, &scene, Ink::Poison, Ink::PoisonLight),
             FxKind::Blast(FxColor::Blood) => splatter(c, &art, &scene, Ink::Blood, Ink::Blood),
+            FxKind::Blast(FxColor::Frost) => frost_shatter(c, &art, &scene),
             FxKind::Blast(color) => spirit_burst(c, &art, &scene, color),
+            FxKind::Warn(FxColor::Void) => doom_mark(c, &art, &scene),
+            FxKind::Warn(FxColor::Spirit) => echo(c, &art, &scene),
             FxKind::Warn(color) => warning(c, &art, &scene, color),
-            FxKind::Bolt => gathering_storm(c, &art, &mut meshes, &scene),
+            FxKind::Bolt => gathering_storm(c, &art, &scene),
             FxKind::Arc => arc(c, &art, &mut meshes, &scene),
             FxKind::Lob(color) => lob(c, &art, &scene, color),
             FxKind::Coins => coins(c, &art, &scene),
@@ -175,21 +178,21 @@ fn blizzard(c: &mut Commands, art: &FxArt, s: &Scene) {
     }
 }
 
-/// The Void Orb's vortex: a hole torn in the ground, arms of void light whirling in to it, dark
-/// arms under them turning the other way, motes of the void dragged in from all round.
+/// The Void Orb's vortex: a hole torn in the ground, thin arms of void light whirling in to it
+/// over darker ones turning the other way, motes of the void dragged in from all round.
 fn vortex(c: &mut Commands, art: &FxArt, s: &Scene) {
     let (r, lasts) = (s.radius, s.lasts.max(0.6));
     let life = [0.3, lasts - 0.5, lasts];
-    put(c, art, s.pick(1, &art.splotch), Part::new(s.start, life, Ink::Void, ground(s.at, 0.02)).sized(Vec3::new(r * 0.9, 1.0, r * 0.9)).grow(0.1).shrink(0.3));
-    put(c, art, s.pick(2, &art.whirl), Part::new(s.start, life, Ink::Void, ground(s.at, 0.03)).sized(Vec3::new(r * 1.1, 1.0, r * 1.1)).spin(-1.6).grow(0.3).shrink(0.4));
-    put(c, art, s.pick(3, &art.whirl), Part::new(s.start, life, Ink::VoidLight, ground(s.at, 0.04)).sized(Vec3::new(r, 1.0, r)).spin(-3.4).grow(0.3).shrink(0.0));
-    put(c, art, &art.mote, Part::new(s.start, life, Ink::Void, s.at + Vec3::Y * 0.15).size(0.5).grow(0.0).shrink(0.0));
+    put(c, art, s.pick(1, &art.splotch), Part::new(s.start, life, Ink::Void, ground(s.at, 0.02)).size(r * 0.4).grow(0.2).shrink(0.2));
+    put(c, art, s.pick(2, &art.whirl), Part::new(s.start, life, Ink::Void, ground(s.at, 0.03)).sized(Vec3::new(r, 1.0, r)).spin(-1.4).grow(0.3).shrink(0.3));
+    put(c, art, s.pick(3, &art.whirl), Part::new(s.start, life, Ink::VoidMist, ground(s.at, 0.04)).sized(Vec3::new(r * 1.05, 1.0, r * 1.05)).spin(-3.2).grow(0.3).shrink(0.0));
+    put(c, art, s.pick(4, &art.splotch), Part::new(s.start, life, Ink::VoidMist, ground(s.at, 0.025)).size(r).grow(0.5));
     // Dragged in from round about, over and over.
     for i in 0..18 {
         let k = 300 + i * 6;
         let born = s.start + lasts * 0.8 * s.r(k);
-        let motion = Motion::Orbit { center: s.at, angle: s.r(k + 1) * TAU, speed: -4.0, radius: (r * (0.8 + 0.4 * s.r(k + 2)), 0.05), height: (0.3 + 0.7 * s.r(k + 3), 0.1) };
-        put(c, art, &art.mote, Part::new(born, [0.1, 0.5, 0.75], Ink::VoidLight, s.at).size(0.07).motion(motion).flicker(0.3));
+        let motion = Motion::Orbit { center: s.at, angle: s.r(k + 1) * TAU, speed: -4.0, radius: (r * (0.8 + 0.4 * s.r(k + 2)), 0.05), height: (0.3 + 0.7 * s.r(k + 3), 0.05) };
+        put(c, art, &art.mote, Part::new(born, [0.1, 0.5, 0.75], Ink::VoidLight, s.at).size(0.06).motion(motion).flicker(0.3));
     }
 }
 
@@ -201,7 +204,7 @@ fn glow_zone(c: &mut Commands, art: &FxArt, s: &Scene, color: FxColor) {
     motes(c, art, s, 10, ink, 0.07, 0.8, 1.0, lasts);
 }
 
-/// A blast of fire (Ember Heart, a keg, the Phoenix, a volatile monster): the ground scorched
+/// A blast of fire (Ember Heart, a keg, a volatile monster): the ground scorched
 /// black, its cracks glowing and cooling, tongues of flame licking out and up, a ring of flame
 /// racing out, embers flying up, earth thrown, smoke rising after.
 fn fire_blast(c: &mut Commands, art: &FxArt, s: &Scene) {
@@ -237,26 +240,43 @@ fn fire_blast(c: &mut Commands, art: &FxArt, s: &Scene) {
     }
 }
 
-/// Bramble Mantle's lash: thorns bursting up out of the ground all round, leaning out, and
-/// sinking back; brambles creeping over the ground where they broke out, a few leaves thrown.
+/// Bramble Mantle's lash: pale thorns bursting up out of the ground all round, leaning out, and
+/// sinking back; brambles creeping over the ground where they broke out, leaves and clods thrown.
 fn thorn_burst(c: &mut Commands, art: &FxArt, s: &Scene) {
     let r = s.radius;
     put(c, art, s.pick(1, &art.streaks), Part::new(s.start, [0.1, 0.9, 1.5], Ink::Thorn, ground(s.at, 0.025)).sized(Vec3::new(r, 1.0, r)).facing(s.r(2) * TAU).grow(0.3));
     put(c, art, s.pick(3, &art.cracks), Part::new(s.start, [0.06, 0.5, 1.2], Ink::Scorch, ground(s.at, 0.02)).sized(Vec3::new(r * 0.7, 1.0, r * 0.7)).facing(s.r(4) * TAU).grow(0.3));
-    for i in 0..14 {
+    for i in 0..16 {
         let k = 30 + i * 6;
         let at = s.spot(k, 0.95);
         let out = (at - s.at).with_y(0.0).normalize_or(Vec3::X);
         // Leaning out, away from you.
         let lean = Quat::from_rotation_arc(Vec3::Y, (Vec3::Y + out * (0.4 + 0.6 * s.r(k + 2))).normalize());
-        let tall = 0.35 + 0.45 * s.r(k + 3);
-        let part = Part::new(s.start + 0.06 * s.r(k + 4), [0.07, 0.3, 0.6], Ink::Thorn, at).sized(Vec3::new(0.12, tall, 0.12)).turn(lean).grow(0.0).shrink(0.0);
+        let tall = 0.45 + 0.5 * s.r(k + 3);
+        let part = Part::new(s.start + 0.06 * s.r(k + 4), [0.06, 0.35, 0.65], Ink::Bark, at).sized(Vec3::new(0.14, tall, 0.14)).turn(lean).grow(0.0).shrink(0.0);
         put(c, art, &art.thorn, part);
     }
-    clods(c, art, s, 5, 1.2, Ink::Thorn);
+    clods(c, art, s, 6, 1.4, Ink::Thorn);
 }
 
-/// A spirit's burst (Echo Stone, a decoy shattering, a comeback): a ripple of spirit light racing
+/// A frostbolt shattering where it hits: a flash of cold, frost flung over the ground and
+/// melting, splinters of ice thrown out and falling, a breath of cold mist.
+fn frost_shatter(c: &mut Commands, art: &FxArt, s: &Scene) {
+    let r = s.radius;
+    put(c, art, &art.glint, Part::new(s.start, [0.02, 0.05, 0.2], Ink::Glint, s.at + Vec3::Y * 0.6).size(r * 0.9).facing(s.r(1) * TAU).grow(0.4).shrink(0.6));
+    put(c, art, s.pick(2, &art.frost), Part::new(s.start, [0.06, 0.5, 1.2], Ink::Frost, ground(s.at, 0.03)).sized(Vec3::new(r * 0.85, 1.0, r * 0.85)).facing(s.r(3) * TAU).grow(0.25).shrink(0.8));
+    put(c, art, s.pick(4, &art.splotch), Part::new(s.start, [0.05, 0.3, 0.9], Ink::Glaze, ground(s.at, 0.02)).size(r * 0.75).grow(0.4));
+    for i in 0..7 {
+        let k = 40 + i * 6;
+        let velocity = s.out(k) * (2.0 + 2.5 * s.r(k + 1)) + Vec3::Y * (1.5 + 2.0 * s.r(k + 2));
+        let tumble = Vec3::new(s.r(k + 3) - 0.5, s.r(k + 4) - 0.5, s.r(k + 5) - 0.5) * 30.0;
+        let part = Part::new(s.start, [0.01, 0.35, 0.6], Ink::Frost, s.at + Vec3::Y * 0.7).size(0.05 + 0.06 * s.r(k + 1));
+        put(c, art, &art.chunk, part.motion(Motion::Thrown { velocity, gravity: 12.0, tumble }).shrink(0.0));
+    }
+    motes(c, art, s, 5, Ink::Glint, 0.05, 0.6, 0.6, 0.15);
+}
+
+/// A spirit's burst (an echo, a decoy shattering, a comeback): a ripple of spirit light racing
 /// out over the ground, cracks onto the spirit realm glowing under it, a breath of mist, and
 /// wisps rising.
 fn spirit_burst(c: &mut Commands, art: &FxArt, s: &Scene, color: FxColor) {
@@ -280,22 +300,28 @@ fn void_toll(c: &mut Commands, art: &FxArt, s: &Scene) {
     motes(c, art, s, 10, Ink::VoidLight, 0.09, 2.4, 0.8, 0.2);
 }
 
-/// Lightning come down (Thunder Crown): the bolt's last flash, the ground burned in a star of
-/// scorch with glowing cracks, sparks thrown, a puff of smoke.
+/// Lightning come down (Thunder Crown): a thin bolt flickering down out of the sky, its glow
+/// round it, a flash where it lands, the ground burned in a star of scorch with cracks glowing
+/// and fading, sparks thrown, a puff of smoke.
 fn thunder_strike(c: &mut Commands, art: &FxArt, meshes: &mut Assets<Mesh>, s: &Scene) {
     let r = s.radius;
-    let frames: Vec<Handle<Mesh>> = (0..3).map(|f| meshes.add(shapes::lightning(s.seed.wrapping_add(f), s.at + Vec3::Y * 9.0, s.at, 0.22))).collect();
-    put(c, art, &frames[0].clone(), Part::new(s.start, [0.0, 0.08, 0.2], Ink::Storm, Vec3::ZERO).frames(frames).flicker(0.3));
+    let sky = s.at + Vec3::new(1.5 * (s.r(9) - 0.5), 11.0, 1.5 * (s.r(10) - 0.5));
+    let core: Vec<Handle<Mesh>> = (0..3).map(|f| meshes.add(shapes::lightning(s.seed.wrapping_add(f), sky, s.at, 0.07))).collect();
+    let glow: Vec<Handle<Mesh>> = (0..3).map(|f| meshes.add(shapes::lightning(s.seed.wrapping_add(f), sky, s.at, 0.32))).collect();
+    put(c, art, &core[0].clone(), Part::new(s.start, [0.0, 0.1, 0.22], Ink::Storm, Vec3::ZERO).frames(core).flicker(0.35));
+    put(c, art, &glow[0].clone(), Part::new(s.start, [0.0, 0.08, 0.25], Ink::StormMist, Vec3::ZERO).frames(glow).flicker(0.3));
+    put(c, art, &art.glint, Part::new(s.start, [0.0, 0.06, 0.25], Ink::Glint, s.at + Vec3::Y * 0.3).size(r * 1.4).facing(s.r(11) * TAU).shrink(0.4));
     put(c, art, s.pick(1, &art.streaks), Part::new(s.start, [0.04, 1.6, 2.6], Ink::Scorch, ground(s.at, 0.02)).sized(Vec3::new(r * 1.1, 1.0, r * 1.1)).facing(s.r(2) * TAU).grow(0.2));
     put(c, art, s.pick(3, &art.splotch), Part::new(s.start, [0.04, 1.4, 2.4], Ink::Scorch, ground(s.at, 0.021)).size(r * 0.45));
     put(c, art, s.pick(4, &art.cracks), Part::new(s.start, [0.03, 0.25, 1.0], Ink::Storm, ground(s.at, 0.03)).sized(Vec3::new(r * 0.8, 1.0, r * 0.8)).facing(s.r(5) * TAU).flicker(0.3));
-    put(c, art, &art.band, Part::new(s.start, [0.08, 0.08, 0.3], Ink::StormMist, ground(s.at, 0.06)).sized(Vec3::new(r, 1.0, r)).grow(0.3).shrink(1.2));
     for i in 0..12 {
         let k = 60 + i * 6;
         let velocity = s.out(k) * (2.0 + 3.0 * s.r(k + 1)) + Vec3::Y * (1.5 + 2.5 * s.r(k + 2));
         let part = Part::new(s.start, [0.01, 0.25, 0.5 + 0.3 * s.r(k + 3)], Ink::Storm, s.at + Vec3::Y * 0.2).size(0.04);
         put(c, art, &art.mote, part.motion(Motion::Thrown { velocity, gravity: 9.0, tumble: Vec3::ZERO }).flicker(0.6));
     }
+    let smoke = Part::new(s.start + 0.1, [0.3, 0.5, 1.4], Ink::Smoke, s.at + Vec3::Y * 0.3).size(r * 0.5);
+    put(c, art, s.pick(6, &art.splotch), smoke.motion(Motion::Thrown { velocity: Vec3::Y * 0.7, gravity: -0.2, tumble: Vec3::ZERO }).grow(0.4).shrink(1.6).spin(0.6));
 }
 
 /// A burst of something wet (a bloater, an enraged monster's blood): a splash over the ground,
@@ -309,42 +335,70 @@ fn splatter(c: &mut Commands, art: &FxArt, s: &Scene, ink: Ink, light: Ink) {
     motes(c, art, s, 8, light, 0.1, 0.7, 1.4, 0.8);
 }
 
-/// Something about to land here (a bomb's fuse, a bolt gathering, an echo, a doom mark, a monster
-/// swelling): a ring of runes drawn on the ground and turning, the ground inside darkening as it
-/// fills in toward the moment, motes gathering in. It's gone as what it warned of happens.
+/// Something about to land here (a bomb's fuse, a volatile monster swelling): no marker, but the
+/// ground itself souring in its color: a faint stain out to where it'll reach, and the deeper
+/// stain at its heart spreading out to meet it as the moment comes, cracks of it glowing, motes
+/// of it rising. It's gone as what it warned of happens.
 fn warning(c: &mut Commands, art: &FxArt, s: &Scene, color: FxColor) {
     let (ink, mist) = inks(color);
     let (r, lasts) = (s.radius, s.lasts.max(0.2));
-    let life = [lasts * 0.25, lasts, lasts + 0.1];
-    put(c, art, s.pick(1, &art.runes), Part::new(s.start, life, ink, ground(s.at, 0.04)).sized(Vec3::new(r, 1.0, r)).facing(s.r(2) * TAU).spin(1.2).grow(0.6));
-    put(c, art, s.pick(3, &art.splotch), Part::new(s.start, [lasts, lasts, lasts + 0.1], mist, ground(s.at, 0.03)).sized(Vec3::new(r * 0.95, 1.0, r * 0.95)).grow(0.0));
-    for i in 0..8 {
-        let k = 50 + i * 6;
-        let motion = Motion::Orbit { center: s.at, angle: s.r(k) * TAU, speed: 2.0, radius: (r, 0.1), height: (0.6 * s.r(k + 1), 0.05) };
-        put(c, art, &art.mote, Part::new(s.start + lasts * 0.6 * s.r(k + 2), [0.1, lasts * 0.3, lasts * 0.4], ink, s.at).size(0.06).motion(motion).flicker(0.3));
+    put(c, art, s.pick(1, &art.splotch), Part::new(s.start, [0.15, lasts, lasts + 0.1], mist, ground(s.at, 0.02)).size(r).facing(s.r(2) * TAU).grow(0.7));
+    put(c, art, s.pick(3, &art.splotch), Part::new(s.start, [lasts, lasts, lasts + 0.1], mist, ground(s.at, 0.025)).size(r * 0.95).facing(s.r(4) * TAU).grow(0.1));
+    put(c, art, s.pick(5, &art.cracks), Part::new(s.start, [lasts, lasts, lasts + 0.1], ink, ground(s.at, 0.03)).sized(Vec3::new(r * 0.9, 1.0, r * 0.9)).facing(s.r(6) * TAU).grow(0.15).flicker(0.2));
+    motes(c, art, s, 8, ink, 0.06, 0.8, 0.7, lasts * 0.8);
+}
+
+/// A Doom Bell's mark, where the marked one was struck: the void seeping up through cracks in the
+/// ground, spreading as the toll nears, and dark motes circling over it.
+fn doom_mark(c: &mut Commands, art: &FxArt, s: &Scene) {
+    let lasts = s.lasts.max(0.3);
+    let r = s.radius.max(0.8);
+    put(c, art, s.pick(1, &art.cracks), Part::new(s.start, [lasts, lasts, lasts + 0.15], Ink::VoidLight, ground(s.at, 0.03)).sized(Vec3::new(r * 1.4, 1.0, r * 1.4)).facing(s.r(2) * TAU).grow(0.2).flicker(0.15));
+    put(c, art, s.pick(3, &art.splotch), Part::new(s.start, [lasts, lasts, lasts + 0.15], Ink::Void, ground(s.at, 0.02)).size(r).grow(0.2));
+    for i in 0..4 {
+        let motion = Motion::Orbit { center: s.at, angle: i as f32 / 4.0 * TAU, speed: 2.5, radius: (r * 0.7, r * 0.3), height: (1.6, 0.4) };
+        put(c, art, &art.mote, Part::new(s.start, [0.2, lasts, lasts + 0.1], Ink::VoidLight, s.at).size(0.07).motion(motion).flicker(0.3));
     }
 }
 
-/// Thunder Crown's bolt gathering: storm runes turning on the ground where it'll strike, sparks
-/// crawling in, and the bolt itself coming down at the end (its strike is `thunder_strike`).
-fn gathering_storm(c: &mut Commands, art: &FxArt, meshes: &mut Assets<Mesh>, s: &Scene) {
-    warning(c, art, s, FxColor::Storm);
-    let frames: Vec<Handle<Mesh>> = (0..3).map(|f| meshes.add(shapes::lightning((s.seed ^ 77).wrapping_add(f), s.at + Vec3::Y * 10.0, s.at, 0.3))).collect();
-    put(c, art, &frames[0].clone(), Part::new(s.start + s.lasts, [0.0, 0.1, 0.22], Ink::Storm, Vec3::ZERO).frames(frames).flicker(0.2));
+/// An Echo Stone's echo gathering where the ability hit: spirit light welling up in the ground,
+/// wisps of it spiralling in, until it bursts (`spirit_burst`).
+fn echo(c: &mut Commands, art: &FxArt, s: &Scene) {
+    let (r, lasts) = (s.radius, s.lasts.max(0.2));
+    put(c, art, s.pick(1, &art.splotch), Part::new(s.start, [lasts, lasts, lasts + 0.1], Ink::SpiritMist, ground(s.at, 0.025)).size(r).grow(0.15));
+    put(c, art, s.pick(2, &art.frost), Part::new(s.start, [lasts, lasts, lasts + 0.1], Ink::Spirit, ground(s.at, 0.03)).sized(Vec3::new(r * 0.8, 1.0, r * 0.8)).facing(s.r(3) * TAU).grow(0.1).flicker(0.2));
+    for i in 0..10 {
+        let k = 50 + i * 6;
+        let motion = Motion::Orbit { center: s.at, angle: s.r(k) * TAU, speed: 3.0, radius: (r, 0.1), height: (0.2 + 0.8 * s.r(k + 1), 0.1) };
+        put(c, art, &art.mote, Part::new(s.start + lasts * 0.5 * s.r(k + 2), [0.1, lasts * 0.4, lasts * 0.5], Ink::Spirit, s.at).size(0.06).motion(motion).flicker(0.3));
+    }
 }
 
-/// Storm Coil's arc: lightning leaping from one to the next, flickering, gone in a blink, sparks
-/// where it lands.
+/// Thunder Crown's bolt gathering: the air over the mark charging, sparks crackling in toward it
+/// and the ground darkening under it, then the bolt (its strike is `thunder_strike`).
+fn gathering_storm(c: &mut Commands, art: &FxArt, s: &Scene) {
+    let (r, lasts) = (s.radius, s.lasts.max(0.1));
+    put(c, art, s.pick(1, &art.splotch), Part::new(s.start, [lasts, lasts, lasts + 0.05], Ink::StormMist, ground(s.at, 0.025)).size(r * 0.8).grow(0.2));
+    for i in 0..10 {
+        let k = 50 + i * 6;
+        let motion = Motion::Orbit { center: s.at, angle: s.r(k) * TAU, speed: 6.0, radius: (r, 0.05), height: (0.3 + 1.5 * s.r(k + 1), 0.2) };
+        put(c, art, &art.mote, Part::new(s.start, [0.02, lasts, lasts + 0.05], Ink::Storm, s.at).size(0.04).motion(motion).flicker(0.6));
+    }
+}
+
+/// Storm Coil's arc: a thin crackling bolt leaping from one to the next, its glow round it,
+/// flickering, a flash and sparks where it lands.
 fn arc(c: &mut Commands, art: &FxArt, meshes: &mut Assets<Mesh>, s: &Scene) {
     let (from, to) = (s.at + Vec3::Y * 1.0, s.to + Vec3::Y * 0.9);
-    let frames: Vec<Handle<Mesh>> = (0..3).map(|f| meshes.add(shapes::lightning(s.seed.wrapping_add(f * 31), from, to, 0.09))).collect();
-    let mist: Vec<Handle<Mesh>> = (0..2).map(|f| meshes.add(shapes::lightning(s.seed.wrapping_add(900 + f), from, to, 0.3))).collect();
-    put(c, art, &frames[0].clone(), Part::new(s.start, [0.0, 0.16, 0.3], Ink::Storm, Vec3::ZERO).frames(frames).flicker(0.35));
-    put(c, art, &mist[0].clone(), Part::new(s.start, [0.0, 0.12, 0.3], Ink::StormMist, Vec3::ZERO).frames(mist));
-    for i in 0..5 {
+    let core: Vec<Handle<Mesh>> = (0..3).map(|f| meshes.add(shapes::lightning(s.seed.wrapping_add(f * 31), from, to, 0.045))).collect();
+    let glow: Vec<Handle<Mesh>> = (0..3).map(|f| meshes.add(shapes::lightning(s.seed.wrapping_add(f * 31), from, to, 0.2))).collect();
+    put(c, art, &core[0].clone(), Part::new(s.start, [0.0, 0.22, 0.4], Ink::Storm, Vec3::ZERO).frames(core).flicker(0.35));
+    put(c, art, &glow[0].clone(), Part::new(s.start, [0.0, 0.18, 0.4], Ink::StormMist, Vec3::ZERO).frames(glow).flicker(0.2));
+    put(c, art, &art.glint, Part::new(s.start, [0.0, 0.08, 0.3], Ink::Glint, to).size(0.9).facing(s.r(7) * TAU).shrink(0.3));
+    for i in 0..6 {
         let k = 40 + i * 6;
         let velocity = s.out(k) * (1.5 + 1.5 * s.r(k + 1)) + Vec3::Y * (1.0 + 1.5 * s.r(k + 2));
-        put(c, art, &art.mote, Part::new(s.start, [0.01, 0.15, 0.35], Ink::Storm, to).size(0.035).motion(Motion::Thrown { velocity, gravity: 9.0, tumble: Vec3::ZERO }).flicker(0.5));
+        put(c, art, &art.mote, Part::new(s.start, [0.01, 0.2, 0.45], Ink::Storm, to).size(0.04).motion(Motion::Thrown { velocity, gravity: 9.0, tumble: Vec3::ZERO }).flicker(0.5));
     }
 }
 
@@ -397,13 +451,12 @@ fn rise(c: &mut Commands, art: &FxArt, s: &Scene) {
     motes(c, art, s, 6, Ink::PoisonLight, 0.08, 0.6, 1.2, 0.4);
 }
 
-/// A rot priest's prayer: sickly light welling up from the ground round it, motes of it rising
+/// A rot priest's prayer: a sickly haze breathing up off the ground round it, motes of it rising
 /// over the monsters it mends.
 fn mend(c: &mut Commands, art: &FxArt, s: &Scene) {
     let r = s.radius;
-    put(c, art, s.pick(1, &art.runes), Part::new(s.start, [0.2, 0.5, 0.9], Ink::PoisonLight, ground(s.at, 0.04)).sized(Vec3::new(r, 1.0, r)).spin(-0.8).grow(0.5));
-    put(c, art, s.pick(2, &art.splotch), Part::new(s.start, [0.2, 0.4, 0.9], Ink::Poison, ground(s.at, 0.03)).size(r).grow(0.3));
-    motes(c, art, s, 16, Ink::PoisonLight, 0.09, 1.8, 1.1, 0.4);
+    put(c, art, s.pick(1, &art.splotch), Part::new(s.start, [0.25, 0.45, 1.0], Ink::PoisonMist, ground(s.at, 0.03)).size(r).grow(0.5));
+    motes(c, art, s, 18, Ink::PoisonLight, 0.07, 1.8, 1.1, 0.5);
 }
 
 /// The ink an effect of `color` glows in, and its mist.

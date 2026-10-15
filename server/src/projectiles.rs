@@ -45,12 +45,15 @@ pub(super) fn move_projectiles(
 pub(super) fn resolve_projectile_hits(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    mut projectiles: Query<(Entity, &Pos, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Spares>, (Option<&Bounces>, Has<Shard>, Option<&mut Pierced>))>,
+    mut projectiles: Query<(Entity, &Pos, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Spares>, (Option<&Bounces>, Option<&mut Pierced>))>,
     mut targets: Targets,
     mut log: ResMut<HitLog>,
 ) {
     let now = timeline.tick();
-    for (projectile_entity, projectile_pos, projectile, room, team, might, spares, (bounces, shard, mut pierced)) in &mut projectiles {
+    // Frostbolts' bursts (`AttackDef::burst`), dealt once every shot's hit is: where, by whom,
+    // how hard, and whom they spare (the one struck).
+    let mut bursts = Vec::new();
+    for (projectile_entity, projectile_pos, projectile, room, team, might, spares, (bounces, mut pierced)) in &mut projectiles {
         let pierces = projectile.ability.is_none() && projectile.class.def().attack.pierces;
         let mut through: Vec<PeerId> = pierced.as_ref().map_or_else(Vec::new, |p| p.0.clone());
         for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent, _, sheltered) in &mut targets {
@@ -78,8 +81,11 @@ pub(super) fn resolve_projectile_hits(
             let source = projectile.ability.map_or(Source::Attack, Source::Ability);
             let hit = (&mut *health, &mut *chilled, &mut *recent);
             let at = (target, target_id.0, target_pos.0);
-            let shot = ShotHit { projectile: *projectile, might: might_of(might), bounces: bounces.map(|b| b.0), shard, pierced: !first };
+            let shot = ShotHit { projectile: *projectile, might: might_of(might), bounces: bounces.map(|b| b.0), pierced: !first };
             damage(&mut commands, &mut log, now.0, at, hit, blow, (projectile.owner, projectile.class, with), ((*room, *team), source, Some(shot)));
+            if let Some(burst) = def.attack.burst.filter(|_| projectile.ability.is_none()) {
+                bursts.push((burst, target_pos.0, target_id.0, *projectile, mighty(amount, burst.share), chill, (*room, *team)));
+            }
             if !goes_on {
                 break;
             }
@@ -92,5 +98,11 @@ pub(super) fn resolve_projectile_hits(
             }
             _ => {}
         }
+    }
+    for (burst, at, struck, projectile, amount, chill, side) in bursts {
+        crate::fx::spawn_fx(&mut commands, side.0, Fx::at(FxKind::Blast(FxColor::Frost), at, burst.radius, now.0, 10));
+        let reach = burst.radius + PLAYER_RADIUS;
+        let blow = Blow::attack(amount, chill, false, projectile.crit);
+        hit_foes(&mut commands, &mut log, now.0, &mut targets, (projectile.owner, projectile.class, "auto-attack"), (side, Source::Attack), blow, |id, p| id != struck && p.distance(at) <= reach);
     }
 }

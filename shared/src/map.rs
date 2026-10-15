@@ -905,6 +905,14 @@ mod tests {
     }
 
     #[test]
+    fn every_map_has_a_merchant_on_open_ground() {
+        for id in MapId::ALL {
+            let m = id.map();
+            assert!(m.shop.is_some_and(|shop| m.walkable_at(shop)), "{id:?}");
+        }
+    }
+
+    #[test]
     fn the_wilds_have_a_camp_lairs_and_chests_on_open_ground() {
         let m = MapId::Wilds.map();
         let shop = m.shop.expect("the wilds have a shop");

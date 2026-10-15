@@ -115,7 +115,7 @@ impl Plugin for ServerGamePlugin {
         app.insert_resource(ReplicationMetadata::new(SEND_INTERVAL));
         app.add_observer(on_new_link);
         app.init_resource::<Rifts>();
-        app.init_resource::<HitLog>().init_resource::<CastLog>().init_resource::<Pending>().init_resource::<Zones>();
+        app.init_resource::<HitLog>().init_resource::<Barrages>().init_resource::<Pending>().init_resource::<Zones>();
         app.init_resource::<Fields>().init_resource::<Deeds>();
         // As soon as they're received, before this frame's ticks run.
         app.add_systems(PreUpdate, apply_commands.after(MessageSystems::Receive));

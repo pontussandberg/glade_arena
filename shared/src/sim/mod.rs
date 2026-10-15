@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn projectile_expires_at_its_range_and_at_walls() {
-        let proj = Projectile { owner: PeerId::Netcode(1), class: shooter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false };
+        let proj = Projectile { owner: PeerId::Netcode(1), class: shooter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false, extra: false };
         let lifetime = shooter().def().shot(None).unwrap().lifetime_ticks();
         assert!(!projectile_expired(map(), Vec2::ZERO, &proj, 5 + lifetime - 1));
         assert!(projectile_expired(map(), Vec2::ZERO, &proj, 5 + lifetime));
@@ -636,7 +636,7 @@ mod tests {
     #[test]
     fn only_auto_attacks_chill() {
         let class = chiller();
-        let shot = Projectile { owner: PeerId::Netcode(1), class, origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 1, ability: None, crit: false };
+        let shot = Projectile { owner: PeerId::Netcode(1), class, origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 1, ability: None, crit: false, extra: false };
         assert_eq!(projectile_chill(&shot), class.def().attack.chill);
         assert!(projectile_chill(&Projectile { class: primer(), ability: Some(Q), ..shot }).is_none());
     }

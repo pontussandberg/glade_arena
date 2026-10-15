@@ -215,6 +215,18 @@ pub struct AttackDef {
     /// Its shots fly on through monsters (never players), hitting each once (no by default).
     #[serde(default)]
     pub pierces: bool,
+    /// Its shots burst where they hit, hitting the struck one's foes round it too (none by
+    /// default).
+    #[serde(default)]
+    pub burst: Option<BurstDef>,
+}
+
+/// A shot's burst where it hits (`AttackDef::burst`): everyone else within `radius` of the one
+/// struck takes `share` of the shot's damage, and its chill.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct BurstDef {
+    pub radius: f32,
+    pub share: f32,
 }
 
 /// The ground a strike tears open over its lane (`AttackDef::lane`, empowered or not): it lasts
@@ -392,6 +404,9 @@ impl ClassDef {
         ];
         if let Some(rift) = self.attack.rift {
             all.extend([("rift_time", seconds(rift.ticks)), ("rift_haste", percent(rift.haste))]);
+        }
+        if let Some(burst) = self.attack.burst {
+            all.extend([("burst_radius", format!("{} m", burst.radius)), ("burst_share", percent(burst.share))]);
         }
         if let Some(follow_up) = self.attack.follow_up {
             all.extend([
@@ -679,6 +694,7 @@ mod tests {
             }
             chill_is_sane(&c.id, c.attack.chill);
             assert!(!c.attack.pierces || c.attack.kind.shot().is_some(), "{}: pierces, but throws nothing", c.id);
+            assert!(c.attack.burst.is_none() || c.attack.kind.shot().is_some(), "{}: bursts, but throws nothing", c.id);
             if let Some(RiftDef { ticks, haste }) = c.attack.rift {
                 assert!(matches!(c.attack.kind, AttackKind::Melee { .. }), "{}: a rift from a projectile", c.id);
                 assert!((1..=10 * TICK_HZ as u32).contains(&ticks) && (0.0..=2.0).contains(&haste), "{}: rift", c.id);
@@ -730,7 +746,7 @@ mod tests {
     #[test]
     fn far_scale_scales_with_distance() {
         let kind = |far_scale| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_scale };
-        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None, pierces: false };
+        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None, pierces: false, burst: None };
         assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(3.0))).damage_at(d)), [10, 20, 30, 30]);
         assert_eq!(attack(kind(None)).damage_at(5.0), 10);
     }

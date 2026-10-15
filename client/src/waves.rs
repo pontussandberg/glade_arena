@@ -32,7 +32,6 @@ impl Plugin for WavesPlugin {
                 (show_satchel, open_shop, show_shop, trade).chain(),
                 circle_wisps,
                 (name_in_world, place_names).chain(),
-                mark_downed,
             ),
         );
     }
@@ -289,11 +288,12 @@ fn item_tile(parent: &mut ChildSpawnerCommands, item: Item, level: u8, size: f32
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                border: UiRect::all(px(1.0)),
+                border: UiRect::all(px(if item.class().is_some() { 2.0 } else { 1.0 })),
                 ..default()
             },
             BackgroundColor(trigger_color(item).with_alpha(0.35)),
-            BorderColor::all(trigger_color(item)),
+            // A class's own item is rimmed in gold.
+            BorderColor::all(if item.class().is_some() { palette::GOLD } else { trigger_color(item) }),
         ))
         .with_children(|tile| {
             tile.spawn(ui_text(initials, size * 0.36, palette::ui::TEXT));
@@ -353,7 +353,7 @@ fn show_satchel(
     bar: Single<(Entity, &mut Node), With<SatchelBar>>,
 ) {
     let (bar, mut node) = bar.into_inner();
-    let satchel = me.single().ok().filter(|_| room.run().is_some() || room.practice());
+    let satchel = me.single().ok().filter(|_| room.run().is_some() || room.shopping());
     let display = if satchel.is_some() { Display::Flex } else { Display::None };
     if node.display != display {
         node.display = display;
@@ -407,7 +407,7 @@ fn open_shop(
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     merchant: Query<&Pos, With<Shopkeeper>>,
 ) {
-    let near = (room.practice() || room.run().is_some_and(|run| !matches!(run.phase, Phase::Over { .. })))
+    let near = room.shopping()
         && me.single().ok().zip(merchant.iter().next()).is_some_and(|(me, merchant)| me.distance(merchant.0) <= SHOP_RADIUS);
     open.set_if_neq(ShopOpen(near));
 }
@@ -439,40 +439,51 @@ fn show_shop(
         let free = room.practice();
         let note = if free { "Practice: everything's free. Items do things, never stats." } else { "Items do things, never stats. Buy one again to raise it." };
         panel.spawn(ui_text(note, 10.0, palette::ui::MUTED));
-        // Two columns of items, so the whole stock fits on a short screen.
-        let grid = Node { display: Display::Grid, grid_template_columns: RepeatedGridTrack::flex(2, 1.0), column_gap: px(GAP), row_gap: px(3.0), ..default() };
-        panel.spawn(grid).with_children(|grid| {
-            for item in Item::ALL.into_iter().filter(|item| item.fits(*class)) {
-                let level = satchel.level(item);
-                let price = satchel.price_of(item, *class, free);
-                grid.spawn((
-                    Node { column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::all(px(3.0)), ..default() },
-                    BackgroundColor(palette::ui::BACKDROP.with_alpha(0.5)),
-                ))
-                .with_children(|row| {
-                    let tile = item_tile(row, item, level, 28.0);
-                    let mut commands = row.commands();
-                    item_tip(&mut commands.entity(tile), item, level, true);
-                    row.spawn(Node { flex_direction: FlexDirection::Column, flex_grow: 1.0, flex_basis: px(0.0), ..default() }).with_children(|words| {
-                        let name = if level > 0 { format!("{} {level}/{MAX_LEVEL}", item.name()) } else { item.name().to_string() };
-                        words.spawn(ui_text(name, 11.0, palette::ui::TEXT));
-                        words.spawn(ui_text(item.trigger().label(), 8.0, trigger_color(item)));
-                    });
-                    match price {
-                        Ok(cost) => {
-                            let affordable = satchel.gold >= cost;
-                            let (fill, text) = if affordable { (palette::ui::SELECTED, palette::GOLD) } else { (palette::ui::BACKDROP, palette::ui::MUTED) };
-                            let label = if free { "FREE".to_string() } else { cost.to_string() };
-                            row.spawn((BuyButton(item), HudButton, button(label, 10.0, fill, text, palette::GOLD.with_alpha(0.5))));
-                        }
-                        Err(why) => {
-                            let why = if level >= MAX_LEVEL { "MAX" } else if why.starts_with("No room") { "FULL" } else { "-" };
-                            row.spawn(ui_text(why, 10.0, palette::ui::MUTED));
-                        }
-                    }
-                });
+        // Our class's own items first, set apart, then those for every class; each in two columns,
+        // so the whole stock fits on a short screen.
+        let (own, shared): (Vec<Item>, Vec<Item>) = Item::ALL.into_iter().filter(|item| item.fits(*class)).partition(|item| item.class().is_some());
+        let sections = [(format!("{} ONLY", class.def().name.to_uppercase()), palette::GOLD, own), ("FOR EVERY CLASS".to_string(), palette::ui::MUTED, shared)];
+        for (title, color, stock) in sections {
+            if stock.is_empty() {
+                continue;
             }
-        });
+            panel.spawn((Node { margin: UiRect::top(px(4.0)), ..default() }, ui_text(title, 10.0, color)));
+            let grid = Node { display: Display::Grid, grid_template_columns: RepeatedGridTrack::flex(2, 1.0), column_gap: px(GAP), row_gap: px(3.0), ..default() };
+            panel.spawn(grid).with_children(|grid| {
+                for item in stock {
+                    let level = satchel.level(item);
+                    let price = satchel.price_of(item, *class, free);
+                    let own = item.class().is_some();
+                    grid.spawn((
+                        Node { column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::all(px(3.0)), border: UiRect::left(px(if own { 2.0 } else { 0.0 })), ..default() },
+                        BackgroundColor(if own { palette::GOLD.with_alpha(0.12) } else { palette::ui::BACKDROP.with_alpha(0.5) }),
+                        BorderColor::all(palette::GOLD),
+                    ))
+                    .with_children(|row| {
+                        let tile = item_tile(row, item, level, 28.0);
+                        let mut commands = row.commands();
+                        item_tip(&mut commands.entity(tile), item, level, true);
+                        row.spawn(Node { flex_direction: FlexDirection::Column, flex_grow: 1.0, flex_basis: px(0.0), ..default() }).with_children(|words| {
+                            let name = if level > 0 { format!("{} {level}/{MAX_LEVEL}", item.name()) } else { item.name().to_string() };
+                            words.spawn(ui_text(name, 11.0, palette::ui::TEXT));
+                            words.spawn(ui_text(item.trigger().label(), 8.0, trigger_color(item)));
+                        });
+                        match price {
+                            Ok(cost) => {
+                                let affordable = satchel.gold >= cost;
+                                let (fill, text) = if affordable { (palette::ui::SELECTED, palette::GOLD) } else { (palette::ui::BACKDROP, palette::ui::MUTED) };
+                                let label = if free { "FREE".to_string() } else { cost.to_string() };
+                                row.spawn((BuyButton(item), HudButton, button(label, 10.0, fill, text, palette::GOLD.with_alpha(0.5))));
+                            }
+                            Err(why) => {
+                                let why = if level >= MAX_LEVEL { "MAX" } else if why.starts_with("No room") { "FULL" } else { "-" };
+                                row.spawn(ui_text(why, 10.0, palette::ui::MUTED));
+                            }
+                        }
+                    });
+                }
+            });
+        }
         panel.spawn(ui_text("Hover an item to see what it does. Walk away to close.", 9.0, palette::ui::MUTED));
     });
 }
@@ -492,60 +503,6 @@ fn trade(
         if clicked(interaction) {
             request(&mut sender, RoomRequest::Sell(sell.0));
         }
-    }
-}
-
-// The downed.
-
-/// Where a downed fighter lies (`of`): a ring of spirit light round them, filling as an ally picks
-/// them up, and a pale column over them so they're found from afar.
-#[derive(Component)]
-struct DownMark {
-    of: Entity,
-    fill: Entity,
-}
-
-/// How far up the column over the downed reaches.
-const DOWN_COLUMN: f32 = 2.6;
-
-/// Marks every downed fighter where they lie, the fill of its ring growing with their rescue; the
-/// mark goes when they're back up.
-fn mark_downed(
-    mut commands: Commands,
-    looks: Res<FxLooks>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    downed: Query<(Entity, &Pos, &Downed)>,
-    mut marks: Query<(Entity, &DownMark, &mut Transform)>,
-    mut fills: Query<&mut Transform, Without<DownMark>>,
-    mut material: Local<Option<(Handle<StandardMaterial>, Handle<StandardMaterial>)>>,
-) {
-    let (glow, faint) = material
-        .get_or_insert_with(|| (materials.add(arena::translucent(palette::SPIRIT, 0.85, 4.0)), materials.add(arena::translucent(palette::SPIRIT, 0.3, 2.0))))
-        .clone();
-    let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
-    for (mark, down, mut transform) in &mut marks {
-        let Ok((_, pos, downed)) = downed.get(down.of) else {
-            commands.entity(mark).despawn();
-            continue;
-        };
-        transform.translation = to_world(pos.0, 0.0);
-        if let Ok(mut fill) = fills.get_mut(down.fill) {
-            let r = REVIVE_RADIUS * downed.rescue.max(0.02);
-            fill.scale = Vec3::new(r, r, 1.0);
-        }
-    }
-    for (fighter, pos, _) in &downed {
-        if marks.iter().any(|(_, mark, _)| mark.of == fighter) {
-            continue;
-        }
-        let ring = Transform::from_xyz(0.0, 0.06, 0.0).with_rotation(flat).with_scale(Vec3::new(REVIVE_RADIUS, REVIVE_RADIUS, 1.0));
-        let fill = commands.spawn((Mesh3d(looks.disc.clone()), MeshMaterial3d(glow.clone()), Transform::from_xyz(0.0, 0.07, 0.0).with_rotation(flat), NotShadowCaster)).id();
-        let ring = commands.spawn((Mesh3d(looks.ring.clone()), MeshMaterial3d(glow.clone()), ring, NotShadowCaster)).id();
-        let column = Transform::from_xyz(0.0, DOWN_COLUMN / 2.0, 0.0).with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new(DOWN_COLUMN, 2.0, 2.0));
-        let column = commands.spawn((Mesh3d(looks.bolt.clone()), MeshMaterial3d(faint.clone()), column, NotShadowCaster)).id();
-        commands
-            .spawn((DownMark { of: fighter, fill }, Transform::from_translation(to_world(pos.0, 0.0)), Visibility::Inherited))
-            .add_children(&[fill, ring, column]);
     }
 }
 
@@ -608,25 +565,21 @@ fn place_names(
 
 // Effects.
 
-/// The meshes the downed's marks and the wisps are made of (the effects themselves are `fx`'s).
+/// A wisp's body (the effects themselves are `fx`'s).
 #[derive(Resource)]
 struct FxLooks {
-    disc: Handle<Mesh>,
-    ring: Handle<Mesh>,
-    bolt: Handle<Mesh>,
     ball: Handle<Mesh>,
 }
 
 fn load_fx_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
-    commands.insert_resource(FxLooks {
-        disc: meshes.add(Circle::new(1.0).mesh().resolution(32).build()),
-        ring: meshes.add(Annulus::new(0.88, 1.0).mesh().resolution(40).build()),
-        bolt: meshes.add(Cuboid::new(1.0, 0.07, 0.07)),
-        ball: meshes.add(Sphere::new(1.0).mesh().ico(1).expect("a small ico sphere")),
-    });
+    commands.insert_resource(FxLooks { ball: meshes.add(Sphere::new(1.0).mesh().ico(1).expect("a small ico sphere")) });
 }
 
-/// Wisps circling a fighter that carries a Wisp Lantern, as many as its level gives.
+/// How often a wisp leaves a mote of its light behind (seconds).
+const WISP_WAKE_EVERY: f32 = 0.04;
+
+/// Wisps circling a fighter that carries a Wisp Lantern, as many as its level gives, each
+/// leaving a wake of light.
 #[derive(Component)]
 struct Wisps(Vec<Entity>);
 
@@ -634,9 +587,13 @@ struct Wisps(Vec<Entity>);
 #[derive(Component)]
 struct WispOf(Entity);
 
+#[allow(clippy::too_many_arguments)]
 fn circle_wisps(
     mut commands: Commands,
     clock: AttackClock,
+    time: Res<Time>,
+    art: Res<crate::fx::FxArt>,
+    mut wake_at: Local<f32>,
     looks: Res<FxLooks>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     fighters: Query<(Entity, &Pos, &Satchel, Option<&Health>, Option<&Wisps>, Has<Me>)>,
@@ -650,6 +607,10 @@ fn circle_wisps(
         }
     }
     let glow = material.get_or_insert_with(|| materials.add(arena::glow(palette::WISP, 6.0))).clone();
+    let wake = time.elapsed_secs() >= *wake_at;
+    if wake {
+        *wake_at = time.elapsed_secs() + WISP_WAKE_EVERY;
+    }
     for (entity, pos, satchel, health, wisps, is_me) in &fighters {
         let level = satchel.level(Item::WispLantern);
         let (count, _, orbit, _) = items::wisp_lantern(level.max(1));
@@ -674,6 +635,9 @@ fn circle_wisps(
                 let at = pos.0 + items::wisp_offset(now, n as u32, count, orbit);
                 let bob = 0.15 * (now * 0.3 + n as f32).sin();
                 transform.translation = to_world(at, 1.1 + bob);
+                if wake {
+                    crate::fx::wisp_wake(&mut commands, &art, time.elapsed_secs(), transform.translation);
+                }
             }
         }
     }

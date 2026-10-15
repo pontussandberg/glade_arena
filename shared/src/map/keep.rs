@@ -156,5 +156,7 @@ pub(super) fn build() -> Map {
     // Torches on the causeways' outer ends.
     torches.extend([Vec2::new(-13.6, 0.7), Vec2::new(-13.6, 4.3)]);
     map.mirror_spots(WEST_SPAWNS, WEST_PICKUPS, &torches);
+    // The merchant in the middle, as near the one side as the other.
+    map.shop = map.nearest_walkable(Map::tile_of(Vec2::ZERO), 4).map(Map::center);
     map
 }

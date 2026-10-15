@@ -159,39 +159,6 @@ pub(super) fn band(width: f32) -> Mesh {
     b.build()
 }
 
-/// A ring of runes, 1 across: a thin circle broken into strokes, with glyphs (ticks, chevrons,
-/// little crosses) standing on it at intervals, and a fainter circle inside: a sigil drawn on
-/// the ground where something is about to happen.
-pub(super) fn runes(seed: u32) -> Mesh {
-    let mut b = FlatMesh::default();
-    let segments = 18;
-    for i in 0..segments {
-        let a0 = i as f32 / segments as f32 * TAU;
-        let gap = 0.035 + 0.03 * noise(seed, 2000 + i);
-        let a1 = (i + 1) as f32 / segments as f32 * TAU - gap;
-        let arc: Vec<(Vec3, f32)> = (0..=4).map(|s| (at(a0 + (a1 - a0) * s as f32 / 4.0, 1.0), 0.03)).collect();
-        stroke(&mut b, &arc);
-        let mid = (a0 + a1) / 2.0;
-        let out = at(mid, 1.0);
-        let up = out.normalize();
-        match (noise(seed, 2100 + i) * 3.0) as u32 {
-            0 => stroke(&mut b, &[(out * 0.88, 0.025), (out * 0.78, 0.0)]),
-            1 => {
-                let side = across(up) * 0.05;
-                stroke(&mut b, &[(out * 0.9 + side, 0.02), (out * 0.82, 0.02), (out * 0.9 - side, 0.0)]);
-            }
-            _ => {
-                let side = across(up) * 0.04;
-                stroke(&mut b, &[(out * 0.86 - side, 0.02), (out * 0.86 + side, 0.0)]);
-                stroke(&mut b, &[(out * 0.9, 0.02), (out * 0.82, 0.0)]);
-            }
-        }
-    }
-    let inner: Vec<(Vec3, f32)> = (0..=48).map(|s| (at(s as f32 / 48.0 * TAU, 0.72), 0.012)).collect();
-    stroke(&mut b, &inner);
-    b.build()
-}
-
 /// A tongue of flame lying along +X from the origin, 1 long: a teardrop, widest a third of the
 /// way out, licking to a point; solid along its middle, clear at its edges and tip.
 pub(super) fn tongue() -> Mesh {
@@ -213,7 +180,7 @@ pub(super) fn tongue() -> Mesh {
 
 /// Arms of a whirl, 1 across: `arms` curving strokes spiralling in to the middle, thick at their
 /// outer ends and thinning in: a vortex seen from above.
-pub(super) fn whirl(seed: u32, arms: u32) -> Mesh {
+pub(super) fn whirl(seed: u32, arms: u32, width: f32) -> Mesh {
     let mut b = FlatMesh::default();
     for k in 0..arms {
         let start = k as f32 / arms as f32 * TAU + noise(seed, 3000 + k) * 0.4;
@@ -221,7 +188,7 @@ pub(super) fn whirl(seed: u32, arms: u32) -> Mesh {
             .map(|i| {
                 let t = i as f32 / 14.0;
                 let r = 1.0 - t * 0.92;
-                (at(start + t * TAU * 0.75, r), 0.09 * r.powf(0.6))
+                (at(start + t * TAU * 0.75, r), width * r.powf(0.6))
             })
             .collect();
         stroke(&mut b, &line);
@@ -241,44 +208,60 @@ pub(super) fn glint() -> Mesh {
     b.build()
 }
 
-/// A jagged line of lightning from `from` to `to` (anywhere), forking: a ribbon facing up, and
-/// crossed with one standing on edge, so it reads from any angle; `width` at its widest.
+/// A bolt of lightning from `from` to `to` (anywhere), forking: its path broken by halving it
+/// again and again, each half's middle knocked aside less than the last (so it jags finely, not
+/// in a sawtooth), drawn as a ribbon facing up crossed with one standing on edge, so it reads from
+/// any angle; `width` at its widest, thinning toward its end. Its forks are thinner and fade out.
 pub(super) fn lightning(seed: u32, from: Vec3, to: Vec3, width: f32) -> Mesh {
     let mut b = FlatMesh::default();
     let length = from.distance(to).max(0.01);
     let dir = (to - from) / length;
-    // Perpendiculars to bend along and to stand the ribbon on.
+    // Perpendiculars to knock it aside along and to stand the ribbon on.
     let side = dir.any_orthonormal_vector();
     let up = dir.cross(side);
-    let steps = ((length / 0.35).ceil() as u32).clamp(3, 24);
-    let bolt = |b: &mut FlatMesh, k: u32, from: Vec3, to: Vec3, width: f32, steps: u32| {
-        let points: Vec<Vec3> = (0..=steps)
-            .map(|i| {
-                let t = i as f32 / steps as f32;
-                let jag = if i == 0 || i == steps { 0.0 } else { 1.0 };
-                from.lerp(to, t) + (side * (noise(seed, k + i) - 0.5) + up * (noise(seed, k + 50 + i) - 0.5)) * from.distance(to) * 0.18 * jag
-            })
-            .collect();
-        for pair in points.windows(2) {
-            let (p0, p1) = (pair[0], pair[1]);
-            let along = (p1 - p0).normalize_or(dir);
-            for across in [along.cross(up).normalize_or(side), along.cross(side).normalize_or(up)] {
-                let w = across * width;
-                b.tri_faded_both([p0 - w, p0, p1], [0.0, 1.0, 1.0]);
-                b.tri_faded_both([p0 - w, p1, p1 - w], [0.0, 1.0, 0.0]);
-                b.tri_faded_both([p0, p0 + w, p1 + w], [1.0, 0.0, 0.0]);
-                b.tri_faded_both([p0, p1 + w, p1], [1.0, 0.0, 1.0]);
+    let path = |k: u32, from: Vec3, to: Vec3| {
+        let length = from.distance(to);
+        let halvings = ((length / 0.25).log2().ceil() as i32).clamp(2, 6);
+        let mut points = vec![from, to];
+        let mut knock = length * 0.16;
+        for level in 0..halvings as u32 {
+            let mut next = Vec::with_capacity(points.len() * 2);
+            for (i, pair) in points.windows(2).enumerate() {
+                let n = k + level * 97 + i as u32 * 7;
+                let mid = (pair[0] + pair[1]) / 2.0 + (side * (noise(seed, n) - 0.5) + up * (noise(seed, n + 3) - 0.5)) * knock;
+                next.extend([pair[0], mid]);
             }
+            next.push(to);
+            points = next;
+            knock *= 0.55;
         }
         points
     };
-    let main = bolt(&mut b, 0, from, to, width, steps);
-    // A fork or two off it.
-    for f in 0..2 {
-        let at = main[(main.len() as f32 * (0.3 + 0.35 * noise(seed, 900 + f))) as usize % main.len()];
+    let ribbon = |b: &mut FlatMesh, points: &[Vec3], width: f32, fade: bool| {
+        let last = (points.len() - 1) as f32;
+        for (i, pair) in points.windows(2).enumerate() {
+            let (p0, p1) = (pair[0], pair[1]);
+            let thin = |j: f32| 1.0 - 0.6 * j / last;
+            let (w0, w1) = (width * thin(i as f32), width * thin(i as f32 + 1.0));
+            let (a0, a1) = if fade { (1.0 - i as f32 / last, 1.0 - (i + 1) as f32 / last) } else { (1.0, 1.0) };
+            let along = (p1 - p0).normalize_or(dir);
+            for across in [along.cross(up).normalize_or(side), along.cross(side).normalize_or(up)] {
+                let (s0, s1) = (across * w0, across * w1);
+                b.tri_faded_both([p0 - s0, p0, p1], [0.0, a0, a1]);
+                b.tri_faded_both([p0 - s0, p1, p1 - s1], [0.0, a1, 0.0]);
+                b.tri_faded_both([p0, p0 + s0, p1 + s1], [a0, 0.0, 0.0]);
+                b.tri_faded_both([p0, p1 + s1, p1], [a0, 0.0, a1]);
+            }
+        }
+    };
+    let main = path(0, from, to);
+    ribbon(&mut b, &main, width, false);
+    // Forks off it, thinner, fading out.
+    for f in 0..3 {
+        let at = main[((main.len() - 1) as f32 * (0.15 + 0.6 * noise(seed, 900 + f))) as usize];
         let off = (side * (noise(seed, 910 + f) - 0.5) + up * (noise(seed, 920 + f) - 0.5)).normalize_or(side);
-        let end = at + (dir * 0.6 + off) * length * 0.25;
-        bolt(&mut b, 1000 + f * 100, at, end, width * 0.5, (steps / 3).max(2));
+        let end = at + (dir * 0.7 + off).normalize() * length * (0.15 + 0.15 * noise(seed, 930 + f));
+        ribbon(&mut b, &path(1000 + f * 100, at, end), width * 0.45, true);
     }
     b.build()
 }

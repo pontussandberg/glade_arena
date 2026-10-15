@@ -287,6 +287,16 @@ impl Lobby {
         room.members.iter().filter_map(|link| self.guests.get(link).map(|g| (*link, g.id))).collect()
     }
 
+    /// `peer` earned `amount` gold in room `key`: against the waves, the whole party gets it; in a
+    /// PvP match, they alone do.
+    pub(crate) fn reward(&mut self, key: RoomKey, peer: PeerId, amount: u32) {
+        if self.pve(key) {
+            self.give_gold(key, amount);
+        } else if let Some(guest) = self.guests.values_mut().find(|g| g.room == Some(key) && g.peer == peer) {
+            guest.satchel.gold += amount;
+        }
+    }
+
     /// Everyone in room `key` gets `amount` more gold.
     pub(crate) fn give_gold(&mut self, key: RoomKey, amount: u32) {
         let Some(room) = self.rooms.get(&key) else { return };
@@ -347,8 +357,12 @@ impl Lobby {
         let room = self.rooms.get_mut(&key)?;
         let link = room.members.iter().copied().find(|link| self.guests.get(link).is_some_and(|g| g.peer == killer))?;
         room.changed = true;
+        let pvp = !room.mode.pve();
         let guest = self.guests.get_mut(&link).expect("a member");
         guest.zombie_kills += 1;
+        if pvp {
+            guest.satchel.gold += arena_shared::items::PVP_ZOMBIE_GOLD;
+        }
         Some(guest.zombie_kills - 1)
     }
 
@@ -364,6 +378,7 @@ impl Lobby {
         }
         let guest = self.guests.get_mut(&link).expect("a member");
         guest.kills += 1;
+        guest.satchel.gold += arena_shared::items::PVP_KILL_GOLD;
         let (id, team, kills) = (guest.id, guest.team, guest.kills);
         let room = self.rooms.get_mut(&key).expect("checked");
         room.changed = true;
@@ -734,12 +749,14 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             lobby.list_changed = true;
             info!(room = key.0, name = room.name, mode = ?room.mode, players = room.members.len(), "match started");
             let members = room.members.clone();
+            // Every match starts with empty hands: against the waves, with some gold.
+            let gold = if room.mode.pve() { START_GOLD } else { 0 };
             if room.mode.pve() {
                 room.run = Some(Run::new(now, 1));
-                for member in &members {
-                    if let Some(guest) = lobby.guests.get_mut(member) {
-                        guest.satchel = Satchel { gold: START_GOLD, ..default() };
-                    }
+            }
+            for member in &members {
+                if let Some(guest) = lobby.guests.get_mut(member) {
+                    guest.satchel = Satchel { gold, ..default() };
                 }
             }
             lobby.clear_score(key);
@@ -832,8 +849,8 @@ fn mode_team(mode: Mode, n: usize) -> u8 {
 /// Whether `link` may trade now: in a run, their fighter by the shopkeeper. What it fights as.
 fn near_the_shop(lobby: &Lobby, ctx: &Ctx, link: Entity, key: RoomKey) -> Result<ClassId, &'static str> {
     let room = &lobby.rooms[&key];
-    if room.live_run().is_none() && !room.practice {
-        return Err("The shop is open in a run against the waves, and in practice");
+    if !room.practice && !(room.started && if room.mode.pve() { room.live_run().is_some() } else { room.hunting() }) {
+        return Err("The shop is open while a match is on");
     }
     let shop = room.map.map().shop.ok_or("There's no shop here")?;
     let (pos, class) = ctx.fighter_of(link).ok_or("You're not in the arena")?;

@@ -18,6 +18,10 @@ pub const SLOTS: usize = 6;
 pub const MAX_LEVEL: u8 = 3;
 /// What selling an item gives back, as a share of what was spent on it.
 pub const SELL_BACK: f32 = 0.5;
+/// Gold in a PvP match, where items are rare: what a zombie, and another player, pays whoever
+/// kills it (against the waves, the whole party is paid instead).
+pub const PVP_ZOMBIE_GOLD: u32 = 25;
+pub const PVP_KILL_GOLD: u32 = 60;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
 pub enum Item {
@@ -32,7 +36,6 @@ pub enum Item {
     HoarfrostBoots,
     DoomBell,
     MidasCoin,
-    PhoenixFeather,
     ThunderCrown,
     VoidOrb,
     MirrorShard,
@@ -58,7 +61,7 @@ impl Trigger {
         match self {
             Trigger::OnHit => "ON HIT",
             Trigger::OnKill => "ON KILL",
-            Trigger::OnCast => "ON ABILITY",
+            Trigger::OnCast => "ABILITY HIT",
             Trigger::WhenHit => "WHEN HIT",
             Trigger::Always => "PASSIVE",
         }
@@ -138,10 +141,6 @@ pub fn doom_bell(level: u8) -> (f32, u32) {
 pub fn midas_coin(level: u8) -> (f32, u32) {
     (lv(level, [0.12, 0.16, 0.22]), lv(level, [3, 4, 6]))
 }
-/// Phoenix Feather: (share of health risen with, burst damage, radius, recharge in ticks).
-pub fn phoenix_feather(level: u8) -> (f32, i32, f32, u32) {
-    (lv(level, [0.4, 0.6, 0.8]), lv(level, [30, 50, 80]), 3.5, lv(level, [secs(90.0), secs(75.0), secs(60.0)]))
-}
 /// Thunder Crown: (every how many hits, strike damage, radius, delay in ticks).
 pub fn thunder_crown(level: u8) -> (u32, i32, f32, u32) {
     (lv(level, [5, 4, 3]), lv(level, [36, 50, 68]), 2.2, secs(0.35))
@@ -163,10 +162,15 @@ pub fn berserker_totem(level: u8) -> (f32, f32, u32) {
 pub fn ricochet_charm(level: u8) -> (u8, f32, f32) {
     (lv(level, [1, 2, 3]), 7.0, 0.75)
 }
-/// Hydra Spear: (how many spears a javelin splits into, share of the damage each keeps).
-pub fn hydra_spear(level: u8) -> (u32, f32) {
-    (lv(level, [3, 4, 5]), lv(level, [0.4, 0.45, 0.5]))
+/// Hydra Spear: (how many javelins an auto-attack throws in all, share of the damage each after
+/// the first deals, ticks between one and the next).
+pub fn hydra_spear(level: u8) -> (u32, f32, u32) {
+    (lv(level, [2, 3, 4]), lv(level, [0.5, 0.45, 0.4]), 3)
 }
+
+/// How long after an ability's damage set off its holder's ability items they can go off again:
+/// each use of an ability sets them off once, however many it hits.
+pub const ABILITY_ITEMS_AGAIN: u32 = secs(1.0);
 /// Gravecaller Rift: damage per pulse to enemies in your rifts.
 pub fn gravecaller_rift(level: u8) -> i32 {
     lv(level, [7, 11, 16])
@@ -177,7 +181,7 @@ pub fn heart_of_winter(level: u8) -> (f32, f32, i32, u32) {
 }
 
 impl Item {
-    pub const ALL: [Item; 20] = [
+    pub const ALL: [Item; 19] = [
         Item::StormCoil,
         Item::EmberHeart,
         Item::RimeSigil,
@@ -189,7 +193,6 @@ impl Item {
         Item::HoarfrostBoots,
         Item::DoomBell,
         Item::MidasCoin,
-        Item::PhoenixFeather,
         Item::ThunderCrown,
         Item::VoidOrb,
         Item::MirrorShard,
@@ -213,7 +216,6 @@ impl Item {
             Item::HoarfrostBoots => "Hoarfrost Boots",
             Item::DoomBell => "Doom Bell",
             Item::MidasCoin => "Midas Coin",
-            Item::PhoenixFeather => "Phoenix Feather",
             Item::ThunderCrown => "Thunder Crown",
             Item::VoidOrb => "Void Orb",
             Item::MirrorShard => "Mirror Shard",
@@ -233,7 +235,6 @@ impl Item {
             Item::RicochetCharm | Item::GravecallerRift | Item::HeartOfWinter => 300,
             Item::EmberHeart | Item::EchoStone | Item::DoomBell | Item::MirrorShard | Item::HydraSpear => 350,
             Item::PowderKeg | Item::WispLantern | Item::ThunderCrown | Item::VoidOrb => 400,
-            Item::PhoenixFeather => 450,
         }
     }
 
@@ -273,7 +274,7 @@ impl Item {
             Item::RicochetCharm | Item::HydraSpear => Trigger::OnHit,
             Item::EmberHeart | Item::BerserkerTotem => Trigger::OnKill,
             Item::EchoStone | Item::VoidOrb | Item::MirrorShard | Item::HeartOfWinter => Trigger::OnCast,
-            Item::BrambleMantle | Item::PhoenixFeather => Trigger::WhenHit,
+            Item::BrambleMantle => Trigger::WhenHit,
             Item::PowderKeg | Item::WispLantern | Item::HoarfrostBoots | Item::GravecallerRift => Trigger::Always,
         }
     }
@@ -292,13 +293,12 @@ impl Item {
             Item::HoarfrostBoots => "Every step leaves winter behind.",
             Item::DoomBell => "It rings for them, a little late.",
             Item::MidasCoin => "The dying are worth their weight in gold.",
-            Item::PhoenixFeather => "Death is a setback, not an ending.",
             Item::ThunderCrown => "The sky answers whoever wears it.",
             Item::VoidOrb => "A hole in the world, small and hungry.",
             Item::MirrorShard => "They'll chase the shine. It bites.",
             Item::BerserkerTotem => "Every kill feeds the next.",
             Item::RicochetCharm => "Why stop at one?",
-            Item::HydraSpear => "Cut off one point, three more grow.",
+            Item::HydraSpear => "One throw, and the sky fills with points.",
             Item::GravecallerRift => "The wounds you open in the earth stay hungry.",
             Item::HeartOfWinter => "Your nova leaves a storm behind.",
         }
@@ -328,7 +328,7 @@ impl Item {
             }
             Item::EchoStone => {
                 let (damage, radius, delay) = echo_stone(level);
-                format!("{} after you use your ability, it echoes where you stood: {damage} damage to enemies within {radius} m.", s(delay))
+                format!("When your ability deals damage, it echoes {} later where it hit: {damage} damage to enemies within {radius} m.", s(delay))
             }
             Item::PowderKeg => {
                 let (every, damage, radius, fuse, _) = powder_keg(level);
@@ -348,11 +348,7 @@ impl Item {
             }
             Item::MidasCoin => {
                 let (below, gold) = midas_coin(level);
-                format!("Hitting an enemy below {} health turns it to gold: it dies, and everyone gets {gold} more gold. Not bosses.", pct(below))
-            }
-            Item::PhoenixFeather => {
-                let (share, damage, radius, recharge) = phoenix_feather(level);
-                format!("A killing blow instead raises you at {} health in a burst of fire ({damage} damage within {radius} m). Recharges in {}.", pct(share), s(recharge))
+                format!("Hitting a monster below {} health turns it to gold: it dies, and pays {gold} more gold. Not bosses.", pct(below))
             }
             Item::ThunderCrown => {
                 let (every, damage, radius, _) = thunder_crown(level);
@@ -360,11 +356,11 @@ impl Item {
             }
             Item::VoidOrb => {
                 let (radius, _, damage, lasts) = void_orb(level);
-                format!("Using your ability opens a vortex at the cursor for {}, dragging enemies within {radius} m in and dealing {damage} damage every {}.", s(lasts), s(ZONE_PULSE_TICKS))
+                format!("When your ability deals damage, a vortex opens where it hit for {}, dragging enemies within {radius} m in and dealing {damage} damage every {}.", s(lasts), s(ZONE_PULSE_TICKS))
             }
             Item::MirrorShard => {
                 let (lasts, damage, radius, recharge) = mirror_shard(level);
-                format!("Using your ability leaves a decoy of you for {}: enemies go for it, and it shatters for {damage} damage within {radius} m. Every {} at most.", s(lasts), s(recharge))
+                format!("When your ability deals damage, a decoy of you is left where you stand for {}: enemies go for it, and it shatters for {damage} damage within {radius} m. Every {} at most.", s(lasts), s(recharge))
             }
             Item::BerserkerTotem => {
                 let (each, most, _) = berserker_totem(level);
@@ -376,15 +372,15 @@ impl Item {
                 format!("Your shots that hit bounce on to the nearest enemy, {times}, each bounce keeping {} of the damage.", pct(keeps))
             }
             Item::HydraSpear => {
-                let (count, keeps) = hydra_spear(level);
-                format!("Javelins that hit split into {count} spears fanning on, each dealing {} of the damage.", pct(keeps))
+                let (count, keeps, _) = hydra_spear(level);
+                format!("Each auto-attack throws {count} javelins in a barrage, one right after the other; each after the first deals {} of the damage.", pct(keeps))
             }
             Item::GravecallerRift => {
                 format!("Enemies in your rifts take {} damage every {}.", gravecaller_rift(level), s(ZONE_PULSE_TICKS))
             }
             Item::HeartOfWinter => {
                 let (radius, slow, damage, lasts) = heart_of_winter(level);
-                format!("Frost Nova leaves a blizzard for {}: enemies within {radius} m are slowed {} and take {damage} damage every {}.", s(lasts), pct(slow), s(ZONE_PULSE_TICKS))
+                format!("When Frost Nova deals damage, it leaves a blizzard for {}: enemies within {radius} m are slowed {} and take {damage} damage every {}.", s(lasts), pct(slow), s(ZONE_PULSE_TICKS))
             }
         }
     }

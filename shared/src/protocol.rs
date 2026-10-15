@@ -524,6 +524,9 @@ pub struct Projectile {
     pub ability: Option<AbilitySlot>,
     /// A primed auto-attack's (`AttackState::primed`): sure to crit. Set by the server.
     pub crit: bool,
+    /// Thrown by an item (a barrage's javelin, a bounce), not from the hand: drawn straight from
+    /// where it starts, and nothing an auto-attack's throw sets off goes off again for it.
+    pub extra: bool,
 }
 
 impl Projectile {

@@ -61,9 +61,15 @@ impl CurrentRoom {
         self.0.as_ref().filter(|view| view.started && view.mode.pve()).and_then(|view| view.run.as_ref())
     }
 
-    /// We're practicing (where items are free, if the map has a shop).
+    /// We're practicing (where items are free).
     pub fn practice(&self) -> bool {
         self.0.as_ref().is_some_and(|view| view.practice)
+    }
+
+    /// The merchant trades now: in practice, while a PvP match is on, or in a run not yet lost.
+    pub fn shopping(&self) -> bool {
+        let Some(view) = &self.0 else { return false };
+        view.practice || (view.started && !view.mode.pve()) || self.run().is_some_and(|run| !matches!(run.phase, arena_shared::rooms::Phase::Over { .. }))
     }
 }
 

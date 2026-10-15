@@ -93,20 +93,20 @@ pub(crate) struct Landed {
     pub(crate) amount: i32,
     pub(crate) killed: bool,
     pub(crate) source: Source,
-    /// The shot that hit, if one did: what bounces and splits off it.
+    /// A primed auto-attack's (Deadeye's): an ability's doing, as much as the attack's.
+    pub(crate) primed: bool,
+    /// The shot that hit, if one did: what bounces off it.
     pub(crate) shot: Option<ShotHit>,
 }
 
-/// A shot that hit: it, its might, and how many bounces it has left (`None`: it's never bounced)
-/// or whether it's split off another.
+/// A shot that hit: it, its might, and how many bounces it has left (`None`: it's never bounced).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ShotHit {
     pub(crate) projectile: Projectile,
     pub(crate) might: f32,
     pub(crate) bounces: Option<u8>,
-    pub(crate) shard: bool,
-    /// It pierced others before this one (`AttackDef::pierces`): what splits and bounces off a
-    /// shot does so off its first hit only.
+    /// It pierced others before this one (`AttackDef::pierces`): what bounces off a shot does so
+    /// off its first hit only.
     pub(crate) pierced: bool,
 }
 
@@ -163,7 +163,7 @@ pub(super) fn damage(
         }
         commands.entity(player).insert(Dead { respawn_at: now + RESPAWN_TICKS, placed: false, killer: by });
     }
-    log.0.push(Landed { attacker: by, class, side, victim: player, victim_id: id, at, amount, killed, source, shot });
+    log.0.push(Landed { attacker: by, class, side, victim: player, victim_id: id, at, amount, killed, source, primed: blow.sure_crit, shot });
 }
 
 pub(super) type Targets<'w, 's> = Query<

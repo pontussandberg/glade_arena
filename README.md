@@ -25,7 +25,7 @@ shares (field reference in the README there):
 |---|---|---|---|
 | Jav | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`) | **Deadeye**: at once, your next auto-attack will critically strike, with 50% more attack speed; press again to call it off (15s cooldown, from the throw; off the global cooldown) |
 | Revenant | Duelist | A heavy overhead blow of its dark glaive, the blade coming down flat on the ground from 1.6 m to 3.08 m ahead, tearing it open for 3s (inside the tear the revenant moves 30% faster); each hit empowers the glaive for the next swing if it follows within 10s (time to kite): a lane 50% further and wider, from 2 m to 4.62 m, 0.75 m wide, 50% more attack speed and a 50% crit chance (it never crits otherwise; an empowered hit renews it), lost on a miss (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash toward the cursor, 1 m to 6 m, damaging each enemy you pass through |
-| Frost Mage | Controller | Frostbolts: little damage and shorter range (mid range), but each hit slows (40% for 2s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5s (no walking, no dashing) |
+| Frost Mage | Controller | Frostbolts (mid range) that shatter where they hit, the burst of ice hitting everyone round the one struck for most of the damage; every hit slows (40% for 2s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5s (no walking, no dashing) |
 
 Hits can carry **crowd control** (`chill` in the class files): a slow takes a share off walking
 and dashing speed (a dash still goes its full distance, just slower; a haste speeds it up the
@@ -85,8 +85,13 @@ knock monsters (zombies too) back a little, bosses aside, and the Jav's javelins
 through monsters (never players).
 
 **Items** (`shared/src/items.rs`) never give stats: each does something. Six at most; buying one
-you have raises it a level (up to 3), selling gives back half. In practice on Hollow Wilds the
-merchant is there too, and everything is free, to try items out on the target dummies.
+you have raises it a level (up to 3), selling gives back half. A few are one class's own: the shop
+lists them first under "<class> ONLY", and their tiles are rimmed in gold. Items that go off on an
+ability go off when the ability deals damage (once a use; Deadeye's primed javelin counts).
+
+Every map has a merchant. In practice everything is free, to try items out on the target dummies.
+In a PvP match everyone starts with nothing and earns gold only by their own kills (25 a zombie,
+60 a player), so items there are few and far between.
 
 What items and monsters do is drawn as little scenes, not marker circles (`client/src/fx/`):
 frost growing over the ground and thawing, scorched earth with glowing cracks and flames licking
@@ -101,23 +106,22 @@ procedural shapes (`shapes.rs`).
 | Rime Sigil | Every few auto-attack hits freeze |
 | Bloodfang | Auto-attack hits heal you |
 | Bramble Mantle | Being hit lashes everyone around you |
-| Echo Stone | Your ability echoes where you stood, as a burst |
+| Echo Stone | Your ability's damage echoes where it hit, as a burst |
 | Powder Keg | Lobs kegs at the nearest enemy now and then |
 | Wisp Lantern | Wisps circle you, burning what they touch |
 | Hoarfrost Boots | You leave hoarfrost behind that slows |
 | Doom Bell | Marks enemies; the bell tolls back a share of what you dealt them |
-| Midas Coin | Hits finish enemies low on health, for gold (not bosses) |
-| Phoenix Feather | A killing blow raises you instead, in fire (recharges) |
+| Midas Coin | Hits finish monsters low on health, for gold (not bosses) |
 | Thunder Crown | Every few hits call down lightning |
-| Void Orb | Your ability opens a vortex at the cursor that drags enemies in |
-| Mirror Shard | Your ability leaves a decoy monsters go for; it shatters |
+| Void Orb | Your ability's damage opens a vortex where it hit that drags enemies in |
+| Mirror Shard | Your ability's damage leaves a decoy monsters go for; it shatters |
 | Berserker Totem | Kills stack a frenzy (walk and attack faster) |
 | Ricochet Charm | Shots that hit bounce on (ranged classes) |
-| Hydra Spear | Javelins split on hit (Jav only) |
+| Hydra Spear | Each auto-attack throws a barrage of 2-4 javelins (Jav only) |
 | Gravecaller Rift | Your rifts burn enemies in them (Revenant only) |
-| Heart of Winter | Frost Nova leaves a blizzard (Frost Mage only) |
+| Heart of Winter | Frost Nova's damage leaves a blizzard (Frost Mage only) |
 
-They combine: a Hydra Spear's splits ricochet off Storm Coil arcs, Ember Heart's bursts kill into
+They combine: a Hydra Spear's barrage pierces a whole line and sets off Storm Coil arcs, Ember Heart's bursts kill into
 more bursts and feed a Berserker Totem, a Void Orb gathers a pack for Thunder Crown and the kegs.
 
 **Monsters** are classes too (`shared/assets/classes/`, with a `mob` section: how it gets about,

@@ -86,6 +86,9 @@ const CRIT_NUMBER_SIZE: f32 = 26.0;
 const CRIT_POP: f32 = 0.6;
 const CRIT_POP_PART: f32 = 0.15;
 const NUMBER_SECONDS: f32 = 0.9;
+/// Plain damage to one fighter landing this soon (seconds) after its last number adds to that
+/// number instead of floating up a new one, so a flurry (arcs, bursts, a barrage) reads as one.
+const NUMBER_MERGE_SECONDS: f32 = 0.25;
 const CRIT_NUMBER_SECONDS: f32 = 1.2;
 const NUMBER_FADE_PART: f32 = 0.4;
 const NUMBER_RISE: f32 = 36.0;
@@ -140,6 +143,8 @@ struct DamageNumber {
     crit: bool,
     /// Sideways from the bar's center, in pixels.
     dx: f32,
+    /// For plain damage, how much it shows, for more landing on it (`NUMBER_MERGE_SECONDS`).
+    merges: Option<i32>,
 }
 
 /// What floats over the fighters (bars, damage numbers): under one screen-filling `GameUi` root,
@@ -460,14 +465,36 @@ fn spawn_damage_numbers(
     time: Res<Time>,
     world_ui: Single<Entity, With<WorldUi>>,
     mut players: Query<(Entity, &RecentHits, Option<&mut ShownHits>, Has<Me>), Changed<RecentHits>>,
+    mut numbers: Query<(&mut DamageNumber, &mut Text)>,
 ) {
+    let now = time.elapsed_secs();
     for (player, recent, shown, is_me) in &mut players {
         let Some(mut shown) = shown else {
             commands.entity(player).insert(ShownHits(recent.seq()));
             continue;
         };
         let last = std::mem::replace(&mut shown.0, recent.seq());
-        for (i, hit) in recent.0.iter().filter(|hit| hit.seq > last).enumerate() {
+        // Plain damage first adds to a number just shown, or comes as one number for all of it.
+        let new: Vec<_> = recent.0.iter().filter(|hit| hit.seq > last).copied().collect();
+        let plain: i32 = new.iter().filter(|hit| hit.kind == HitKind::Damage).map(|hit| hit.amount).sum();
+        let merged = plain > 0
+            && numbers.iter_mut().filter(|(n, _)| n.player == player && n.merges.is_some() && now - n.born < NUMBER_MERGE_SECONDS).last().is_some_and(|(mut number, mut text)| {
+                let total = number.merges.unwrap_or(0) + plain;
+                number.merges = Some(total);
+                // Kept up a moment longer, without dropping back to the bar.
+                number.born = number.born.max(now - 0.2);
+                text.0 = total.to_string();
+                true
+            });
+        let mut plain_shown = merged;
+        for (i, hit) in new.iter().enumerate() {
+            let mut hit = *hit;
+            if hit.kind == HitKind::Damage {
+                if std::mem::replace(&mut plain_shown, true) {
+                    continue;
+                }
+                hit.amount = plain;
+            }
             let crit = hit.kind == HitKind::Crit;
             if crit {
                 commands.entity(player).insert(CritAt(time.elapsed_secs()));
@@ -482,7 +509,7 @@ fn spawn_damage_numbers(
             let side = if i % 2 == 0 { 1.0 } else { -1.0 };
             let lasts = if crit { CRIT_NUMBER_SECONDS } else { NUMBER_SECONDS };
             commands.spawn((
-                DamageNumber { player, born: time.elapsed_secs(), lasts, crit, dx: side * NUMBER_SPREAD * i.div_ceil(2) as f32 },
+                DamageNumber { player, born: now, lasts, crit, dx: side * NUMBER_SPREAD * i.div_ceil(2) as f32, merges: (hit.kind == HitKind::Damage).then_some(hit.amount) },
                 ChildOf(*world_ui),
                 ui_text(text, size, color),
                 TextShadow { offset: Vec2::splat(2.0), color: palette::ui::PANEL },

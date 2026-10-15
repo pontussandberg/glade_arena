@@ -2,25 +2,9 @@
 
 use super::*;
 
-use arena_shared::abilities::{self, AbilityDef, AbilityKind, AbilitySlot, Cast, CastOrder, dash};
+use arena_shared::abilities::{self, AbilityDef, AbilityKind, Cast, CastOrder, dash};
 
 use crate::rooms::{InRoom, Lobby};
-
-/// An ability used (its cooldown started): by whom, of which class, on which side, in which slot,
-/// from where and aimed how (toward the cursor).
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Used {
-    pub(crate) caster: PeerId,
-    pub(crate) class: ClassId,
-    pub(crate) side: Side,
-    pub(crate) slot: AbilitySlot,
-    pub(crate) at: Vec2,
-    pub(crate) aim: Vec2,
-}
-
-/// Server-only: abilities used this tick, until `items` has seen them.
-#[derive(Resource, Default)]
-pub(crate) struct CastLog(pub(crate) Vec<Used>);
 
 /// Server-only: who the current dash (started at `.0`) has already cut, so each target is cut
 /// once per dash.
@@ -42,7 +26,6 @@ pub(super) fn use_abilities(
     >,
     mut targets: Targets,
     mut log: ResMut<HitLog>,
-    mut cast_log: ResMut<CastLog>,
 ) {
     let now = timeline.tick();
     // Read up front: `targets` holds every player's `Chilled` mutably. A root or slow landing
@@ -94,12 +77,6 @@ pub(super) fn use_abilities(
             orders.casts = orders.casts.map(|order| order.filter(|order| !primes(order)));
         }
         let casts = abilities::step(now.0, id.0, *class, pos.0, &orders, &chilled, &mut next_cooldowns, &mut next_dashing);
-        // Which were used, for what reacts to abilities (`items`): a cooldown that started.
-        for order in orders.casts() {
-            if next_cooldowns.used_at(order.slot) == Some(now.0) && cooldowns.used_at(order.slot) != Some(now.0) {
-                cast_log.0.push(Used { caster: id.0, class: *class, side, slot: order.slot, at: pos.0, aim: order.aim });
-            }
-        }
         // Only on change: both are replicated.
         cooldowns.set_if_neq(next_cooldowns);
         dashing.set_if_neq(next_dashing);

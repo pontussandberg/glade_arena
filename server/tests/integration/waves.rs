@@ -305,3 +305,43 @@ fn javelins_pierce_monsters_and_knock_them_back() {
     let pushed = p.server.world().get::<Pos>(monsters[0]).unwrap().0;
     assert!(pushed.x > spots[0].x + 0.1, "the first wasn't knocked back: {pushed}");
 }
+
+/// A Frost Mage's frostbolt shatters on the monster it hits: the one beside it is hit too.
+#[test]
+fn frostbolts_shatter_over_those_round_their_mark() {
+    let mut p = Party::new(5866, "frost_mage", false);
+    p.ask(RoomRequest::QuickJoin("Waves 3".into()));
+    p.until(Duration::from_secs(10), "in the run", |p| p.satchel().is_some_and(|s| s.gold > 0));
+    p.ask(RoomRequest::Ready(true));
+    p.until(Duration::from_secs(40), "two monsters about", |p| {
+        let world = p.server.world_mut();
+        world.query::<(&Team, &Health)>().iter(world).filter(|(t, h)| t.0 == ZOMBIES && h.alive()).count() >= 2
+    });
+    // Out in the open east of the camp: one monster straight ahead, one beside it, out of the
+    // bolt's way; both held still.
+    let me = Vec2::new(10.5, 0.5);
+    let world = p.server.world_mut();
+    let monsters: Vec<Entity> = world.query::<(Entity, &Team, &Health)>().iter(world).filter(|(_, t, h)| t.0 == ZOMBIES && h.alive()).map(|(e, ..)| e).take(2).collect();
+    let spots = [me + Vec2::new(4.0, 0.0), me + Vec2::new(4.3, 1.3)];
+    let hold = |p: &mut Party| {
+        let world = p.server.world_mut();
+        for (monster, spot) in monsters.iter().zip(spots) {
+            let mut m = world.entity_mut(*monster);
+            m.get_mut::<Pos>().unwrap().0 = spot;
+            m.get_mut::<Chilled>().unwrap().rooted = Span { from: 0, until: u32::MAX };
+        }
+        place(&mut p.server, 1, me);
+    };
+    for _ in 0..30 {
+        hold(&mut p);
+        p.update();
+    }
+    let health = |p: &mut Party| [monsters[0], monsters[1]].map(|m| p.server.world().get::<Health>(m).map_or(0, |h| h.0));
+    let before = health(&mut p);
+    set_input(&mut p.client, PlayerInput { aim: Vec2::X, fire: true, ..default() });
+    p.until(Duration::from_secs(3), "both hit by one frostbolt", |p| {
+        hold(p);
+        let now = health(p);
+        now[0] < before[0] && now[1] < before[1]
+    });
+}
