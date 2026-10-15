@@ -23,5 +23,5 @@
         ),
     ],
     look: Some(figure: "zombie", size: 1.0, tint: (0.66, 0.8, 1.0)),
-    mob: Some(brain: Chase, tricks: [Lunge(slot: 0, within: 5.5)], bounty: 8, cost: 1.6, from_wave: 4),
+    mob: Some(brain: Chase, tricks: [Lunge(slot: 0, within: 5.5)], bounty: 8, cost: 1.6, from_wave: 5),
 )

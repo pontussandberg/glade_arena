@@ -18,11 +18,6 @@ use crate::{DesiredInput, Me, PlayerControls, SendCommands};
 
 /// How far inside its lane's ends (`AttackDef::hit_span`) a melee bot starts a swing.
 const MELEE_LEAD: f32 = 0.6;
-/// How many foes this close make the bot back off rather than fight, once it's hurt this badly
-/// (a share of its health).
-const HURT: f32 = 0.4;
-const CROWDED_WITHIN: f32 = 3.5;
-const CROWDED_BY: usize = 3;
 
 /// Present when this client is played by the bot.
 #[derive(Resource)]
@@ -40,7 +35,7 @@ impl Plugin for BotPlugin {
 }
 
 fn think(
-    me: Query<(&PlayerId, &ClassId, &Pos, &AttackState, &Cooldowns, Option<&Team>, (Option<&Health>, Option<&MaxHealth>)), With<Me>>,
+    me: Query<(&PlayerId, &ClassId, &Pos, &AttackState, &Cooldowns, Option<&Team>), With<Me>>,
     server: Query<&RemoteTimeline, With<Client>>,
     // Not the shopkeeper: no one can hurt them.
     others: Query<(&PlayerId, &Pos, &Health, Option<&Team>), (Without<Me>, Without<Shopkeeper>)>,
@@ -48,8 +43,7 @@ fn think(
     map: Res<CurrentMap>,
 ) {
     let map = map.map();
-    let Ok((my_id, class, me, attack, cooldowns, my_team, (health, max))) = me.single() else { return };
-    let hurt = health.zip(max).is_some_and(|(h, m)| (h.0 as f32) < HURT * m.0 as f32);
+    let Ok((my_id, class, me, attack, cooldowns, my_team)) = me.single() else { return };
     // The server tick our news is from: an ability whose cooldowns were over by then is ready.
     let latest = server.single().ok().and_then(|timeline| timeline.last_received_tick()).map_or(0, |tick| tick.0);
     let Some(target) = others
@@ -88,19 +82,6 @@ fn think(
         (Some(current), Some(new)) if (new - current).abs().max_element() < 2.0 => Some(current),
         _ => wanted,
     };
-    // Hurt and crowded (a pack all round, against the waves): back away from the middle of it.
-    let near: Vec<Vec2> = others
-        .iter()
-        .filter(|(id, p, health, team)| id.0 != my_id.0 && health.alive() && p.0.distance(me.0) < CROWDED_WITHIN && !my_team.zip(*team).is_some_and(|(mine, theirs)| mine.allied(*theirs)))
-        .map(|(_, p, ..)| p.0)
-        .collect();
-    if hurt && near.len() >= CROWDED_BY && attack.winding_up().is_none() {
-        let middle = near.iter().copied().sum::<Vec2>() / near.len() as f32;
-        let away = (me.0 - middle).normalize_or(-to_target.normalize_or_zero());
-        let flee = [away, away.perp(), -away.perp()].into_iter().find_map(|dir| map.walk_target(me.0 + dir * 4.0, 2));
-        desired.0 = PlayerInput { move_to: flee, aim: to_target, ..default() };
-        return;
-    }
     let clear = map.shot_clear(me.0, target);
     let fire = in_reach && clear;
     let move_to = move_to.filter(|_| !fire && attack.winding_up().is_none());

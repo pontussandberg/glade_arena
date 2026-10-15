@@ -24,5 +24,5 @@
         ),
     ],
     look: Some(figure: "revenant", size: 1.15, tint: (1.15, 0.55, 0.5), cloth: false),
-    mob: Some(brain: Chase, tricks: [Lunge(slot: 0, within: 7.0)], bounty: 30, cost: 5.0, from_wave: 9),
+    mob: Some(brain: Chase, tricks: [Lunge(slot: 0, within: 7.0)], bounty: 30, cost: 5.0, from_wave: 11),
 )

@@ -17,5 +17,5 @@
     ),
     abilities: [],
     look: Some(figure: "zombie", size: 1.35, tint: (0.72, 1.1, 0.5)),
-    mob: Some(brain: Chase, tricks: [Burst(within: 1.8, damage: 34, radius: 2.8)], bounty: 9, cost: 2.0, from_wave: 5),
+    mob: Some(brain: Chase, tricks: [Burst(within: 1.8, damage: 34, radius: 2.8)], bounty: 9, cost: 2.0, from_wave: 6),
 )

@@ -25,5 +25,5 @@
         ),
     ],
     look: Some(figure: "frost_mage", size: 1.0, tint: (0.7, 1.0, 1.1), cloth: false),
-    mob: Some(brain: Kite(keep: 6.5), tricks: [Slam(slot: 0, within: 2.6)], bounty: 12, cost: 2.5, from_wave: 5),
+    mob: Some(brain: Kite(keep: 6.5), tricks: [Slam(slot: 0, within: 2.6)], bounty: 12, cost: 2.5, from_wave: 7),
 )

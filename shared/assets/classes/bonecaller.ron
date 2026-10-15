@@ -22,6 +22,6 @@
         tricks: [Summon(class: "gnawer", count: 2, every_ticks: 224, max: 6)],
         bounty: 20,
         cost: 4.0,
-        from_wave: 7,
+        from_wave: 9,
     ),
 )

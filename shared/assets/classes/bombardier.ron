@@ -22,6 +22,6 @@
         tricks: [Mortar(damage: 24, radius: 2.2, fuse_ticks: 40, every_ticks: 128)],
         bounty: 14,
         cost: 3.0,
-        from_wave: 6,
+        from_wave: 7,
     ),
 )

@@ -21,6 +21,6 @@
         tricks: [Mend(radius: 6.0, amount: 30, every_ticks: 128)],
         bounty: 16,
         cost: 3.0,
-        from_wave: 8,
+        from_wave: 10,
     ),
 )

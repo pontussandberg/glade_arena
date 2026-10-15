@@ -195,7 +195,7 @@ fn show_banner(mut commands: Commands, room: Res<CurrentRoom>, me: Option<Res<cr
                     banner.spawn(ui_text(format!("OMEN: {}  -  {}", omen.label().to_uppercase(), omen.blurb()), 12.0, palette::BLOOD));
                 }
                 banner.spawn(Node { column_gap: px(GAP * 2.0), align_items: AlignItems::Center, ..default() }).with_children(|row| {
-                    row.spawn(ui_text("Shop at the merchant in the camp", 12.0, palette::ui::MUTED));
+                    row.spawn(ui_text("Shop at the merchant in the camp; its fire mends you", 12.0, palette::ui::MUTED));
                     row.spawn(ui_text(lives, 12.0, palette::HEAL));
                 });
                 let ready = run.ready.contains(&my_id);
@@ -388,12 +388,12 @@ fn show_satchel(
                     if open.0 {
                         let back = Satchel::sell_value(&owned);
                         tile_entity.with_children(|tile| {
-                            // Hanging under the tile.
+                            // Over the tile (under it is the action bar).
                             tile.spawn((SellButton(slot as u8), HudButton, button(format!("+{back}"), 9.0, palette::ui::BACKDROP, palette::GOLD, palette::GOLD.with_alpha(0.6))))
                                 .entry::<Node>()
                                 .and_modify(|mut node| {
                                     node.position_type = PositionType::Absolute;
-                                    node.bottom = px(-22.0);
+                                    node.top = px(-22.0);
                                 });
                         });
                     }

@@ -156,6 +156,9 @@ pub struct Map {
     pub chests: Vec<Vec2>,
     /// Where the shopkeeper stands, if the map has a shop.
     pub shop: Option<Vec2>,
+    /// The camp around the shop, where the fire mends the party in a run: its middle and
+    /// half-width (a square).
+    pub camp: Option<(Vec2, f32)>,
     /// Meters inside the playable area's edge (negative outside). Continuous, for terrain and
     /// decoration.
     edge: fn(Vec2) -> f32,
@@ -189,6 +192,7 @@ impl Map {
             lairs: Vec::new(),
             chests: Vec::new(),
             shop: None,
+            camp: None,
             edge,
             beyond,
         };

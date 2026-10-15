@@ -41,6 +41,9 @@ const READY_TICKS: u32 = 3 * TICK_HZ as u32;
 const START_LIVES: u32 = 3;
 /// How long a player coming back can't be hurt (nor is gone for), so they're not caught at once.
 const SHELTER_TICKS: u32 = 2 * TICK_HZ as u32;
+/// How much of their health players in the camp get back a second, in a run, and how often.
+const CAMP_MENDS: f32 = 0.04;
+const MEND_EVERY_TICKS: u32 = TICK_HZ as u32 / 2;
 /// How long a fallen player with a life to spend waits.
 const COMEBACK_TICKS: u32 = 5 * TICK_HZ as u32;
 /// Every how many waves a boss leads one.
@@ -251,7 +254,7 @@ fn roster(wave: u32) -> Vec<(ClassId, f32)> {
                 return None;
             }
             let fresh = wave - mob.from_wave < 3;
-            Some((c, if fresh { 2.0 } else { 1.0 }))
+            Some((c, if fresh { 1.5 } else { 1.0 }))
         })
         .collect()
 }
@@ -506,6 +509,24 @@ pub(super) fn pay_bounties(timeline: Res<LocalTimeline>, mut commands: Commands,
             info!(room = room.key.0, boss = class.def().name, "a boss falls");
             spawn_fx(&mut commands, *room, Fx { kind: FxKind::Coins, at: pos.0, to: pos.0, radius: 3.0, from: now, until: now + 40 });
         }
+    }
+}
+
+/// The camp's fire mends the party: players in it, in a run, get some health back now and then.
+pub(super) fn mend_at_camp(timeline: Res<LocalTimeline>, lobby: Res<Lobby>, mut party: Query<(&InRoom, &Pos, &mut Health, &MaxHealth, &mut RecentHits), (With<ControlledBy>, InPlay)>) {
+    let now = timeline.tick().0;
+    if now % MEND_EVERY_TICKS != 0 {
+        return;
+    }
+    for (room, pos, mut health, max, mut hits) in &mut party {
+        let Some((middle, half)) = lobby.map(room).camp else { continue };
+        let inside = (pos.0 - middle).abs().max_element() < half;
+        if !inside || health.0 >= max.0 || !lobby.run(room.key).is_some_and(Run::on) {
+            continue;
+        }
+        let mended = ((max.0 as f32 * CAMP_MENDS * MEND_EVERY_TICKS as f32 / TICK_HZ as f32).ceil() as i32).min(max.0 - health.0);
+        health.0 += mended;
+        hits.push(mended, HitKind::Heal);
     }
 }
 
