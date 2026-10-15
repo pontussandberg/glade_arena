@@ -1,19 +1,24 @@
-//! Where a downed fighter lies: spirit light pooled on the ground round them, veins of it creeping
-//! out as an ally picks them up (as far as the rescue has got), and wisps of it rising off them,
-//! so they're found from afar.
+//! Where a downed fighter lies: spirit light pooled on the ground round them, a cross of it under
+//! them, faint, filling out bright from the middle as an ally picks them up (as far as the rescue
+//! has got), and wisps of it rising off them, so they're found from afar.
 
 use super::*;
 
 use crate::swish::noise;
 
-/// A downed fighter's mark: its veins (`veins`, scaled to the rescue) and when it last let a wisp
-/// rise.
+/// A downed fighter's mark: its bright cross (`fill`, scaled to the rescue) and when it last let a
+/// wisp rise.
 #[derive(Component)]
 pub(super) struct DownMark {
     of: Entity,
-    veins: Entity,
+    fill: Entity,
     wisp_at: f32,
 }
+
+/// How far the cross reaches, as a share of the rescue's reach; and how see-through its faint
+/// outline is (a share of the way to clear).
+const CROSS_REACH: f32 = 0.8;
+const CROSS_FAINT: f32 = 0.7;
 
 /// How often a wisp rises off the downed (seconds).
 const WISP_EVERY: f32 = 0.12;
@@ -26,7 +31,7 @@ pub(super) fn mark_downed(
     art: Res<FxArt>,
     downed: Query<(Entity, &Pos, &Downed)>,
     mut marks: Query<(Entity, &mut DownMark, &mut Transform)>,
-    mut veins: Query<&mut Transform, Without<DownMark>>,
+    mut fills: Query<&mut Transform, Without<DownMark>>,
 ) {
     let now = time.elapsed_secs();
     for (mark, mut down, mut transform) in &mut marks {
@@ -36,9 +41,9 @@ pub(super) fn mark_downed(
         };
         let at = arena::to_world(pos.0, 0.0);
         transform.translation = at;
-        if let Ok(mut veins) = veins.get_mut(down.veins) {
-            let r = REVIVE_RADIUS * (0.15 + 0.85 * downed.rescue);
-            veins.scale = Vec3::new(r, 1.0, r);
+        if let Ok(mut fill) = fills.get_mut(down.fill) {
+            let r = REVIVE_RADIUS * CROSS_REACH * downed.rescue;
+            fill.scale = Vec3::new(r, 1.0, r);
         }
         if now >= down.wisp_at {
             down.wisp_at = now + WISP_EVERY;
@@ -55,11 +60,13 @@ pub(super) fn mark_downed(
         }
         let pool = Transform::from_xyz(0.0, 0.03, 0.0).with_scale(Vec3::new(REVIVE_RADIUS, 1.0, REVIVE_RADIUS));
         let pool = commands.spawn((Mesh3d(art.splotch[0].clone()), MeshMaterial3d(art.ink(Ink::SpiritMist, 0.0).clone()), pool, NotShadowCaster, NotShadowReceiver)).id();
-        let veins = commands
-            .spawn((Mesh3d(art.frost[1].clone()), MeshMaterial3d(art.ink(Ink::Spirit, 0.0).clone()), Transform::from_xyz(0.0, 0.04, 0.0), NotShadowCaster, NotShadowReceiver))
-            .id();
+        let reach = REVIVE_RADIUS * CROSS_REACH;
+        let outline = Transform::from_xyz(0.0, 0.04, 0.0).with_scale(Vec3::new(reach, 1.0, reach));
+        let outline = commands.spawn((Mesh3d(art.cross.clone()), MeshMaterial3d(art.ink(Ink::Spirit, CROSS_FAINT).clone()), outline, NotShadowCaster, NotShadowReceiver)).id();
+        let fill = Transform::from_xyz(0.0, 0.05, 0.0).with_scale(Vec3::new(0.0, 1.0, 0.0));
+        let fill = commands.spawn((Mesh3d(art.cross.clone()), MeshMaterial3d(art.ink(Ink::Spirit, 0.0).clone()), fill, NotShadowCaster, NotShadowReceiver)).id();
         commands
-            .spawn((DownMark { of: fighter, veins, wisp_at: 0.0 }, Transform::from_translation(arena::to_world(pos.0, 0.0)), Visibility::Inherited))
-            .add_children(&[pool, veins]);
+            .spawn((DownMark { of: fighter, fill, wisp_at: 0.0 }, Transform::from_translation(arena::to_world(pos.0, 0.0)), Visibility::Inherited))
+            .add_children(&[pool, outline, fill]);
     }
 }

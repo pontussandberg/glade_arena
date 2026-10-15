@@ -145,6 +145,8 @@ pub(crate) struct FxArt {
     frost: Vec<Handle<Mesh>>,
     whirl: Vec<Handle<Mesh>>,
     band: Handle<Mesh>,
+    /// A cross lying flat (`shapes::cross`): where the downed lie.
+    cross: Handle<Mesh>,
     pub(crate) tongue: Handle<Mesh>,
     glint: Handle<Mesh>,
     /// Solid bits: a chunk, a mote, a coin, a keg, an ice shard (leaning out along +X, 1 tall),
@@ -191,6 +193,7 @@ fn load_art(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materi
         frost,
         whirl,
         band: meshes.add(shapes::band(0.3)),
+        cross: meshes.add(shapes::cross(0.32)),
         tongue: meshes.add(shapes::tongue()),
         glint: meshes.add(shapes::glint()),
         chunk: meshes.add(Cuboid::new(1.0, 0.7, 0.85)),

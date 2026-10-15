@@ -23,80 +23,88 @@ pub(super) fn show_room(
     screen: Res<State<Screen>>,
     me: Option<Res<Me>>,
     panel: Single<(Entity, Ref<SidePanel>, &mut Visibility)>,
+    (boards_open, boards): (Res<crate::browser::BoardsOpen>, Res<crate::rooms::Leaderboards>),
 ) {
     let (panel, fresh, mut visibility) = panel.into_inner();
-    if !room.is_changed() && !fresh.is_added() && !screen.is_changed() {
+    if !room.is_changed() && !fresh.is_added() && !screen.is_changed() && !boards_open.is_changed() && !boards.is_changed() {
         return;
     }
     let Some(view) = &room.0 else { return };
     visibility.set_if_neq(Visibility::Inherited);
     let my_id = me.as_ref().map_or(0, |me| me.guest_id);
     let leading = view.leader == my_id;
-    commands.entity(panel).despawn_children().with_children(|panel| {
-        panel.spawn(card()).with_children(|card| {
-            card.spawn(label("Lobby"));
-            card.spawn(ui_text(view.name.clone(), 24.0, palette::ui::TEXT));
-            // Before the start: the leader waits for everyone to be ready, then starts.
-            let ready = view.member(my_id).is_some_and(|m| m.ready);
-            let status = match (view.started, leading) {
-                (true, _) => Some(("Match in progress", ACCENT)),
-                (false, true) if !view.all_ready() => Some(("Waiting for everyone to be ready", palette::ui::MUTED)),
-                (false, true) => None,
-                (false, false) if ready => Some(("Ready: waiting for the leader", palette::ui::GO)),
-                (false, false) => Some(("Ready up when you are", palette::ui::MUTED)),
-            };
-            if let Some((line, color)) = status {
-                card.spawn(ui_text(line, 12.0, color));
-            }
-            if !view.started
-                && let Some(winner) = view.winner_name(my_id)
-            {
-                let won = if winner == "You" { "You won the last match".to_string() } else { format!("{winner} won the last match") };
-                card.spawn(ui_text(won, 12.0, palette::TORCH_FLAME));
-            }
-            if let Some(goal) = view.goal {
-                card.spawn(ui_text(format!("First to {goal} kills. Zombies roam the arena."), 11.0, palette::ui::MUTED));
-            }
-            if view.mode.pve() {
-                card.spawn(ui_text("Endless waves of monsters out of the wilds. Buy items from the merchant between waves; a boss every fifth.", 11.0, palette::ui::MUTED));
-                if let Some(run) = &view.run {
-                    let line = match run.phase {
-                        Phase::Over { reached } if !view.started => Some(format!("The last run fell on wave {reached}")),
-                        _ if view.started => Some(format!("Fighting wave {}", run.wave)),
-                        _ => None,
+    commands.entity(panel).despawn_children().with_children(|column| {
+        // The room, one block (what doesn't fit scrolls), then the leaderboards.
+        column.spawn(pane(true)).with_children(|block| {
+            block.spawn(pane_body(0.0)).with_children(|panel| {
+                panel.spawn(card()).with_children(|card| {
+                    card.spawn(label("Lobby"));
+                    card.spawn(ui_text(view.name.clone(), 24.0, palette::ui::TEXT));
+                    // Before the start: the leader waits for everyone to be ready, then starts.
+                    let ready = view.member(my_id).is_some_and(|m| m.ready);
+                    let status = match (view.started, leading) {
+                        (true, _) => Some(("Match in progress", ACCENT)),
+                        (false, true) if !view.all_ready() => Some(("Waiting for everyone to be ready", palette::ui::MUTED)),
+                        (false, true) => None,
+                        (false, false) if ready => Some(("Ready: waiting for the leader", palette::ui::GO)),
+                        (false, false) => Some(("Ready up when you are", palette::ui::MUTED)),
                     };
-                    if let Some(line) = line {
-                        card.spawn(ui_text(line, 12.0, palette::TORCH_FLAME));
+                    if let Some((line, color)) = status {
+                        card.spawn(ui_text(line, 12.0, color));
                     }
-                    if run.best > 0 {
-                        card.spawn(ui_text(format!("Best: wave {}", run.best), 11.0, palette::ui::TEXT));
+                    if !view.started
+                        && let Some(winner) = view.winner_name(my_id)
+                    {
+                        let won = if winner == "You" { "You won the last match".to_string() } else { format!("{winner} won the last match") };
+                        card.spawn(ui_text(won, 12.0, palette::TORCH_FLAME));
                     }
-                }
-            }
-            // The game first (fighting each other, or the waves together), then its mode, then where.
-            let editing = view.may_edit(my_id);
-            let games = [(false, "PvP: each other"), (true, "PvE: the waves")];
-            setting(card, "Game", &games, view.mode.pve(), editing, |pve| RoomRequest::SetMode(if pve { Mode::Waves } else { Mode::Ffa }));
-            if !view.mode.pve() {
-                let modes = Mode::PVP.map(|mode| (mode, mode.label()));
-                setting(card, "Mode", &modes, view.mode, editing, RoomRequest::SetMode);
-            }
-            let maps: Vec<(MapId, &str)> = view.mode.maps().iter().map(|map| (*map, map.label())).collect();
-            setting(card, "Map", &maps, view.map, editing, RoomRequest::SetMap);
-        });
+                    if let Some(goal) = view.goal {
+                        card.spawn(ui_text(format!("First to {goal} kills. Zombies roam the arena."), 11.0, palette::ui::MUTED));
+                    }
+                    if view.mode.pve() {
+                        card.spawn(ui_text("Endless waves of monsters out of the wilds. Buy items from the merchant between waves; a boss every fifth.", 11.0, palette::ui::MUTED));
+                        if let Some(run) = &view.run {
+                            let line = match run.phase {
+                                Phase::Over { reached } if !view.started => Some(format!("The last run fell on wave {reached}")),
+                                _ if view.started => Some(format!("Fighting wave {}", run.wave)),
+                                _ => None,
+                            };
+                            if let Some(line) = line {
+                                card.spawn(ui_text(line, 12.0, palette::TORCH_FLAME));
+                            }
+                            if run.best > 0 {
+                                card.spawn(ui_text(format!("Best: wave {}", run.best), 11.0, palette::ui::TEXT));
+                            }
+                        }
+                    }
+                    // The game first (fighting each other, or the waves together), then its mode, then where.
+                    let editing = view.may_edit(my_id);
+                    let games = [(false, "PvP: each other"), (true, "PvE: the waves")];
+                    setting(card, "Game", &games, view.mode.pve(), editing, |pve| RoomRequest::SetMode(if pve { Mode::Waves } else { Mode::Ffa }));
+                    if !view.mode.pve() {
+                        let modes = Mode::PVP.map(|mode| (mode, mode.label()));
+                        setting(card, "Mode", &modes, view.mode, editing, RoomRequest::SetMode);
+                    }
+                    let maps: Vec<(MapId, &str)> = view.mode.maps().iter().map(|map| (*map, map.label())).collect();
+                    setting(card, "Map", &maps, view.map, editing, RoomRequest::SetMap);
+                });
 
-        panel.spawn(card()).with_children(|card| match view.mode {
-            Mode::Ffa | Mode::Waves => {
-                card.spawn(label(&format!("Players  {}/{}", view.members.len(), view.mode.capacity())));
-                for member in &view.members {
-                    member_row(card, Node::default(), view, member, my_id);
-                }
-            }
-            Mode::Teams => spawn_teams(card, view, my_id),
-        });
+                panel.spawn(card()).with_children(|card| match view.mode {
+                    Mode::Ffa | Mode::Waves => {
+                        card.spawn(label(&format!("Players  {}/{}", view.members.len(), view.mode.capacity())));
+                        for member in &view.members {
+                            member_row(card, Node::default(), view, member, my_id);
+                        }
+                    }
+                    Mode::Teams => spawn_teams(card, view, my_id),
+                });
 
-        let leave = button("Leave lobby", 12.0, palette::ui::PANEL, palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.3));
-        panel.spawn((RoomButton(RoomRequest::Leave), leave));
+                let leave = button("Leave lobby", 12.0, palette::ui::PANEL, palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.3));
+                panel.spawn(Node { flex_direction: FlexDirection::Column, padding: UiRect { top: px(0.0), ..UiRect::all(px(CARD_PADDING)) }, ..default() })
+                    .with_child((RoomButton(RoomRequest::Leave), leave));
+            });
+        });
+        crate::browser::spawn_boards(column, &boards.0, &boards_open);
     });
 }
 

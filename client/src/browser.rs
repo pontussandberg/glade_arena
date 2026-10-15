@@ -33,6 +33,7 @@ impl Plugin for BrowserPlugin {
         app.add_systems(Update, show_connecting.run_if(in_state(Screen::Connecting)));
         app.add_systems(OnEnter(Screen::Home), open_home);
         app.add_systems(OnExit(Screen::Home), close_home);
+        app.add_systems(Update, board_buttons.run_if(in_state(Screen::Home).or_else(in_state(Screen::Room))));
         app.add_systems(
             Update,
             (focus_name, type_name, lobby_buttons, show_lobbies, show_form)
@@ -113,18 +114,13 @@ fn show_connecting(client: Query<Has<Disconnected>, With<Client>>, mut text: Sin
     }
 }
 
-/// Whether the lobbies pane is open (to begin with, it is); it stays as it was left, coming home
-/// again.
-#[derive(Resource)]
+/// Whether the lobbies pane is open (to begin with, it's folded); it stays as it was left, coming
+/// home again.
+#[derive(Resource, Default)]
 pub(crate) struct LobbiesOpen(bool);
 
-impl Default for LobbiesOpen {
-    fn default() -> Self {
-        LobbiesOpen(true)
-    }
-}
-
-/// Whether the leaderboards are open (to begin with, they are), and which party size's is shown.
+/// Whether the leaderboards are open (to begin with, they're folded), and which party size's is
+/// shown. They're under the lobbies at home, and under the room in a lobby.
 #[derive(Resource)]
 pub(crate) struct BoardsOpen {
     open: bool,
@@ -133,7 +129,7 @@ pub(crate) struct BoardsOpen {
 
 impl Default for BoardsOpen {
     fn default() -> Self {
-        BoardsOpen { open: true, size: 1 }
+        BoardsOpen { open: false, size: 1 }
     }
 }
 
@@ -287,24 +283,15 @@ fn lobby_buttons(
     joins: Query<(Ref<Interaction>, &JoinButton)>,
     (games, modes, maps): (Query<(Ref<Interaction>, &GameButton)>, Query<(Ref<Interaction>, &ModeButton)>, Query<(Ref<Interaction>, &MapButton)>),
     (create_button, cancel): (Query<Ref<Interaction>, With<CreateButton>>, Query<Ref<Interaction>, With<CancelButton>>),
-    (boards_header, tabs): (Query<Ref<Interaction>, With<BoardsHeader>>, Query<(Ref<Interaction>, &BoardTab)>),
     (set_password, no_password): (Query<Ref<Interaction>, With<PasswordButton>>, Query<Ref<Interaction>, With<NoPasswordButton>>),
     mut home: ResMut<Home>,
     mut shown: ResMut<CurrentMap>,
-    (mut open, mut boards): (ResMut<LobbiesOpen>, ResMut<BoardsOpen>),
+    mut open: ResMut<LobbiesOpen>,
     (mut prompt, mut answered): (ResMut<TextPrompt>, ResMut<Answered>),
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
     if header.iter().any(clicked) {
         open.0 = !open.0;
-    }
-    if boards_header.iter().any(clicked) {
-        boards.open = !boards.open;
-    }
-    for (interaction, tab) in &tabs {
-        if clicked(interaction) && boards.size != tab.0 {
-            boards.size = tab.0;
-        }
     }
     for (interaction, join) in &joins {
         if !clicked(interaction) {
@@ -360,6 +347,18 @@ fn lobby_buttons(
     }
     if cancel.iter().any(clicked) {
         home.form_open = false;
+    }
+}
+
+/// The leaderboards' header folds or opens them; a tab picks the board.
+fn board_buttons(header: Query<Ref<Interaction>, With<BoardsHeader>>, tabs: Query<(Ref<Interaction>, &BoardTab)>, mut boards: ResMut<BoardsOpen>) {
+    if header.iter().any(clicked) {
+        boards.open = !boards.open;
+    }
+    for (interaction, tab) in &tabs {
+        if clicked(interaction) && boards.size != tab.0 {
+            boards.size = tab.0;
+        }
     }
 }
 
@@ -511,7 +510,7 @@ fn spawn_lobbies(panel: &mut ChildSpawnerCommands, home: &Home, list: &[RoomSumm
 }
 
 /// The leaderboards: their header, and open, a tab for each party size and its board.
-fn spawn_boards(panel: &mut ChildSpawnerCommands, scores: &[HighScore], open: &BoardsOpen) {
+pub(crate) fn spawn_boards(panel: &mut ChildSpawnerCommands, scores: &[HighScore], open: &BoardsOpen) {
     panel.spawn(pane(open.open)).with_children(|panel| {
         panel.spawn((BoardsHeader, pane_header())).with_children(|header| {
             header.spawn(ui_text("Leaderboards", 18.0, palette::ui::TEXT));

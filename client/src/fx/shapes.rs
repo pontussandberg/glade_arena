@@ -143,6 +143,23 @@ pub(super) fn frost(seed: u32) -> Mesh {
     b.build()
 }
 
+/// A cross lying flat (a plus), its arms 1 out from the middle along X and Z, `width` wide:
+/// solid along each arm's spine, clear at its edges and tip.
+pub(super) fn cross(width: f32) -> Mesh {
+    let mut b = FlatMesh::default();
+    let half = width / 2.0;
+    for (along, side) in [(Vec3::X, Vec3::Z), (Vec3::Z, Vec3::NEG_X), (Vec3::NEG_X, Vec3::NEG_Z), (Vec3::NEG_Z, Vec3::X)] {
+        let (end, tip) = (along * (1.0 - half), along);
+        for s in [1.0, -1.0] {
+            let edge = side * half * s;
+            b.tri_faded_both([Vec3::ZERO, end, end + edge], [1.0, 1.0, 0.0]);
+            b.tri_faded_both([Vec3::ZERO, end + edge, edge], [1.0, 0.0, 0.0]);
+            b.tri_faded_both([end, tip, end + edge], [1.0, 0.0, 0.0]);
+        }
+    }
+    b.build()
+}
+
 /// A soft band round a ring, 1 out at its middle, `width` wide, clear at both edges: a
 /// shockwave, a ripple.
 pub(super) fn band(width: f32) -> Mesh {
