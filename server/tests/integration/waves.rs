@@ -345,3 +345,140 @@ fn frostbolts_shatter_over_those_round_their_mark() {
         now[0] < before[0] && now[1] < before[1]
     });
 }
+
+/// Open ground near `p` on `map`.
+fn open_near(map: MapId, p: Vec2) -> Vec2 {
+    let map = map.map();
+    map.nearest_walkable(arena_shared::map::Map::tile_of(p), 3).map(arena_shared::map::Map::center).expect("open ground")
+}
+
+/// How many effects of `kind` the server has up now.
+fn effects(server: &mut App, kind: FxKind) -> usize {
+    let world = server.world_mut();
+    world.query::<&Fx>().iter(world).filter(|fx| fx.kind == kind).count()
+}
+
+/// Whether the server has the merchant out.
+fn merchant_out(server: &mut App) -> bool {
+    let world = server.world_mut();
+    world.query_filtered::<(), With<Shopkeeper>>().iter(world).count() == 1
+}
+
+/// The notice the client was last shown.
+fn notice(p: &Party) -> Option<String> {
+    p.client.world().resource::<arena_client::rooms::Notice>().0.clone()
+}
+
+/// Practice on a PvP map: the merchant is there, giving items away. And Deadeye's primed javelin
+/// counts as the ability dealing damage: it sets off an Echo Stone, where a plain javelin doesn't.
+#[test]
+fn practice_shops_free_and_deadeye_sets_off_ability_items() {
+    let mut p = Party::new(5867, "javelinist", false);
+    p.ask(RoomRequest::Practice(MapId::Keep));
+    p.until(Duration::from_secs(10), "practicing", |p| p.room().is_some_and(|r| r.practice) && p.satchel().is_some());
+    p.until(Duration::from_secs(5), "the merchant out", |p| merchant_out(&mut p.server));
+    let shop = MapId::Keep.map().shop.expect("the keep has a merchant");
+    let me = open_near(MapId::Keep, shop + Vec2::new(-1.0, 0.0));
+    for _ in 0..5 {
+        place(&mut p.server, 1, me);
+        p.update();
+    }
+    p.ask(RoomRequest::Buy(Item::EchoStone));
+    p.until(Duration::from_secs(3), "given the echo stone", |p| p.satchel().is_some_and(|s| s.level(Item::EchoStone) == 1));
+    assert_eq!(p.satchel().unwrap().gold, 0, "it wasn't free");
+
+    // A dummy straight ahead.
+    let target = open_near(MapId::Keep, me + Vec2::new(4.0, 0.0));
+    assert!(MapId::Keep.map().shot_clear(me, target), "no clear shot at the dummy");
+    p.ask(RoomRequest::PlaceDummy { at: target, walks: false });
+    let dummy = |p: &mut Party| {
+        let world = p.server.world_mut();
+        world.query_filtered::<(Entity, &Pos, &Health), Without<Shopkeeper>>().iter(world).find(|(_, pos, _)| pos.0.distance(target) < 0.5).map(|(e, _, h)| (e, h.0))
+    };
+    p.until(Duration::from_secs(3), "the dummy up", |p| dummy(p).is_some());
+    let aim = target - me;
+
+    // A plain javelin: a hit, no echo.
+    let full = dummy(&mut p).unwrap().1;
+    set_input(&mut p.client, PlayerInput { aim, fire: true, ..default() });
+    let mut echoed = false;
+    p.until(Duration::from_secs(3), "a plain javelin hits", |p| {
+        place(&mut p.server, 1, me);
+        echoed |= effects(&mut p.server, FxKind::Warn(FxColor::Spirit)) > 0;
+        dummy(p).is_some_and(|(_, h)| h < full)
+    });
+    set_input(&mut p.client, PlayerInput { aim, ..default() });
+    for _ in 0..40 {
+        place(&mut p.server, 1, me);
+        echoed |= effects(&mut p.server, FxKind::Warn(FxColor::Spirit)) > 0;
+        p.update();
+    }
+    assert!(!echoed, "a plain javelin set off the echo stone");
+
+    // Deadeye, then the javelin it primes: an echo where it hit.
+    edit_input(&mut p.client, |i| i.order_cast(arena_shared::abilities::AbilitySlot(0), aim));
+    p.until(Duration::from_secs(2), "primed", |p| attack_state(&mut p.server, 1).primed.is_some());
+    // Clicked until it goes (a click while the last throw recovers is dropped).
+    p.until(Duration::from_secs(4), "the primed javelin echoes", |p| {
+        edit_input(&mut p.client, |i| (i.aim, i.fire) = (aim, true));
+        place(&mut p.server, 1, me);
+        effects(&mut p.server, FxKind::Warn(FxColor::Spirit)) > 0
+    });
+}
+
+/// A PvP match has the merchant too, but no gold to start with: only kills earn it, each its
+/// killer's own.
+#[test]
+fn pvp_has_a_merchant_and_kills_pay_their_killer() {
+    let mut p = Party::new(5868, "revenant", false);
+    p.ask(RoomRequest::Create { name: "Brawl".into(), mode: Mode::Ffa, map: MapId::Keep });
+    p.until(Duration::from_secs(5), "in the room", |p| p.room().is_some());
+    p.ask(RoomRequest::Start);
+    p.until(Duration::from_secs(10), "fighting", |p| player::<Health>(&mut p.server, 1).is_some() && p.satchel().is_some());
+    assert_eq!(p.satchel().unwrap().gold, 0, "a PvP match started with gold");
+    p.until(Duration::from_secs(5), "the merchant out", |p| merchant_out(&mut p.server));
+
+    // The shop's open, but there's nothing to pay with.
+    let shop = MapId::Keep.map().shop.unwrap();
+    let me = open_near(MapId::Keep, shop + Vec2::new(-1.0, 0.0));
+    for _ in 0..5 {
+        place(&mut p.server, 1, me);
+        p.update();
+    }
+    p.ask(RoomRequest::Buy(Item::Bloodfang));
+    p.until(Duration::from_secs(3), "turned away for want of gold", |p| notice(p).as_deref() == Some("Not enough gold"));
+
+    // A zombie, brought next to us on its last legs, killed: its gold is ours.
+    p.until(Duration::from_secs(60), "a zombie about", |p| {
+        let world = p.server.world_mut();
+        world.query::<(&Team, &Health)>().iter(world).any(|(t, h)| t.0 == ZOMBIES && h.alive())
+    });
+    let world = p.server.world_mut();
+    let zombie = world.query::<(Entity, &Team, &Health)>().iter(world).find(|(_, t, h)| t.0 == ZOMBIES && h.alive()).map(|(e, ..)| e).unwrap();
+    // Out where the glaive's lane comes down (it starts a way ahead of the revenant).
+    let map = MapId::Keep.map();
+    let spot = [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y]
+        .map(|dir| me + dir * 2.4)
+        .into_iter()
+        .find(|&spot| map.walkable_at(spot) && map.line_walkable(me, spot))
+        .expect("open ground round us for the zombie");
+    let hold = |p: &mut Party| {
+        let world = p.server.world_mut();
+        let mut z = world.entity_mut(zombie);
+        z.get_mut::<Pos>().unwrap().0 = spot;
+        z.get_mut::<Chilled>().unwrap().rooted = Span { from: 0, until: u32::MAX };
+        if let Some(mut health) = z.get_mut::<Health>() {
+            health.0 = health.0.min(1);
+        }
+        place(&mut p.server, 1, me);
+    };
+    for _ in 0..10 {
+        hold(&mut p);
+        p.update();
+    }
+    p.until(Duration::from_secs(5), "paid for the zombie", |p| {
+        edit_input(&mut p.client, |i| (i.aim, i.fire) = (spot - me, true));
+        hold(p);
+        p.satchel().is_some_and(|s| s.gold == arena_shared::items::PVP_ZOMBIE_GOLD)
+    });
+}
