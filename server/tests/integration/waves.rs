@@ -618,3 +618,57 @@ fn acolytes_blink_away_when_closed_in_on() {
     assert!(after.distance(before) > 5.0, "blinked only {}", after.distance(before));
     assert!(effects(&mut p.server, FxKind::Blink) > 0, "no blink to be seen");
 }
+
+/// Leaving practice leaves nothing of it behind: no dummies, zombies, shots or effects of the
+/// old room, and practising again starts afresh.
+#[test]
+fn leaving_practice_leaves_nothing_behind() {
+    let mut p = Party::new(5879, "javelinist", false);
+    let leftovers = |p: &mut Party, key: RoomKey| {
+        let world = p.server.world_mut();
+        world.query::<(Entity, &arena_server::rooms::InRoom, Option<&Name>)>().iter(world).filter(|(_, r, _)| r.key == key).map(|(e, _, n)| format!("{e} {n:?}")).collect::<Vec<_>>()
+    };
+    for round in 0..2 {
+        p.ask(RoomRequest::Practice(MapId::Keep));
+        p.until(Duration::from_secs(10), "practicing", |p| p.room().is_some_and(|r| r.practice) && player::<Health>(&mut p.server, 1).is_some());
+        let key = p.room().unwrap().key;
+        let shop = MapId::Keep.map().shop.unwrap();
+        let me = open_near(MapId::Keep, shop + Vec2::new(-1.0, 0.0));
+        let near = open_near(MapId::Keep, me + Vec2::new(0.0, -5.0));
+        place(&mut p.server, 1, me);
+        p.ask(RoomRequest::PlaceDummy { at: open_near(MapId::Keep, me + Vec2::new(4.0, 0.0)), walks: true });
+        p.ask(RoomRequest::PlaceZombies { at: near });
+        p.until(Duration::from_secs(3), "zombies out", |p| {
+            let world = p.server.world_mut();
+            world.query::<&Team>().iter(world).filter(|t| t.0 == ZOMBIES).count() == 3
+        });
+        // Mid-fight: a javelin in the air.
+        for _ in 0..40 {
+            edit_input(&mut p.client, |i| (i.aim, i.fire) = (near - me, true));
+            p.update();
+        }
+        p.ask(RoomRequest::Leave);
+        p.until(Duration::from_secs(5), "out of practice", |p| p.room().is_none());
+        for _ in 0..10 {
+            p.update();
+        }
+        let left = leftovers(&mut p, key);
+        assert!(left.is_empty(), "round {round}: left behind in the old room: {left:?}");
+        // Nor does the client go on seeing any of it: no fighters, shots, pickups or effects out of
+        // a room.
+        let seen = |p: &mut Party| {
+            let world = p.client.world_mut();
+            world
+                .query_filtered::<(Entity, Option<&Name>), Or<(With<PlayerId>, With<Projectile>, With<Pickup>, With<Fx>)>>()
+                .iter(world)
+                .map(|(e, name)| format!("{e} {name:?}"))
+                .collect::<Vec<_>>()
+        };
+        let end = Instant::now() + Duration::from_secs(2);
+        while !seen(&mut p).is_empty() && Instant::now() < end {
+            p.update();
+        }
+        let seen = seen(&mut p);
+        assert!(seen.is_empty(), "round {round}: the client still sees the old room's things: {seen:?}");
+    }
+}

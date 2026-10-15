@@ -80,11 +80,25 @@ impl Plugin for RoomsPlugin {
         app.add_systems(
             Update,
             // A class picked with a request (practice, the way in) is known when it's handled.
-            (greet, handle_class_choices, handle_requests, take_out_idle, end_matches, send_updates).chain().in_set(RoomSystems),
+            (greet, handle_class_choices, handle_requests, take_out_idle, end_matches, send_updates, end_lingering).chain().in_set(RoomSystems),
         );
         app.add_systems(FixedUpdate, note_activity);
     }
 }
+
+/// A lightyear room (`net`) its client (`link`) has just left, still sent to them until `until`
+/// (a tick): what's despawned of the room as they leave it (its fighters, dummies, monsters,
+/// shots, all of it when they were the last in it) is still sent to them, so none of it stays on
+/// their screen. Without a `link`, a closed room's, free to use again only then.
+#[derive(Debug)]
+struct Linger {
+    link: Option<Entity>,
+    net: RoomId,
+    until: u32,
+}
+
+/// How many ticks a client still gets a room's news after leaving it (`Linger`).
+const LINGER_TICKS: u32 = 4;
 
 /// Every guest and room.
 #[derive(Resource, Default)]
@@ -99,6 +113,8 @@ pub struct Lobby {
     next_local: u64,
     /// Lightyear rooms no longer used, to use again (there are only `u16::MAX` of them).
     free_net: Vec<RoomId>,
+    /// Lightyear rooms a client has just left, still sent to them a moment (`Linger`).
+    lingering: Vec<Linger>,
     /// The browser's list changed since it was last sent.
     list_changed: bool,
 }
@@ -419,6 +435,8 @@ struct Ctx<'w, 's> {
     timeline: Res<'w, LocalTimeline>,
     players: Query<'w, 's, (Entity, &'static ControlledBy, &'static Pos, &'static ClassId), With<PlayerId>>,
     projectiles: Query<'w, 's, (Entity, &'static InRoom), With<Projectile>>,
+    /// Everything in a room: its fighters, monsters, decoys, shots, effects, pickups, gates.
+    in_rooms: Query<'w, 's, (Entity, &'static InRoom)>,
     zombies: Query<'w, 's, &'static InRoom, With<crate::Zombie>>,
     senders: Query<'w, 's, &'static mut MessageSender<LobbyEvent>>,
 }
@@ -936,7 +954,7 @@ fn join(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity, key: RoomKey) -> Result<
     guest.zombie_kills = 0;
     guest.satchel = Satchel { gold: gold.unwrap_or_default(), ..default() };
     info!(room = key.0, guest = guest.id, "joined a room");
-    ctx.commands.entity(link).insert(Rooms::single(net));
+    ctx.commands.entity(link).insert(lobby.nets_of(link, Some(net)));
     enter_arena(lobby, ctx, link);
     Ok(())
 }
@@ -971,9 +989,12 @@ fn leave(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity) -> bool {
     if let Some(player) = ctx.player_of(link) {
         ctx.commands.entity(player).try_despawn();
     }
-    ctx.commands.entity(link).try_remove::<Rooms>();
+    // Still sent the room's news a moment: what goes as they leave goes from their screen too.
+    let until = ctx.now() + LINGER_TICKS;
     lobby.list_changed = true;
     let Some(room) = lobby.rooms.get_mut(&key) else { return true };
+    lobby.lingering.push(Linger { link: Some(link), net: room.net, until });
+    let room = lobby.rooms.get_mut(&key).expect("there");
     room.members.retain(|m| *m != link);
     room.changed = true;
     info!(room = key.0, guest = id, "left a room");
@@ -981,10 +1002,15 @@ fn leave(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity) -> bool {
         None => {
             let mut room = lobby.rooms.remove(&key).expect("there");
             room.clear_things(&mut ctx.commands);
+            // And whatever else was in it: monsters, decoys, shots still flying, effects.
+            for (thing, _) in ctx.in_rooms.iter().filter(|(_, r)| r.key == key) {
+                ctx.commands.entity(thing).try_despawn();
+            }
             if let Some(run) = room.run.as_mut() {
                 run.clear_chests(&mut ctx.commands);
             }
-            lobby.free_net.push(room.net);
+            // Free again once no one's sent its news any more.
+            lobby.lingering.push(Linger { link: None, net: room.net, until: until + 1 });
             info!(room = key.0, "room closed");
         }
         Some(next) if room.leader == link => room.leader = *next,
@@ -1111,6 +1137,39 @@ fn send_updates(mut lobby: ResMut<Lobby>, mut list_sent_at: Local<Option<Duratio
         let browsing: Vec<Entity> = lobby.guests.iter().filter(|(_, g)| g.room.is_none()).map(|(link, _)| *link).collect();
         for link in browsing {
             ctx.send(link, LobbyEvent::RoomList(list.clone()));
+        }
+    }
+}
+
+impl Lobby {
+    /// The lightyear rooms `link` is sent: the room they're in (`now`, if it's just been decided)
+    /// and any they've just left (`Linger`).
+    fn nets_of(&self, link: Entity, now: Option<RoomId>) -> Rooms {
+        let current = now.or_else(|| self.guests.get(&link).and_then(|g| g.room).and_then(|key| self.rooms.get(&key)).map(|room| room.net));
+        Rooms::from(current.into_iter().chain(self.lingering.iter().filter(|l| l.link == Some(link)).map(|l| l.net)))
+    }
+}
+
+/// The rooms clients left a moment ago stop being sent to them, and closed ones are free to use
+/// again (`Linger`).
+fn end_lingering(mut commands: Commands, timeline: Res<LocalTimeline>, mut lobby: ResMut<Lobby>) {
+    let now = timeline.tick().0;
+    if lobby.lingering.iter().all(|l| now < l.until) {
+        return;
+    }
+    let (done, still): (Vec<Linger>, Vec<Linger>) = std::mem::take(&mut lobby.lingering).into_iter().partition(|l| now >= l.until);
+    lobby.lingering = still;
+    for linger in done {
+        match linger.link {
+            Some(link) => {
+                let nets = lobby.nets_of(link, None);
+                if nets.rooms().next().is_some() {
+                    commands.entity(link).try_insert(nets);
+                } else {
+                    commands.entity(link).try_remove::<Rooms>();
+                }
+            }
+            None => lobby.free_net.push(linger.net),
         }
     }
 }
