@@ -33,6 +33,8 @@ pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
+        app.add_observer(forget_body);
+        app.add_observer(strike_home);
         app.add_plugins((
             arena::ArenaPlugin,
             crate::camera::CameraPlugin,
@@ -50,7 +52,7 @@ impl Plugin for RenderPlugin {
             crate::tooltip::TooltipPlugin,
             crate::practice::PracticePlugin,
         ));
-        app.add_plugins(crate::waygates::WaygatesPlugin);
+        app.add_plugins((crate::waygates::WaygatesPlugin, crate::scoreboard::ScoreboardPlugin));
         app.insert_resource(ControlsOpen(load_setting(CONTROLS_KEY).as_deref() == Some("open")));
         app.add_systems(Startup, setup_scene);
         // Right after the network's updates are in, before anything this frame reads positions.
@@ -64,7 +66,7 @@ impl Plugin for RenderPlugin {
             (
                 (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
                 (add_visuals, sync_transforms).chain().before(crate::rig::Posing),
-                (fly_shots, crate::rig::empty_hands).chain().after(crate::rig::Posing),
+                (fly_shots, fade_wakes, fly_impacts, crate::rig::empty_hands).chain().after(crate::rig::Posing),
                 (show_novas, grow_bursts, end_fleeting, show_frost),
                 align_to_world.after(crate::rig::Posing).after(fly_shots),
                 toggle_range_circle,
@@ -84,6 +86,8 @@ pub(crate) enum Relation {
     You,
     Ally,
     Enemy,
+    /// A zombie: a foe to everyone, but no player.
+    Monster,
 }
 
 impl Relation {
@@ -101,6 +105,7 @@ impl Relation {
             Self::You => palette::YOU,
             Self::Ally => palette::ALLY,
             Self::Enemy => palette::ENEMY,
+            Self::Monster => palette::MONSTER,
         }
     }
 }
@@ -121,8 +126,13 @@ pub(crate) struct Visuals {
     /// Per class and shot (auto-attack: false, Q: true).
     projectiles: HashMap<(ClassId, Option<AbilitySlot>), arena::ShotLook<Handle<Mesh>>>,
     shot_tip: Handle<Mesh>,
-    wind: Handle<Mesh>,
+    /// A piece of a thrown spear's wake.
+    pub(super) wake: Handle<Mesh>,
+    /// Deadeye's light on a primed javelin in flight.
+    primed_aura: Handle<Mesh>,
     spear_shadow: Handle<Mesh>,
+    /// A bit of a spear's impact: its flash, a splinter.
+    impact: Handle<Mesh>,
     /// Per owner (`None` for looks that are the same for everyone: all but bodies, so a hit
     /// flashes just that fighter) and look.
     materials: HashMap<(Option<PeerId>, Look), Handle<StandardMaterial>>,
@@ -141,10 +151,12 @@ pub(crate) enum Look {
     Spirit,
     /// Plain, for meshes that carry their own colors (a thrown javelin).
     Plain,
-    /// The faint white wind behind a thrown spear.
+    /// The faint white wind a thrown spear leaves behind (its wake).
     Wind,
     /// The white glow on a thrown spear's point.
     Spark,
+    /// Deadeye's pale light on a primed javelin.
+    Deadeye,
     /// The faint dark streak on the ground under a thrown spear.
     Shadow,
     /// The faint circle at the edge of your auto-attack's range.
@@ -179,8 +191,9 @@ impl Visuals {
                     Look::Aura => arena::translucent(palette::FROST_GLOW, 0.35, 2.0),
                     Look::Spirit => arena::glow(palette::SPIRIT, 6.0),
                     Look::Plain => arena::matte(Color::WHITE),
-                    Look::Wind => arena::translucent(Color::WHITE, 0.6, 1.5),
+                    Look::Wind => arena::translucent(Color::WHITE, 0.4, 1.0),
                     Look::Spark => arena::glow(Color::WHITE, 5.0),
+                    Look::Deadeye => arena::glow(palette::DEADEYE, 9.0),
                     Look::Shadow => arena::translucent(palette::INK, 0.4, 0.0),
                     Look::Range => arena::translucent(Color::WHITE, 0.2, 1.0),
                     Look::Frost => arena::translucent(palette::ICE, 0.45, 1.6),
@@ -188,6 +201,14 @@ impl Visuals {
                 })
             })
             .clone()
+    }
+}
+
+/// A fighter gone: its body's material goes from `Visuals` too (fighters no client controls, such
+/// as zombies, come and go with new ids all match long). One still in use stays alive in its user.
+fn forget_body(trigger: On<Remove, PlayerId>, players: Query<&PlayerId>, mut visuals: ResMut<Visuals>) {
+    if let Ok(id) = players.get(trigger.entity) {
+        visuals.materials.remove(&(Some(id.0), Look::Body));
     }
 }
 
@@ -242,8 +263,10 @@ fn setup_scene(
             })
             .collect(),
         shot_tip: meshes.add(arena::shot_tip_mesh()),
-        wind: meshes.add(arena::wind_mesh()),
+        wake: meshes.add(arena::wake_mesh()),
+        primed_aura: meshes.add(arena::primed_spear_aura()),
         spear_shadow: meshes.add(arena::spear_shadow_mesh()),
+        impact: meshes.add(Sphere::new(1.0).mesh().ico(1).unwrap()),
         materials: HashMap::default(),
     });
     commands
@@ -254,9 +277,9 @@ fn setup_scene(
                 .spawn((crate::esc_menu::HomeButton, HudButton, button_fill(palette::ui::PANEL), home, BorderColor::all(palette::ui::MUTED.with_alpha(0.5))))
                 .with_children(|button| pixel_art(button, HOUSE, 2.0, palette::ui::TEXT));
             corner.spawn((Status, ui_text("connecting...", 12.0, palette::ui::TEXT)));
-            let chevron = corner.spawn(chevron(false)).id();
+            let sign = corner.spawn(fold_sign(false, HUD_FOLD_SIGN, palette::ui::MUTED)).id();
             let label = corner.spawn(ui_text("Controls", 12.0, palette::ui::MUTED)).id();
-            corner.spawn((ControlsHeader { chevron }, fold_header())).add_children(&[chevron, label]);
+            corner.spawn((ControlsHeader { sign }, fold_header())).add_children(&[sign, label]);
             // Two columns: the keys, as wide as the widest, then what they do, all left-aligned.
             corner.spawn((
                 KeyHints,
@@ -357,12 +380,14 @@ fn add_visuals(
             let material = visuals.material(&mut materials, projectile.owner, Look::Aura);
             shot.with_child((Mesh3d(aura), MeshMaterial3d(material)));
         }
+        // A primed javelin (Deadeye's sure crit) flies lit as it was held, dripping its light.
+        if thrown && projectile.crit {
+            let light = visuals.material(&mut materials, projectile.owner, Look::Deadeye);
+            shot.insert(crate::rig::ShotDrips::default()).with_child((Mesh3d(visuals.primed_aura.clone()), MeshMaterial3d(light), NotShadowCaster));
+        }
         if thrown {
-            let material = visuals.material(&mut materials, projectile.owner, Look::Wind);
-            // No length yet: it grows as the spear flies.
-            let wind = Transform::from_xyz(-WIND_FRONT, 0.0, 0.0).with_scale(Vec3::new(0.0, 1.0, 1.0));
-            let wind = shot.commands().spawn((Mesh3d(visuals.wind.clone()), MeshMaterial3d(material), wind, NotShadowCaster)).id();
-            shot.add_child(wind).insert(Thrown { wind, launch: None, length: default() });
+            let wake = visuals.material(&mut materials, projectile.owner, Look::Wind);
+            shot.insert(Thrown { launch: None, wake, wake_at: None });
             // Its only shadow is the one straight under it, on its line: where it really is (the
             // sun's would fall meters off to the side), so none of it casts one, its point's spark
             // and its wind neither.
@@ -398,7 +423,8 @@ fn mark_relations(
     let my_team = me.single().ok().copied();
     for (player, is_me, team, relation) in &players {
         let allied = my_team.zip(team).is_some_and(|(mine, theirs)| mine.allied(*theirs));
-        let now = Relation::of(is_me, allied);
+        let monster = team.is_some_and(|team| team.0 == arena_shared::rooms::ZOMBIES);
+        let now = if monster { Relation::Monster } else { Relation::of(is_me, allied) };
         if relation != Some(&now) {
             commands.entity(player).insert(now);
         }

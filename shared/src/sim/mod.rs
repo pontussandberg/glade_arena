@@ -255,7 +255,7 @@ mod tests {
         let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some()) else { return };
         let attack = quickened(class);
         let (period, windup) = (attack.period_ticks(1.0), attack.windup_ticks(1.0));
-        let mut swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false };
+        let mut swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false };
         assert_eq!(swing.ready_at(&attack), 10 + period);
         // As the server does when the swing lands.
         swing.hastened = true;
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn projectile_expires_at_its_range_and_at_walls() {
-        let proj = Projectile { owner: PeerId::Netcode(1), class: shooter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 5, ability: None };
+        let proj = Projectile { owner: PeerId::Netcode(1), class: shooter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false };
         let lifetime = shooter().def().shot(None).unwrap().lifetime_ticks();
         assert!(!projectile_expired(map(), Vec2::ZERO, &proj, 5 + lifetime - 1));
         assert!(projectile_expired(map(), Vec2::ZERO, &proj, 5 + lifetime));
@@ -363,9 +363,9 @@ mod tests {
         class.def().ability(Q).unwrap()
     }
 
-    /// The first class whose Q is a thrown projectile / a dash.
-    fn thrower() -> ClassId {
-        ClassId::all().find(|c| matches!(q(*c).kind, AbilityKind::Projectile(_))).unwrap()
+    /// The first class whose Q is a prime / a dash.
+    fn primer() -> ClassId {
+        ClassId::playable().find(|c| matches!(q(*c).kind, AbilityKind::Prime(_))).unwrap()
     }
     fn dasher() -> ClassId {
         ClassId::all().find(|c| matches!(q(*c).kind, AbilityKind::Dash(_))).unwrap()
@@ -416,23 +416,8 @@ mod tests {
     }
 
     #[test]
-    fn thrown_ability_goes_off_at_once_then_waits_for_its_cooldown() {
-        let class = thrower();
-        let (state, thrown) = step_kit(10, class, Vec2::ZERO, &press_q(Vec2::X), &default(), default());
-        let Some(Cast::Throw(projectile)) = thrown else { panic!("thrown the tick Q is pressed") };
-        assert!(projectile.ability == Some(Q) && projectile.spawn_tick == 10);
-        assert_eq!(state.cooldowns.used_at(Q), Some(10));
-        let cooldown = q(class).cooldown_ticks;
-        let again = |tick| step_kit(tick, class, Vec2::ZERO, &press_q(Vec2::X), &default(), state).1;
-        assert!(again(10 + cooldown - 1).is_none(), "used again during its cooldown");
-        assert!(again(10 + cooldown).is_some());
-        // Its own speed, separate from the auto-attack's.
-        assert_ne!(class.def().shot(Some(Q)), class.def().shot(None));
-    }
-
-    #[test]
     fn with_no_cooldown_an_ability_still_waits_for_the_global_cooldown() {
-        let class = thrower();
+        let class = dasher();
         assert!(q(class).global_cooldown);
         let free = Kit { cooldowns: Cooldowns { free: true, ..default() }, ..default() };
         let (state, thrown) = step_kit(10, class, Vec2::ZERO, &press_q(Vec2::X), &default(), free);
@@ -445,7 +430,7 @@ mod tests {
 
     #[test]
     fn an_empty_slot_or_a_missing_aim_casts_nothing() {
-        let class = thrower();
+        let class = dasher();
         let empty = AbilitySlot(class.def().abilities.len() as u8);
         assert!(step_kit(10, class, Vec2::ZERO, &press(empty, Vec2::X), &default(), default()).1.is_none(), "cast from an empty slot");
         assert!(step_kit(10, class, Vec2::ZERO, &press_q(Vec2::ZERO), &default(), default()).1.is_none(), "cast without an aim");
@@ -459,10 +444,29 @@ mod tests {
         let orders: Vec<_> = input.casts().collect();
         assert_eq!(orders, [CastOrder { slot: Q, aim: -Vec2::X }, CastOrder { slot: AbilitySlot(1), aim: Vec2::Y }], "pressed again, Q kept its place and took the new aim");
         // A press the class has no ability for doesn't keep the one before it from going off.
-        let class = thrower();
+        let class = primer();
         let mut both = press(AbilitySlot(class.def().abilities.len() as u8), Vec2::X);
         both.order_cast(Q, Vec2::X);
-        assert!(matches!(step_kit(10, class, Vec2::ZERO, &both, &default(), default()).1, Some(Cast::Throw(_))), "Q lost to a later press");
+        assert!(matches!(step_kit(10, class, Vec2::ZERO, &both, &default(), default()).1, Some(Cast::Prime { .. })), "Q lost to a later press");
+    }
+
+    #[test]
+    fn a_prime_needs_no_aim_and_readies_one_quicker_attack() {
+        let class = primer();
+        let Some(Cast::Prime { slot, prime }) = step_kit(10, class, Vec2::ZERO, &press_q(Vec2::ZERO), &default(), default()).1 else {
+            panic!("no prime the tick Q is pressed")
+        };
+        let attack = &class.def().attack;
+        let fire = aim(Vec2::X, true);
+        let primed = AttackState { primed: Some((slot, prime.attack_speed)), ..default() };
+        let plain = start_attack(20, class, &fire, AttackState::default()).swing.unwrap();
+        let state = start_attack(20, class, &fire, primed);
+        let swing = state.swing.unwrap();
+        assert!(swing.primed && swing.windup_ticks(attack) < plain.windup_ticks(attack), "not quicker");
+        // Cancelled, it stays ready; gone off, it's used up.
+        assert_eq!(cancel_attack(state).primed, primed.primed);
+        let (gone, released) = release_attack(swing.releases_at(attack), PeerId::Netcode(1), class, Vec2::ZERO, state);
+        assert!(released.is_some() && gone.primed.is_none(), "still primed after it went off");
     }
 
     /// A dash from `from` toward `dir` run to its end: where it ended, and how many ticks it moved.
@@ -632,9 +636,9 @@ mod tests {
     #[test]
     fn only_auto_attacks_chill() {
         let class = chiller();
-        let shot = Projectile { owner: PeerId::Netcode(1), class, origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 1, ability: None };
+        let shot = Projectile { owner: PeerId::Netcode(1), class, origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 1, ability: None, crit: false };
         assert_eq!(projectile_chill(&shot), class.def().attack.chill);
-        assert!(projectile_chill(&Projectile { class: thrower(), ability: Some(Q), ..shot }).is_none());
+        assert!(projectile_chill(&Projectile { class: primer(), ability: Some(Q), ..shot }).is_none());
     }
 
     #[test]

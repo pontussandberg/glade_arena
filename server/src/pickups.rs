@@ -25,7 +25,7 @@ pub(super) fn take_pickups(
     timeline: Res<LocalTimeline>,
     mut pickups: Query<(&mut Pickup, &InRoom)>,
     // Not dummies: one standing on a pickup's spot would take it every time it came back.
-    mut players: Query<(&PlayerId, &ClassId, &Pos, &mut Health, &mut Hasted, &mut RecentHits, &InRoom), (InPlay, Without<Dummy>)>,
+    mut players: Query<(&PlayerId, &ClassId, &Pos, &mut Health, &mut Hasted, &mut RecentHits, &InRoom), (InPlay, Without<Dummy>, Without<Zombie>)>,
 ) {
     let now = timeline.tick().0;
     for (mut pickup, room) in &mut pickups {

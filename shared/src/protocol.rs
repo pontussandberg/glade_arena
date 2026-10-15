@@ -18,7 +18,7 @@ use crate::rooms::{LeaveReason, Mode, NO_TEAM, RoomKey, RoomSummary, RoomView};
 pub struct PlayerId(pub PeerId);
 
 /// Which side a player fights on: `rooms::TEAM_A` or `rooms::TEAM_B`, or `rooms::NO_TEAM` in
-/// free-for-all. Allies can't hurt each other.
+/// free-for-all; zombies are all `rooms::ZOMBIES`. Allies can't hurt each other.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
 pub struct Team(pub u8);
 
@@ -103,6 +103,10 @@ pub struct AttackState {
     /// An attack started by this tick is quick (`FollowUp`; `None`: not armed). Used up when an
     /// attack goes off, not when one is cancelled.
     pub quick_until: Option<u32>,
+    /// The next attack is primed (`abilities::prime`) by the ability in this slot: sure to crit,
+    /// and this much more attack speed. Used up when a primed attack goes off, not when one is
+    /// cancelled.
+    pub primed: Option<(AbilitySlot, f32)>,
 }
 
 impl AttackState {
@@ -115,6 +119,12 @@ impl AttackState {
     /// fractional tick)?
     pub fn empowered_at(&self, now: f32) -> bool {
         self.quick_at(now) || self.swing.is_some_and(|swing| swing.quick)
+    }
+
+    /// Is the `follow_up` still to be used at `now` (a fractional tick): armed, or its empowered
+    /// attack winding up? Not once that attack has gone off, hit or miss.
+    pub fn armed_at(&self, now: f32) -> bool {
+        self.quick_at(now) || self.winding_up().is_some_and(|swing| swing.quick)
     }
 
     /// Has the attack in progress gone off yet?
@@ -139,6 +149,11 @@ pub struct Swing {
     /// Its hit armed the `follow_up`: the rest of its backswing runs at that attack speed too,
     /// so the empowered attack can come that much sooner.
     pub hastened: bool,
+    /// Attack speed on top, as a share of the normal (0.1 = 10% more), from what the attacker
+    /// had going when it started (a `Frenzy`, a prime), kept for the whole attack.
+    pub haste: f32,
+    /// Primed (`AttackState::primed`): sure to crit.
+    pub primed: bool,
 }
 
 impl Swing {
@@ -147,7 +162,7 @@ impl Swing {
 
     /// How many times the normal attack speed it has.
     pub fn speed(&self, attack: &AttackDef) -> f32 {
-        attack.speed(self.quick)
+        attack.speed(self.quick) + self.haste
     }
 
     /// How long it winds up.
@@ -167,14 +182,18 @@ impl Swing {
 
     /// How many times the normal attack speed its backswing has: hastened, or quick all through.
     pub fn backswing_speed(&self, attack: &AttackDef) -> f32 {
-        attack.speed(self.quick || self.hastened)
+        attack.speed(self.quick || self.hastened) + self.haste
     }
 
     /// The tick the next attack may start: after its backswing, sped up if its hit armed the
     /// `follow_up` (a quick one's already is).
     pub fn ready_at(&self, attack: &AttackDef) -> u32 {
         let backswing = self.ticks(attack) - self.windup_ticks(attack);
-        let backswing = if self.hastened && !self.quick { (backswing as f32 / attack.speed(true)).round() as u32 } else { backswing };
+        let backswing = if self.hastened && !self.quick {
+            (backswing as f32 * self.speed(attack) / self.backswing_speed(attack)).round() as u32
+        } else {
+            backswing
+        };
         self.releases_at(attack) + backswing.max(1)
     }
 
@@ -279,6 +298,35 @@ impl Hasted {
     }
 }
 
+/// A rush of speed from killing zombies: walking and attacking `strength` faster (0.1 = 10%)
+/// from `from`, fading linearly to nothing at `until` (ticks). Each zombie a fighter kills in a
+/// match starts it again, stronger by the zombies killed before (`FRENZY_PER_KILL` each; counted
+/// in `Member::zombie_kills`). Server-authoritative and replicated: an attack's speed is fixed as it
+/// starts (`Swing::haste`), and the action bar shows it.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
+pub struct Frenzy {
+    pub from: u32,
+    pub until: u32,
+    pub strength: f32,
+}
+
+impl Frenzy {
+    /// The frenzy from a zombie kill at `now`, after `kills` others this match, for a fighter
+    /// that fights in `melee` or not (a melee fighter's lasts longer).
+    pub fn after_kill(now: u32, kills: u32, melee: bool) -> Frenzy {
+        let ticks = if melee { crate::config::FRENZY_MELEE_TICKS } else { crate::config::FRENZY_RANGED_TICKS };
+        let strength = crate::config::FRENZY_BASE + crate::config::FRENZY_PER_KILL * kills as f32;
+        Frenzy { from: now, until: now + ticks, strength }
+    }
+
+    /// How much faster it makes its fighter at `tick` (a fractional tick, for drawing in between):
+    /// 0 once it's faded.
+    pub fn at(&self, tick: f32) -> f32 {
+        let (from, until) = (self.from as f32, self.until as f32);
+        if tick < from || tick >= until { 0.0 } else { self.strength * (until - tick) / (until - from) }
+    }
+}
+
 /// What a pickup does to whoever takes it.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
 pub enum PickupKind {
@@ -342,6 +390,8 @@ pub struct Projectile {
     pub spawn_tick: u32,
     /// Thrown with the ability in this slot, rather than the auto-attack (`None`).
     pub ability: Option<AbilitySlot>,
+    /// A primed auto-attack's (`AttackState::primed`): sure to crit. Set by the server.
+    pub crit: bool,
 }
 
 impl Projectile {
@@ -529,6 +579,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<Chilled>().replicate();
         app.component::<RecentHits>().replicate();
         app.component::<Hasted>().replicate();
+        app.component::<Frenzy>().replicate();
         app.component::<Pickup>().replicate();
         app.component::<Waygate>().replicate();
         // Others' fighters are interpolated (smooth, a little in the past); our own isn't: it's
@@ -540,5 +591,34 @@ impl Plugin for ProtocolPlugin {
         app.component::<Dashing>().replicate().add_interpolation_with(hold);
         // Projectiles fly on rails: clients draw them from this alone (`sim::projectile_pos`).
         app.component::<Projectile>().replicate();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{FRENZY_MELEE_TICKS, FRENZY_RANGED_TICKS};
+
+    #[test]
+    fn frenzy_grows_with_kills_and_fades() {
+        let first = Frenzy::after_kill(100, 0, false);
+        assert!((first.strength - 0.1).abs() < 1e-6);
+        // After ten kills, the next one's is three times the first.
+        assert!((Frenzy::after_kill(100, 10, false).strength - 0.3).abs() < 1e-6);
+        assert_eq!(first.until - first.from, FRENZY_RANGED_TICKS);
+        assert_eq!(Frenzy::after_kill(100, 0, true).until - 100, FRENZY_MELEE_TICKS);
+        let half = 100.0 + FRENZY_RANGED_TICKS as f32 / 2.0;
+        assert!((first.at(half) - 0.05).abs() < 1e-6, "fades linearly");
+        assert_eq!(first.at(99.0), 0.0);
+        assert_eq!(first.at(first.until as f32), 0.0);
+    }
+
+    #[test]
+    fn a_hasted_swing_is_quicker() {
+        let attack = &crate::classes::ClassId(0).def().attack;
+        let plain = Swing { started_at: 0, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false };
+        let hasted = Swing { haste: 0.3, ..plain };
+        assert!(hasted.windup_ticks(attack) < plain.windup_ticks(attack));
+        assert!(hasted.ready_at(attack) < plain.ready_at(attack));
     }
 }

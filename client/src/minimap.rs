@@ -1,7 +1,8 @@
 //! The minimap in the bottom-right corner: our room's map drawn tile by tile from the shared map
 //! (so it's exactly what blocks movement), every fighter as a dot in its ring color, every
 //! pickup as its icon while it's lying there or the seconds until it's back, every waygate end
-//! as a ring (dim while it's closed), and a frame showing what the camera sees. Drawn again when
+//! as a ring (dim while it's closed), where we're walking to as a small ring in our color, and
+//! a frame showing what the camera sees. Drawn again when
 //! the map changes.
 
 use arena_shared::config::TICK_HZ;
@@ -13,10 +14,11 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::Me;
-use crate::camera::CameraPlaced;
+use crate::camera::{CameraMode, CameraPlaced};
 use crate::feedback::AttackClock;
 use crate::arena::{self, palette};
-use crate::render::{Relation, ground_at, shown, ui_text};
+use crate::render::{HudButton, Relation, button_fill, clicked, ground_at, key_chip, pixel_art, shown, ui_text};
+use crate::tooltip::{Side, hover_shows, tip, tip_text, tip_title};
 use crate::rooms::CurrentMap;
 
 pub struct MinimapPlugin;
@@ -33,6 +35,8 @@ impl Plugin for MinimapPlugin {
                 (spawn_markers, update_markers).chain(),
                 (spawn_gate_marks, update_gate_marks).chain(),
                 frame_view.in_set(CameraPlaced),
+                (click_lock, show_lock).chain(),
+                (left_fullscreen, click_fullscreen, show_fullscreen).chain(),
             ),
         );
     }
@@ -44,23 +48,68 @@ const ROOM: Vec2 = Vec2::new(384.0, 264.0);
 /// waygate end's ring.
 const MARGIN: f32 = 12.0;
 const DOT: f32 = 12.0;
+/// A monster's (a zombie's) dot: smaller, so players stand out.
+const MONSTER_DOT: f32 = 7.0;
+/// The frame round the picture.
+const FRAME: f32 = 2.0;
 const MARKER: f32 = 22.0;
 const MARKER_TEXT: f32 = 14.0;
 const GATE_MARK: f32 = 14.0;
 
-/// The minimap's picture; dots and the view frame are its children.
+/// The minimap's picture; dots and the view frame are its children. A right click on it walks
+/// there (`render::read_local_input`).
 #[derive(Component)]
-struct Minimap;
+pub(crate) struct Minimap;
 
-/// A fighter's dot.
+/// A fighter's dot, `size` across (a monster's smaller).
 #[derive(Component)]
 struct Dot {
     player: Entity,
+    size: f32,
 }
 
 /// What the camera sees.
 #[derive(Component)]
 struct ViewFrame;
+
+/// Where we're walking to (`DesiredInput::move_to`), shown with the ground's marker
+/// (`render::input::show_destination`).
+#[derive(Component)]
+pub(crate) struct DestinationDot;
+
+/// The destination's ring's size.
+const DESTINATION: f32 = 9.0;
+
+/// The camera's lock, just left of the minimap's bottom-left corner: clicking it (or Y) locks the
+/// camera on your fighter or unlocks it (`CameraMode::unlocked`). Its padlock is drawn in `art`.
+#[derive(Component)]
+struct CameraLock {
+    art: Entity,
+}
+
+/// The lock's size (as big as the passive's icon) and its gap from the minimap.
+const LOCK: f32 = 46.0;
+const LOCK_GAP: f32 = 8.0;
+/// The padlock, old-school pixel art: shut, and open (its shackle swung up off the right).
+const PADLOCK: [&[&str]; 2] = [
+    &["..###..", ".#...#.", ".#...#.", "#######", "###.###", "###.###", "#######"],
+    &["..###..", ".#...#.", ".#.....", "#######", "###.###", "###.###", "#######"],
+];
+const PADLOCK_PIXEL: f32 = 3.0;
+
+/// The full screen button, just left of the camera's lock: clicking it fills the screen with the
+/// game, or gives it back. Its picture is drawn in `art`.
+#[derive(Component)]
+struct FullscreenButton {
+    art: Entity,
+}
+
+/// Its picture, old-school pixel art: four corners pointing out (to fill the screen) or in (to
+/// leave it).
+const FULLSCREEN_ART: [&[&str]; 2] = [
+    &["###.###", "#.....#", "#.....#", ".......", "#.....#", "#.....#", "###.###"],
+    &[".#...#.", ".#...#.", "##...##", ".......", "##...##", ".#...#.", ".#...#."],
+];
 
 /// A pickup's marker (this entity, a round chip) and its text, and what it shows now: the
 /// pickup's icon (`None`: it's lying there), else the seconds until it's back.
@@ -81,6 +130,18 @@ fn scale(map: &Map) -> f32 {
 fn on_minimap(map: &Map, p: Vec2) -> Vec2 {
     let half = map.half_extents();
     (Vec2::new(p.x + half.x, half.y - p.y) * scale(map)).round()
+}
+
+/// Where on `map` the screen point `at` (physical pixels) is, if it's on the minimap's picture
+/// (`node`, at `transform`): `on_minimap` the other way.
+pub(crate) fn ground_on_minimap(node: &ComputedNode, transform: UiGlobalTransform, map: &Map, at: Vec2) -> Option<Vec2> {
+    let from_corner = (node.normalize_point(transform, at)? + 0.5) * node.size() - node.border().min_inset;
+    let on_picture = from_corner * node.inverse_scale_factor;
+    if on_picture.cmplt(Vec2::ZERO).any() || on_picture.cmpgt(picture_size(map)).any() {
+        return None;
+    }
+    let (half, tiles) = (map.half_extents(), on_picture / scale(map));
+    Some(Vec2::new(tiles.x - half.x, half.y - tiles.y))
 }
 
 /// The minimap's size in pixels.
@@ -121,7 +182,7 @@ fn spawn_minimap(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 right: px(MARGIN),
                 bottom: px(MARGIN),
-                border: UiRect::all(px(2.0)),
+                border: UiRect::all(px(FRAME)),
                 ..default()
             },
             BorderColor::all(palette::ui::PANEL),
@@ -131,16 +192,147 @@ fn spawn_minimap(mut commands: Commands) {
             ViewFrame,
             Node { position_type: PositionType::Absolute, border: UiRect::all(px(1.0)), ..default() },
             BorderColor::all(palette::ui::TEXT),
-        ));
+        ))
+        .with_child((
+            DestinationDot,
+            Node {
+                position_type: PositionType::Absolute,
+                width: px(DESTINATION),
+                height: px(DESTINATION),
+                border: UiRect::all(px(2.0)),
+                border_radius: BorderRadius::MAX,
+                ..default()
+            },
+            BorderColor::all(palette::YOU),
+            Visibility::Hidden,
+        ))
+        .with_children(|minimap| {
+            let tip = minimap
+                .spawn(tip(Side::Above, 0.0, 220.0))
+                .with_children(|tip| {
+                    tip.spawn(tip_title("Camera"));
+                    tip.spawn(tip_text("Locked, it follows you. Unlocked, it stays put: move the cursor to the screen's edges to look around."));
+                })
+                .id();
+            let art = minimap.spawn(Node { width: percent(100.0), height: percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }).id();
+            let full_art = minimap.spawn(Node { width: percent(100.0), height: percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }).id();
+            minimap
+                .spawn((
+                    FullscreenButton { art: full_art },
+                    HudButton,
+                    button_fill(palette::ui::PANEL),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(-2.0 * (LOCK + LOCK_GAP)),
+                        bottom: px(0.0),
+                        width: px(LOCK),
+                        height: px(LOCK),
+                        border: UiRect::all(px(2.0)),
+                        ..default()
+                    },
+                    BorderColor::all(palette::ui::MUTED),
+                ))
+                .add_child(full_art);
+            minimap
+                .spawn((
+                    CameraLock { art },
+                    HudButton,
+                    button_fill(palette::ui::PANEL),
+                    hover_shows(tip),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(-(LOCK + LOCK_GAP)),
+                        bottom: px(0.0),
+                        width: px(LOCK),
+                        height: px(LOCK),
+                        border: UiRect::all(px(2.0)),
+                        ..default()
+                    },
+                    BorderColor::all(palette::ui::MUTED),
+                ))
+                .add_children(&[art, tip])
+                .with_child((
+                    Node { position_type: PositionType::Absolute, left: px(2.0), top: px(1.0), ..default() },
+                    children![key_chip("Y", 9.0, palette::ui::TEXT, Color::NONE)],
+                ));
+        });
 }
 
-/// The map, drawn in the minimap at the size it takes there.
+/// A click on the full screen button fills the screen with the game, or gives it back.
+fn click_fullscreen(button: Single<Ref<Interaction>, With<FullscreenButton>>, mut window: Single<&mut Window, With<bevy::window::PrimaryWindow>>) {
+    if clicked(button.into_inner()) {
+        window.mode = match window.mode {
+            bevy::window::WindowMode::Windowed => bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Current),
+            _ => bevy::window::WindowMode::Windowed,
+        };
+    }
+}
+
+/// Full screen left by the browser itself (Esc, its own controls) isn't told to the window: once
+/// the page that was full screen no longer is, the window is windowed again. (Going full screen
+/// takes the browser a moment, so a page not full screen yet is left be.)
+fn left_fullscreen(mut window: Single<&mut Window, With<bevy::window::PrimaryWindow>>, mut was_full: Local<bool>) {
+    #[cfg(target_family = "wasm")]
+    {
+        let full = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|document| js_sys::Reflect::get(&document, &"fullscreenElement".into()).ok())
+            .is_some_and(|element| !element.is_null() && !element.is_undefined());
+        if *was_full && !full && window.mode != bevy::window::WindowMode::Windowed {
+            window.mode = bevy::window::WindowMode::Windowed;
+        }
+        *was_full = full;
+    }
+    #[cfg(not(target_family = "wasm"))]
+    let _ = (&mut window, &mut was_full);
+}
+
+/// The full screen button shows which way a click goes: out to full screen, or back in.
+fn show_fullscreen(
+    mut commands: Commands,
+    window: Single<Ref<Window>, With<bevy::window::PrimaryWindow>>,
+    button: Single<Ref<FullscreenButton>>,
+) {
+    if !window.is_changed() && !button.is_added() {
+        return;
+    }
+    let full = window.mode != bevy::window::WindowMode::Windowed;
+    commands.entity(button.art).despawn_children().with_children(|art| pixel_art(art, FULLSCREEN_ART[full as usize], PADLOCK_PIXEL, palette::ui::TEXT));
+}
+
+/// A click on the lock locks or unlocks the camera.
+fn click_lock(lock: Single<Ref<Interaction>, With<CameraLock>>, mut mode: ResMut<CameraMode>) {
+    if clicked(lock.into_inner()) {
+        mode.unlocked = !mode.unlocked;
+    }
+}
+
+/// The lock shows the camera's: shut and plain while it follows you, open and lit while it's
+/// unlocked.
+fn show_lock(mut commands: Commands, mode: Res<CameraMode>, lock: Single<(Ref<CameraLock>, &mut BorderColor)>) {
+    let (lock, mut border) = lock.into_inner();
+    if !mode.is_changed() && !lock.is_added() {
+        return;
+    }
+    let color = if mode.unlocked { palette::ui::ACCENT } else { palette::ui::TEXT };
+    border.set_if_neq(BorderColor::all(if mode.unlocked { palette::ui::ACCENT } else { palette::ui::MUTED }));
+    commands.entity(lock.art).despawn_children().with_children(|art| pixel_art(art, PADLOCK[mode.unlocked as usize], PADLOCK_PIXEL, color));
+}
+
+/// Puts the destination's ring on `at`, on `map`'s minimap.
+pub(crate) fn place_destination(node: &mut Node, map: &Map, at: Vec2) {
+    place(node, map, at, DESTINATION);
+}
+
+/// The map, drawn in the minimap at the size it takes there: the node is that and its frame (a
+/// node's size takes its border in), so the picture is drawn at exactly `picture_size`, as dots,
+/// marks and clicks (`ground_on_minimap`) count on.
 fn draw_map(current: Res<CurrentMap>, mut images: ResMut<Assets<Image>>, minimap: Single<(&mut Node, &mut ImageNode), With<Minimap>>) {
     let map = current.map();
     let (mut node, mut image) = minimap.into_inner();
     let size = picture_size(map);
-    node.width = px(size.x);
-    node.height = px(size.y);
+    node.width = px(size.x + 2.0 * FRAME);
+    node.height = px(size.y + 2.0 * FRAME);
     image.image = images.add(picture(map));
 }
 
@@ -160,16 +352,17 @@ fn place(node: &mut Node, map: &Map, at: Vec2, size: f32) {
 fn spawn_dots(
     mut commands: Commands,
     minimap: Single<Entity, With<Minimap>>,
-    new: Query<(Entity, Has<Me>), (With<PlayerId>, Added<Mesh3d>)>,
+    new: Query<(Entity, &ClassId, Has<Me>), (With<PlayerId>, Added<Mesh3d>)>,
 ) {
-    for (player, is_me) in &new {
+    for (player, class, is_me) in &new {
+        let size = if class.def().playable { DOT } else { MONSTER_DOT };
         let dot = commands
             .spawn((
-                Dot { player },
+                Dot { player, size },
                 Node {
                     position_type: PositionType::Absolute,
-                    width: px(DOT),
-                    height: px(DOT),
+                    width: px(size),
+                    height: px(size),
                     border: UiRect::all(px(1.0)),
                     border_radius: BorderRadius::MAX,
                     ..default()
@@ -182,7 +375,7 @@ fn spawn_dots(
     }
 }
 
-/// A dot is in its fighter's `Relation` color: ours, an ally's or an enemy's.
+/// A dot is in its fighter's `Relation` color: ours, an ally's, an enemy's or a monster's.
 fn color_dots(
     players: Query<&Relation>,
     changed: Query<(), Changed<Relation>>,
@@ -212,7 +405,7 @@ fn place_dots(
             continue;
         };
         visibility.set_if_neq(shown(health.is_none_or(Health::alive)));
-        place(&mut node, current.map(), pos.0, DOT);
+        place(&mut node, current.map(), pos.0, owner.size);
     }
 }
 

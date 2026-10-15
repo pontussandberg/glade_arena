@@ -53,6 +53,8 @@ pub mod render;
 #[cfg(feature = "render")]
 pub mod rig;
 pub mod rooms;
+#[cfg(feature = "render")]
+pub mod scoreboard;
 #[cfg(all(test, feature = "render"))]
 mod preview;
 #[cfg(feature = "render")]
@@ -236,7 +238,8 @@ fn send_commands(
 ) {
     let (Ok(mut sender), false) = (client.single_mut(), me.is_empty()) else {
         *sent = Sent::default();
-        (desired.0.casts, desired.0.fire) = (default(), false);
+        // Nothing carries over to our next fighter: not a destination, not a click.
+        desired.0 = PlayerInput { aim: desired.0.aim, ..default() };
         stop.0 = false;
         return;
     };

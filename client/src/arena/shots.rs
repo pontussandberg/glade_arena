@@ -56,9 +56,6 @@ pub fn shot_look(class: &ClassDef, shot: Shot, ability: bool) -> ShotLook {
             thrown: true,
             ..plain(carried_javelin().rotated_by(ALONG_X), ShotGlow::Weapon)
         },
-        ("javelinist", true) => {
-            ShotLook { thrown: true, ..plain(javelin(Color::WHITE, Color::WHITE, Color::WHITE, Color::WHITE, Color::WHITE).rotated_by(ALONG_X), ShotGlow::Spirit) }
-        }
         ("frost_mage", false) => ShotLook {
             aura: Some(frost_aura(shot.radius)),
             spin: FROSTBOLT_SPIN,
@@ -68,29 +65,32 @@ pub fn shot_look(class: &ClassDef, shot: Shot, ability: bool) -> ShotLook {
     }
 }
 
+/// Deadeye's light on a primed javelin in flight: the held spear's (`spear_aura`), posed as a shot
+/// is (along +X, its point at the origin).
+pub fn primed_spear_aura() -> Mesh {
+    spear_aura().translated_by(Vec3::NEG_Y * GRIP_TO_TIP).rotated_by(ALONG_X)
+}
+
+/// `spear_edge`, on a javelin in flight (posed as `primed_spear_aura` is).
+pub fn shot_spear_edge(t: f32) -> Vec3 {
+    ALONG_X * (spear_edge(t) - Vec3::Y * GRIP_TO_TIP)
+}
+
 /// The white glow on a thrown spear's point: a small bright spark stretched along +X, at the
 /// origin.
 pub fn shot_tip_mesh() -> Mesh {
     ball(0.04).scaled_by(Vec3::new(3.0, 1.0, 1.0))
 }
 
-/// The wind behind a thrown spear: one thin, straight streak, 1 m long along -X from the origin
-/// (stretched to length as it flies), two crossed ribbons so it shows from any angle. It keeps
-/// nearly its width all the way and fades out toward the back.
-pub fn wind_mesh() -> Mesh {
+/// A piece of a thrown spear's wake: a thin line of wind 1 m long along +X from the origin, even
+/// all along (stretched to each piece's length; pieces thin away as they age), two crossed
+/// ribbons so it shows from any angle.
+pub fn wake_mesh() -> Mesh {
     let mut b = FlatMesh::default();
-    // Stations down the streak: how far along it (0..1), its width and opacity there.
-    let stations = [(0.0, 1.0, 0.2), (0.12, 1.0, 1.0), (0.6, 0.8, 0.45), (1.0, 0.5, 0.0)];
     for side in [Vec3::Z, Vec3::Y] {
-        let at = |(t, w, a): (f32, f32, f32)| (Vec3::X * -t, side * 0.022 * w, a);
-        for pair in stations.windows(2) {
-            let ((near, near_half, near_alpha), (far, far_half, far_alpha)) = (at(pair[0]), at(pair[1]));
-            b.tri_faded([near - near_half, far - far_half, near + near_half], [near_alpha, far_alpha, near_alpha]);
-            b.tri_faded([near + near_half, far - far_half, far + far_half], [near_alpha, far_alpha, far_alpha]);
-            // Both faces: it's seen from either side.
-            b.tri_faded([near + near_half, far - far_half, near - near_half], [near_alpha, far_alpha, near_alpha]);
-            b.tri_faded([near + near_half, far + far_half, far - far_half], [near_alpha, far_alpha, far_alpha]);
-        }
+        let half = side * 0.012;
+        b.tri_faded_both([-half, Vec3::X - half, half], [1.0; 3]);
+        b.tri_faded_both([half, Vec3::X - half, Vec3::X + half], [1.0; 3]);
     }
     b.build()
 }

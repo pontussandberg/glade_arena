@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use arena_shared::abilities::AbilityKind;
 use arena_shared::abilities::dash::DashDef;
 use arena_shared::abilities::nova::NovaDef;
-use arena_shared::abilities::throw::Throw;
+use arena_shared::abilities::prime::PrimeDef;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use crate::common::*;
@@ -34,28 +34,38 @@ fn q_kind(class: &str) -> AbilityKind {
     class_id(class).def().ability(Q).expect("no Q").kind
 }
 
-fn spirit_spears(app: &mut App) -> usize {
-    let mut q = app.world_mut().query::<&Projectile>();
-    q.iter(app.world()).filter(|p| p.ability.is_some()).count()
+/// The last hit player `id` took, as `app` has it.
+fn last_hit(app: &mut App, id: u64) -> Option<Hit> {
+    let mut q = app.world_mut().query::<(&PlayerId, &RecentHits)>();
+    q.iter(app.world()).find(|(p, _)| p.0 == peer(id)).and_then(|(_, hits)| hits.0.last().copied())
 }
 
 #[test]
-fn spirit_spear_flies_and_hits() {
+fn deadeye_primes_one_quicker_sure_crit() {
     let mut d = duel(5892, "javelinist", "revenant");
-    let AbilityKind::Projectile(Throw { damage, .. }) = q_kind("javelinist") else { panic!("not a throw") };
-    let full = server_player(&mut d.server, B).1;
+    let AbilityKind::Prime(PrimeDef { attack_speed }) = q_kind("javelinist") else { panic!("not a prime") };
 
     a_uses_q_at_b(&mut d);
     let t0 = Instant::now();
-    d.until(Duration::from_secs(1), "the spear appears on A", |d| spirit_spears(&mut d.a) > 0);
-    println!("spirit spear appeared on A after {:?}", t0.elapsed());
-    assert!(t0.elapsed() < COMMAND_SHOWS_WITHIN, "no windup: the spear should be thrown at once");
-    assert!(attack_state(&mut d.a, A).swing.is_none(), "throwing it shouldn't start an attack");
+    d.until(Duration::from_secs(1), "A sees its attack primed", |d| attack_state(&mut d.a, A).primed.is_some());
+    println!("primed on A after {:?}", t0.elapsed());
+    assert_eq!(attack_state(&mut d.a, A).primed, Some((Q, attack_speed)));
+    assert!(attack_state(&mut d.a, A).swing.is_none(), "priming shouldn't start an attack");
+    let cooldowns = |d: &mut Duel| player::<Cooldowns>(&mut d.server, A).unwrap();
+    assert_eq!(cooldowns(&mut d).cooldown_over_at(Q), 0, "its cooldown started before the attack it readied");
 
-    d.until(Duration::from_secs(2), "the spear hits", |d| server_player(&mut d.server, B).1 == full - damage);
-    // One press, one spear: its cooldown holds.
-    d.run(Duration::from_millis(1000));
-    assert_eq!(server_player(&mut d.server, B).1, full - damage);
+    let aim = sees(&mut d.a, B).unwrap() - sees(&mut d.a, A).unwrap();
+    set_input(&mut d.a, PlayerInput { aim, fire: true, ..default() });
+    d.until(Duration::from_secs(1), "the primed attack starts", |d| attack_state(&mut d.server, A).swing.is_some());
+    let swing = attack_state(&mut d.server, A).swing.unwrap();
+    assert!(swing.primed && (swing.haste - attack_speed).abs() < 1e-6, "the attack isn't primed: {swing:?}");
+    d.until(Duration::from_secs(3), "the javelin hits, a crit", |d| {
+        last_hit(&mut d.server, B).is_some_and(|hit| hit.kind == HitKind::Crit)
+    });
+    assert!(attack_state(&mut d.server, A).primed.is_none(), "still primed after it went off");
+    // Its cooldown runs from the throw.
+    let released = attack_state(&mut d.server, A).released_at.unwrap();
+    assert_eq!(cooldowns(&mut d).used_at(Q), Some(released));
 }
 
 #[test]
@@ -161,4 +171,28 @@ fn frostbolts_slow_what_they_hit() {
     let slowed = chilled(&mut d.server, B);
     assert_eq!((slowed.slow, slowed.slowed.until - slowed.slowed.from), (attack.chill.slow, attack.chill.slow_ticks));
     assert_eq!(slowed.rooted, Span::default(), "a frostbolt shouldn't root");
+}
+
+#[test]
+fn deadeye_pressed_again_calls_it_off() {
+    let mut d = duel(5876, "javelinist", "revenant");
+    a_uses_q_at_b(&mut d);
+    d.until(Duration::from_secs(1), "primed", |d| attack_state(&mut d.server, A).primed.is_some());
+    d.run(Duration::from_millis(100));
+    a_uses_q_at_b(&mut d);
+    d.until(Duration::from_secs(1), "called off", |d| attack_state(&mut d.server, A).primed.is_none());
+    let cooldowns = player::<Cooldowns>(&mut d.server, A).unwrap();
+    assert_eq!(cooldowns.cooldown_over_at(Q), 0, "calling it off started its cooldown");
+    assert_eq!(cooldowns.global_ready_at, 0, "it's off the global cooldown");
+}
+
+#[test]
+fn deadeye_pressed_with_the_click_primes_that_attack() {
+    let mut d = duel(5875, "javelinist", "revenant");
+    let aim = sees(&mut d.a, B).unwrap() - sees(&mut d.a, A).unwrap();
+    let mut input = PlayerInput { aim, fire: true, ..default() };
+    input.order_cast(Q, aim);
+    set_input(&mut d.a, input);
+    d.until(Duration::from_secs(1), "the attack starts", |d| attack_state(&mut d.server, A).swing.is_some());
+    assert!(attack_state(&mut d.server, A).swing.unwrap().primed, "the attack started with Q isn't primed");
 }

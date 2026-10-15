@@ -7,7 +7,7 @@ use arena_shared::protocol::RoomRequest;
 use arena_shared::map::MapId;
 use arena_shared::rooms::{MAX_PER_TEAM, Member, Mode, NO_TEAM, RoomView, TEAMS};
 
-use crate::browser::LobbiesButton;
+use crate::browser::{HeaderFlash, LobbiesOpen};
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::palette;
 use crate::render::{button, clicked, shown, ui_text};
@@ -37,23 +37,34 @@ pub(super) fn show_room(
         panel.spawn(card()).with_children(|card| {
             card.spawn(label("Lobby"));
             card.spawn(ui_text(view.name.clone(), 24.0, palette::ui::TEXT));
-            let (line, color) = match (view.started, leading) {
-                (true, _) => ("Match in progress", ACCENT),
-                (false, true) => ("Start when you're ready", palette::ui::MUTED),
-                (false, false) => ("Waiting for the leader", palette::ui::MUTED),
+            // The leader needs no telling: the start button is theirs.
+            let status = match (view.started, leading) {
+                (true, _) => Some(("Match in progress", ACCENT)),
+                (false, true) => None,
+                (false, false) => Some(("Waiting for the leader", palette::ui::MUTED)),
             };
-            card.spawn(ui_text(line, 12.0, color));
+            if let Some((line, color)) = status {
+                card.spawn(ui_text(line, 12.0, color));
+            }
+            if !view.started
+                && let Some(winner) = view.winner_name(my_id)
+            {
+                let won = if winner == "You" { "You won the last match".to_string() } else { format!("{winner} won the last match") };
+                card.spawn(ui_text(won, 12.0, palette::TORCH_FLAME));
+            }
+            if let Some(goal) = view.goal {
+                card.spawn(ui_text(format!("First to {goal} kills. Zombies roam the arena."), 11.0, palette::ui::MUTED));
+            }
             let editing = view.may_edit(my_id);
             let modes = [Mode::Ffa, Mode::Teams].map(|mode| (mode, mode.label()));
             setting(card, "Mode", &modes, view.mode, editing, RoomRequest::SetMode);
             let maps = MapId::ALL.map(|map| (map, map.label()));
             setting(card, "Map", &maps, view.map, editing, RoomRequest::SetMap);
-            card.spawn(ui_text(view.map.blurb(), 11.0, palette::ui::MUTED));
         });
 
         panel.spawn(card()).with_children(|card| match view.mode {
             Mode::Ffa => {
-                card.spawn(label(&format!("Fighters  {}/{}", view.members.len(), view.mode.capacity())));
+                card.spawn(label(&format!("Players  {}/{}", view.members.len(), view.mode.capacity())));
                 for member in &view.members {
                     member_row(card, Node::default(), view, member, my_id);
                 }
@@ -192,6 +203,10 @@ fn member_row(parent: &mut ChildSpawnerCommands, node: Node, view: &RoomView, me
             if member.in_arena {
                 line.spawn(ui_text("in arena", 11.0, ACCENT));
             }
+            if view.goal.is_some() && (view.started || view.winner.is_some()) {
+                let kills = if member.kills == 1 { "1 kill".to_string() } else { format!("{} kills", member.kills) };
+                line.spawn(ui_text(kills, 11.0, palette::ui::TEXT));
+            }
         });
     });
 }
@@ -222,11 +237,14 @@ pub(super) fn show_status(
     }
 }
 
-/// What the way in does: at home, practice; in a room, into the arena once the match is on, the
-/// start for the leader, or nothing while waiting for the leader.
+/// How often the start button breathes, per second.
+const START_PULSE_HZ: f32 = 0.9;
+
+/// What the big button does: at home, open the lobbies; in a room, into the arena once the match
+/// is on, the start for the leader, or nothing while waiting for the leader.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WayIn {
-    Practice,
+    Lobbies,
     Enter,
     Start,
     Wait,
@@ -234,16 +252,17 @@ enum WayIn {
 
 fn way_in(screen: Screen, view: Option<&RoomView>, me: Option<&Me>) -> WayIn {
     match view {
-        _ if screen == Screen::Home => WayIn::Practice,
+        _ if screen == Screen::Home => WayIn::Lobbies,
         Some(view) if view.started => WayIn::Enter,
         Some(view) if me.is_some_and(|me| me.guest_id == view.leader) => WayIn::Start,
         _ => WayIn::Wait,
     }
 }
 
-/// The button: at home, practice as the selected fighter on the picked map; in a room, the leader starts
-/// the match (everyone goes in as what they picked), and once it's on, in we go. We're taken to
-/// the arena when our fighter appears. "Create / join lobby" is there at home only.
+/// The big button: at home, it opens the lobbies (flashing their header, if they're open already);
+/// in a room, the leader starts the match (everyone goes in as what they picked), and once it's
+/// on, in we go. The small one over it, at home only, practices as the selected fighter on the
+/// picked map. We're taken to the arena when our fighter appears.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn enter_arena(
     mut mouse: ResMut<ButtonInput<MouseButton>>,
@@ -254,13 +273,20 @@ pub(super) fn enter_arena(
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
     button: Single<(Ref<Interaction>, &mut BackgroundColor), With<EnterButton>>,
     mut label: Single<&mut Text, With<EnterLabel>>,
-    mut lobbies: Single<&mut Visibility, With<LobbiesButton>>,
+    practice: Single<(Ref<Interaction>, &mut Visibility), With<PracticeButton>>,
+    time: Res<Time>,
+    (mut lobbies_open, mut flash): (ResMut<LobbiesOpen>, ResMut<HeaderFlash>),
 ) {
     let way = way_in(*screen.get(), room.0.as_ref(), me.as_deref());
-    // Its look is `browser.rs`'s, where it opens the lobbies.
-    lobbies.set_if_neq(shown(way == WayIn::Practice));
+    let (practice_click, mut practice_shown) = practice.into_inner();
+    practice_shown.set_if_neq(shown(way == WayIn::Lobbies));
+    if way == WayIn::Lobbies && clicked(practice_click) {
+        // In on the press, as the big button goes: forget the held button.
+        mouse.reset(MouseButton::Left);
+        request(&mut sender, RoomRequest::Practice(map.0));
+    }
     let text = match way {
-        WayIn::Practice => "PRACTICE",
+        WayIn::Lobbies => "CREATE / JOIN LOBBY",
         WayIn::Enter => "ENTER THE ARENA",
         WayIn::Start => "START THE MATCH",
         WayIn::Wait => "WAITING FOR THE LEADER",
@@ -269,10 +295,13 @@ pub(super) fn enter_arena(
         label.0 = text.to_string();
     }
     let (interaction, mut background) = button.into_inner();
+    // Starting the match is what the leader is here for: the button slowly brightens and dims
+    // until it's pressed.
+    let breath = if way == WayIn::Start { 0.5 + 0.5 * (time.elapsed_secs() * START_PULSE_HZ * std::f32::consts::TAU).sin() } else { 0.0 };
     let fill = match (way, *interaction) {
         (WayIn::Wait, _) => palette::ui::MUTED.with_alpha(0.5),
-        (_, Interaction::None) => ACCENT,
-        _ => ACCENT.lighter(0.08),
+        (_, Interaction::None) => ACCENT.lighter(0.12 * breath),
+        _ => ACCENT.lighter(0.16),
     };
     background.set_if_neq(BackgroundColor(fill));
     if !clicked(interaction) {
@@ -282,7 +311,7 @@ pub(super) fn enter_arena(
     // it's still down and take the click for an attack.
     mouse.reset(MouseButton::Left);
     match way {
-        WayIn::Practice => request(&mut sender, RoomRequest::Practice(map.0)),
+        WayIn::Lobbies => crate::browser::open_lobbies(&mut lobbies_open, &mut flash, time.elapsed_secs()),
         WayIn::Enter => request(&mut sender, RoomRequest::EnterArena),
         WayIn::Start => request(&mut sender, RoomRequest::Start),
         WayIn::Wait => {}

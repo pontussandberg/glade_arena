@@ -35,6 +35,8 @@ mod gates;
 use gates::*;
 mod dummies;
 use dummies::*;
+mod zombies;
+use zombies::*;
 
 pub mod logging;
 pub mod rooms;
@@ -110,6 +112,7 @@ impl Plugin for ServerGamePlugin {
         app.add_systems(
             FixedUpdate,
             (
+                chase,
                 move_players,
                 walk_dummies,
                 take_pickups,
@@ -118,8 +121,12 @@ impl Plugin for ServerGamePlugin {
                 use_abilities,
                 move_projectiles,
                 resolve_projectile_hits,
+                rooms::count_kills,
+                feed_frenzy,
                 restore_dummies,
                 respawn,
+                bury_zombies,
+                raise_zombies,
                 place_players,
                 use_up_clicks,
                 close_rifts,

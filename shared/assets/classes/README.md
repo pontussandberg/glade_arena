@@ -1,6 +1,7 @@
 # Classes
 
-One file per playable class (`revenant.ron`, `javelinist.ron`, `frost_mage.ron`), and
+One file per class (`revenant.ron`, `javelinist.ron`, `frost_mage.ron`, and `zombie.ron`, which
+no one picks: the server fields zombies in lobby matches), and
 `common.ron` for the values every class shares. Edit freely: everything gameplay-related about a
 class lives in its file. Server and client both compile these files in, and their hash is part of
 the protocol id, so a client built from different numbers is refused at connect instead of
@@ -19,6 +20,8 @@ Every class file starts with `#![enable(unwrap_variant_newtypes)]`, so a kind is
 Units: meters, meters per second, ticks (32 per second).
 
 - `id`: stable key (also picks the class's look in the client)
+- `playable` (optional, true by default): false keeps it out of the class picker, for what only
+  the server fields (zombies). Such a class may have no abilities, and goes after the playable ones
 - `max_hp`: health at spawn and respawn
 - `move_speed`: walking speed
 - `attack`: the left-click auto-attack, aimed at the cursor (skillshot)
@@ -49,7 +52,7 @@ Units: meters, meters per second, ticks (32 per second).
     times as far, its start (optional) `near` times as far (`reach` unless given). Used up as an
     attack goes off (cancelling one first leaves it armed): a miss loses it, an empowered one that
     lands arms the next.
-- `abilities`: one to four, on Q, W, E and R in this order, each aimed at the cursor: `name`,
+- `abilities`: one to four (none is fine for an unplayable class), on Q, W, E and R in this order, each aimed at the cursor: `name`,
   `description`, `cooldown_ticks`, and
   - `kind`:
     - `Projectile(speed, radius, range, damage)`: thrown instantly: no windup, no root.
@@ -59,13 +62,18 @@ Units: meters, meters per second, ticks (32 per second).
       `distance` in `ticks` at normal speed (longer slowed, shorter hasted).
     - `Nova(radius, damage, chill)`: a burst around you, at once: everyone within `radius` (and
       not behind a wall) takes `damage` and `chill`.
+    - `Prime(attack_speed)`: at once, no aim: your next auto-attack is sure to crit and has
+      `attack_speed` more attack speed (0.5 = 50%). It stays ready until that attack goes off
+      (cancelling it first keeps it). `{ability_attack_speed}` names it in the description.
   - `global_cooldown` (optional, true by default): using it starts the global cooldown
     (`common.ron`), and it waits for it, like every other ability on it; false opts out.
 - `passive` (optional): shown to players, nothing more: `Some(name: ..., description: ...)`. Its effect
   lives in the numbers it describes (`far_scale`, `chill`, `crit`...).
 - `crit` (optional): odds (0 to 1) that an auto-attack hit you deal is critical, for
   `crit_multiplier` (`common.ron`) times the damage (an ability never crits): `chance` normally,
-  `vs_frozen` against a frozen (rooted) target. None by default.
+  `vs_frozen` against a frozen (rooted) target, and `empowered` more on top for an attack empowered
+  by its `follow_up`. Rolled once per attack: a swing that crits crits everyone it hits. None by
+  default.
 
 ## Placeholders
 
@@ -77,7 +85,7 @@ retune:
   seconds), `{rift_time}` / `{rift_haste}` (how long a strike's rift lasts / how much faster its
   striker walks in it), `{follow_up_time}` / `{follow_up_speed}` / `{follow_up_reach}` (the
   follow-up's window, in seconds / its attack speed / how much further its lane reaches, as
-  percents), `{crit}`, `{crit_vs_frozen}`, `{crit_multiplier}` (as percents).
+  percents), `{crit}`, `{crit_vs_frozen}`, `{crit_empowered}`, `{crit_multiplier}` (as percents).
 - In an ability's description, about that ability: `{ability_damage}`, `{ability_reach}` (a
   thrown ability's range, a dash's distance, a nova's radius, in meters), `{ability_root}` (a
   nova's root, in seconds). An ability that deals damage must name `{ability_damage}`.

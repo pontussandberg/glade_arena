@@ -42,6 +42,7 @@ pub(super) fn read_local_input(
         (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&AbilityIcon>),
         Or<(With<HudButton>, With<AbilityIcon>)>,
     >,
+    minimap: Option<Single<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility), With<crate::minimap::Minimap>>>,
     mut aiming: ResMut<Aiming>,
     mut held_click: Local<bool>,
     mut last_pos: Local<Option<Vec2>>,
@@ -64,7 +65,11 @@ pub(super) fn read_local_input(
     let under_cursor = |(node, transform, visible, _): &(&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&AbilityIcon>)| {
         visible.get() && screen.is_some_and(|at| node.contains_point(**transform, at))
     };
-    let on_control = hud.iter().filter(|part| part.3.is_none()).any(|part| under_cursor(&part));
+    // The point on the map under the cursor on the minimap, if it's there.
+    let on_minimap = minimap
+        .filter(|minimap| minimap.2.get())
+        .and_then(|minimap| crate::minimap::ground_on_minimap(minimap.0, *minimap.1, map.map(), screen?));
+    let on_control = on_minimap.is_some() || hud.iter().filter(|part| part.3.is_none()).any(|part| under_cursor(&part));
     let on_icon = hud.iter().filter(under_cursor).find_map(|(.., icon)| icon.map(|icon| icon.slot));
     let cursor = window.and_then(|w| w.cursor_position()).and_then(|c| ground_at(camera, camera_transform, c));
 
@@ -81,10 +86,11 @@ pub(super) fn read_local_input(
     let right_click = !mode.free && mouse.just_pressed(MouseButton::Right);
     let drops_aim = right_click && aiming.0.is_some();
     // Once per click: holding the button doesn't keep re-targeting. Not with the free camera:
-    // there the right button turns the camera, and WASD walks.
+    // there the right button turns the camera, and WASD walks. A click on the minimap walks to
+    // where it is there.
     if right_click
         && !drops_aim
-        && let Some(cursor) = cursor
+        && let Some(cursor) = on_minimap.or(cursor)
         && let Some(point) = map.map().walk_target(cursor, 4)
     {
         move_to = Some(point);
@@ -107,7 +113,9 @@ pub(super) fn read_local_input(
         if !keys.just_pressed(ability_key(slot)) || !key_casts(slot, mode.free) {
             continue;
         }
-        if cast_mode.casts_now(shift) {
+        // A prime has nothing to aim: its key casts it at once, quick cast or not.
+        let aimed = my_class.and_then(|def| def.ability(slot)).is_some_and(|ability| ability.kind.aimed());
+        if cast_mode.casts_now(shift) || !aimed {
             casts.order_cast(slot, aim);
             aiming.0 = None;
         } else if ready(slot) {
@@ -119,6 +127,11 @@ pub(super) fn read_local_input(
     // click drops the aim (`drops_aim`); ESC does too (`esc_menu`).
     if mouse.just_pressed(MouseButton::Left) {
         if on_control {
+            *held_click = true;
+        } else if let Some(slot) = on_icon
+            && my_class.and_then(|def| def.ability(slot)).is_some_and(|ability| !ability.kind.aimed())
+        {
+            casts.order_cast(slot, aim);
             *held_click = true;
         } else if let Some(slot) = on_icon {
             aiming.0 = Some(slot).filter(|&slot| ready(slot));
@@ -192,17 +205,24 @@ pub(super) fn toggle_range_circle(
     visibility.set_if_neq(shown(show));
 }
 
+/// Where we're walking to, while we are: a marker on the ground, and a ring on the minimap.
 pub(super) fn show_destination(
     desired: Res<DesiredInput>,
+    current: Res<crate::rooms::CurrentMap>,
     marker: Single<(&mut Transform, &mut Visibility), With<DestinationMarker>>,
+    dot: Option<Single<(&mut Node, &mut Visibility), (With<crate::minimap::DestinationDot>, Without<DestinationMarker>)>>,
 ) {
     let (mut transform, mut visibility) = marker.into_inner();
-    match desired.0.move_to {
-        Some(point) => {
-            transform.translation = to_world(point, 0.03);
-            *visibility = Visibility::Inherited;
+    visibility.set_if_neq(shown(desired.0.move_to.is_some()));
+    if let Some(point) = desired.0.move_to {
+        transform.translation = to_world(point, 0.03);
+    }
+    if let Some(dot) = dot {
+        let (mut node, mut visibility) = dot.into_inner();
+        visibility.set_if_neq(shown(desired.0.move_to.is_some()));
+        if let Some(point) = desired.0.move_to {
+            crate::minimap::place_destination(&mut node, current.map(), point);
         }
-        None => *visibility = Visibility::Hidden,
     }
 }
 

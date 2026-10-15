@@ -16,11 +16,12 @@ use crate::config::{PLAYER_RADIUS, TICK_HZ};
 
 /// The class files, compiled into both server and client so they can't disagree. Their order is
 /// the classes' order everywhere: the class picker and its number keys, the default pick, and the
-/// order target dummies come in.
-const CLASS_FILES: [&str; 3] = [
+/// order target dummies come in. The ones no one picks (`ClassDef::playable`) go last.
+const CLASS_FILES: [&str; 4] = [
     include_str!("../assets/classes/revenant.ron"),
     include_str!("../assets/classes/javelinist.ron"),
     include_str!("../assets/classes/frost_mage.ron"),
+    include_str!("../assets/classes/zombie.ron"),
 ];
 
 /// What every class shares.
@@ -56,10 +57,13 @@ pub struct ClassDef {
     pub name: String,
     pub role: String,
     pub blurb: String,
+    /// Players pick it (else only the server fields it: zombies). True by default.
+    #[serde(default = "yes")]
+    pub playable: bool,
     pub max_hp: i32,
     pub move_speed: f32,
     pub attack: AttackDef,
-    /// On Q, W, E and R, in that order (`AbilitySlot`).
+    /// On Q, W, E and R, in that order (`AbilitySlot`). A playable class has at least one.
     pub abilities: Vec<AbilityDef>,
     /// What the class always has going for it, nothing to press (none by default).
     #[serde(default)]
@@ -71,17 +75,21 @@ pub struct ClassDef {
 
 /// The odds that an auto-attack hit this class deals is critical (an ability's never is), for
 /// `Common::crit_multiplier` times its damage: `chance` normally, `vs_frozen` against a frozen (rooted) target.
+/// An attack empowered by its `follow_up` has `empowered` more on top.
 #[derive(Deserialize, Debug, Clone, Copy, Default, PartialEq)]
 #[serde(default)]
 pub struct Crit {
     pub chance: f32,
     pub vs_frozen: f32,
+    pub empowered: f32,
 }
 
 impl Crit {
-    /// The odds of a crit against a target that's `frozen` or not.
-    pub fn chance_against(&self, frozen: bool) -> f32 {
-        if frozen { self.chance.max(self.vs_frozen) } else { self.chance }
+    /// The odds of a crit against a target that's `frozen` or not, by an attack that's
+    /// `empowered` or not.
+    pub fn chance_against(&self, frozen: bool, empowered: bool) -> f32 {
+        let base = if frozen { self.chance.max(self.vs_frozen) } else { self.chance };
+        if empowered { (base + self.empowered).min(1.0) } else { base }
     }
 }
 
@@ -137,6 +145,10 @@ pub struct FollowUp {
 
 fn one() -> f32 {
     1.0
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Crowd control a hit applies on top of its damage: a slow (`slow` is the fraction of speed
@@ -250,6 +262,7 @@ impl ClassDef {
             ("attack_slow_time", seconds(self.attack.chill.slow_ticks)),
             ("crit", percent(self.crit.chance)),
             ("crit_vs_frozen", percent(self.crit.vs_frozen)),
+            ("crit_empowered", percent(self.crit.empowered)),
             ("crit_multiplier", percent(common().crit_multiplier)),
         ];
         if let Some(rift) = self.attack.rift {
@@ -271,10 +284,10 @@ fn fill(text: &str, placeholders: impl IntoIterator<Item = (&'static str, String
     placeholders.into_iter().fold(text.to_string(), |text, (key, value)| text.replace(&format!("{{{key}}}"), &value))
 }
 
-/// Ticks as players read them: "6 s", "2.5 s".
+/// Ticks as players read them: "6s", "2.5s".
 pub fn seconds(ticks: u32) -> String {
     let seconds = ticks as f32 / TICK_HZ as f32;
-    if seconds.fract() == 0.0 { format!("{seconds} s") } else { format!("{seconds:.1} s") }
+    if seconds.fract() == 0.0 { format!("{seconds}s") } else { format!("{seconds:.1}s") }
 }
 
 impl AttackDef {
@@ -385,8 +398,19 @@ impl ClassId {
         classes().iter().position(|c| c.id == key).map(|i| ClassId(i as u8))
     }
 
+    /// Every class, the ones no one picks too: everything that may be fielded, and so drawn.
     pub fn all() -> impl Iterator<Item = ClassId> {
         (0..classes().len() as u8).map(ClassId)
+    }
+
+    /// The classes players pick from, in order.
+    pub fn playable() -> impl Iterator<Item = ClassId> {
+        Self::all().filter(|c| c.def().playable)
+    }
+
+    /// `None` unless players may pick it (e.g. a zombie, from a hacked client).
+    pub fn pickable(self) -> Option<Self> {
+        self.checked().filter(|c| c.def().playable)
     }
 }
 
@@ -395,8 +419,9 @@ impl ClassId {
 static CLASSES: LazyLock<Vec<ClassDef>> = LazyLock::new(|| {
     let load = |file: &str| -> Result<ClassDef, String> {
         let class: ClassDef = ron::from_str(file).map_err(|e| e.to_string())?;
-        if !(1..=MAX_ABILITIES).contains(&class.abilities.len()) {
-            return Err(format!("{}: one to {MAX_ABILITIES} abilities, not {}", class.id, class.abilities.len()));
+        let fewest = if class.playable { 1 } else { 0 };
+        if !(fewest..=MAX_ABILITIES).contains(&class.abilities.len()) {
+            return Err(format!("{}: {fewest} to {MAX_ABILITIES} abilities, not {}", class.id, class.abilities.len()));
         }
         Ok(class)
     };
@@ -449,6 +474,7 @@ mod tests {
     use super::*;
     use crate::abilities::dash::DashDef;
     use crate::abilities::nova::NovaDef;
+    use crate::abilities::prime::PrimeDef;
     use crate::abilities::throw::Throw;
 
     #[test]
@@ -472,7 +498,9 @@ mod tests {
                     assert!((1.0..=30.0).contains(&range), "{}: projectile range", c.id);
                 }
             }
-            assert!((1..=MAX_ABILITIES).contains(&c.abilities.len()), "{}: one to {MAX_ABILITIES} abilities", c.id);
+            let fewest = if c.playable { 1 } else { 0 };
+            assert!((fewest..=MAX_ABILITIES).contains(&c.abilities.len()), "{}: {fewest} to {MAX_ABILITIES} abilities", c.id);
+            assert!(c.playable || all[i..].iter().all(|o| !o.playable), "{}: unplayable classes go last", c.id);
             for (_, ability) in c.abilities() {
                 let what = format!("{}: {}", c.id, ability.name);
                 assert!(ability.cooldown_ticks > 0, "{what}: cooldown");
@@ -493,6 +521,9 @@ mod tests {
                         assert!(damage >= 0 && (0.5..=10.0).contains(&radius), "{what}: nova");
                         assert!(damage > 0 || !chill.is_none(), "{what}: a nova that does nothing");
                         chill_is_sane(&c.id, chill);
+                    }
+                    AbilityKind::Prime(PrimeDef { attack_speed }) => {
+                        assert!((0.0..=3.0).contains(&attack_speed), "{what}: prime attack_speed");
                     }
                 }
                 let filled = c.describe_ability(ability);
@@ -516,8 +547,9 @@ mod tests {
                 let filled = c.describe(&passive.description);
                 assert!(!filled.contains(['{', '}']), "{}: unknown placeholder in {filled:?}", c.id);
             }
-            let Crit { chance, vs_frozen } = c.crit;
-            assert!((0.0..=1.0).contains(&chance) && (0.0..=1.0).contains(&vs_frozen), "{}: crit odds", c.id);
+            let Crit { chance, vs_frozen, empowered } = c.crit;
+            assert!([chance, vs_frozen, empowered].iter().all(|odds| (0.0..=1.0).contains(odds)), "{}: crit odds", c.id);
+            assert!(empowered == 0.0 || c.attack.follow_up.is_some(), "{}: empowered crit odds without a follow_up", c.id);
         }
     }
 
@@ -540,6 +572,10 @@ mod tests {
             assert_eq!(ClassId::by_key(&id.def().id), Some(id));
         }
         assert_eq!(ClassId(200).checked(), None);
+        assert!(ClassId::playable().count() > 0);
+        let zombie = ClassId::by_key("zombie").unwrap();
+        assert_eq!(zombie.pickable(), None);
+        assert!(!ClassId::playable().any(|c| c == zombie));
     }
 
     #[test]

@@ -92,6 +92,7 @@ fn think(
                     AbilityKind::Dash(dash) => distance > attack_within && distance < dash.distance * 0.9,
                     AbilityKind::Projectile(throw) => distance < throw.range * 0.9,
                     AbilityKind::Nova(nova) => distance < nova.radius * 0.8,
+                    AbilityKind::Prime(_) => distance < attack_within && attack.primed.is_none(),
                 }
         })
         .map(|(slot, _)| slot);

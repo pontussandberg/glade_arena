@@ -17,14 +17,14 @@
     abilities: [
         (
             name: "Frost Nova",
-            description: "Instantly deal {ability_damage} damage to everyone within {ability_reach} and freeze them in place for {ability_root}: no walking, no dashing.",
+            description: "Enemies within {ability_reach} take {ability_damage} damage and are frozen for {ability_root}.",
             cooldown_ticks: 224,
             kind: Nova(radius: 3.5, damage: 6, chill: (root_ticks: 80)),
         ),
     ],
     passive: Some(
         name: "Shatter",
-        description: "Auto-attacks against targets frozen by Frost Nova have a {crit_vs_frozen} crit chance. Auto-attacks also slow on hit, by {attack_slow} for {attack_slow_time}.",
+        description: "On hit, auto-attacks slow by {attack_slow} for {attack_slow_time}. Against frozen enemies, gain {crit_vs_frozen} crit chance.",
     ),
     crit: (vs_frozen: 1.0),
 )
