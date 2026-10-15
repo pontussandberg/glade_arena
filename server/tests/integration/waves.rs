@@ -562,6 +562,11 @@ fn practice_places_three_slow_zombies() {
         world.query::<(&Team, &Pos)>().iter(world).filter(|(t, _)| t.0 == ZOMBIES).map(|(_, pos)| pos.0).collect::<Vec<_>>()
     };
     p.until(Duration::from_secs(3), "three zombies", |p| zombies(p).len() == 3);
+    // And we see them.
+    p.until(Duration::from_secs(3), "three zombies in sight", |p| {
+        let world = p.client.world_mut();
+        world.query::<&Team>().iter(world).filter(|t| t.0 == ZOMBIES).count() == 3
+    });
     let placed = zombies(&mut p);
     assert!(placed.iter().all(|z| z.distance(at) < 1.5), "not where asked: {placed:?}");
     let apart = placed.iter().flat_map(|a| placed.iter().map(move |b| a.distance(*b))).filter(|d| *d > 0.0).fold(f32::MAX, f32::min);

@@ -745,7 +745,9 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             for spot in [at - side, at, at + side] {
                 let spot = if map.walkable_at(spot) && map.line_walkable(at, spot) { spot } else { at };
                 let zombie = crate::zombies::spawn_zombie(&mut ctx.commands, lobby.next_local(), in_room, spot);
-                ctx.commands.entity(zombie).insert(crate::zombies::Sluggish(crate::zombies::PRACTICE_ZOMBIE_SPEED));
+                // Sent to clients from the start: placed already, they skip `place_players`, where
+                // others start being sent.
+                ctx.commands.entity(zombie).insert((crate::zombies::Sluggish(crate::zombies::PRACTICE_ZOMBIE_SPEED), crate::replicated_npc()));
                 // Gone with the map's things when practice moves to another map.
                 lobby.rooms.get_mut(&key).expect("in it").things.push(zombie);
             }
