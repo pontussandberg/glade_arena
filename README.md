@@ -159,7 +159,8 @@ after `ARENA_PERF_SECS` (60 by default). `ARENA_PERF_OFF=lights,shadows,fog,ui,f
 of the scene off, to see what each costs. Building the client with `--features profile` also
 writes a Chrome trace (`trace-*.json`) of every system's time, every frame (it gets big: a few GB a
 minute). On a fast machine the frame rate hides costs that show on a slow one or in the browser,
-so compare frame times, not frame rates.
+so compare frame times, not frame rates. `scripts/trace_sum.py` sums a trace per system; what
+we've measured so far, and how to run a perf loop, is in [docs/PERF.md](docs/PERF.md).
 
 To try a later wave natively: `ARENA_ROOM="Waves 10" cargo run -p arena-client -- 11 revenant`
 starts a run at wave 10 with the gold you'd have by then (`ARENA_BOT=1` to let the bot play it,
