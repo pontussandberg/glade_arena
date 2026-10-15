@@ -160,9 +160,6 @@ pub struct Map {
     pub shop_faces: Vec2,
     /// The tiles of the shopkeeper's counter, behind them (walls), drawn as their stall.
     pub counter: Vec<IVec2>,
-    /// The camp around the shop, where the fire mends the party in a run: its middle and
-    /// half-width (a square).
-    pub camp: Option<(Vec2, f32)>,
     /// Meters inside the playable area's edge (negative outside). Continuous, for terrain and
     /// decoration.
     edge: fn(Vec2) -> f32,
@@ -204,7 +201,6 @@ impl Map {
             shop: None,
             shop_faces: Vec2::NEG_Y,
             counter: Vec::new(),
-            camp: None,
             edge,
             beyond,
         };

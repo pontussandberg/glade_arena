@@ -48,9 +48,6 @@ const READY_TICKS: u32 = 3 * TICK_HZ as u32;
 /// and how far round them monsters are flung back as they do.
 const SHELTER_TICKS: u32 = 3 * TICK_HZ as u32;
 const REBIRTH_REACH: f32 = 6.0;
-/// How much of their health players in the camp get back a second, in a run, and how often.
-const CAMP_MENDS: f32 = 0.04;
-const MEND_EVERY_TICKS: u32 = TICK_HZ as u32 / 2;
 /// When a downed player comes back by themselves: not until the wave's cleared (or a boss falls).
 const UNTIL_CLEARED: u32 = u32::MAX / 2;
 /// How much of their health a player picked up by an ally comes back with.
@@ -605,20 +602,6 @@ pub(super) fn pay_bounties(timeline: Res<LocalTimeline>, mut commands: Commands,
             }
             info!(room = room.key.0, boss = class.def().name, "a boss falls");
             spawn_fx(&mut commands, *room, Fx::at(FxKind::Coins, pos.0, 3.0, now, 40));
-        }
-    }
-}
-
-/// The camp's fire mends the party: players in it, in a run, get some health back now and then.
-pub(super) fn mend_at_camp(timeline: Res<LocalTimeline>, lobby: Res<Lobby>, mut party: Query<(&InRoom, &Pos, &mut Health, &MaxHealth, &mut RecentHits), (With<ControlledBy>, InPlay)>) {
-    if timeline.tick().0 % MEND_EVERY_TICKS != 0 {
-        return;
-    }
-    for (room, pos, mut health, max, mut hits) in &mut party {
-        let Some((middle, half)) = lobby.map(room).camp else { continue };
-        if (pos.0 - middle).abs().max_element() < half && lobby.run_on(room.key) {
-            let amount = (max.0 as f32 * CAMP_MENDS * MEND_EVERY_TICKS as f32 / TICK_HZ as f32).ceil() as i32;
-            mend(&mut health, max, &mut hits, amount);
         }
     }
 }

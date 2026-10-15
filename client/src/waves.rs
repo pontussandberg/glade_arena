@@ -184,9 +184,6 @@ fn show_banner(mut commands: Commands, room: Res<CurrentRoom>, me: Option<Res<cr
                 if let Some(omen) = run.omen {
                     banner.spawn(ui_text(format!("OMEN: {}  -  {}", omen.label().to_uppercase(), omen.blurb()), 12.0, palette::BLOOD));
                 }
-                banner.spawn(Node { column_gap: px(GAP * 2.0), align_items: AlignItems::Center, ..default() }).with_children(|row| {
-                    row.spawn(ui_text("Shop at the merchant in the camp; its fire mends you", 12.0, palette::ui::MUTED));
-                });
                 let ready = run.ready.contains(&my_id);
                 let label = if ready { format!("READY  {}/{}", run.ready.len(), party) } else { "READY (F)".to_string() };
                 let fill = if ready { palette::ui::SELECTED } else { palette::ui::BACKDROP };
