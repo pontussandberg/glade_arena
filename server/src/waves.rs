@@ -155,8 +155,9 @@ pub(crate) struct Run {
     ready_by: Option<u32>,
     /// The wave it started at: only a run from the first makes the leaderboards.
     pub(crate) from: u32,
-    /// Who fought it (names and classes), as the last wave came: who it's on the leaderboards as.
-    pub(crate) party: Vec<(String, ClassId)>,
+    /// Who fought it (guest ids, names and classes), as the last wave came: who it's on the
+    /// leaderboards as.
+    pub(crate) party: Vec<(u32, String, ClassId)>,
     /// It's on the leaderboards already (it ended).
     pub(crate) scored: bool,
 }

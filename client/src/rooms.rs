@@ -51,6 +51,38 @@ pub struct Me {
 #[derive(Resource, Default, Debug)]
 pub struct RoomList(pub Vec<RoomSummary>);
 
+
+/// Our run made a leaderboard (`score_name` puts the box up), and we've yet to name our entry: where it placed, and the name
+/// as typed so far.
+#[derive(Resource, Default)]
+pub struct ScorePrompt(pub Option<Prompt>);
+
+pub struct Prompt {
+    pub wave: u32,
+    pub place: usize,
+    pub size: usize,
+    pub name: String,
+}
+
+impl ScorePrompt {
+    /// The server's `LobbyEvent::NameYourScore`.
+    pub(crate) fn asked(&mut self, event: &LobbyEvent) {
+        if let LobbyEvent::NameYourScore { wave, place, size, name } = event {
+            self.0 = Some(Prompt { wave: *wave, place: *place, size: *size, name: name.clone() });
+        }
+    }
+
+    /// Whether the box is up (keys go into it).
+    pub fn open(&self, screen: &Screen) -> bool {
+        self.0.is_some() && shown_on(screen)
+    }
+}
+
+/// Out of the arena and connected: where the box comes up.
+fn shown_on(screen: &Screen) -> bool {
+    matches!(screen, Screen::Home | Screen::Room)
+}
+
 /// The leaderboards, as the server last sent them: each party size's best runs, best first.
 #[derive(Resource, Default)]
 pub struct Leaderboards(pub Vec<arena_shared::rooms::HighScore>);
@@ -123,7 +155,7 @@ pub struct RoomsNetPlugin {
 impl Plugin for RoomsNetPlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<Screen>().add_computed_state::<Picking>();
-        app.init_resource::<RoomList>().init_resource::<Leaderboards>().init_resource::<CurrentRoom>().init_resource::<CurrentMap>();
+        app.init_resource::<RoomList>().init_resource::<Leaderboards>().init_resource::<ScorePrompt>().init_resource::<CurrentRoom>().init_resource::<CurrentMap>();
         app.init_resource::<Notice>().init_resource::<Leaving>();
         app.insert_resource(QuickJoin(self.quick_join.clone()));
         app.insert_resource(StoredName(self.guest_name.clone()));
@@ -155,7 +187,7 @@ fn read_lobby_events(
     mut commands: Commands,
     mut client: Query<(&mut MessageReceiver<LobbyEvent>, &mut MessageSender<RoomRequest>), With<Client>>,
     quick_join: Res<QuickJoin>,
-    (mut list, mut boards): (ResMut<RoomList>, ResMut<Leaderboards>),
+    (mut list, mut boards, mut prompt): (ResMut<RoomList>, ResMut<Leaderboards>, ResMut<ScorePrompt>),
     mut room: ResMut<CurrentRoom>,
     mut current_map: ResMut<CurrentMap>,
     mut notice: ResMut<Notice>,
@@ -179,6 +211,7 @@ fn read_lobby_events(
             }
             LobbyEvent::RoomList(rooms) => list.0 = rooms,
             LobbyEvent::HighScores(scores) => boards.0 = scores,
+            LobbyEvent::NameYourScore { .. } => prompt.asked(&event),
             LobbyEvent::Room(view) => {
                 // Practice goes straight in: home until our fighter's there.
                 if room.0.is_none() {

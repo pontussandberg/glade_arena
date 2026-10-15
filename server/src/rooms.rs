@@ -124,6 +124,11 @@ pub struct Lobby {
     /// was last sent the leaderboards.
     pub(crate) scores: crate::highscores::HighScores,
     scores_changed: bool,
+    /// Who may still name their entry on the leaderboards (by guest id): which run (its index
+    /// there) and which of its fighters they are.
+    naming: HashMap<u32, (usize, usize)>,
+    /// Asked to (`LobbyEvent::NameYourScore`), by guest id, to send.
+    prompts: Vec<(u32, LobbyEvent)>,
 }
 
 struct Guest {
@@ -185,14 +190,15 @@ struct Room {
 
 impl Room {
     /// Its run came to an end (lost, or everyone left it): onto the leaderboards, if it was run
-    /// from the first wave and any came. Once.
-    fn score_run(&mut self, scores: &mut crate::highscores::HighScores) -> bool {
-        let Some(run) = self.run.as_mut().filter(|run| !run.scored && run.fought && run.from == 1 && !run.party.is_empty()) else { return false };
+    /// from the first wave and any came. Once. Its index there, and who fought it (guest ids).
+    fn score_run(&mut self, scores: &mut crate::highscores::HighScores) -> Option<(usize, Vec<u32>)> {
+        let run = self.run.as_mut().filter(|run| !run.scored && run.fought && run.from == 1 && !run.party.is_empty())?;
         run.scored = true;
         // Shopping for the next: the last one fought is as far as it got.
         let wave = if matches!(run.phase, RunPhase::Shop { .. }) { run.wave - 1 } else { run.wave };
-        scores.record(HighScore { wave, map: self.map, party: run.party.clone(), at: crate::highscores::now() });
-        true
+        let party = run.party.iter().map(|(_, name, class)| (name.clone(), *class)).collect();
+        let score = HighScore { wave, map: self.map, party, date: crate::highscores::today(), version: arena_shared::config::GAME_VERSION.to_string() };
+        Some((scores.record(score), run.party.iter().map(|(id, ..)| *id).collect()))
     }
 }
 
@@ -375,9 +381,10 @@ impl Lobby {
             if let Some(run) = &room.run {
                 room.best = room.best.max(run.wave);
             }
-            self.scores_changed |= room.score_run(&mut self.scores);
+            let scored = room.score_run(&mut self.scores);
             room.ends_at = Some(ends_at);
             room.changed = true;
+            self.scored(scored);
         }
     }
 
@@ -821,6 +828,14 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             near_the_shop(lobby, ctx, link, key)?;
             lobby.guests.get_mut(&link).expect("checked").satchel.sell(slot as usize).ok_or("Nothing there to sell")?;
         }
+        RoomRequest::NameScore(name) => {
+            let id = lobby.guests[&link].id;
+            let name = clean_score_name(&name).ok_or("Give it a name")?;
+            let (index, member) = lobby.naming.remove(&id).ok_or("No score of yours to name")?;
+            info!(guest = id, name, "a score named");
+            lobby.scores.rename(index, member, name);
+            lobby.scores_changed = true;
+        }
         RoomRequest::Ready(ready) => {
             let key = room_key.ok_or("You're not in a room")?;
             let id = lobby.guests[&link].id;
@@ -1063,7 +1078,8 @@ fn leave(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity) -> bool {
         None => {
             let mut room = lobby.rooms.remove(&key).expect("there");
             // A run left under way ends here.
-            lobby.scores_changed |= room.score_run(&mut lobby.scores);
+            let scored = room.score_run(&mut lobby.scores);
+            lobby.scored(scored);
             room.clear_things(&mut ctx.commands);
             // And whatever else was in it: monsters, decoys, shots still flying, effects.
             for (thing, _) in ctx.in_rooms.iter().filter(|(_, r)| r.key == key) {
@@ -1192,11 +1208,17 @@ fn send_updates(mut lobby: ResMut<Lobby>, mut list_sent_at: Local<Option<Duratio
         }
         lobby.rooms.get_mut(&key).expect("there").changed = false;
     }
-    // A run made the leaderboards: everyone sees them again.
+    // A run made the leaderboards: everyone sees them again, and those who fought it are asked
+    // to name their entry.
     if std::mem::take(&mut lobby.scores_changed) {
         let boards = lobby.scores.boards();
         for link in lobby.guests.keys().copied().collect::<Vec<_>>() {
             ctx.send(link, LobbyEvent::HighScores(boards.clone()));
+        }
+    }
+    for (id, prompt) in std::mem::take(&mut lobby.prompts) {
+        if let Some(link) = lobby.guests.iter().find(|(_, g)| g.id == id).map(|(link, _)| *link) {
+            ctx.send(link, prompt);
         }
     }
     let now = ctx.time.elapsed();
@@ -1212,10 +1234,24 @@ fn send_updates(mut lobby: ResMut<Lobby>, mut list_sent_at: Local<Option<Duratio
 }
 
 impl Lobby {
-    /// Who in room `key` is fighting: their names and classes.
-    pub(crate) fn roster(&self, key: RoomKey) -> Vec<(String, ClassId)> {
+    /// Who in room `key` is fighting: their guest ids, names and classes.
+    pub(crate) fn roster(&self, key: RoomKey) -> Vec<(u32, String, ClassId)> {
         let Some(room) = self.rooms.get(&key) else { return Vec::new() };
-        room.members.iter().filter_map(|link| self.guests.get(link)).filter(|g| g.playing).filter_map(|g| Some((g.name.clone(), g.class?))).collect()
+        room.members.iter().filter_map(|link| self.guests.get(link)).filter(|g| g.playing).filter_map(|g| Some((g.id, g.name.clone(), g.class?))).collect()
+    }
+
+    /// A run went onto the leaderboards (`Room::score_run`): everyone sees them again, and if it
+    /// made its board, each who fought it is asked what their entry goes by.
+    fn scored(&mut self, scored: Option<(usize, Vec<u32>)>) {
+        let Some((index, fought)) = scored else { return };
+        self.scores_changed = true;
+        let Some(place) = self.scores.place(index) else { return };
+        let Some(score) = self.scores.get(index).cloned() else { return };
+        for (member, id) in fought.into_iter().enumerate() {
+            self.naming.insert(id, (index, member));
+            let name = score.party[member].0.clone();
+            self.prompts.push((id, LobbyEvent::NameYourScore { wave: score.wave, place, size: score.party.len(), name }));
+        }
     }
 
     /// The lightyear rooms `link` is sent: the room they're in (`now`, if it's just been decided)

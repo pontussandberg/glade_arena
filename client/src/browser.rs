@@ -215,7 +215,12 @@ fn focus_name(
     keys: Res<ButtonInput<KeyCode>>,
     name_box: Query<&Interaction, With<NameBox>>,
     mut typing: ResMut<Typing>,
+    prompt: Res<crate::rooms::ScorePrompt>,
 ) {
+    // Naming a score: the keys are its (`score_name`).
+    if prompt.0.is_some() {
+        return;
+    }
     if mouse.just_pressed(MouseButton::Left) {
         let on_box = name_box.iter().any(|i| *i == Interaction::Pressed);
         if typing.0 != on_box {
@@ -233,9 +238,10 @@ fn type_name(
     typing: Res<Typing>,
     mut home: ResMut<Home>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
+    prompt: Res<crate::rooms::ScorePrompt>,
 ) {
     for key in typed.read() {
-        if key.state != ButtonState::Pressed || !typing.0 {
+        if key.state != ButtonState::Pressed || !typing.0 || prompt.0.is_some() {
             continue;
         }
         match &key.logical_key {

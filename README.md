@@ -154,9 +154,12 @@ all the tuning is) and the items (`server/src/items.rs`).
 
 **Leaderboards**: every run against the waves that ends (lost, or left under way) and was played
 from the first wave goes on the leaderboards, one for each party size (solo up to five), shown on
-the home screen under the lobbies. There's no database yet: the server appends each run to a CSV
-file (`ARENA_HIGHSCORES`, default `highscores.csv` where it runs; on the server,
-`/var/lib/arena/highscores.csv`) and reads it back when it starts (`server/src/highscores.rs`).
+the home screen under the lobbies: each entry's name, hero, map and wave. A run that makes its
+board asks each player, once they're out of the arena, for the name their entry goes by. There's
+no database yet: the server appends each run to a CSV file (`ARENA_HIGHSCORES`, default
+`highscores.csv` where it runs; on the server, `/var/lib/arena/highscores.csv`) and reads it back
+when it starts (`server/src/highscores.rs`). Each line: the date (UTC), the game's version (the
+workspace's, `GAME_VERSION`, now 0.0.1), the wave, the map, and the party (names and heroes).
 
 **Measuring performance** (native): `ARENA_PERF=perf.txt` turns vsync off, notes every frame's
 time and counts what's in the world each second (entities, meshes drawn, effect parts, lights, UI

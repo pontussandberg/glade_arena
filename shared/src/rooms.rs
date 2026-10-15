@@ -84,22 +84,35 @@ pub const MAX_PARTY: usize = 5;
 /// Runs shown on each leaderboard (one a party size).
 pub const LEADERBOARD_ROWS: usize = 10;
 
+/// Longest name a player gives their entry on the leaderboards, in characters.
+pub const SCORE_NAME_MAX: usize = 20;
+
 /// A run against the waves that came to an end, for the leaderboards: the furthest wave it
-/// reached, where, who fought it (their names and classes, as the last wave came), and when (unix
-/// seconds). There's a board for each party size.
+/// reached, where, who fought it (the names they go by there, and their heroes, as the last wave
+/// came), when (a UTC date, ISO 8601) and on what version of the game. There's a board for each
+/// party size.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct HighScore {
     pub wave: u32,
     pub map: MapId,
     pub party: Vec<(String, ClassId)>,
-    pub at: u64,
+    pub date: String,
+    pub version: String,
 }
 
 impl HighScore {
     /// Better first: further, then sooner.
     pub fn rank(a: &HighScore, b: &HighScore) -> core::cmp::Ordering {
-        b.wave.cmp(&a.wave).then(a.at.cmp(&b.at))
+        b.wave.cmp(&a.wave).then(a.date.cmp(&b.date))
     }
+}
+
+/// A name for a leaderboard entry as typed, made fit to show: trimmed, printable only, at most
+/// `SCORE_NAME_MAX` characters. `None` if nothing is left.
+pub fn clean_score_name(name: &str) -> Option<String> {
+    let clean: String = name.chars().filter(|c| !c.is_control() && *c != ';').take(SCORE_NAME_MAX).collect();
+    let clean = clean.trim();
+    (!clean.is_empty()).then(|| clean.to_string())
 }
 
 /// What a leaderboard for `size` fighters is called.

@@ -707,6 +707,8 @@ pub enum RoomRequest {
     Sell(u8),
     /// Waves only, between waves: we're ready for the next (or not, again).
     Ready(bool),
+    /// The name our entry on the leaderboards goes by (after `LobbyEvent::NameYourScore`).
+    NameScore(String),
 }
 
 /// What the server tells a client about guests and rooms.
@@ -725,6 +727,9 @@ pub enum LobbyEvent {
     /// The leaderboards: the best runs against the waves for each party size
     /// (`LEADERBOARD_ROWS` of each at most), on arrival and whenever a run makes them.
     HighScores(Vec<crate::rooms::HighScore>),
+    /// Our run made a leaderboard: `place` on the board for `size` fighters, at `wave`. We may
+    /// name our entry (`RoomRequest::NameScore`); it goes by `name` until we do.
+    NameYourScore { wave: u32, place: usize, size: usize, name: String },
 }
 
 /// Reliable, ordered channel for the few messages we send.

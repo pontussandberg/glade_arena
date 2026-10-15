@@ -1,7 +1,8 @@
 //! The leaderboards: every run against the waves that came to an end (lost, or left under way),
 //! kept in a CSV file (no database yet), a line a run, appended as it ends and read back at start.
-//! Its columns: `time` (unix seconds), `wave` (the furthest reached), `map`, `players`, `party`
-//! (`Name (class)`, `; ` between them).
+//! Its columns: `date` (UTC, ISO 8601), `version` (the game's), `wave` (the furthest reached),
+//! `map`, `players`, `party` (`Name (hero)`, `; ` between them). A player who made a board names
+//! their entry after the run: the file is written out again with it.
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -11,7 +12,7 @@ use arena_shared::map::MapId;
 use arena_shared::rooms::{HighScore, LEADERBOARD_ROWS, MAX_PARTY};
 use bevy::prelude::*;
 
-const HEADER: &str = "time,wave,map,players,party";
+const HEADER: &str = "date,version,wave,map,players,party";
 
 /// Every run on record, and the file they're kept in (none: only in memory, as in tests).
 #[derive(Default)]
@@ -29,8 +30,8 @@ impl HighScores {
         HighScores { path, all }
     }
 
-    /// A run came to an end: kept, and written to the file.
-    pub fn record(&mut self, score: HighScore) {
+    /// A run came to an end: kept, and written to the file. Its index, to name it by.
+    pub fn record(&mut self, score: HighScore) -> usize {
         info!(wave = score.wave, players = score.party.len(), "a run on the leaderboards");
         if let Some(path) = &self.path {
             let fresh = !path.exists();
@@ -45,6 +46,32 @@ impl HighScores {
             }
         }
         self.all.push(score);
+        self.all.len() - 1
+    }
+
+    /// Run `index`.
+    pub fn get(&self, index: usize) -> Option<&HighScore> {
+        self.all.get(index)
+    }
+
+    /// Where run `index` stands on its board (1: the best), if it's on it.
+    pub fn place(&self, index: usize) -> Option<usize> {
+        let score = self.all.get(index)?;
+        let better = self.all.iter().enumerate().filter(|(i, s)| *i != index && s.party.len() == score.party.len() && HighScore::rank(s, score).is_lt()).count();
+        (better < LEADERBOARD_ROWS).then_some(better + 1)
+    }
+
+    /// Run `index`'s `member` goes by `name` on the boards: the file is written out again.
+    pub fn rename(&mut self, index: usize, member: usize, name: String) {
+        let Some(entry) = self.all.get_mut(index).and_then(|s| s.party.get_mut(member)) else { return };
+        entry.0 = name;
+        let Some(path) = &self.path else { return };
+        let text: String = std::iter::once(HEADER.to_string()).chain(self.all.iter().map(line)).map(|l| l + "\n").collect();
+        // Written beside it, then swapped in: never half a file.
+        let fresh = path.with_extension("csv.new");
+        if let Err(error) = std::fs::write(&fresh, text).and_then(|_| std::fs::rename(&fresh, path)) {
+            warn!(?path, %error, "couldn't write the high scores");
+        }
     }
 
     /// Each party size's best (`LEADERBOARD_ROWS` at most), best first.
@@ -59,14 +86,31 @@ impl HighScores {
     }
 }
 
-/// Unix seconds now.
-pub fn now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+/// Now, as a UTC date and time (ISO 8601, to the second: `2026-10-15T20:41:12Z`).
+pub fn today() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    iso_date(secs)
+}
+
+/// Unix seconds as a UTC date and time (ISO 8601).
+fn iso_date(secs: u64) -> String {
+    let (days, rest) = ((secs / 86_400) as i64, secs % 86_400);
+    // Days since 1970 to a civil date (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + (month <= 2) as i64;
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rest / 3600, rest / 60 % 60, rest % 60)
 }
 
 fn line(score: &HighScore) -> String {
     let party: Vec<String> = score.party.iter().map(|(name, class)| format!("{name} ({})", class.def().id)).collect();
-    let fields = [score.at.to_string(), score.wave.to_string(), format!("{:?}", score.map), score.party.len().to_string(), party.join("; ")];
+    let fields = [score.date.clone(), score.version.clone(), score.wave.to_string(), format!("{:?}", score.map), score.party.len().to_string(), party.join("; ")];
     fields.iter().map(|f| quoted(f)).collect::<Vec<_>>().join(",")
 }
 
@@ -96,7 +140,7 @@ fn fields(line: &str) -> Vec<String> {
 
 fn parse(line: &str) -> Option<HighScore> {
     let f = fields(line);
-    let [at, wave, map, _, party] = f.as_slice() else { return None };
+    let [date, version, wave, map, _, party] = f.as_slice() else { return None };
     let map = MapId::ALL.into_iter().find(|m| format!("{m:?}") == *map)?;
     let party = party
         .split("; ")
@@ -105,32 +149,55 @@ fn parse(line: &str) -> Option<HighScore> {
             Some((name.to_string(), ClassId::by_key(class.strip_suffix(')')?)?))
         })
         .collect::<Option<Vec<_>>>()?;
-    Some(HighScore { wave: wave.parse().ok()?, map, party, at: at.parse().ok()? })
+    Some(HighScore { wave: wave.parse().ok()?, map, party, date: date.clone(), version: version.clone() })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn run(wave: u32, size: usize, date: &str) -> HighScore {
+        let class = ClassId::playable().next().unwrap();
+        HighScore { wave, map: MapId::Wilds, party: vec![("A".into(), class); size], date: date.into(), version: "0.0.1".into() }
+    }
+
     #[test]
     fn a_line_reads_back_as_written() {
         let class = ClassId::playable().next().unwrap();
-        let score = HighScore { wave: 12, map: MapId::Wilds, party: vec![("Ketil, \"the\" Bold".into(), class), ("Astrid".into(), class)], at: 1_700_000_000 };
+        let score = HighScore { party: vec![("Ketil, \"the\" Bold".into(), class), ("Astrid".into(), class)], ..run(12, 2, "2026-10-15T20:41:12Z") };
         assert_eq!(parse(&line(&score)), Some(score));
         assert_eq!(parse(HEADER), None);
     }
 
     #[test]
+    fn dates_are_utc() {
+        assert_eq!(iso_date(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso_date(1_760_560_872), "2025-10-15T20:41:12Z");
+        assert_eq!(iso_date(951_782_400), "2000-02-29T00:00:00Z");
+    }
+
+    #[test]
     fn boards_are_by_party_size_best_first() {
-        let class = ClassId::playable().next().unwrap();
-        let run = |wave, size: usize, at| HighScore { wave, map: MapId::Wilds, party: vec![("A".into(), class); size], at };
         let mut scores = HighScores::default();
-        for score in [run(3, 1, 1), run(9, 1, 2), run(9, 1, 1), run(4, 2, 3)] {
+        for score in [run(3, 1, "2026-01-01"), run(9, 1, "2026-01-02"), run(9, 1, "2026-01-01"), run(4, 2, "2026-01-03")] {
             scores.record(score);
         }
         let boards = scores.boards();
-        let solo: Vec<(u32, u64)> = boards.iter().filter(|s| s.party.len() == 1).map(|s| (s.wave, s.at)).collect();
-        assert_eq!(solo, [(9, 1), (9, 2), (3, 1)]);
+        let solo: Vec<(u32, &str)> = boards.iter().filter(|s| s.party.len() == 1).map(|s| (s.wave, s.date.as_str())).collect();
+        assert_eq!(solo, [(9, "2026-01-01"), (9, "2026-01-02"), (3, "2026-01-01")]);
         assert_eq!(boards.iter().filter(|s| s.party.len() == 2).count(), 1);
+        assert_eq!((scores.place(2), scores.place(1), scores.place(0), scores.place(3)), (Some(1), Some(2), Some(3), Some(1)));
+        scores.rename(0, 0, "Me".into());
+        assert_eq!(scores.boards().iter().find(|s| s.wave == 3).unwrap().party[0].0, "Me");
+    }
+
+    #[test]
+    fn off_the_board_has_no_place() {
+        let mut scores = HighScores::default();
+        for i in 0..LEADERBOARD_ROWS {
+            scores.record(run(10, 1, &format!("2026-01-{i:02}")));
+        }
+        let low = scores.record(run(2, 1, "2026-02-01"));
+        assert_eq!(scores.place(low), None);
     }
 }

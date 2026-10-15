@@ -787,4 +787,17 @@ fn a_run_left_under_way_makes_the_leaderboards() {
     assert_eq!(board.len(), 1);
     assert_eq!((board[0].wave, board[0].party.len(), board[0].map), (1, 1, MapId::Wilds));
     assert_eq!(board[0].party[0].1, class_id("revenant"));
+    assert_eq!(board[0].version, arena_shared::config::GAME_VERSION);
+
+    // It made the (empty) solo board: we're asked to name it, and the board shows the name.
+    p.until(Duration::from_secs(5), "asked to name it", |p| p.client.world().resource::<arena_client::rooms::ScorePrompt>().0.is_some());
+    p.ask(RoomRequest::NameScore("  Tester  ".into()));
+    p.until(Duration::from_secs(5), "named", |p| boards(p).first().is_some_and(|s| s.party[0].0 == "Tester"));
+    // Once only.
+    p.ask(RoomRequest::NameScore("Again".into()));
+    let end = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < end {
+        p.update();
+    }
+    assert_eq!(boards(&p)[0].party[0].0, "Tester");
 }
