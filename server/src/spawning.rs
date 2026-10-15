@@ -57,7 +57,7 @@ pub(super) fn fighter(id: PeerId, class: ClassId, room: InRoom, team: Team, at: 
         (class, team, room, room.rooms()),
         Pos(at),
         (Health(class.def().max_hp), MaxHealth(class.def().max_hp)),
-        (Chilled::default(), Hasted::default(), Frenzy::default(), RecentHits::default()),
+        (Chilled::default(), Hasted::default(), Frenzy::default(), Fury::default(), RecentHits::default()),
         (AttackState::default(), Cooldowns::default(), Dashing::default(), LastSwing::default()),
     )
 }
@@ -129,10 +129,10 @@ pub(super) fn respawn(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
     // Dummies come back on the spot instead (`restore_dummies`); zombies don't (`bury_zombies`).
-    mut dead: Query<(Entity, &MaxHealth, &mut Health, (&mut Chilled, &mut Hasted, &mut Frenzy), &mut AttackState, (&mut Cooldowns, &mut Dashing), &mut Dead), (Without<Dummy>, Without<Zombie>, Without<Decoy>)>,
+    mut dead: Query<(Entity, &MaxHealth, &mut Health, (&mut Chilled, &mut Hasted, &mut Frenzy, &mut Fury), &mut AttackState, (&mut Cooldowns, &mut Dashing), &mut Dead), (Without<Dummy>, Without<Zombie>, Without<Decoy>)>,
 ) {
     let now = timeline.tick().0;
-    for (player, max, mut health, (mut chilled, mut hasted, mut frenzy), mut attack, (mut cooldowns, mut dashing), mut dead) in &mut dead {
+    for (player, max, mut health, (mut chilled, mut hasted, mut frenzy, mut fury), mut attack, (mut cooldowns, mut dashing), mut dead) in &mut dead {
         if !dead.placed && now + PLACE_BEFORE_RESPAWN_TICKS >= dead.respawn_at {
             dead.placed = true;
             commands.entity(player).insert(NeedsSpawnPoint);
@@ -143,6 +143,7 @@ pub(super) fn respawn(
             hasted.set_if_neq(Hasted::default());
             // Its frenzy's over (the zombies it killed still count: `Member::zombie_kills`).
             frenzy.set_if_neq(Frenzy::default());
+            fury.set_if_neq(Fury::default());
             *attack = AttackState::default();
             // Practice's No cooldowns stays as it was.
             *cooldowns = Cooldowns { free: cooldowns.free, ..default() };

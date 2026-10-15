@@ -315,6 +315,12 @@ pub struct Frenzy {
     pub strength: f32,
 }
 
+/// A fury stone's rush (`PickupKind::Fury`): attacking `FURY_HASTE` faster, fading to nothing
+/// over `FURY_TICKS`, as a `Frenzy` does; but walking no faster. Server-authoritative and
+/// replicated.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
+pub struct Fury(pub Frenzy);
+
 impl Frenzy {
     /// The frenzy from a zombie kill at `now`, after `kills` others this match, for a fighter
     /// that fights in `melee` or not (a melee fighter's lasts longer).
@@ -342,8 +348,8 @@ pub enum PickupKind {
     /// A treasure chest, in the waves mode: gold for everyone in the run. Lies out in the wilds
     /// during a wave, gone once taken or the wave's over.
     Chest,
-    /// A blood shrine: a frenzy (`SHRINE_FRENZY`), walking and attacking faster for a while.
-    Shrine,
+    /// A fury stone: attacking faster for a while (`Fury`), walking no faster (that's a haste's).
+    Fury,
 }
 
 /// A monster made stronger than its kind, in the waves mode: bigger, tougher, worth more, and
@@ -731,6 +737,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<RecentHits>().replicate();
         app.component::<Hasted>().replicate();
         app.component::<Frenzy>().replicate();
+        app.component::<Fury>().replicate();
         app.component::<Pickup>().replicate();
         app.component::<MaxHealth>().replicate();
         app.component::<crate::items::Satchel>().replicate();

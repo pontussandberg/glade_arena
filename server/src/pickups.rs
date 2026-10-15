@@ -28,7 +28,7 @@ pub(super) fn take_pickups(
     mut pickups: Query<(Entity, &mut Pickup, &InRoom)>,
     // Not dummies: one standing on a pickup's spot would take it every time it came back. Nor
     // decoys, or the shopkeeper.
-    mut players: Query<(&PlayerId, &MaxHealth, &Pos, &mut Health, &mut Hasted, &mut RecentHits, &InRoom, &mut Frenzy), (InPlay, With<ControlledBy>)>,
+    mut players: Query<(&PlayerId, &MaxHealth, &Pos, &mut Health, &mut Hasted, &mut RecentHits, &InRoom, &mut Fury), (InPlay, With<ControlledBy>)>,
 ) {
     let now = timeline.tick().0;
     for (entity, mut pickup, room) in &mut pickups {
@@ -38,7 +38,7 @@ pub(super) fn take_pickups(
             None => {}
         }
         let at = pickup.at;
-        let Some((id, max, _, mut health, mut hasted, mut hits, _, mut frenzy)) =
+        let Some((id, max, _, mut health, mut hasted, mut hits, _, mut fury)) =
             players.iter_mut().find(|(_, _, pos, _, _, _, in_room, _)| *in_room == room && sim::touches_pickup(pos.0, at))
         else {
             continue;
@@ -52,9 +52,9 @@ pub(super) fn take_pickups(
                 hasted.start(now);
                 PICKUP_RESPAWN_TICKS
             }
-            PickupKind::Shrine => {
-                *frenzy = Frenzy { from: now, until: now + SHRINE_FRENZY_TICKS, strength: SHRINE_FRENZY.max(frenzy.at(now as f32)) };
-                SHRINE_RESPAWN_TICKS
+            PickupKind::Fury => {
+                *fury = Fury(Frenzy { from: now, until: now + FURY_TICKS, strength: FURY_HASTE.max(fury.0.at(now as f32)) });
+                FURY_RESPAWN_TICKS
             }
             PickupKind::Chest => {
                 // Gold for everyone, and it's gone.

@@ -123,7 +123,7 @@ pub(super) fn feed_frenzy(
     let now = timeline.tick().0;
     for (room, dead) in &killed {
         let Some(before) = lobby.count_zombie_kill(room.key, dead.killer) else { continue };
-        // Against the waves, kills are counted, but frenzies come from items and shrines.
+        // Against the waves, kills are counted, but frenzies come from items.
         if lobby.pve(room.key) {
             continue;
         }

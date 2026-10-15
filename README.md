@@ -78,7 +78,7 @@ tougher each time), and from wave 6 a few
 (blows up where it dies), Frostbound or Splitting. Everyone has **one life**: a fallen player is
 **down** where they fell (marked by a ring of spirit light) until an ally stands over them for 3
 seconds to pick them up, the wave is cleared, or a boss falls; if everyone is down, the run is
-over (alone, the first fall ends it). Shrines (blood-red stones) send you into a frenzy.
+over (alone, the first fall ends it). Fury stones (pale yellow crossed blades) make you attack faster for a while; the blue winged boots make you walk faster.
 
 Every wave is the same every run: which monsters come, in what order, which are elites, and its
 omen are all the wave's own (only where they come out of, and where chests turn up, changes).

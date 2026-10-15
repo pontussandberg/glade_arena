@@ -125,11 +125,13 @@ pub mod palette {
     pub const TORCH_LIGHT: Color = Color::srgb_u8(0xFF, 0x94, 0x43);
 
     // Pickups glow like spirits do: a heal's fresh green and a haste's quick blue; a chest's gold
-    // and a shrine's blood.
+    // and a fury stone's pale yellow. Blood marks what's dire (an omen).
     pub const HEAL: Color = Color::srgb_u8(0x7C, 0xF2, 0x9A);
     pub const HASTE: Color = Color::srgb_u8(0x58, 0xA8, 0xFF);
     pub const GOLD: Color = Color::srgb_u8(0xFF, 0xCC, 0x44);
     pub const BLOOD: Color = Color::srgb_u8(0xE8, 0x2A, 0x3C);
+    /// A fury stone's pale yellow: attack speed.
+    pub const FURY: Color = Color::srgb_u8(0xFF, 0xE8, 0x8C);
 
     /// The UI's own theme, "Bronze": panels, text and accents, apart from the world's.
     /// What marks a fighter, an ability or a pickup keeps its world color. Named by role, so a

@@ -300,13 +300,16 @@ pub(super) fn think(
                     }
                 }
                 Trick::Blink { within, distance, leaves, .. } if dist < *within => {
-                    // Away from its prey, else off to a side: wherever there's open ground in reach.
+                    // As far away from its prey as there's open ground for: straight away first,
+                    // then turning further round, the whole way if it must, then a shorter hop.
+                    // Never through a wall, nor into somewhere it can't be got at.
                     let away = (-to).normalize_or(Vec2::X);
-                    let spot = [away, away.rotate(Vec2::from_angle(0.6)), away.rotate(Vec2::from_angle(-0.6)), away.perp(), -away.perp()]
+                    let turns = (0..12).map(|n| (n as f32 / 2.0).ceil() * if n % 2 == 0 { 1.0 } else { -1.0 } * TAU / 12.0);
+                    let spot = [*distance, *distance * 0.6]
                         .into_iter()
-                        .map(|dir| pos.0 + dir * *distance)
-                        // Never through a wall, nor into somewhere it can't be got at.
-                        .find(|spot| map.walkable_at(*spot) && map.line_walkable(pos.0, *spot));
+                        .flat_map(|reach| turns.clone().map(move |turn| (reach, turn)))
+                        .map(|(reach, turn)| pos.0 + away.rotate(Vec2::from_angle(turn)) * reach)
+                        .find(|spot| map.walkable_at(*spot) && map.line_walkable(pos.0, *spot) && spot.distance(target) > *within);
                     if let Some(to) = spot {
                         fired = true;
                         input.move_to = None;

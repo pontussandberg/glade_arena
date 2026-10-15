@@ -1,5 +1,6 @@
-//! Pickups lying in the arena, and what taking one shows: a glowing green cross (a heal) or a
-//! blue winged boot (a haste, like a sprint's) floating over a glow on the ground, bobbing and turning, gone while
+//! Pickups lying in the arena, and what taking one shows: a glowing green cross (a heal), a blue
+//! winged boot (a haste: walking faster, like a sprint's) or pale yellow crossed blades (a fury
+//! stone: attacking faster) floating over a glow on the ground, bobbing and turning, gone while
 //! they're waiting to come back. A heal bursts around whoever takes it, even at full health (a
 //! ring spreading on the ground, sparks spiraling up); a hasted fighter trails blue wind streaks while it runs, like a
 //! sprint. Who takes a pickup is the server's call (`Pickup`, `Hasted`); a heal's number is in
@@ -39,7 +40,7 @@ const GLOW: f32 = 3.0;
 /// How often (seconds) a pickup lying out may give off a sparkle (`fx::sparkle`), and the odds,
 /// each time, that it does: a haste's wind always, the rest now and then.
 const SPARKLE_EVERY: f32 = 0.05;
-/// How fast a heal breathes and a shrine's stone beats (a second), and by how much.
+/// How fast a heal breathes (a second), and by how much.
 const PULSE_RATE: f32 = 1.3;
 const PULSE: f32 = 0.08;
 
@@ -70,13 +71,14 @@ struct PickupLooks {
     heal: (Handle<StandardMaterial>, Handle<StandardMaterial>),
     haste: (Handle<StandardMaterial>, Handle<StandardMaterial>),
     chest: (Handle<StandardMaterial>, Handle<StandardMaterial>),
-    shrine: (Handle<StandardMaterial>, Handle<StandardMaterial>),
-    /// A chest's box and lid (in plain wood), its gold bands; a shrine's floating stone.
+    fury: (Handle<StandardMaterial>, Handle<StandardMaterial>),
+    /// A chest's box and lid (in plain wood), its gold bands; a fury stone's blade and hilt.
     chest_box: Handle<Mesh>,
     chest_lid: Handle<Mesh>,
     chest_band: Handle<Mesh>,
     wood: Handle<StandardMaterial>,
-    shrine_stone: Handle<Mesh>,
+    blade: Handle<Mesh>,
+    hilt: Handle<Mesh>,
     /// The winged boot: its shaft, its foot, a feather of its wings (one meter long along +X,
     /// scaled to its length), and the wings' pale glow.
     boot_shaft: Handle<Mesh>,
@@ -98,7 +100,7 @@ impl PickupLooks {
             PickupKind::Heal => &self.heal,
             PickupKind::Haste => &self.haste,
             PickupKind::Chest => &self.chest,
-            PickupKind::Shrine => &self.shrine,
+            PickupKind::Fury => &self.fury,
         }
     }
 }
@@ -109,7 +111,7 @@ pub(crate) fn color(kind: PickupKind) -> Color {
         PickupKind::Heal => palette::HEAL,
         PickupKind::Haste => palette::HASTE,
         PickupKind::Chest => palette::GOLD,
-        PickupKind::Shrine => palette::BLOOD,
+        PickupKind::Fury => palette::FURY,
     }
 }
 
@@ -119,7 +121,7 @@ pub(crate) fn icon(kind: PickupKind) -> &'static str {
         PickupKind::Heal => "+",
         PickupKind::Haste => ">>",
         PickupKind::Chest => "$",
-        PickupKind::Shrine => "!",
+        PickupKind::Fury => "X",
     }
 }
 
@@ -129,15 +131,16 @@ fn load_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mate
         (materials.add(arena::glow(c, GLOW)), materials.add(arena::translucent(c, 0.3, 1.5)))
     };
     let (heal, haste) = (kind(PickupKind::Heal), kind(PickupKind::Haste));
-    let (chest, shrine) = (kind(PickupKind::Chest), kind(PickupKind::Shrine));
+    let (chest, fury) = (kind(PickupKind::Chest), kind(PickupKind::Fury));
     commands.insert_resource(PickupLooks {
         chest,
-        shrine,
+        fury,
         chest_box: meshes.add(Cuboid::new(0.8, 0.42, 0.55)),
         chest_lid: meshes.add(Cuboid::new(0.84, 0.16, 0.59)),
         chest_band: meshes.add(Cuboid::new(0.1, 0.6, 0.62)),
         wood: materials.add(arena::matte(palette::BARK)),
-        shrine_stone: meshes.add(Cuboid::new(0.42, 0.42, 0.42)),
+        blade: meshes.add(Cuboid::new(0.08, 0.72, 0.03)),
+        hilt: meshes.add(Cuboid::new(0.26, 0.05, 0.06)),
         bar: meshes.add(Cuboid::new(0.14, 0.5, 0.14)),
         ground: meshes.add(soft_glow(0.75)),
         heal,
@@ -184,10 +187,16 @@ fn add_pickup_visuals(mut commands: Commands, looks: Res<PickupLooks>, new: Quer
                     }
                 });
             }
-            PickupKind::Shrine => {
-                // A blood-red stone, turned up on its point.
-                let tipped = Quat::from_rotation_x(std::f32::consts::FRAC_PI_4) * Quat::from_rotation_z(std::f32::consts::FRAC_PI_4);
-                commands.entity(floating).with_child((Mesh3d(looks.shrine_stone.clone()), MeshMaterial3d(body.clone()), Transform::from_rotation(tipped)));
+            PickupKind::Fury => {
+                // Two blades crossed, points up, each with its crossguard: strike faster.
+                commands.entity(floating).with_children(|blades| {
+                    for side in [-1.0f32, 1.0] {
+                        let tilt = Quat::from_rotation_z(side * 0.6);
+                        blades.spawn((Mesh3d(looks.blade.clone()), MeshMaterial3d(body.clone()), Transform::from_rotation(tilt)));
+                        let guard = tilt * Vec3::new(0.0, -0.22, 0.0);
+                        blades.spawn((Mesh3d(looks.hilt.clone()), MeshMaterial3d(body.clone()), Transform::from_translation(guard).with_rotation(tilt)));
+                    }
+                });
             }
             PickupKind::Haste => {
                 let part = |mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>, transform: Transform| {
@@ -239,13 +248,13 @@ fn sparkles(kind: PickupKind) -> (Sparkle, f32) {
     match kind {
         PickupKind::Heal => (Sparkle::Heal, 0.4),
         PickupKind::Haste => (Sparkle::Haste, 1.0),
-        PickupKind::Shrine => (Sparkle::Blood, 0.3),
+        PickupKind::Fury => (Sparkle::Fury, 0.35),
         PickupKind::Chest => (Sparkle::Gold, 0.12),
     }
 }
 
-/// Bobs and turns the pickups that are lying there, a heal breathing and a shrine's stone
-/// beating like a heart, each giving off its sparkles; hides the taken ones.
+/// Bobs and turns the pickups that are lying there, a heal breathing, a haste and a fury stone
+/// spinning eager, each giving off its sparkles; hides the taken ones.
 fn float_pickups(
     mut commands: Commands,
     time: Res<Time>,
@@ -280,15 +289,10 @@ fn float_pickups(
         }
         let pulse = match pickup.kind {
             PickupKind::Heal => 1.0 + PULSE * (t * PULSE_RATE * std::f32::consts::TAU).sin(),
-            // Two quick beats, then a rest.
-            PickupKind::Shrine => {
-                let beat = (t * PULSE_RATE).fract();
-                1.0 + 2.0 * PULSE * ((-((beat - 0.08) / 0.05).powi(2)).exp() + 0.7 * (-((beat - 0.28) / 0.05).powi(2)).exp())
-            }
             _ => 1.0,
         };
-        // A haste spins faster, eager to go.
-        let turn = if pickup.kind == PickupKind::Haste { TURN_RATE * 2.2 } else { TURN_RATE };
+        // A haste and a fury stone spin faster, eager to go.
+        let turn = if matches!(pickup.kind, PickupKind::Haste | PickupKind::Fury) { TURN_RATE * 2.2 } else { TURN_RATE };
         if let Ok(mut transform) = floating.get_mut(float.0) {
             transform.translation.y = FLOAT_HEIGHT + BOB * (t * BOB_RATE).sin();
             transform.rotation = Quat::from_rotation_y(t * turn);

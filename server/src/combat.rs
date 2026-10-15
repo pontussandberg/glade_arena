@@ -223,7 +223,7 @@ pub(super) fn attack(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut attackers: Query<
-        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), &Frenzy, &mut Cooldowns, Option<&Might>),
+        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), (&Frenzy, Option<&Fury>), &mut Cooldowns, Option<&Might>),
         InPlay,
     >,
     mut targets: Targets,
@@ -231,7 +231,7 @@ pub(super) fn attack(
     mut log: ResMut<HitLog>,
 ) {
     let now = timeline.tick();
-    for (id, class, pos, mut input, mut state, mut last_swing, (room, team), frenzy, mut cooldowns, might) in &mut attackers {
+    for (id, class, pos, mut input, mut state, mut last_swing, (room, team), (frenzy, fury), mut cooldowns, might) in &mut attackers {
         let might = might_of(might);
         let side = (*room, *team);
         // A primed attack going off this tick is a sure crit (`primer`: the ability that readied it).
@@ -273,8 +273,9 @@ pub(super) fn attack(
                 }
             }
         }
-        // A frenzy speeds up the attack it starts, all through.
-        let next = sim::start_attack_hasted(now.0, *class, &input, next, frenzy.at(now.0 as f32));
+        // A frenzy (or a fury stone's rush) speeds up the attack it starts, all through.
+        let haste = frenzy.at(now.0 as f32) + fury.map_or(0.0, |f| f.0.at(now.0 as f32));
+        let next = sim::start_attack_hasted(now.0, *class, &input, next, haste);
         if next.swing.is_some_and(|w| w.started_at == now.0) {
             input.move_to = None;
         }

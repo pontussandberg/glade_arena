@@ -2,7 +2,7 @@
 //! camp in the middle, where the merchant keeps shop and the party starts; roads out of its four
 //! gates to the places around it, each with its own way in and something to find there:
 //!
-//! - north, a graveyard of crooked stones around a ruined chapel, a blood shrine at its altar
+//! - north, a graveyard of crooked stones around a ruined chapel, a fury stone at its altar
 //! - north-east, the hedge maze: old garden walls doubling back on themselves, chests deep in
 //! - east, a moonlit lake, a stone bridge out to its island and a ford off the far side
 //! - south-east, the quarry: boulders and a burned-out watchtower
@@ -229,9 +229,9 @@ const PICKUPS: &[(Vec2, PickupKind)] = &[
     (Vec2::new(-21.5, -4.5), PickupKind::Haste),
     (Vec2::new(17.5, -2.5), PickupKind::Haste),
     (Vec2::new(-1.5, -17.5), PickupKind::Haste),
-    (Vec2::new(33.5, 4.5), PickupKind::Shrine),
-    (Vec2::new(0.5, 31.5), PickupKind::Shrine),
-    (Vec2::new(-31.5, -25.5), PickupKind::Shrine),
+    (Vec2::new(33.5, 4.5), PickupKind::Fury),
+    (Vec2::new(0.5, 31.5), PickupKind::Fury),
+    (Vec2::new(-31.5, -25.5), PickupKind::Fury),
 ];
 
 /// Where monsters come out.

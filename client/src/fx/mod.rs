@@ -401,8 +401,8 @@ pub(crate) enum Sparkle {
     Heal,
     /// A haste: motes of wind whipping round it.
     Haste,
-    /// A shrine: blood dripping off its stone.
-    Blood,
+    /// A fury stone: quick flashes of steel round its blades.
+    Fury,
     /// A chest: light glinting off its gold.
     Gold,
 }
@@ -425,10 +425,9 @@ pub(crate) fn sparkle(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3, 
             let motion = Motion::Orbit { center: at.with_y(0.0), angle: r(1) * std::f32::consts::TAU, speed: 7.0, radius: (0.6, 0.3), height: (at.y - 0.4 + 0.5 * r(2), at.y + 0.3) };
             (art.mote.clone(), Part::new(now, [0.05, 0.3, 0.5], Ink::Haste, at).size(0.045).motion(motion).flicker(0.3).shrink(0.3))
         }
-        Sparkle::Blood => {
-            let from = at + round(1, 0.12) - Vec3::Y * 0.2;
-            let drip = Motion::Thrown { velocity: round(2, 0.15) - Vec3::Y * 0.2, gravity: 5.0, tumble: Vec3::ZERO };
-            (art.mote.clone(), Part::new(now, [0.05, 0.45, 0.6], Ink::Blood, from).size(0.06 + 0.03 * r(3)).motion(drip).shrink(0.5))
+        Sparkle::Fury => {
+            let from = at + round(1, 0.45) + Vec3::Y * (0.5 * r(2) - 0.25);
+            (art.glint.clone(), Part::new(now, [0.03, 0.05, 0.18], Ink::Spark, from).size(0.3 + 0.2 * r(3)).facing(r(4) * std::f32::consts::TAU).grow(0.3).shrink(0.2).spin(6.0))
         }
         Sparkle::Gold => {
             let from = at + round(1, 0.35) + Vec3::Y * (0.3 * r(2) - 0.3);

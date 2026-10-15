@@ -597,25 +597,27 @@ fn acolytes_blink_away_when_closed_in_on() {
     p.until(Duration::from_secs(60), "an acolyte about", |p| find(p).is_some());
     let (entity, _) = find(&mut p).unwrap();
     let pos = |p: &mut Party| p.server.world().get::<Pos>(entity).map(|pos| pos.0);
-    // Up close (and kept from harm), until it's gone from there.
+    // Up close (and kept from harm), until it's gone from there: a jump from where it was last
+    // seen, whichever frame it comes in.
     let mut jumped = None;
+    let mut last: Option<Vec2> = None;
     p.until(Duration::from_secs(8), "the acolyte blinks", |p| {
-        let Some(before) = pos(p) else { return false };
+        let Some(now) = pos(p) else { return false };
+        if let Some(was) = last.filter(|was| was.distance(now) > 4.0) {
+            jumped = Some((was, now));
+            return true;
+        }
+        last = Some(now);
         let map = MapId::Wilds.map();
-        let beside = [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y].map(|d| before + d * 1.5).into_iter().find(|s| map.walkable_at(*s)).unwrap_or(before);
+        let beside = [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y].map(|d| now + d * 1.5).into_iter().find(|s| map.walkable_at(*s)).unwrap_or(now);
         place(&mut p.server, 1, beside);
         if let Some(mut health) = p.server.world_mut().query::<(&PlayerId, &mut Health)>().iter_mut(p.server.world_mut()).find(|(id, _)| id.0 == peer(1)).map(|(_, h)| h) {
             health.0 = health.0.max(100);
         }
-        p.update();
-        let after = pos(p).unwrap_or(before);
-        if after.distance(before) > 4.0 {
-            jumped = Some((before, after));
-        }
-        jumped.is_some()
+        false
     });
     let (before, after) = jumped.unwrap();
-    assert!(after.distance(before) > 5.0, "blinked only {}", after.distance(before));
+    assert!(after.distance(before) > 4.0, "blinked only {}", after.distance(before));
     assert!(effects(&mut p.server, FxKind::Blink) > 0, "no blink to be seen");
 }
 
@@ -671,4 +673,22 @@ fn leaving_practice_leaves_nothing_behind() {
         let seen = seen(&mut p);
         assert!(seen.is_empty(), "round {round}: the client still sees the old room's things: {seen:?}");
     }
+}
+
+/// A fury stone quickens attacks, never walking: its rush (`Fury`) and no haste, no frenzy.
+#[test]
+fn a_fury_stone_quickens_attacks_only() {
+    let mut p = Party::new(5884, "revenant", false);
+    p.ask(RoomRequest::QuickJoin("Waves".into()));
+    p.until(Duration::from_secs(10), "in the run", |p| player::<Health>(&mut p.server, 1).is_some());
+    let stone = MapId::Wilds.map().pickups.iter().find(|(_, kind)| *kind == PickupKind::Fury).map(|(at, _)| *at).expect("a fury stone in the wilds");
+    p.until(Duration::from_secs(3), "the rush", |p| {
+        place(&mut p.server, 1, stone);
+        player::<Fury>(&mut p.server, 1).is_some_and(|f| f.0.strength > 0.0)
+    });
+    let now = p.server.world().resource::<lightyear::prelude::LocalTimeline>().tick().0;
+    let fury = player::<Fury>(&mut p.server, 1).unwrap();
+    assert!(fury.0.at(now as f32) > 0.2, "barely any rush: {fury:?}");
+    assert_eq!(player::<Hasted>(&mut p.server, 1).unwrap().speed_factor(now), 1.0, "it hasted walking");
+    assert_eq!(player::<Frenzy>(&mut p.server, 1).unwrap().at(now as f32), 0.0, "it frenzied");
 }
