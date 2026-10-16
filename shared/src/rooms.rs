@@ -159,9 +159,8 @@ pub struct RoomSummary {
     pub mode: Mode,
     pub map: MapId,
     pub players: u8,
+    /// Its match is on: no way in from the list (`RoomRequest::Join`).
     pub started: bool,
-    /// No way in from the list: its match has started.
-    pub closed: bool,
     /// Only those with its password may join.
     pub locked: bool,
 }

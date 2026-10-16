@@ -56,13 +56,27 @@ fn think(
     let Ok((my_id, class, me, attack, cooldowns, my_team)) = me.single() else { return };
     // The server tick our news is from: an ability whose cooldowns were over by then is ready.
     let latest = server.single().ok().and_then(|timeline| timeline.last_received_tick()).map_or(0, |tick| tick.0);
-    let Some(target) = others
+    let target = others
         .iter()
         // Foes only: not allies (the party, against the waves).
         .filter(|(id, _, health, team, _)| id.0 != my_id.0 && health.alive() && !my_team.zip(*team).is_some_and(|(mine, theirs)| mine.allied(*theirs)))
         .map(|(_, p, ..)| p.0)
-        .min_by(|a, b| a.distance(me.0).total_cmp(&b.distance(me.0)))
-    else {
+        .min_by(|a, b| a.distance(me.0).total_cmp(&b.distance(me.0)));
+    // An ally down, with no foe near (or none alive at all, the safest moment there is): go and
+    // pick them up (stand over them).
+    let fallen = downed
+        .iter()
+        .filter(|(_, team)| my_team.zip(*team).is_some_and(|(mine, theirs)| mine.allied(*theirs)))
+        .map(|(p, _)| p.0)
+        .min_by(|a, b| a.distance(me.0).total_cmp(&b.distance(me.0)));
+    if let Some(fallen) = fallen
+        && target.is_none_or(|target| target.distance(me.0) > RESCUE_SAFE)
+    {
+        let move_to = (fallen.distance(me.0) > REVIVE_RADIUS * 0.5).then(|| map.walk_target(fallen, 2)).flatten();
+        desired.0 = PlayerInput { move_to, aim: target.unwrap_or(fallen) - me.0, ..default() };
+        return;
+    }
+    let Some(target) = target else {
         desired.0 = PlayerInput::default();
         return;
     };
@@ -92,19 +106,6 @@ fn think(
         (Some(current), Some(new)) if (new - current).abs().max_element() < 2.0 => Some(current),
         _ => wanted,
     };
-    // An ally down, with no foe near: go and pick them up (stand over them).
-    let fallen = downed
-        .iter()
-        .filter(|(_, team)| my_team.zip(*team).is_some_and(|(mine, theirs)| mine.allied(*theirs)))
-        .map(|(p, _)| p.0)
-        .min_by(|a, b| a.distance(me.0).total_cmp(&b.distance(me.0)));
-    if let Some(fallen) = fallen
-        && distance > RESCUE_SAFE
-    {
-        let move_to = (fallen.distance(me.0) > REVIVE_RADIUS * 0.5).then(|| map.walk_target(fallen, 2)).flatten();
-        desired.0 = PlayerInput { move_to, aim: to_target, ..default() };
-        return;
-    }
     // Something about to land on us: step away from it, unless we're winding up ourselves.
     let foe = |team: Option<&Team>| !my_team.zip(team).is_some_and(|(mine, theirs)| mine.allied(*theirs));
     let bomb = warnings

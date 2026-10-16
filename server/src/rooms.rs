@@ -230,8 +230,6 @@ impl Lobby {
             map: room.map,
             players: room.members.len() as u8,
             started: room.started,
-            // Joined from the list only while waiting (`RoomRequest::Join`).
-            closed: room.started,
             locked: room.password.is_some(),
         }
     }
@@ -443,8 +441,13 @@ impl Lobby {
     pub(crate) fn count_zombie_kill(&mut self, key: RoomKey, killer: PeerId) -> Option<u32> {
         let room = self.rooms.get_mut(&key)?;
         let link = room.members.iter().copied().find(|link| self.guests.get(link).is_some_and(|g| g.peer == killer))?;
-        room.changed = true;
         let pvp = !room.mode.pve();
+        // Against the waves the kill rides along on the next run refresh (the count of monsters
+        // left changed too, throttled by `RUN_COUNT_EVERY`): sending the whole room for every
+        // kill of a big wave would flood its members.
+        if pvp {
+            room.changed = true;
+        }
         let guest = self.guests.get_mut(&link).expect("a member");
         guest.zombie_kills += 1;
         if pvp {
@@ -1127,6 +1130,12 @@ fn leave(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity) -> bool {
     lobby.lingering.push(Linger { link: Some(link), net: room.net, until });
     let room = lobby.rooms.get_mut(&key).expect("there");
     room.members.retain(|m| *m != link);
+    // Their marks on the run go with them: not counted down (the wave's banner), nor ready
+    // (the shop's count), once they're gone.
+    if let Some(run) = room.run.as_mut() {
+        run.ready.retain(|g| *g != id);
+        run.waiting.retain(|g| *g != id);
+    }
     room.changed = true;
     info!(room = key.0, guest = id, "left a room");
     match room.members.first() {

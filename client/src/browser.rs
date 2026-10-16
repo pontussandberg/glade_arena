@@ -1,5 +1,5 @@
 //! Home's side panel: two panes, each one block that folds open and shut by its header, both
-//! open to begin with and never hidden. "Play with friends": every lobby there is (name, mode, how
+//! folded to begin with, each kept as it was left. "Play with friends": every lobby there is (name, mode, how
 //! full, whether its match is on, whether it has a password), each with a way in, the ones against
 //! the waves (PvE) apart from the ones for fighting each other (PvP); and under them a form to
 //! create one: a name (click it to type), the game (PvE first: the obvious choice), its mode (PvP:
@@ -626,7 +626,7 @@ fn spawn_row(card: &mut ChildSpawnerCommands, room: &RoomSummary) {
             });
         });
         // Started, it's closed: only a waiting lobby takes anyone in.
-        if room.closed {
+        if room.started {
             row.spawn(ui_text("In progress", 12.0, palette::ui::MUTED));
         } else if room.full() {
             row.spawn(ui_text("Full", 12.0, palette::ui::MUTED));

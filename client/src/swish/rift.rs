@@ -221,17 +221,28 @@ pub(super) fn strike_ground(
     time: Res<Time>,
     assets: Res<SwishAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut fighters: Query<(&mut Blade, &LastSwing, &Pos, &ClassId, (&PlayerId, Option<&Team>))>,
+    mut fighters: Query<(Entity, &mut Blade, &LastSwing, &Pos, &ClassId, (&PlayerId, Option<&Team>), Option<&mut TornRifts>)>,
 ) {
     let now = time.elapsed_secs();
-    for (mut blade, swing, pos, class, (id, team)) in &mut fighters {
+    for (entity, mut blade, swing, pos, class, (id, team), torn) in &mut fighters {
         if !std::mem::take(&mut blade.striking) {
             continue;
         }
-        // Where it burns its striker's foes (`burn_in_rifts`), while it's open.
-        if let Some(rift) = arena_shared::sim::Rift::torn(id.0, *class, pos.0, swing).filter(|rift| rift.burn > 0) {
-            let open = (rift.until - swing.tick) as f32 / arena_shared::config::TICK_HZ as f32;
-            commands.spawn(RiftZone { rift, tick: swing.tick, team: team.copied(), until: now + open });
+        if let Some(rift) = arena_shared::sim::Rift::torn(id.0, *class, pos.0, swing) {
+            // Where it burns its striker's foes (`burn_in_rifts`), while it's open.
+            if rift.burn > 0 {
+                let open = (rift.until - swing.tick) as f32 / arena_shared::config::TICK_HZ as f32;
+                commands.spawn(RiftZone { rift, tick: swing.tick, team: team.copied(), until: now + open });
+            }
+            // And where it hastes its striker, kept from where they stood as they struck: the
+            // live move speed (`stat_frame`) reads it, as the server grants it.
+            match torn {
+                Some(mut torn) => {
+                    torn.0.retain(|r| r.until > swing.tick);
+                    torn.0.push(rift);
+                }
+                None => _ = commands.entity(entity).insert(TornRifts(vec![rift])),
+            }
         }
         // The plain strike's break, and an empowered one's: the same, grown to its lane.
         let (Some((from, range, width)), Some((near_end, far_end, wide))) = (class.def().attack.lane(false), class.def().attack.lane_grown(swing.empowered, swing.grown)) else { continue };
@@ -381,6 +392,11 @@ pub(super) fn drive_impacts(
         }
     }
 }
+
+/// The rifts a fighter's strikes tore that are still open (`RiftDef`), each from where they stood
+/// as they struck: their own ground hastes them (the server's `move_players`).
+#[derive(Component)]
+pub(crate) struct TornRifts(pub(crate) Vec<arena_shared::sim::Rift>);
 
 /// An open rift that burns its striker's foes standing in it (`RiftDef::burn`), as the server
 /// has it: torn at `tick`, by one on `team`, gone at `until` (seconds).

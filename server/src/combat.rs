@@ -362,9 +362,10 @@ pub(super) fn burn_rifts(
     if !now.is_multiple_of(arena_shared::items::ZONE_PULSE_TICKS) {
         return;
     }
-    let mut owners: Vec<PeerId> = rifts.0.iter().filter(|(_, rift)| rift.burn > 0 && rift.until > now).map(|(_, rift)| rift.owner).collect();
-    owners.sort_by_key(|id| format!("{id:?}"));
-    owners.dedup();
+    // Each owner once (a set: each is burned for on its own, so order doesn't matter).
+    let owners: std::collections::HashSet<PeerId> = rifts.0.iter().filter(|(_, rift)| rift.burn > 0 && rift.until > now).map(|(_, rift)| rift.owner).collect();
+    // A leftover fraction only matters while its owner's rifts burn: the rest go.
+    owed.retain(|owner, _| owners.contains(owner));
     for owner in owners {
         let Some((entity, side)) = targets.iter().find(|(_, id, ..)| id.0 == owner).map(|(e, _, (room, team), ..)| (e, (*room, *team))) else { continue };
         let Ok(class) = classes.get(entity).copied() else { continue };

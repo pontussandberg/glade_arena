@@ -101,16 +101,18 @@ pub(super) fn show_room(
 /// Where the room stands, in one line: the match on (the wave fought); before it, the last result,
 /// then who's ready.
 fn status(view: &RoomView, my_id: u32, leading: bool) -> (String, Color) {
-    if view.started {
-        let line = view.run.as_ref().filter(|_| view.mode.pve()).map_or("Match in progress".to_string(), |run| format!("Fighting wave {}", run.wave));
-        return (line, ACCENT);
-    }
+    // The result before the match on: `started` stays set once the match or run ends (the room
+    // ends as its members leave), so a won match or a fallen run shows as what it is.
     if let Some(winner) = view.winner_name(my_id) {
         let won = if winner == "You" { "You won the last match".to_string() } else { format!("{winner} won the last match") };
         return (won, palette::TORCH_FLAME);
     }
     if let Some(Phase::Over { reached }) = view.run.as_ref().map(|run| run.phase) {
         return (format!("The last run fell on wave {reached}"), palette::TORCH_FLAME);
+    }
+    if view.started {
+        let line = view.run.as_ref().filter(|_| view.mode.pve()).map_or("Match in progress".to_string(), |run| format!("Fighting wave {}", run.wave));
+        return (line, ACCENT);
     }
     let ready = view.member(my_id).is_some_and(|m| m.ready);
     match (leading, view.all_ready(), ready) {
@@ -310,6 +312,8 @@ enum WayIn {
     Start,
     WaitReady,
     Ready(bool),
+    /// The match is won or the run lost (a run, if true): no way back in.
+    Over(bool),
 }
 
 fn way_in(screen: Screen, view: Option<&RoomView>, me: Option<&Me>) -> WayIn {
@@ -317,6 +321,9 @@ fn way_in(screen: Screen, view: Option<&RoomView>, me: Option<&Me>) -> WayIn {
     match view {
         _ if screen == Screen::Home => WayIn::Solo,
         None => WayIn::Solo,
+        // A won match or a lost run doesn't start again: the server turns `EnterArena` away.
+        Some(view) if view.run.as_ref().is_some_and(|run| matches!(run.phase, Phase::Over { .. })) => WayIn::Over(true),
+        Some(view) if view.started && view.winner.is_some() => WayIn::Over(false),
         Some(view) if view.started => WayIn::Enter,
         Some(view) if view.leader == my_id && view.all_ready() => WayIn::Start,
         Some(view) if view.leader == my_id => WayIn::WaitReady,
@@ -356,6 +363,8 @@ pub(super) fn enter_arena(
         WayIn::WaitReady => "WAITING FOR PLAYERS",
         WayIn::Ready(false) => "READY",
         WayIn::Ready(true) => "READY!",
+        WayIn::Over(true) => "THE RUN IS OVER",
+        WayIn::Over(false) => "THE MATCH IS OVER",
     };
     let (mut label, mut label_color) = label.into_inner();
     if label.0 != text {
@@ -373,7 +382,7 @@ pub(super) fn enter_arena(
     // Light on green, dark on the accent.
     label_color.set_if_neq(TextColor(if base == palette::ui::GO { palette::ui::TEXT.lighter(0.1) } else { palette::ui::PANEL }));
     let fill = match (way, *interaction) {
-        (WayIn::WaitReady, _) => palette::ui::MUTED.with_alpha(0.5),
+        (WayIn::WaitReady | WayIn::Over(_), _) => palette::ui::MUTED.with_alpha(0.5),
         (_, Interaction::None) => base.lighter(0.12 * breath),
         _ => base.lighter(0.16),
     };
@@ -388,7 +397,7 @@ pub(super) fn enter_arena(
         WayIn::Solo => request(&mut sender, RoomRequest::PlaySolo),
         WayIn::Enter => request(&mut sender, RoomRequest::EnterArena),
         WayIn::Start => request(&mut sender, RoomRequest::Start),
-        WayIn::WaitReady => {}
+        WayIn::WaitReady | WayIn::Over(_) => {}
         WayIn::Ready(ready) => request(&mut sender, RoomRequest::Ready(!ready)),
     }
 }

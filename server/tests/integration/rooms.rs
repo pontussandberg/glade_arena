@@ -241,7 +241,7 @@ fn a_run_under_way_cant_be_joined() {
     g.ask(0, RoomRequest::QuickJoin("Waves".into()));
     g.until(Duration::from_secs(10), "A in the run", |g| g.room(0).is_some_and(|r| r.run.is_some()));
     let key = g.room(0).unwrap().key;
-    g.until(Duration::from_secs(5), "B sees it in progress", |g| g.rooms_listed(1).iter().any(|r| r.key == key && r.closed));
+    g.until(Duration::from_secs(5), "B sees it in progress", |g| g.rooms_listed(1).iter().any(|r| r.key == key && r.started));
     g.ask(1, RoomRequest::Join(key, None));
     g.until(Duration::from_secs(3), "B turned away", |g| {
         g.clients[1].world().resource::<Notice>().0.as_deref().is_some_and(|n| n.contains("has started"))
