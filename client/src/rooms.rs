@@ -51,15 +51,119 @@ pub struct Me {
 #[derive(Resource, Default, Debug)]
 pub struct RoomList(pub Vec<RoomSummary>);
 
+
+/// A question put to us in a box over everything, once we're out of the arena (`prompt` draws
+/// it): what it's about, and the answer as typed so far. Asked by the server (name a score that
+/// made a leaderboard) or by us (a lobby's password, to join it or to make one with).
+#[derive(Resource, Default)]
+pub struct TextPrompt(pub Option<Asking>);
+
+pub struct Asking {
+    /// What it's about: a small label, a heading, a line under it.
+    pub kicker: String,
+    pub title: String,
+    pub body: String,
+    /// Over the box: what to type.
+    pub field: String,
+    pub text: String,
+    /// Characters at most, and whether they're shown as stars.
+    pub max: usize,
+    pub secret: bool,
+    /// The buttons: the answer's (Enter), and the one that lets it be (Esc).
+    pub confirm: &'static str,
+    pub dismiss: &'static str,
+    pub answer: Answer,
+}
+
+/// What an answer is for.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Answer {
+    /// The name our entry on the leaderboards goes by.
+    ScoreName,
+    /// The password into this lobby.
+    JoinRoom(RoomKey),
+    /// The password the lobby we make will have (none if left empty).
+    RoomPassword,
+}
+
+impl TextPrompt {
+    /// The server's `LobbyEvent::NameYourScore`.
+    pub(crate) fn asked(&mut self, event: &LobbyEvent) {
+        if let LobbyEvent::NameYourScore { wave, place, of, size, name } = event {
+            // On the board (its top few), or where it stands among them all.
+            let board = arena_shared::rooms::party_label(*size);
+            let (kicker, title) = if *place <= arena_shared::rooms::LEADERBOARD_ROWS {
+                ("New high score".to_string(), format!("#{place} on the {board} board"))
+            } else {
+                ("Run over".to_string(), format!("#{place} of {of}, {board}"))
+            };
+            self.0 = Some(Asking {
+                kicker,
+                title,
+                body: format!("You reached wave {wave}."),
+                field: "Your name for the leaderboards".into(),
+                text: name.clone(),
+                max: arena_shared::rooms::SCORE_NAME_MAX,
+                secret: false,
+                confirm: "SAVE",
+                dismiss: "Skip",
+                answer: Answer::ScoreName,
+            });
+        }
+    }
+
+    /// Whether the box is up (keys go into it).
+    pub fn open(&self, screen: &Screen) -> bool {
+        self.0.is_some() && shown_on(screen)
+    }
+}
+
+/// Out of the arena and connected: where the box comes up.
+fn shown_on(screen: &Screen) -> bool {
+    matches!(screen, Screen::Home | Screen::Room)
+}
+
+/// The leaderboards, as the server last sent them: each party size's best runs, best first.
+#[derive(Resource, Default)]
+pub struct Leaderboards(pub Vec<arena_shared::rooms::HighScore>);
+
 /// The room we're in, if any.
 #[derive(Resource, Default, Debug)]
 pub struct CurrentRoom(pub Option<RoomView>);
 
-/// The map our room plays on; out of a room, the one picked at home (`map_pick.rs`, the default
-/// map to begin with), which practice and new lobbies play on, and the last room's once out of it. Changes only when it
-/// does, so what's built from it is rebuilt only then.
-#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+impl CurrentRoom {
+    /// Our room's run, while its match is on (a run on, or just lost): only against the waves.
+    pub fn run(&self) -> Option<&RunView> {
+        self.0.as_ref().filter(|view| view.started && view.mode.pve()).and_then(|view| view.run.as_ref())
+    }
+
+    /// We're practicing (where items are free).
+    pub fn practice(&self) -> bool {
+        self.0.as_ref().is_some_and(|view| view.practice)
+    }
+
+    /// The merchant trades now: in practice, while a PvP match is on (not yet won), or in a run
+    /// not yet lost.
+    pub fn shopping(&self) -> bool {
+        let Some(view) = &self.0 else { return false };
+        view.practice || (view.started && !view.mode.pve() && view.goal.is_some() && view.winner.is_none()) || self.run().is_some_and(|run| !matches!(run.phase, arena_shared::rooms::Phase::Over { .. }))
+    }
+}
+
+/// The map shown and played: our room's; at home, the one picked for a new lobby (`browser.rs`),
+/// Hollow Wilds until one is. Changes only when it does, so what's built from it is rebuilt only
+/// then.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CurrentMap(pub MapId);
+
+impl Default for CurrentMap {
+    fn default() -> Self {
+        CurrentMap(HOME_MAP)
+    }
+}
+
+/// The map shown at home, and practiced on.
+pub const HOME_MAP: MapId = MapId::Wilds;
 
 impl CurrentMap {
     pub fn map(&self) -> &'static Map {
@@ -91,7 +195,7 @@ pub struct RoomsNetPlugin {
 impl Plugin for RoomsNetPlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<Screen>().add_computed_state::<Picking>();
-        app.init_resource::<RoomList>().init_resource::<CurrentRoom>().init_resource::<CurrentMap>();
+        app.init_resource::<RoomList>().init_resource::<Leaderboards>().init_resource::<TextPrompt>().init_resource::<CurrentRoom>().init_resource::<CurrentMap>();
         app.init_resource::<Notice>().init_resource::<Leaving>();
         app.insert_resource(QuickJoin(self.quick_join.clone()));
         app.insert_resource(StoredName(self.guest_name.clone()));
@@ -123,7 +227,7 @@ fn read_lobby_events(
     mut commands: Commands,
     mut client: Query<(&mut MessageReceiver<LobbyEvent>, &mut MessageSender<RoomRequest>), With<Client>>,
     quick_join: Res<QuickJoin>,
-    mut list: ResMut<RoomList>,
+    (mut list, mut boards, mut prompt): (ResMut<RoomList>, ResMut<Leaderboards>, ResMut<TextPrompt>),
     mut room: ResMut<CurrentRoom>,
     mut current_map: ResMut<CurrentMap>,
     mut notice: ResMut<Notice>,
@@ -146,16 +250,22 @@ fn read_lobby_events(
                 }
             }
             LobbyEvent::RoomList(rooms) => list.0 = rooms,
+            LobbyEvent::HighScores(scores) => boards.0 = scores,
+            LobbyEvent::NameYourScore { .. } => prompt.asked(&event),
             LobbyEvent::Room(view) => {
                 // Practice goes straight in: home until our fighter's there.
                 if room.0.is_none() {
                     notice.0 = None;
-                    if !view.practice {
+                    if !view.practice && !view.solo {
                         next.set(Screen::Room);
                     }
                 }
                 current_map.set_if_neq(CurrentMap(view.map));
-                room.0 = Some(view);
+                // Only news counts as a change: what's built from the room isn't built again for
+                // nothing.
+                if room.0.as_ref() != Some(&view) {
+                    room.0 = Some(view);
+                }
             }
             LobbyEvent::Left(reason) => {
                 room.0 = None;

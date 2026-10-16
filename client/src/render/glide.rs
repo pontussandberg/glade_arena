@@ -74,6 +74,27 @@ pub(super) fn glide_me(mut commands: Commands, clock: AttackClock, mut me: Query
     }
 }
 
+/// How high (meters) a knock-up throws a fighter at the top.
+const LIFT_HEIGHT: f32 = 0.45;
+
+/// Knocked up (`Chilled::lifted`): off the ground, up and back down over the knock-up, on the
+/// timeline it's shown on; set down again once it's over.
+pub(super) fn lift_fighters(clock: crate::feedback::AttackClock, mut q: Query<(&Chilled, &mut Transform, Has<crate::Me>)>) {
+    for (chilled, mut transform, me) in &mut q {
+        let now = clock.now(me);
+        let span = chilled.lifted;
+        let y = if span.covers(now) {
+            let t = (now - span.from as f32) / (span.until - span.from).max(1) as f32;
+            LIFT_HEIGHT * 4.0 * t * (1.0 - t)
+        } else {
+            0.0
+        };
+        if transform.translation.y != y {
+            transform.translation.y = y;
+        }
+    }
+}
+
 pub(super) fn sync_transforms(mut q: Query<(&Pos, &mut Transform), (Changed<Pos>, Without<Projectile>)>) {
     for (pos, mut transform) in &mut q {
         transform.translation = to_world(pos.0, 0.0);

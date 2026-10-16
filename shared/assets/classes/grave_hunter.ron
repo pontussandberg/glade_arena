@@ -1,0 +1,21 @@
+#![enable(unwrap_variant_newtypes)]
+// A Grave Hunter (field reference: README.md): throws rusted spears from afar, keeping its
+// distance, in the waves mode.
+(
+    id: "grave_hunter",
+    name: "Grave Hunter",
+    role: "Monster",
+    blurb: "A dead hunter that still hunts. Keeps its distance.",
+    playable: false,
+    max_hp: 40,
+    move_speed: 3.2,
+    attack: (
+        damage: 10,
+        attack_ticks: 52,
+        windup: 0.5,
+        kind: Projectile(speed: 12.0, radius: 0.25, range: 11.0),
+    ),
+    abilities: [],
+    look: Some(figure: "javelinist", size: 0.95, tint: (0.75, 1.0, 0.8), cloth: false),
+    mob: Some(brain: Kite(keep: 8.0), bounty: 8, cost: 1.5, from_wave: 3),
+)

@@ -1,0 +1,28 @@
+#![enable(unwrap_variant_newtypes)]
+// Ember Imps (field reference: README.md): small, fast and burning, they come in packs and
+// throw themselves at you, bursting into flame; killed, they burst all the same. Meet them at range.
+(
+    id: "ember_imp",
+    name: "Ember Imp",
+    role: "Monster",
+    blurb: "A spark with legs and a grudge.",
+    playable: false,
+    max_hp: 26,
+    move_speed: 4.4,
+    attack: (
+        damage: 6,
+        attack_ticks: 28,
+        windup: 0.3,
+        kind: Melee(range: 1.4, width: 0.6),
+    ),
+    abilities: [],
+    look: Some(figure: "zombie", size: 0.6, tint: (1.6, 0.65, 0.3), cloth: false),
+    mob: Some(
+        brain: Chase,
+        tricks: [Burst(within: 1.6, damage: 22, radius: 2.2, color: Fire)],
+        bounty: 4,
+        cost: 0.6,
+        from_wave: 16,
+        pack: 3,
+    ),
+)

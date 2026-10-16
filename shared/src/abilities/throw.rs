@@ -26,6 +26,6 @@ impl Throw {
     /// Thrown by `owner` (of `class`, with the ability in `slot`) from `pos` toward `dir` at
     /// `tick`.
     pub fn projectile(&self, owner: PeerId, class: ClassId, slot: AbilitySlot, pos: Vec2, dir: Vec2, tick: u32) -> Projectile {
-        Projectile { owner, class, origin: shot_spawn(pos, dir, self.radius), dir, spawn_tick: tick, ability: Some(slot), crit: false }
+        Projectile { owner, class, origin: shot_spawn(pos, dir, self.radius), dir, spawn_tick: tick, ability: Some(slot), crit: false, extra: false }
     }
 }

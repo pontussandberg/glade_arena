@@ -23,8 +23,7 @@ pub(crate) fn spawn_dummy(commands: &mut Commands, id: PeerId, class: ClassId, r
             Name::from("Dummy"),
             Dummy { home: at },
             fighter(id, class, room, Team(arena_shared::rooms::NO_TEAM), at),
-            Replicate::to_clients(NetworkTarget::All),
-            InterpolationTarget::to_clients(NetworkTarget::All),
+            replicated_npc(),
         ))
         .id()
 }
@@ -79,11 +78,11 @@ pub(super) fn walk_dummies(timeline: Res<LocalTimeline>, mut dummies: Query<(&mu
 /// slows, roots and haste gone); its hits still show.
 pub(super) fn restore_dummies(
     mut commands: Commands,
-    mut dummies: Query<(Entity, &Dummy, &ClassId, &mut Pos, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, (&mut Cooldowns, &mut Dashing)), With<Dead>>,
+    mut dummies: Query<(Entity, &Dummy, &MaxHealth, &mut Pos, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, (&mut Cooldowns, &mut Dashing)), With<Dead>>,
 ) {
-    for (entity, dummy, class, mut pos, mut health, (mut chilled, mut hasted), mut attack, (mut cooldowns, mut dashing)) in &mut dummies {
+    for (entity, dummy, max, mut pos, mut health, (mut chilled, mut hasted), mut attack, (mut cooldowns, mut dashing)) in &mut dummies {
         pos.set_if_neq(Pos(dummy.home));
-        health.0 = class.def().max_hp;
+        health.0 = max.0;
         chilled.set_if_neq(Chilled::default());
         hasted.set_if_neq(Hasted::default());
         attack.set_if_neq(AttackState::default());

@@ -88,5 +88,7 @@ pub(super) fn build() -> Map {
         torches.push(Vec2::new(river_x(y) - (RIVER_HALF_WIDTH + 0.3), y));
     }
     map.mirror_spots(WEST_SPAWNS, WEST_PICKUPS, &torches);
+    // The merchant in the middle, as near the one side as the other.
+    map.shop = map.nearest_walkable(Map::tile_of(Vec2::ZERO), 4).map(Map::center);
     map
 }

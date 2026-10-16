@@ -3,8 +3,9 @@
 //! server takes each class in turn); a right click or ESC cancels. Click it again for another. A
 //! hint says so meanwhile. "Moving dummy" places one the same way that walks back and forth
 //! along a line through the spot (the server picks the line), to practice hitting something
-//! that moves. Placing reads its own clicks (and ESC), before the fight's controls and the menu,
-//! and takes them: a placing click never also attacks or walks.
+//! that moves. "3 slow zombies" places three zombies side by side the same way, walking at half
+//! speed, coming for us. Placing reads its own clicks (and ESC), before the fight's controls and
+//! the menu, and takes them: a placing click never also attacks or walks.
 
 use arena_shared::config::PLAYER_RADIUS;
 use arena_shared::protocol::RoomRequest;
@@ -35,22 +36,46 @@ impl Plugin for DummiesPlugin {
     }
 }
 
-/// Whether we're placing a target dummy, and if so whether it walks.
+/// Whether we're placing something, and what.
 #[derive(Resource, Default, PartialEq)]
-pub(super) struct Placing(Option<Walks>);
+pub(super) struct Placing(Option<Kind>);
 
+/// What's placed: a standing dummy, one that walks back and forth, or three slow zombies.
 #[derive(Clone, Copy, PartialEq)]
-pub(super) struct Walks(bool);
+pub(super) enum Kind {
+    Dummy,
+    Moving,
+    Zombies,
+}
 
-/// Places a dummy: a standing one, or (`Walks(true)`) one that walks back and forth.
+impl Kind {
+    fn label(self) -> &'static str {
+        match self {
+            Kind::Dummy => "Target dummy",
+            Kind::Moving => "Moving dummy",
+            Kind::Zombies => "3 slow zombies",
+        }
+    }
+
+    /// What the hint says is being placed.
+    fn placing(self) -> &'static str {
+        match self {
+            Kind::Dummy => "a target dummy",
+            Kind::Moving => "a moving dummy (it walks back and forth)",
+            Kind::Zombies => "three slow zombies (they come for you)",
+        }
+    }
+}
+
+/// Places what it says.
 #[derive(Component)]
-struct DummyButton(Walks);
+struct DummyButton(Kind);
 
-/// The dummy buttons, in the practice panel.
+/// The placing buttons, in the practice panel.
 pub(super) fn spawn_buttons(tools: &mut ChildSpawnerCommands) {
-    for (walks, label) in [(false, "Target dummy"), (true, "Moving dummy")] {
-        let look = button(label, 13.0, palette::ui::PANEL, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5));
-        tools.spawn((DummyButton(Walks(walks)), HudButton, look));
+    for kind in [Kind::Dummy, Kind::Moving, Kind::Zombies] {
+        let look = button(kind.label(), 13.0, palette::ui::PANEL, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5));
+        tools.spawn((DummyButton(kind), HudButton, look));
     }
 }
 
@@ -81,11 +106,15 @@ fn place_dummy(
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
     map: Res<CurrentMap>,
 ) {
-    let Some(Walks(walks)) = placing.0 else { return };
+    let Some(kind) = placing.0 else { return };
     let on_control = controls.iter().any(|i| *i != Interaction::None);
     if mouse.just_pressed(MouseButton::Left) && !on_control {
         if let Some(at) = cursor_ground(&window, *camera).filter(|at| map.map().walkable_at(*at)) {
-            request(&mut sender, RoomRequest::PlaceDummy { at, walks });
+            let ask = match kind {
+                Kind::Zombies => RoomRequest::PlaceZombies { at },
+                _ => RoomRequest::PlaceDummy { at, walks: kind == Kind::Moving },
+            };
+            request(&mut sender, ask);
             placing.0 = None;
         }
         mouse.reset(MouseButton::Left);
@@ -151,8 +180,8 @@ fn show_hint(mut commands: Commands, placing: Res<Placing>, hint: Query<Entity, 
     if let Ok(hint) = hint.single() {
         commands.entity(hint).despawn();
     }
-    if let Some(Walks(walks)) = placing.0 {
-        let what = if walks { "a moving dummy (it walks back and forth)" } else { "a target dummy" };
+    if let Some(kind) = placing.0 {
+        let what = kind.placing();
         commands.spawn((
             Hint,
             GameUi,

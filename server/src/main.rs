@@ -6,6 +6,8 @@ use arena_shared::config::SERVER_PORT;
 /// `ARENA_PORT` (UDP, default 5888). `ARENA_TLS_CERT` and `ARENA_TLS_KEY`: PEM files of a real
 /// certificate (deployed); without them, a self-signed one whose digest goes to `ARENA_DIGEST_OUT`
 /// (default `client/web/digest.txt`, so run from the workspace root for the dev web page).
+/// `ARENA_HIGHSCORES`: the CSV file the leaderboards are kept in (default `highscores.csv`, where
+/// it's run from).
 fn main() {
     arena_server::logging::log_panics();
     let certificate = match (std::env::var_os("ARENA_TLS_CERT"), std::env::var_os("ARENA_TLS_KEY")) {
@@ -20,5 +22,6 @@ fn main() {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(SERVER_PORT);
-    build_server_app(ServerSettings { port, certificate }).run();
+    let high_scores = Some(std::env::var_os("ARENA_HIGHSCORES").map_or_else(|| PathBuf::from("highscores.csv"), PathBuf::from));
+    build_server_app(ServerSettings { port, certificate, high_scores }).run();
 }

@@ -12,6 +12,8 @@
         attack_ticks: 43,
         windup: 0.442,
         kind: Projectile(speed: 15.0, radius: 0.25, range: 15.0, far_scale: Some(2.25)),
+        // Javelins go right through monsters (not players), skewering a line of them.
+        pierces: true,
     ),
     abilities: [
         (
@@ -25,7 +27,7 @@
     ],
     passive: Some(
         name: "Long Shot",
-        description: "Auto-attacks deal more damage the farther they fly, up to {far_scale} at full range.",
+        description: "Auto-attacks deal more damage the farther they fly, up to {far_scale} at full range, and pierce through monsters.",
     ),
     crit: (chance: 0.1),
 )

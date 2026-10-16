@@ -1,0 +1,27 @@
+#![enable(unwrap_variant_newtypes)]
+// A Storm Caller (field reference: README.md): keeps well back, throwing sparks, and calls
+// lightning down where its prey stands: the air there crackles first. Keep moving.
+(
+    id: "storm_caller",
+    name: "Storm Caller",
+    role: "Monster",
+    blurb: "The sky listens to it. Don't stand where it points.",
+    playable: false,
+    max_hp: 85,
+    move_speed: 2.8,
+    attack: (
+        damage: 10,
+        attack_ticks: 44,
+        windup: 0.4,
+        kind: Projectile(speed: 15.0, radius: 0.24, range: 12.0),
+    ),
+    abilities: [],
+    look: Some(figure: "javelinist", size: 1.0, tint: (0.65, 0.8, 1.4), cloth: false, bolts: Some(Storm)),
+    mob: Some(
+        brain: Kite(keep: 9.0),
+        tricks: [Mortar(damage: 24, radius: 1.8, fuse_ticks: 26, every_ticks: 150, shell: Lightning)],
+        bounty: 18,
+        cost: 3.5,
+        from_wave: 19,
+    ),
+)

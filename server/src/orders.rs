@@ -44,15 +44,15 @@ pub(super) fn move_players(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     rifts: Res<Rifts>,
-    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, &AttackState, &mut Dashing, &Chilled, &Hasted, &InRoom, &Frenzy), InPlay>,
+    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, &AttackState, &mut Dashing, &Chilled, &Hasted, &InRoom, &Frenzy, Option<&Sluggish>), InPlay>,
 ) {
     let now = timeline.tick().0;
-    for (id, mut pos, class, mut input, attack, mut dashing, chilled, hasted, room, frenzy) in &mut players {
+    for (id, mut pos, class, mut input, attack, mut dashing, chilled, hasted, room, frenzy, sluggish) in &mut players {
         let map = lobby.map(room);
         let mut next = *dashing;
         // Hasted in its own rift (the most hasting, if it stands in several).
         let boost = rifts.0.iter().filter(|(r, rift)| r == room && rift.owner == id.0 && rift.holds(pos.0, now)).fold(1.0f32, |most, (_, rift)| most.max(1.0 + rift.haste));
-        let boost = boost * (1.0 + frenzy.at(now as f32));
+        let boost = boost * (1.0 + frenzy.at(now as f32)) * sluggish.map_or(1.0, |s| s.0);
         pos.set_if_neq(Pos(sim::move_player_boosted(map, pos.0, &input, *class, attack, &mut next, chilled, hasted, now, boost)));
         dashing.set_if_neq(next);
         if input.move_to.is_some_and(|point| sim::arrived(map, pos.0, point)) {

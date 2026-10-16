@@ -1,0 +1,36 @@
+#![enable(unwrap_variant_newtypes)]
+// The Grave Lord (field reference: README.md): the third boss of the waves. Steps through the
+// world, tears it open, and calls ghouls; rages when it is nearly done.
+(
+    id: "grave_lord",
+    name: "The Grave Lord",
+    role: "Boss",
+    blurb: "The first revenant. The last thing you will see.",
+    playable: false,
+    max_hp: 2200,
+    move_speed: 3.3,
+    attack: (
+        damage: 32,
+        attack_ticks: 48,
+        windup: 0.42,
+        kind: Melee(range: 3.4, width: 0.9, from: 1.6),
+        rift: Some(ticks: 96, haste: 0.3),
+    ),
+    abilities: [
+        (
+            name: "Rift Step",
+            description: "Steps up to {ability_reach} through the world, cutting everyone it passes for {ability_damage}.",
+            cooldown_ticks: 192,
+            kind: Dash(distance: 8.0, min_distance: Some(1.0), ticks: 6, damage: 26),
+        ),
+    ],
+    look: Some(figure: "revenant", size: 2.2, tint: (0.95, 0.82, 0.55)),
+    mob: Some(
+        brain: Chase,
+        tricks: [Lunge(slot: 0, within: 9.0), Summon(class: "ghoul", count: 2, every_ticks: 288, max: 6), Enrage(below: 0.4)],
+        bounty: 150,
+        cost: 0.0,
+        from_wave: 15,
+        boss: true,
+    ),
+)

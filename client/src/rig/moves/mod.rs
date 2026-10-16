@@ -116,6 +116,8 @@ pub(crate) fn moves(class_key: &str) -> &'static Moves {
         "revenant" => &REVENANT,
         "frost_mage" => &FROST_MAGE,
         "zombie" => &ZOMBIE,
+        // The merchant stands like a mage with a staff (it never fights).
+        "merchant" => &FROST_MAGE,
         _ => unreachable!("no moves for class {class_key:?}"),
     }
 }

@@ -1,0 +1,37 @@
+#![enable(unwrap_variant_newtypes)]
+// The Ember Archmage (field reference: README.md): the fourth boss of the waves, a mage of fire.
+// Its fireballs burst where they land, it calls meteors down round whoever it hunts (their
+// burning shadows show where), throws rings of fire, and blinks away from anyone who closes in,
+// the spot it left blowing up a moment later. Rages when it is nearly done.
+(
+    id: "ember_archmage",
+    name: "The Ember Archmage",
+    role: "Boss",
+    blurb: "It read every book in the tower. Then it burned the tower.",
+    playable: false,
+    max_hp: 2600,
+    move_speed: 2.8,
+    attack: (
+        damage: 18,
+        attack_ticks: 36,
+        windup: 0.4,
+        kind: Projectile(speed: 13.0, radius: 0.4, range: 13.0),
+        // Its fireballs burst where they hit.
+        burst: Some(radius: 2.0, share: 0.8, color: Fire),
+    ),
+    abilities: [],
+    look: Some(figure: "frost_mage", size: 2.1, tint: (1.45, 0.7, 0.4), bolts: Some(Fire)),
+    mob: Some(
+        brain: Kite(keep: 8.0),
+        tricks: [
+            Blink(within: 4.5, distance: 8.0, every_ticks: 224, leaves: 30),
+            Mortar(damage: 26, radius: 2.2, fuse_ticks: 40, every_ticks: 256, count: 5, scatter: 4.5, shell: Meteor),
+            Ring(count: 10, every_ticks: 288),
+            Enrage(below: 0.35),
+        ],
+        bounty: 200,
+        cost: 0.0,
+        from_wave: 20,
+        boss: true,
+    ),
+)

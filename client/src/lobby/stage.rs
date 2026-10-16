@@ -43,10 +43,13 @@ const TAG_HEIGHT: f32 = 2.75;
 /// fireflies drifting about.
 pub(super) fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
     let center = stage_at(0.0);
+    // No shadows from these: a point light's would draw the whole map six times over every frame,
+    // just for the fighter's shadow on the dais (the sun casts one already). It nearly halved
+    // home's frame.
     let light = |color: Color, intensity: f32, at: Vec3| {
         (
             LobbyPart,
-            PointLight { color, intensity, range: 14.0, shadow_maps_enabled: true, ..default() },
+            PointLight { color, intensity, range: 14.0, shadow_maps_enabled: false, ..default() },
             Transform::from_translation(center + at),
         )
     };

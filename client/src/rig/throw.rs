@@ -33,7 +33,7 @@ pub(super) fn see_throws(
     shots: Query<&Projectile, Added<Projectile>>,
     mut throwers: Query<(&PlayerId, &mut SeenThrows), Without<Me>>,
 ) {
-    for shot in &shots {
+    for shot in shots.iter().filter(|shot| !shot.extra) {
         let Some((_, mut seen)) = throwers.iter_mut().find(|(id, _)| id.0 == shot.owner) else { continue };
         let latest = match shot.ability {
             Some(slot) => {

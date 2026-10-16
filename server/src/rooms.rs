@@ -11,9 +11,15 @@
 //! they'd left.
 //!
 //! A match started from the lobby is won by the first fighter (or team) to `KILLS_TO_WIN` kills,
-//! zombies roaming the arena meanwhile (`zombies.rs`); `MATCH_OVER_AFTER` later everyone is back
-//! in the lobby, the result shown there until the next match starts. A quick-joined room's match
-//! never ends, and has no zombies.
+//! zombies roaming the arena meanwhile (`zombies.rs`); the result shows until each leaves the
+//! room. A quick-joined room's match never ends, and has no zombies. The leader starts a match
+//! once everyone else in the room is ready. A room may have a password: only those who give it
+//! join.
+//!
+//! A waves room (`Mode::Waves`) plays on the wilds instead: its start opens a run (`waves.rs`),
+//! everyone on one side against the monsters, buying items from its shopkeeper between waves,
+//! until the party falls; the wave they reached shows until each leaves the room. Playing solo is
+//! such a room of one's own, never listed.
 //!
 //! Practice is a room of one's own: never listed, no one else can join, started from the off.
 
@@ -27,7 +33,10 @@ use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
-use crate::{Dead, NeedsSpawnPoint, Patrol, spawn_dummy, spawn_gates, spawn_pickups, spawn_player};
+use arena_shared::items::Satchel;
+
+use crate::waves::{Run, RunPhase, START_GOLD, boss_of};
+use crate::{Dead, NeedsSpawnPoint, Patrol, spawn_dummy, spawn_gates, spawn_pickups, spawn_player, spawn_shopkeeper};
 
 /// Server-only: the room a fighter, projectile, pickup or waygate is in. The map it plays on is
 /// the room's (`Lobby::map`).
@@ -53,8 +62,6 @@ pub struct AfkTimeout(pub Duration);
 const AFK_CHECK_EVERY: Duration = Duration::from_secs(5);
 /// The server browser's list is sent at most this often.
 const LIST_EVERY: Duration = Duration::from_millis(500);
-/// How long after a match is won everyone is taken back to the lobby: time to see who won.
-const MATCH_OVER_AFTER: Duration = Duration::from_secs(5);
 
 /// The systems that handle guests' messages; `place_players` goes after them, so a fighter
 /// spawned this frame is placed before its first replication.
@@ -73,11 +80,28 @@ impl Plugin for RoomsPlugin {
         app.add_systems(
             Update,
             // A class picked with a request (practice, the way in) is known when it's handled.
-            (greet, handle_class_choices, handle_requests, take_out_idle, end_matches, send_updates).chain().in_set(RoomSystems),
+            (greet, handle_class_choices, handle_requests, take_out_idle, send_updates, end_lingering).chain().in_set(RoomSystems),
         );
         app.add_systems(FixedUpdate, note_activity);
     }
 }
+
+/// A lightyear room (`net`) its client (`link`) has just left, still sent to them until `until`
+/// (a tick): what's despawned of the room as they leave it (its fighters, dummies, monsters,
+/// shots, all of it when they were the last in it) is still sent to them, so none of it stays on
+/// their screen. Without a `link`, a closed room's, free to use again only then.
+#[derive(Debug)]
+struct Linger {
+    link: Option<Entity>,
+    net: RoomId,
+    until: u32,
+}
+
+/// The fewest ticks between sending a run again only for the count of monsters left changing.
+const RUN_COUNT_EVERY: u32 = 8;
+
+/// How many ticks a client still gets a room's news after leaving it (`Linger`).
+const LINGER_TICKS: u32 = 4;
 
 /// Every guest and room.
 #[derive(Resource, Default)]
@@ -92,8 +116,19 @@ pub struct Lobby {
     next_local: u64,
     /// Lightyear rooms no longer used, to use again (there are only `u16::MAX` of them).
     free_net: Vec<RoomId>,
+    /// Lightyear rooms a client has just left, still sent to them a moment (`Linger`).
+    lingering: Vec<Linger>,
     /// The browser's list changed since it was last sent.
     list_changed: bool,
+    /// Every run against the waves that ended (`highscores`), and whether one has since everyone
+    /// was last sent the leaderboards.
+    pub(crate) scores: crate::highscores::HighScores,
+    scores_changed: bool,
+    /// Who may still name their entry on the leaderboards (by guest id): which run (its index
+    /// there) and which of its fighters they are.
+    naming: HashMap<u32, (usize, usize)>,
+    /// Asked to (`LobbyEvent::NameYourScore`), by guest id, to send.
+    prompts: Vec<(u32, LobbyEvent)>,
 }
 
 struct Guest {
@@ -113,6 +148,10 @@ struct Guest {
     /// Players they killed in their room's match (or its last one), and zombies.
     kills: u32,
     zombie_kills: u32,
+    /// Their gold and items in their room's run (the waves mode).
+    satchel: Satchel,
+    /// Ready for their room's leader to start (in its lobby, before the start).
+    ready: bool,
 }
 
 struct Room {
@@ -125,6 +164,10 @@ struct Room {
     started: bool,
     /// Never listed, no one joins.
     practice: bool,
+    /// A run against the waves of one's own: never listed, no one joins.
+    solo: bool,
+    /// Only those who give it join.
+    password: Option<String>,
     /// Links, in the order they joined.
     members: Vec<Entity>,
     /// What lies on its map: its pickups and waygates.
@@ -137,10 +180,30 @@ struct Room {
     team_kills: [u32; 2],
     /// Who won the match (or the last one).
     winner: Option<Winner>,
-    /// When the won match is over (`Time<Real>`), everyone back in the lobby.
-    ends_at: Option<Duration>,
     /// Members need to see it again.
     changed: bool,
+    /// Its run against the waves (or the last one), in the waves mode, and what its members were
+    /// last sent of it.
+    run: Option<Run>,
+    shown_run: Option<RunView>,
+    /// When its run was last sent (a tick), for the count of monsters left (`RUN_COUNT_EVERY`).
+    run_sent_at: u32,
+    /// The furthest wave it's reached.
+    best: u32,
+}
+
+impl Room {
+    /// Its run came to an end (lost, or everyone left it): onto the leaderboards, if it was run
+    /// from the first wave and any came. Once. Its index there, and who fought it (guest ids).
+    fn score_run(&mut self, scores: &mut crate::highscores::HighScores) -> Option<(usize, Vec<u32>)> {
+        let run = self.run.as_mut().filter(|run| !run.scored && run.fought && run.from == 1 && !run.party.is_empty())?;
+        run.scored = true;
+        // Shopping for the next: the last one fought is as far as it got.
+        let wave = if matches!(run.phase, RunPhase::Shop { .. }) { run.wave - 1 } else { run.wave };
+        let party = run.party.iter().map(|(_, name, class)| (name.clone(), *class)).collect();
+        let score = HighScore { wave, map: self.map, party, date: crate::highscores::today(), version: arena_shared::config::GAME_VERSION.to_string() };
+        Some((scores.record(score), run.party.iter().map(|(id, ..)| *id).collect()))
+    }
 }
 
 impl Lobby {
@@ -160,7 +223,15 @@ impl Lobby {
     }
 
     fn summary(&self, key: RoomKey, room: &Room) -> RoomSummary {
-        RoomSummary { key, name: room.name.clone(), mode: room.mode, map: room.map, players: room.members.len() as u8, started: room.started }
+        RoomSummary {
+            key,
+            name: room.name.clone(),
+            mode: room.mode,
+            map: room.map,
+            players: room.members.len() as u8,
+            started: room.started,
+            locked: room.password.is_some(),
+        }
     }
 
     fn view(&self, key: RoomKey, room: &Room) -> RoomView {
@@ -168,8 +239,20 @@ impl Lobby {
             .members
             .iter()
             .filter_map(|link| self.guests.get(link))
-            .map(|g| Member { guest_id: g.id, name: g.name.clone(), peer: g.peer, team: g.team, class: g.class, in_arena: g.playing && room.started, kills: g.kills, zombie_kills: g.zombie_kills })
+            .map(|g| Member {
+                guest_id: g.id,
+                name: g.name.clone(),
+                peer: g.peer,
+                team: g.team,
+                class: g.class,
+                in_arena: g.playing && room.started,
+                kills: g.kills,
+                zombie_kills: g.zombie_kills,
+                ready: g.ready,
+            })
             .collect();
+        // The run as `refresh_run` last found it.
+        let run = room.shown_run.clone();
         let leader = self.guests.get(&room.leader).map_or(0, |g| g.id);
         RoomView {
             key,
@@ -178,16 +261,50 @@ impl Lobby {
             map: room.map,
             started: room.started,
             practice: room.practice,
+            solo: room.solo,
             leader,
             members,
             goal: room.goal,
             team_kills: room.team_kills,
             winner: room.winner.clone(),
+            run,
         }
     }
 
+    /// What `room`'s members see of its run at `now`.
+    fn run_view(room: &Room, now: u32) -> Option<RunView> {
+        room.run.as_ref().map(|run| RunView {
+            wave: run.wave,
+            phase: run.phase_view(now),
+            enemies_left: run.enemies_left(),
+            ready: run.ready.clone(),
+            waiting: run.waiting.clone(),
+            best: room.best,
+            boss: boss_of(run.wave).map(|boss| boss.def().name.clone()),
+            omen: run.omen,
+        })
+    }
+
+    /// Room `key`'s members see its run again if what they'd see of it changed (the countdown, a
+    /// kill, a life spent, someone ready): checked every tick, sent only then.
+    pub(crate) fn refresh_run(&mut self, key: RoomKey, now: u32) {
+        let Some(room) = self.rooms.get_mut(&key) else { return };
+        let view = Lobby::run_view(room, now);
+        if room.shown_run == view {
+            return;
+        }
+        // Only the count of monsters left (kill after kill, in a big wave): not every tick.
+        let only_count = matches!((&room.shown_run, &view), (Some(was), Some(is)) if RunView { enemies_left: is.enemies_left, ..was.clone() } == *is);
+        if only_count && now < room.run_sent_at + RUN_COUNT_EVERY {
+            return;
+        }
+        room.shown_run = view;
+        room.run_sent_at = now;
+        room.changed = true;
+    }
+
     fn list(&self) -> Vec<RoomSummary> {
-        self.rooms.iter().filter(|(_, room)| !room.practice).map(|(key, room)| self.summary(*key, room)).collect()
+        self.rooms.iter().filter(|(_, room)| !room.practice && !room.solo).map(|(key, room)| self.summary(*key, room)).collect()
     }
 
     /// A number for a new fighter no client controls (a target dummy, a zombie).
@@ -201,9 +318,109 @@ impl Lobby {
         self.rooms.iter().filter(|(_, room)| room.hunting()).map(|(key, room)| room.in_room(*key))
     }
 
-    pub(crate) fn hunts(&self, key: RoomKey) -> bool {
-        self.rooms.get(&key).is_some_and(Room::hunting)
+    /// Whether monsters belong in room `key` now: zombies on the hunt, or a run on.
+    pub(crate) fn keeps_monsters(&self, key: RoomKey) -> bool {
+        self.rooms.get(&key).is_some_and(|room| room.hunting() || room.live_run().is_some() || room.practice)
     }
+
+    /// The rooms with a run on.
+    pub(crate) fn runs(&self) -> Vec<(RoomKey, InRoom)> {
+        self.rooms.iter().filter(|(_, room)| room.live_run().is_some()).map(|(key, room)| (*key, room.in_room(*key))).collect()
+    }
+
+    /// Room `key`'s run (or its last), whether it's on or not.
+    pub(crate) fn run(&self, key: RoomKey) -> Option<&Run> {
+        self.rooms.get(&key)?.run.as_ref()
+    }
+
+    /// Whether room `key` is against the waves.
+    pub(crate) fn pve(&self, key: RoomKey) -> bool {
+        self.rooms.get(&key).is_some_and(|room| room.mode.pve())
+    }
+
+    /// How many of room `key`'s members are in its arena (or on their way in).
+    pub(crate) fn fighting(&self, key: RoomKey) -> usize {
+        let Some(room) = self.rooms.get(&key) else { return 0 };
+        room.members.iter().filter(|link| self.guests.get(link).is_some_and(|g| g.playing && g.class.is_some())).count()
+    }
+
+    /// Whether room `key` has a run on.
+    pub(crate) fn run_on(&self, key: RoomKey) -> bool {
+        self.rooms.get(&key).is_some_and(|room| room.live_run().is_some())
+    }
+
+    /// Room `key`'s run, to change (its members see it again once `refresh_run` finds they'd see
+    /// something new).
+    pub(crate) fn run_mut(&mut self, key: RoomKey) -> Option<&mut Run> {
+        self.rooms.get_mut(&key)?.run.as_mut()
+    }
+
+    /// Room `key`'s members: their links and guest ids.
+    pub(crate) fn party(&self, key: RoomKey) -> Vec<(Entity, u32)> {
+        let Some(room) = self.rooms.get(&key) else { return Vec::new() };
+        room.members.iter().filter_map(|link| self.guests.get(link).map(|g| (*link, g.id))).collect()
+    }
+
+    /// `peer` earned `amount` gold in room `key`: against the waves, the whole party gets it; in a
+    /// PvP match, they alone do.
+    pub(crate) fn reward(&mut self, key: RoomKey, peer: PeerId, amount: u32) {
+        if self.pve(key) {
+            self.give_gold(key, amount);
+        } else if let Some(guest) = self.guests.values_mut().find(|g| g.room == Some(key) && g.peer == peer) {
+            guest.satchel.gold += amount;
+        }
+    }
+
+    /// Everyone in room `key` gets `amount` more gold.
+    pub(crate) fn give_gold(&mut self, key: RoomKey, amount: u32) {
+        let Some(room) = self.rooms.get(&key) else { return };
+        for link in &room.members {
+            if let Some(guest) = self.guests.get_mut(link) {
+                guest.satchel.gold += amount;
+            }
+        }
+    }
+
+    /// Room `key` has been as far as `wave`.
+    pub(crate) fn note_best(&mut self, key: RoomKey, wave: u32) {
+        if let Some(room) = self.rooms.get_mut(&key) {
+            room.best = room.best.max(wave);
+        }
+    }
+
+    /// Whether room `key` is still open.
+    pub(crate) fn has_room(&self, key: RoomKey) -> bool {
+        self.rooms.contains_key(&key)
+    }
+
+    /// A run is under way: the lobby list is sent again, showing it closed.
+    pub(crate) fn close_run(&mut self) {
+        self.list_changed = true;
+    }
+
+    /// Room `key`'s run is lost: onto the leaderboards; its end shows until each leaves.
+    pub(crate) fn lose_run(&mut self, key: RoomKey) {
+        if let Some(room) = self.rooms.get_mut(&key) {
+            if let Some(run) = &room.run {
+                room.best = room.best.max(run.wave);
+            }
+            let scored = room.score_run(&mut self.scores);
+            room.changed = true;
+            self.scored(scored);
+        }
+    }
+
+    /// The satchel the guest on `link` has, if they're one.
+    pub(crate) fn satchel(&self, link: Entity) -> Option<Satchel> {
+        self.guests.get(&link).map(|g| g.satchel)
+    }
+
+    /// The guest id of whoever's on `link`.
+    pub(crate) fn guest_id(&self, link: Entity) -> Option<u32> {
+        self.guests.get(&link).map(|g| g.id)
+    }
+
+
 
     /// Everyone's kills in room `key` back to none, and no winner.
     fn clear_score(&mut self, key: RoomKey) {
@@ -224,15 +441,24 @@ impl Lobby {
     pub(crate) fn count_zombie_kill(&mut self, key: RoomKey, killer: PeerId) -> Option<u32> {
         let room = self.rooms.get_mut(&key)?;
         let link = room.members.iter().copied().find(|link| self.guests.get(link).is_some_and(|g| g.peer == killer))?;
-        room.changed = true;
+        let pvp = !room.mode.pve();
+        // Against the waves the kill rides along on the next run refresh (the count of monsters
+        // left changed too, throttled by `RUN_COUNT_EVERY`): sending the whole room for every
+        // kill of a big wave would flood its members.
+        if pvp {
+            room.changed = true;
+        }
         let guest = self.guests.get_mut(&link).expect("a member");
         guest.zombie_kills += 1;
+        if pvp {
+            guest.satchel.gold += arena_shared::items::PVP_ZOMBIE_GOLD;
+        }
         Some(guest.zombie_kills - 1)
     }
 
     /// `killer` killed `victim` in room `key`, at `now`: it counts toward the match if both are
     /// members (not zombies), not the same, and it isn't won yet. Reaching the goal wins it.
-    fn count_kill(&mut self, key: RoomKey, killer: PeerId, victim: PeerId, now: Duration) {
+    fn count_kill(&mut self, key: RoomKey, killer: PeerId, victim: PeerId) {
         let Some(room) = self.rooms.get(&key) else { return };
         let Some(goal) = room.goal.filter(|_| room.winner.is_none()) else { return };
         let member = |peer: PeerId| room.members.iter().copied().find(|link| self.guests.get(link).is_some_and(|g| g.peer == peer));
@@ -242,6 +468,7 @@ impl Lobby {
         }
         let guest = self.guests.get_mut(&link).expect("a member");
         guest.kills += 1;
+        guest.satchel.gold += arena_shared::items::PVP_KILL_GOLD;
         let (id, team, kills) = (guest.id, guest.team, guest.kills);
         let room = self.rooms.get_mut(&key).expect("checked");
         room.changed = true;
@@ -269,7 +496,6 @@ impl Lobby {
             let room = self.rooms.get_mut(&key).expect("checked");
             info!(room = key.0, ?winner, "match won");
             room.winner = Some(winner);
-            room.ends_at = Some(now + MATCH_OVER_AFTER);
         }
     }
 }
@@ -279,8 +505,12 @@ impl Lobby {
 struct Ctx<'w, 's> {
     commands: Commands<'w, 's>,
     time: Res<'w, Time<Real>>,
-    players: Query<'w, 's, (Entity, &'static ControlledBy), With<PlayerId>>,
+    timeline: Res<'w, LocalTimeline>,
+    players: Query<'w, 's, (Entity, &'static ControlledBy, &'static Pos, &'static ClassId), With<PlayerId>>,
     projectiles: Query<'w, 's, (Entity, &'static InRoom), With<Projectile>>,
+    /// Everything in a room: its fighters, monsters, decoys, shots, effects, pickups, gates.
+    in_rooms: Query<'w, 's, (Entity, &'static InRoom)>,
+    zombies: Query<'w, 's, (Entity, &'static InRoom, Has<crate::Dead>), With<crate::Zombie>>,
     senders: Query<'w, 's, &'static mut MessageSender<LobbyEvent>>,
 }
 
@@ -292,7 +522,17 @@ impl Ctx<'_, '_> {
     }
 
     fn player_of(&self, link: Entity) -> Option<Entity> {
-        self.players.iter().find(|(_, c)| c.owner == link).map(|(player, _)| player)
+        self.players.iter().find(|(_, c, ..)| c.owner == link).map(|(player, ..)| player)
+    }
+
+    /// Where `link`'s fighter is, and what it fights as, if it's in the arena.
+    fn fighter_of(&self, link: Entity) -> Option<(Vec2, ClassId)> {
+        self.players.iter().find(|(_, c, ..)| c.owner == link).map(|(_, _, pos, class)| (pos.0, *class))
+    }
+
+    /// The server's tick.
+    fn now(&self) -> u32 {
+        self.timeline.tick().0
     }
 }
 
@@ -335,10 +575,13 @@ fn greet(
                 last_input: PlayerInput::default(),
                 kills: 0,
                 zombie_kills: 0,
+                satchel: Satchel::default(),
+                ready: false,
             });
             ctx.send(link, LobbyEvent::Welcome { guest_id: id, name });
             let list = lobby.list();
             ctx.send(link, LobbyEvent::RoomList(list));
+            ctx.send(link, LobbyEvent::HighScores(lobby.scores.boards()));
         }
     }
 }
@@ -365,21 +608,33 @@ fn handle_requests(
 fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link: Entity, request: RoomRequest) -> Result<(), &'static str> {
     let room_key = lobby.guests[&link].room;
     match request {
-        RoomRequest::Create { name, mode, map } => {
+        RoomRequest::Create { name, mode, map, password } => {
             let name = clean_room_name(&name).ok_or("Give the room a name")?;
             leave(lobby, ctx, link);
+            // Each mode on its own maps: the waves on theirs, fights on any of the others.
+            let map = mode.fit_map(map);
             let key = create(lobby, allocator, ctx, link, name, mode, map);
-            // A lobby's match is won by kills (a quick-joined room's never ends).
-            lobby.rooms.get_mut(&key).expect("just made").goal = Some(KILLS_TO_WIN);
+            lobby.rooms.get_mut(&key).expect("just made").password = password.as_deref().and_then(clean_password);
+            // A lobby's match is won by kills (a quick-joined room's never ends); the waves'
+            // goes on until the party falls.
+            if !mode.pve() {
+                lobby.rooms.get_mut(&key).expect("just made").goal = Some(KILLS_TO_WIN);
+            }
             join(lobby, ctx, link, key)?;
         }
-        RoomRequest::Join(key) => {
+        RoomRequest::Join(key, password) => {
             if room_key == Some(key) {
                 return Ok(());
             }
-            let room = lobby.rooms.get(&key).filter(|room| !room.practice).ok_or("That room is gone")?;
+            let room = lobby.rooms.get(&key).filter(|room| !room.practice && !room.solo).ok_or("That room is gone")?;
+            if room.password.is_some() && password.as_deref().and_then(clean_password) != room.password {
+                return Err("Wrong password");
+            }
             if room.members.len() >= room.mode.capacity() {
                 return Err("That room is full");
+            }
+            if room.started {
+                return Err("That match has started: join one that's waiting");
             }
             leave(lobby, ctx, link);
             join(lobby, ctx, link, key)?;
@@ -389,7 +644,9 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             let found = lobby
                 .rooms
                 .iter()
-                .find(|(_, room)| !room.practice && room.name == name && room.members.len() < room.mode.capacity())
+                // A started one: a quick-joined room's match is on from the off (one whose run was
+                // lost is back in its lobby, and made again).
+                .find(|(_, room)| !room.practice && !room.solo && room.password.is_none() && room.started && room.joinable() && room.name == name && room.members.len() < room.mode.capacity())
                 .map(|(key, _)| *key);
             if room_key.is_some() && room_key == found {
                 return Ok(());
@@ -398,8 +655,19 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             let key = match found {
                 Some(key) => key,
                 None => {
-                    let key = create(lobby, allocator, ctx, link, name, Mode::Ffa, MapId::default());
-                    lobby.rooms.get_mut(&key).expect("just made").started = true;
+                    // One called "Waves..." is a run against the waves, on from the off; "Waves 10"
+                    // starts at wave 10 (for trying later waves out).
+                    let mode = if name.to_lowercase().starts_with("waves") { Mode::Waves } else { Mode::Ffa };
+                    let from_wave = name.split_whitespace().nth(1).and_then(|n| n.parse::<u32>().ok()).filter(|n| (1..=200).contains(n));
+                    // The default map, if it's one of the mode's; else the mode's own (the wilds).
+                    let map = mode.maps().iter().copied().find(|&map| map == MapId::default()).unwrap_or(mode.maps()[0]);
+                    let key = create(lobby, allocator, ctx, link, name, mode, map);
+                    let now = ctx.now();
+                    let room = lobby.rooms.get_mut(&key).expect("just made");
+                    room.started = true;
+                    if mode.pve() {
+                        room.run = Some(Run::new(now, from_wave.unwrap_or(1)));
+                    }
                     key
                 }
             };
@@ -415,10 +683,30 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             lobby.guests.get_mut(&link).expect("a guest").playing = true;
             join(lobby, ctx, link, key)?;
         }
+        RoomRequest::PlaySolo => {
+            leave(lobby, ctx, link);
+            let first = first_name(&lobby.guests[&link].name).to_string();
+            let key = create(lobby, allocator, ctx, link, format!("{first}'s run"), Mode::Waves, Mode::Waves.maps()[0]);
+            let now = ctx.now();
+            let room = lobby.rooms.get_mut(&key).expect("just made");
+            room.started = true;
+            room.solo = true;
+            room.run = Some(Run::new(now, 1));
+            lobby.guests.get_mut(&link).expect("a guest").playing = true;
+            join(lobby, ctx, link, key)?;
+        }
         RoomRequest::EnterArena => {
             let key = room_key.ok_or("You're not in a room")?;
             if !lobby.rooms[&key].started {
                 return Err("The match hasn't started");
+            }
+            if lobby.rooms[&key].run.as_ref().is_some_and(|run| matches!(run.phase, RunPhase::Over { .. })) {
+                return Err("The run is over");
+            }
+            // Down in a wave stays down (one life a wave): back once it's cleared.
+            let guest = lobby.guests[&link].id;
+            if lobby.rooms[&key].live_run().is_some_and(|run| run.phase == RunPhase::Fight && run.waiting.contains(&guest)) {
+                return Err("You're down: back once the wave is cleared");
             }
             // In now, or once the class arrives.
             lobby.guests.get_mut(&link).expect("checked").playing = true;
@@ -455,21 +743,29 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             if room.members.len() > mode.capacity() {
                 return Err("Too many in the room for that");
             }
-            // Everyone on a team, taking turns; or no teams.
+            // Everyone on a team, taking turns; or no teams; or all on one, against the waves.
             let members = room.members.clone();
             for (n, member) in members.iter().enumerate() {
                 if let Some(guest) = lobby.guests.get_mut(member) {
-                    guest.team = match mode {
-                        Mode::Ffa => NO_TEAM,
-                        Mode::Teams => TEAMS[n % 2],
-                    };
+                    guest.team = mode_team(mode, n);
                 }
             }
             lobby.clear_score(key);
             let room = lobby.rooms.get_mut(&key).expect("checked");
             room.mode = mode;
+            room.goal = (!mode.pve()).then_some(KILLS_TO_WIN);
+            // The last run was against the waves: gone with them.
+            if !mode.pve() {
+                room.run = None;
+                room.shown_run = None;
+            }
             room.changed = true;
             lobby.list_changed = true;
+            // Onto a map the mode plays on.
+            let fit = mode.fit_map(room.map);
+            if fit != room.map {
+                switch_map(lobby, ctx, key, fit);
+            }
         }
         RoomRequest::SetMap(map) => {
             let key = room_key.ok_or("You're not in a room")?;
@@ -483,24 +779,10 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             if room.map == map {
                 return Ok(());
             }
-            info!(room = key.0, from = ?room.map, to = ?map, "map changed");
-            room.map = map;
-            room.changed = true;
-            lobby.list_changed = true;
-            // What lay on the old map goes, and the new one's comes. Practice may change it with
-            // everyone in: they start over on the new map (from a spawn point), and shots in the
-            // air are gone with the old one.
-            room.clear_things(&mut ctx.commands);
-            let in_room = room.in_room(key);
-            room.things = spawn_room_things(&mut ctx.commands, in_room, map);
-            for (projectile, _) in ctx.projectiles.iter().filter(|(_, r)| **r == in_room) {
-                ctx.commands.entity(projectile).try_despawn();
+            if !room.practice && !room.mode.maps().contains(&map) {
+                return Err("That map isn't for this mode");
             }
-            for &member in &room.members {
-                if let Some(player) = ctx.player_of(member) {
-                    ctx.commands.entity(player).insert(NeedsSpawnPoint);
-                }
-            }
+            switch_map(lobby, ctx, key, map);
         }
         RoomRequest::SetTeam(team) => {
             let key = room_key.ok_or("You're not in a room")?;
@@ -545,6 +827,32 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             room.dummies.push(dummy);
             info!(room = key.0, class = class.def().name, walks, "target dummy placed");
         }
+        RoomRequest::PlaceZombies { at } => {
+            let key = room_key.ok_or("You're not in a room")?;
+            let room = lobby.rooms.get(&key).expect("in it");
+            if !room.practice {
+                return Err("Zombies to order are for practice");
+            }
+            if ctx.zombies.iter().filter(|(_, r, dead)| r.key == key && !dead).count() + 3 > MAX_PRACTICE_ZOMBIES {
+                return Err("That's enough zombies");
+            }
+            let map = room.map.map();
+            if !at.is_finite() || !map.walkable_at(at) {
+                return Err("Zombies can't stand there");
+            }
+            let in_room = room.in_room(key);
+            // Side by side, across the way to us (each where there's room, else on the spot).
+            let toward = ctx.fighter_of(link).and_then(|(pos, _)| (pos - at).try_normalize()).unwrap_or(Vec2::Y);
+            let side = toward.perp() * 1.1;
+            for spot in [at - side, at, at + side] {
+                let spot = if map.walkable_at(spot) && map.line_walkable(at, spot) { spot } else { at };
+                let zombie = crate::zombies::spawn_zombie(&mut ctx.commands, lobby.next_local(), in_room, spot);
+                // Sent to clients from the start: placed already, they skip `place_players`, where
+                // others start being sent.
+                ctx.commands.entity(zombie).insert((crate::zombies::Sluggish(crate::zombies::PRACTICE_ZOMBIE_SPEED), crate::replicated_npc()));
+            }
+            info!(room = key.0, "practice zombies placed");
+        }
         RoomRequest::NoCooldowns(on) => {
             let key = room_key.ok_or("You're not in a room")?;
             if !lobby.rooms[&key].practice {
@@ -553,8 +861,45 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             let player = ctx.player_of(link).ok_or("You're not in the arena")?;
             ctx.commands.entity(player).entry::<Cooldowns>().and_modify(move |mut cooldowns| cooldowns.free = on);
         }
+        RoomRequest::Buy(item) => {
+            let key = room_key.ok_or("You're not in a room")?;
+            // For the fighter they are, whatever they've picked to be next.
+            let class = near_the_shop(lobby, ctx, link, key)?;
+            let free = lobby.rooms[&key].practice;
+            lobby.guests.get_mut(&link).expect("checked").satchel.buy(item, class, free)?;
+            info!(room = key.0, guest = lobby.guests[&link].id, item = item.name(), level = lobby.guests[&link].satchel.level(item), "bought");
+        }
+        RoomRequest::Sell(slot) => {
+            let key = room_key.ok_or("You're not in a room")?;
+            near_the_shop(lobby, ctx, link, key)?;
+            lobby.guests.get_mut(&link).expect("checked").satchel.sell(slot as usize).ok_or("Nothing there to sell")?;
+        }
+        RoomRequest::NameScore(name) => {
+            let id = lobby.guests[&link].id;
+            let name = clean_score_name(&name).ok_or("Give it a name")?;
+            let (index, member) = lobby.naming.remove(&id).ok_or("No score of yours to name")?;
+            info!(guest = id, name, "a score named");
+            lobby.scores.rename(index, member, name);
+            lobby.scores_changed = true;
+        }
+        // Before the start: ready for the leader to start.
+        RoomRequest::Ready(ready) if room_key.is_some_and(|key| !lobby.rooms[&key].started) => {
+            let key = room_key.expect("checked");
+            lobby.guests.get_mut(&link).expect("a guest").ready = ready;
+            lobby.rooms.get_mut(&key).expect("in it").changed = true;
+        }
+        RoomRequest::Ready(ready) => {
+            let key = room_key.ok_or("You're not in a room")?;
+            let id = lobby.guests[&link].id;
+            let run = lobby.run_mut(key).filter(|run| matches!(run.phase, RunPhase::Shop { .. })).ok_or("No wave to be ready for")?;
+            run.ready.retain(|r| *r != id);
+            if ready {
+                run.ready.push(id);
+            }
+        }
         RoomRequest::Start => {
             let key = room_key.ok_or("You're not in a room")?;
+            let now = ctx.now();
             let room = lobby.rooms.get_mut(&key).expect("in it");
             if room.leader != link {
                 return Err("Only the leader can start the match");
@@ -562,10 +907,25 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             if room.started {
                 return Ok(());
             }
+            let leader = room.leader;
+            if room.members.iter().any(|m| *m != leader && lobby.guests.get(m).is_some_and(|g| !g.ready)) {
+                return Err("Not everyone is ready");
+            }
+            let room = lobby.rooms.get_mut(&key).expect("in it");
             room.started = true;
             lobby.list_changed = true;
             info!(room = key.0, name = room.name, mode = ?room.mode, players = room.members.len(), "match started");
             let members = room.members.clone();
+            // Every match starts with empty hands: against the waves, with some gold.
+            let gold = if room.mode.pve() { START_GOLD } else { 0 };
+            if room.mode.pve() {
+                room.run = Some(Run::new(now, 1));
+            }
+            for member in &members {
+                if let Some(guest) = lobby.guests.get_mut(member) {
+                    guest.satchel = Satchel { gold, ..default() };
+                }
+            }
             lobby.clear_score(key);
             for member in members {
                 if let Some(guest) = lobby.guests.get_mut(&member) {
@@ -580,6 +940,8 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
 
 /// The most target dummies a practice room may have.
 const MAX_DUMMIES: usize = 12;
+/// The most zombies a practice room may have about.
+const MAX_PRACTICE_ZOMBIES: usize = 12;
 
 /// A new room on `map`, led by `leader` (who still has to `join` it).
 #[allow(clippy::too_many_arguments)]
@@ -597,23 +959,80 @@ fn create(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, leade
         leader,
         started: false,
         practice: false,
+        solo: false,
+        password: None,
         members: Vec::new(),
         things,
         dummies: Vec::new(),
         goal: None,
         team_kills: [0; 2],
         winner: None,
-        ends_at: None,
         changed: true,
+        run: None,
+        shown_run: None,
+        run_sent_at: 0,
+        best: 0,
     });
     key
 }
 
-/// What lies on `map` in `room`: its pickups and waygates.
+/// What lies on `map` in `room`: its pickups and waygates, and its shopkeeper if it has a shop.
 fn spawn_room_things(commands: &mut Commands, room: InRoom, map: MapId) -> Vec<Entity> {
     let mut things = spawn_pickups(commands, room, map.map());
     things.extend(spawn_gates(commands, room, map.map()));
+    if let Some(at) = map.map().shop {
+        things.push(spawn_shopkeeper(commands, room, at));
+    }
     things
+}
+
+/// Room `key` onto `map`: what lay on the old map goes, and the new one's comes. Practice may
+/// change it with everyone in: they start over on the new map (from a spawn point), and shots in
+/// the air are gone with the old one.
+fn switch_map(lobby: &mut Lobby, ctx: &mut Ctx, key: RoomKey, map: MapId) {
+    let Some(room) = lobby.rooms.get_mut(&key) else { return };
+    info!(room = key.0, from = ?room.map, to = ?map, "map changed");
+    room.map = map;
+    room.changed = true;
+    lobby.list_changed = true;
+    room.clear_things(&mut ctx.commands);
+    let in_room = room.in_room(key);
+    room.things = spawn_room_things(&mut ctx.commands, in_room, map);
+    for (projectile, _) in ctx.projectiles.iter().filter(|(_, r)| **r == in_room) {
+        ctx.commands.entity(projectile).try_despawn();
+    }
+    // Zombies (practice's) stood on the old map: gone with it.
+    for (zombie, ..) in ctx.zombies.iter().filter(|(_, r, _)| **r == in_room) {
+        ctx.commands.entity(zombie).try_despawn();
+    }
+    for &member in &room.members {
+        if let Some(player) = ctx.player_of(member) {
+            ctx.commands.entity(player).insert(NeedsSpawnPoint);
+        }
+    }
+}
+
+/// The team a mode puts its `n`th member on.
+fn mode_team(mode: Mode, n: usize) -> u8 {
+    match mode {
+        Mode::Ffa => NO_TEAM,
+        Mode::Teams => TEAMS[n % 2],
+        Mode::Waves => TEAM_A,
+    }
+}
+
+/// Whether `link` may trade now: in a run, their fighter by the shopkeeper. What it fights as.
+fn near_the_shop(lobby: &Lobby, ctx: &Ctx, link: Entity, key: RoomKey) -> Result<ClassId, &'static str> {
+    let room = &lobby.rooms[&key];
+    if !room.practice && !(room.started && if room.mode.pve() { room.live_run().is_some() } else { room.hunting() }) {
+        return Err("The shop is open while a match is on");
+    }
+    let shop = room.map.map().shop.ok_or("There's no shop here")?;
+    let (pos, class) = ctx.fighter_of(link).ok_or("You're not in the arena")?;
+    if pos.distance(shop) > SHOP_RADIUS + 0.5 {
+        return Err("Walk up to the merchant to trade");
+    }
+    Ok(class)
 }
 
 impl Room {
@@ -628,6 +1047,17 @@ impl Room {
         InRoom { key, net: self.net }
     }
 
+    /// Its run, while it's on.
+    fn live_run(&self) -> Option<&Run> {
+        self.run.as_ref().filter(|run| self.started && run.on())
+    }
+
+    /// Whether anyone may join it now: anything but a run against the waves under way (once its
+    /// first wave has come, or it's lost).
+    fn joinable(&self) -> bool {
+        !self.started || !self.mode.pve() || self.run.as_ref().is_some_and(|run| run.on() && !run.fought)
+    }
+
     /// Its match is on and not yet won.
     fn hunting(&self) -> bool {
         self.started && self.goal.is_some() && self.winner.is_none()
@@ -639,9 +1069,12 @@ impl Room {
 fn join(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity, key: RoomKey) -> Result<(), &'static str> {
     let room = lobby.rooms.get(&key).ok_or("That room is gone")?;
     let team = match room.mode {
-        Mode::Ffa => NO_TEAM,
         Mode::Teams => lobby.smaller_team(room),
+        mode => mode_team(mode, 0),
     };
+    // Into a run (before its first wave: `joinable`): with its starting gold, more for one that
+    // starts later on.
+    let gold = room.live_run().map(Run::starting_gold);
     let net = room.net;
     let room = lobby.rooms.get_mut(&key).expect("checked");
     room.members.push(link);
@@ -652,16 +1085,18 @@ fn join(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity, key: RoomKey) -> Result<
     guest.team = team;
     guest.kills = 0;
     guest.zombie_kills = 0;
+    guest.ready = false;
+    guest.satchel = Satchel { gold: gold.unwrap_or_default(), ..default() };
     info!(room = key.0, guest = guest.id, "joined a room");
-    ctx.commands.entity(link).insert(Rooms::single(net));
+    ctx.commands.entity(link).insert(lobby.nets_of(link, Some(net)));
     enter_arena(lobby, ctx, link);
     Ok(())
 }
 
 /// Spawns `link`'s fighter if their room has started, they want in, have picked a class and
-/// aren't in yet.
-fn enter_arena(lobby: &Lobby, ctx: &mut Ctx, link: Entity) {
-    let Some(guest) = lobby.guests.get(&link) else { return };
+/// aren't in yet. Items carried that the class can't (they were another class) are given back.
+fn enter_arena(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity) {
+    let Some(guest) = lobby.guests.get_mut(&link) else { return };
     let (Some(key), Some(class)) = (guest.room, guest.class) else { return };
     if !guest.playing {
         return;
@@ -670,6 +1105,7 @@ fn enter_arena(lobby: &Lobby, ctx: &mut Ctx, link: Entity) {
     if !room.started || ctx.player_of(link).is_some() {
         return;
     }
+    guest.satchel.refund_unfit(class);
     info!(room = key.0, guest = guest.id, class = class.def().name, "entered the arena");
     let in_room = room.in_room(key);
     spawn_player(&mut ctx.commands, link, guest.peer, class, in_room, Team(guest.team));
@@ -682,21 +1118,42 @@ fn leave(lobby: &mut Lobby, ctx: &mut Ctx, link: Entity) -> bool {
     let Some(key) = guest.room.take() else { return false };
     guest.team = NO_TEAM;
     guest.playing = false;
+    guest.satchel = Satchel::default();
     let id = guest.id;
     if let Some(player) = ctx.player_of(link) {
         ctx.commands.entity(player).try_despawn();
     }
-    ctx.commands.entity(link).try_remove::<Rooms>();
+    // Still sent the room's news a moment: what goes as they leave goes from their screen too.
+    let until = ctx.now() + LINGER_TICKS;
     lobby.list_changed = true;
     let Some(room) = lobby.rooms.get_mut(&key) else { return true };
+    lobby.lingering.push(Linger { link: Some(link), net: room.net, until });
+    let room = lobby.rooms.get_mut(&key).expect("there");
     room.members.retain(|m| *m != link);
+    // Their marks on the run go with them: not counted down (the wave's banner), nor ready
+    // (the shop's count), once they're gone.
+    if let Some(run) = room.run.as_mut() {
+        run.ready.retain(|g| *g != id);
+        run.waiting.retain(|g| *g != id);
+    }
     room.changed = true;
     info!(room = key.0, guest = id, "left a room");
     match room.members.first() {
         None => {
             let mut room = lobby.rooms.remove(&key).expect("there");
+            // A run left under way ends here.
+            let scored = room.score_run(&mut lobby.scores);
+            lobby.scored(scored);
             room.clear_things(&mut ctx.commands);
-            lobby.free_net.push(room.net);
+            // And whatever else was in it: monsters, decoys, shots still flying, effects.
+            for (thing, _) in ctx.in_rooms.iter().filter(|(_, r)| r.key == key) {
+                ctx.commands.entity(thing).try_despawn();
+            }
+            if let Some(run) = room.run.as_mut() {
+                run.clear_chests(&mut ctx.commands);
+            }
+            // Free again once no one's sent its news any more.
+            lobby.lingering.push(Linger { link: None, net: room.net, until: until + 1 });
             info!(room = key.0, "room closed");
         }
         Some(next) if room.leader == link => room.leader = *next,
@@ -724,7 +1181,7 @@ fn handle_class_choices(
             {
                 room.changed = true;
             }
-            enter_arena(&lobby, &mut ctx, link);
+            enter_arena(&mut lobby, &mut ctx, link);
         }
     }
 }
@@ -747,38 +1204,9 @@ fn note_activity(
 
 /// A fighter killed by another player counts toward their room's match (`Lobby::count_kill`): in
 /// the tick it happens, before the victim (or the killer) can leave.
-pub(crate) fn count_kills(time: Res<Time<Real>>, mut lobby: ResMut<Lobby>, killed: Query<(&PlayerId, &InRoom, &Dead), Added<Dead>>) {
+pub(crate) fn count_kills(mut lobby: ResMut<Lobby>, killed: Query<(&PlayerId, &InRoom, &Dead), Added<Dead>>) {
     for (victim, room, dead) in &killed {
-        lobby.count_kill(room.key, dead.killer, victim.0, time.elapsed());
-    }
-}
-
-/// A won match is over once its result has shown a while: every fighter leaves the arena (the
-/// zombies go too, `bury_zombies`, and shots in the air), and the room is back in its lobby, not
-/// started, its leader free to change it and start the next.
-fn end_matches(mut lobby: ResMut<Lobby>, mut ctx: Ctx) {
-    let now = ctx.time.elapsed();
-    let over: Vec<RoomKey> = lobby.rooms.iter().filter(|(_, room)| room.ends_at.is_some_and(|at| now >= at)).map(|(key, _)| *key).collect();
-    for key in over {
-        let room = lobby.rooms.get_mut(&key).expect("there");
-        room.started = false;
-        room.ends_at = None;
-        room.changed = true;
-        let in_room = room.in_room(key);
-        let members = room.members.clone();
-        lobby.list_changed = true;
-        for (projectile, _) in ctx.projectiles.iter().filter(|(_, r)| **r == in_room) {
-            ctx.commands.entity(projectile).try_despawn();
-        }
-        for member in members {
-            if let Some(guest) = lobby.guests.get_mut(&member) {
-                guest.playing = false;
-            }
-            if let Some(player) = ctx.player_of(member) {
-                ctx.commands.entity(player).try_despawn();
-            }
-        }
-        info!(room = key.0, "match over, back to the lobby");
+        lobby.count_kill(room.key, dead.killer, victim.0);
     }
 }
 
@@ -803,7 +1231,7 @@ fn take_out_idle(mut lobby: ResMut<Lobby>, timeout: Res<AfkTimeout>, mut next: L
     }
 }
 
-/// Members see their room again when it changed; guests in the browser see the list again when
+/// Members see their room again when it changed; every guest sees the list again when
 /// it changed (at most every `LIST_EVERY`).
 fn send_updates(mut lobby: ResMut<Lobby>, mut list_sent_at: Local<Option<Duration>>, mut ctx: Ctx) {
     let changed: Vec<RoomKey> = lobby.rooms.iter().filter(|(_, room)| room.changed).map(|(key, _)| *key).collect();
@@ -815,14 +1243,80 @@ fn send_updates(mut lobby: ResMut<Lobby>, mut list_sent_at: Local<Option<Duratio
         }
         lobby.rooms.get_mut(&key).expect("there").changed = false;
     }
+    // A run made the leaderboards: everyone sees them again, and those who fought it are asked
+    // to name their entry.
+    if std::mem::take(&mut lobby.scores_changed) {
+        let boards = lobby.scores.boards();
+        for link in lobby.guests.keys().copied().collect::<Vec<_>>() {
+            ctx.send(link, LobbyEvent::HighScores(boards.clone()));
+        }
+    }
+    for (id, prompt) in std::mem::take(&mut lobby.prompts) {
+        if let Some(link) = lobby.guests.iter().find(|(_, g)| g.id == id).map(|(link, _)| *link) {
+            ctx.send(link, prompt);
+        }
+    }
     let now = ctx.time.elapsed();
     if lobby.list_changed && list_sent_at.is_none_or(|at| now >= at + LIST_EVERY) {
         lobby.list_changed = false;
         *list_sent_at = Some(now);
         let list = lobby.list();
-        let browsing: Vec<Entity> = lobby.guests.iter().filter(|(_, g)| g.room.is_none()).map(|(link, _)| *link).collect();
-        for link in browsing {
+        // Everyone: at home to pick one, in a room to see the others.
+        let everyone: Vec<Entity> = lobby.guests.keys().copied().collect();
+        for link in everyone {
             ctx.send(link, LobbyEvent::RoomList(list.clone()));
+        }
+    }
+}
+
+impl Lobby {
+    /// Who in room `key` is fighting: their guest ids, names and classes.
+    pub(crate) fn roster(&self, key: RoomKey) -> Vec<(u32, String, ClassId)> {
+        let Some(room) = self.rooms.get(&key) else { return Vec::new() };
+        room.members.iter().filter_map(|link| self.guests.get(link)).filter(|g| g.playing).filter_map(|g| Some((g.id, g.name.clone(), g.class?))).collect()
+    }
+
+    /// A run went onto the leaderboards (`Room::score_run`): everyone sees them again, and each
+    /// who fought it is asked what their entry goes by (whether or not it made its board).
+    fn scored(&mut self, scored: Option<(usize, Vec<u32>)>) {
+        let Some((index, fought)) = scored else { return };
+        self.scores_changed = true;
+        let Some(((place, of), score)) = self.scores.standing(index).zip(self.scores.get(index).cloned()) else { return };
+        for (member, id) in fought.into_iter().enumerate() {
+            self.naming.insert(id, (index, member));
+            let name = score.party[member].0.clone();
+            self.prompts.push((id, LobbyEvent::NameYourScore { wave: score.wave, place, of, size: score.party.len(), name }));
+        }
+    }
+
+    /// The lightyear rooms `link` is sent: the room they're in (`now`, if it's just been decided)
+    /// and any they've just left (`Linger`).
+    fn nets_of(&self, link: Entity, now: Option<RoomId>) -> Rooms {
+        let current = now.or_else(|| self.guests.get(&link).and_then(|g| g.room).and_then(|key| self.rooms.get(&key)).map(|room| room.net));
+        Rooms::from(current.into_iter().chain(self.lingering.iter().filter(|l| l.link == Some(link)).map(|l| l.net)))
+    }
+}
+
+/// The rooms clients left a moment ago stop being sent to them, and closed ones are free to use
+/// again (`Linger`).
+fn end_lingering(mut commands: Commands, timeline: Res<LocalTimeline>, mut lobby: ResMut<Lobby>) {
+    let now = timeline.tick().0;
+    if lobby.lingering.iter().all(|l| now < l.until) {
+        return;
+    }
+    let (done, still): (Vec<Linger>, Vec<Linger>) = std::mem::take(&mut lobby.lingering).into_iter().partition(|l| now >= l.until);
+    lobby.lingering = still;
+    for linger in done {
+        match linger.link {
+            Some(link) => {
+                let nets = lobby.nets_of(link, None);
+                if nets.rooms().next().is_some() {
+                    commands.entity(link).try_insert(nets);
+                } else {
+                    commands.entity(link).try_remove::<Rooms>();
+                }
+            }
+            None => lobby.free_net.push(linger.net),
         }
     }
 }

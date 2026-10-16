@@ -23,6 +23,8 @@ mod frost_mage;
 pub use frost_mage::*;
 mod zombie;
 use zombie::*;
+mod merchant;
+use merchant::*;
 mod shots;
 pub use shots::*;
 mod scene;
@@ -53,6 +55,18 @@ pub mod palette {
     pub const ROPE: Color = Color::srgb_u8(0x7A, 0x6A, 0x50);
     /// Near-black leathers: trousers and hoods; boots and eye sockets.
     pub const LEATHER: Color = Color::srgb_u8(0x2E, 0x27, 0x24);
+    /// The merchant's: a rich burgundy coat, weathered skin, a grey-brown beard, a forest-green
+    /// hat with a red feather, the canvas of his pack and the rug rolled on it.
+    pub const MERCHANT_COAT: Color = Color::srgb_u8(0x6E, 0x1F, 0x2A);
+    pub const SKIN: Color = Color::srgb_u8(0xC6, 0x8E, 0x6E);
+    pub const MERCHANT_BEARD: Color = Color::srgb_u8(0x7A, 0x6A, 0x5C);
+    pub const MERCHANT_HAT: Color = Color::srgb_u8(0x2E, 0x4A, 0x34);
+    pub const MERCHANT_FEATHER: Color = Color::srgb_u8(0xD8, 0x3A, 0x30);
+    pub const CANVAS: Color = Color::srgb_u8(0xA8, 0x96, 0x72);
+    pub const MERCHANT_RUG: Color = Color::srgb_u8(0x8C, 0x2E, 0x52);
+    /// The stall's awning, striped.
+    pub const AWNING_RED: Color = Color::srgb_u8(0xA8, 0x32, 0x2E);
+    pub const AWNING_CREAM: Color = Color::srgb_u8(0xE6, 0xD8, 0xB6);
     pub const DARK_LEATHER: Color = Color::srgb_u8(0x17, 0x14, 0x14);
     /// Ashen fur trim (mantles, tails).
     pub const FUR: Color = Color::srgb_u8(0x55, 0x55, 0x52);
@@ -124,9 +138,14 @@ pub mod palette {
     pub const TORCH_FLAME: Color = Color::srgb_u8(0xFF, 0xB2, 0x57);
     pub const TORCH_LIGHT: Color = Color::srgb_u8(0xFF, 0x94, 0x43);
 
-    // Pickups glow like spirits do: a heal's fresh green and a haste's quick blue.
+    // Pickups glow like spirits do: a heal's fresh green and a haste's quick blue; a chest's gold
+    // and a fury stone's pale yellow. Blood marks what's dire (an omen).
     pub const HEAL: Color = Color::srgb_u8(0x7C, 0xF2, 0x9A);
     pub const HASTE: Color = Color::srgb_u8(0x58, 0xA8, 0xFF);
+    pub const GOLD: Color = Color::srgb_u8(0xFF, 0xCC, 0x44);
+    pub const BLOOD: Color = Color::srgb_u8(0xE8, 0x2A, 0x3C);
+    /// A fury stone's pale yellow: attack speed.
+    pub const FURY: Color = Color::srgb_u8(0xFF, 0xE8, 0x8C);
 
     /// The UI's own theme, "Bronze": panels, text and accents, apart from the world's.
     /// What marks a fighter, an ability or a pickup keeps its world color. Named by role, so a
@@ -147,6 +166,8 @@ pub mod palette {
         pub const TEXT: Color = Color::srgb_u8(0xD6, 0xBC, 0x98);
         /// The one accent: the role, what's selected, the main button.
         pub const ACCENT: Color = Color::srgb_u8(0xAD, 0x7A, 0x32);
+        /// Go: playing solo, and being ready.
+        pub const GO: Color = Color::srgb_u8(0x4E, 0x8A, 0x3E);
     }
 }
 
@@ -189,7 +210,7 @@ pub fn faceted(mesh: Mesh) -> Mesh {
 /// Class ids that have their own figure in `fighter_mesh`. Every class in `assets/classes/` needs
 /// one (and its parts in `fighter_rig` and its moves in `rig/`): the client won't start
 /// without them, and a test checks every class has one.
-pub const FIGHTER_LOOKS: [&str; 4] = ["javelinist", "revenant", "frost_mage", "zombie"];
+pub const FIGHTER_LOOKS: [&str; 5] = ["javelinist", "revenant", "frost_mage", "zombie", "merchant"];
 
 /// Class ids whose shots have their own look in `shot_look` (the rest throw round bolts).
 pub const SHOT_LOOKS: [&str; 2] = ["javelinist", "frost_mage"];
@@ -315,6 +336,22 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             held_glint: None,
             wardrobe: None,
         },
+        "merchant" => RigMeshes {
+            head: merchant_head(),
+            arm: merchant_arm(),
+            forearm: None,
+            shin: None,
+            lead_arm: None,
+            leg: booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.1, 0.085),
+            held: merchant_staff(),
+            eyes: slit_eyes(MERCHANT_EYES),
+            glow: palette::TORCH_FLAME,
+            held_glow: Some(merchant_lantern()),
+            body_glow: None,
+            held_aura: None,
+            held_glint: None,
+            wardrobe: None,
+        },
         _ => unreachable!("no rig for class {class_key:?} (add it to FIGHTER_LOOKS)"),
     }
 }
@@ -342,6 +379,9 @@ pub fn fighter_mesh(class_key: &str) -> Mesh {
         // Monster (no one picks it): a hunched, rotting villager in a torn shirt. Head, bare
         // arms, legs and claws are separate, animated parts (`fighter_rig`).
         "zombie" => zombie_body(),
+        // The shopkeeper (no one picks it): a stout trader in a long burgundy coat, a pack piled
+        // with wares on its back, a wide hat with a feather, a lantern hanging off its staff.
+        "merchant" => merchant_body(),
         _ => unreachable!("no figure for class {class_key:?} (add it to FIGHTER_LOOKS)"),
     }
 }
@@ -358,8 +398,8 @@ mod tests {
     #[test]
     fn every_class_has_its_own_figure() {
         for class in ClassId::all() {
-            let key = &class.def().id;
-            assert!(FIGHTER_LOOKS.contains(&key.as_str()), "class {key:?} has no figure in fighter_mesh");
+            let key = class.def().figure();
+            assert!(FIGHTER_LOOKS.contains(&key), "class {key:?} has no figure in fighter_mesh");
         }
     }
 

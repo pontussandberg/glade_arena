@@ -79,7 +79,7 @@ fn melee_hits_where_the_target_is_now() {
     let a_spot = A_SPOT + Vec2::X * 2.0;
     let mut d = Duel::placed(5895, (A_CLASS, a_spot), (B_CLASS, a_spot + Vec2::X * (reach() - 0.3)));
     let damage = class_id(A_CLASS).def().attack.damage;
-    let hits = |a: Vec2, b: Vec2| sim::melee_hits(map(), a, Vec2::X, false, class_id(A_CLASS), b);
+    let hits = |a: Vec2, b: Vec2| sim::melee_hits(map(), a, Vec2::X, (false, 0.0), class_id(A_CLASS), b);
 
     // B standing just inside reach is hit; just outside, it isn't.
     let (_, _, dealt) = swing_judged_on_server(&mut d);
@@ -103,7 +103,8 @@ fn melee_hits_where_the_target_is_now() {
     d.until(Duration::from_secs(3), "B runs off", |d| server_player(&mut d.server, B).0.x - a_spot.x > reach() - lead);
     let (a, b, dealt) = swing_judged_on_server(&mut d);
     println!("swing went off with B {:.2} m away on the server (reach {:.2}); dealt {dealt}", b.distance(a), reach());
-    assert_eq!(dealt > 0, hits(a, b), "the swing should land exactly when B is in reach on the server");
+    // (Counting the swing's damage alone: B may burn a little crossing A's rifts.)
+    assert_eq!(dealt >= damage, hits(a, b), "the swing should land exactly when B is in reach on the server");
 
     // Both clients saw A swing.
     let swung = |app: &mut App| player::<LastSwing>(app, A).is_some_and(|s| s.tick > 0);
@@ -138,4 +139,36 @@ fn the_dead_sit_out_then_respawn_at_full_health() {
     println!("B respawned after {waited:.2}s at {pos}");
     assert!(waited > 2.5, "respawned too early");
     assert!(map().spawn_points.contains(&pos));
+}
+
+/// A revenant's rift burns a foe standing in it and heals the revenant a share of the burn; the
+/// strike its Follow Through empowers knocks the foe up, briefly.
+#[test]
+fn a_revenants_rift_burns_and_heals_and_its_empowered_strike_knocks_up() {
+    let mut d = duel_at_close_range(5862);
+    let attack = &class_id(A_CLASS).def().attack;
+    let (rift, follow_up) = (attack.rift.expect("a rift"), attack.follow_up.expect("a follow-up"));
+    assert!(rift.burn > 0 && rift.leech > 0.0 && follow_up.lift_ticks > 0);
+    let wounded = server_player(&mut d.server, A).1 / 2;
+    let mut q = d.server.world_mut().query::<(&PlayerId, &mut Health)>();
+    for (player, mut health) in q.iter_mut(d.server.world_mut()) {
+        if player.0 == peer(A) {
+            health.0 = wounded;
+        }
+    }
+
+    // A plain hit tears the ground under B: B burns there, and A heals.
+    a_swings_at_b(&mut d);
+    set_input(&mut d.a, PlayerInput::default());
+    d.run(Duration::from_millis(150));
+    let (hit, healed) = (b_health(&mut d), server_player(&mut d.server, A).1);
+    d.run(Duration::from_millis(1100));
+    assert!(b_health(&mut d) <= hit - 2 * rift.burn, "B didn't burn in the rift: {hit} -> {}", b_health(&mut d));
+    assert!(server_player(&mut d.server, A).1 > healed, "A didn't heal off the burn");
+
+    // The empowered strike knocks B up, shorter than A's quickened attack.
+    a_swings_at_b(&mut d);
+    d.until(Duration::from_secs(1), "B is knocked up", |d| player::<Chilled>(&mut d.server, B).is_some_and(|c| c.lifted.until > 0));
+    let lifted = player::<Chilled>(&mut d.server, B).unwrap().lifted;
+    assert_eq!(lifted.until - lifted.from, follow_up.lift_ticks);
 }

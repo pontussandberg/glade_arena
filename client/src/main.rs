@@ -37,7 +37,41 @@ fn main() {
         app.add_plugins(arena_client::bot::BotPlugin);
     }
     app.add_plugins(RenderPlugin);
+    #[cfg(not(target_family = "wasm"))]
+    if let Some(out) = std::env::var_os("ARENA_PERF") {
+        app.add_plugins(arena_client::perf::PerfPlugin { out: out.into() });
+    }
+    #[cfg(not(target_family = "wasm"))]
+    if let Some(dir) = std::env::var_os("ARENA_SHOTS") {
+        app.insert_resource(Snapshots { dir: dir.into(), next: 0.0, taken: 0 });
+        app.add_systems(Update, take_snapshots);
+    }
     app.run();
+}
+
+/// `ARENA_SHOTS=dir`: a screenshot of the window every `SNAPSHOT_EVERY` seconds, saved there as
+/// numbered PNGs, to look at a session afterwards (with `ARENA_BOT=1`, one nobody played).
+#[cfg(not(target_family = "wasm"))]
+#[derive(Resource)]
+struct Snapshots {
+    dir: std::path::PathBuf,
+    next: f32,
+    taken: u32,
+}
+
+#[cfg(not(target_family = "wasm"))]
+const SNAPSHOT_EVERY: f32 = 4.0;
+
+#[cfg(not(target_family = "wasm"))]
+fn take_snapshots(mut commands: Commands, time: Res<Time>, mut shots: ResMut<Snapshots>) {
+    use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+    if time.elapsed_secs() < shots.next {
+        return;
+    }
+    shots.next = time.elapsed_secs() + SNAPSHOT_EVERY;
+    shots.taken += 1;
+    let path = shots.dir.join(format!("shot_{:03}.png", shots.taken));
+    commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
 }
 
 fn default_server_addr() -> SocketAddr {

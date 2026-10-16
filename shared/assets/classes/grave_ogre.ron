@@ -1,0 +1,28 @@
+#![enable(unwrap_variant_newtypes)]
+// A Grave Ogre (field reference: README.md): huge, slow, hits like a falling tree and slams the
+// ground, in the waves mode.
+(
+    id: "grave_ogre",
+    name: "Grave Ogre",
+    role: "Monster",
+    blurb: "Slow as a landslide, and as hard to stop.",
+    playable: false,
+    max_hp: 300,
+    move_speed: 2.5,
+    attack: (
+        damage: 30,
+        attack_ticks: 64,
+        windup: 0.6,
+        kind: Melee(range: 2.4, width: 1.6),
+    ),
+    abilities: [
+        (
+            name: "Ground Slam",
+            description: "Slams the ground: everyone within {ability_reach} takes {ability_damage} damage and is slowed.",
+            cooldown_ticks: 256,
+            kind: Nova(radius: 3.0, damage: 16, chill: (slow: 0.5, slow_ticks: 48)),
+        ),
+    ],
+    look: Some(figure: "zombie", size: 1.75, tint: (0.78, 0.62, 0.5)),
+    mob: Some(brain: Chase, tricks: [Slam(slot: 0, within: 2.8)], bounty: 25, cost: 5.0, from_wave: 8),
+)

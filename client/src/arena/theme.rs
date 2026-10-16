@@ -53,6 +53,7 @@ impl Theme {
             MapId::Crossing => &GLADE,
             MapId::Keep => &FEN,
             MapId::Gorge => &HIGHLANDS,
+            MapId::Wilds => &HOLLOW,
         }
     }
 }
@@ -109,6 +110,34 @@ const FEN: Theme = Theme {
     sun: Color::srgb_u8(0xC4, 0xD4, 0xFF),
     sun_illuminance: 2_600.0,
     wilds: Wilds::Fen,
+};
+
+/// Hollow Wilds: a haunted wood in the last light. Deep, mossy greens gone grey-blue, violet
+/// heather, slate stone, under a low, cold violet sun and a dim purple haze, so the camp's torches
+/// and the fights carry the scene.
+const HOLLOW: Theme = Theme {
+    grass: Color::srgb_u8(0x55, 0x6E, 0x4E),
+    meadow: Color::srgb_u8(0x6A, 0x7E, 0x5A),
+    fern: Color::srgb_u8(0x3E, 0x5E, 0x48),
+    pine: Color::srgb_u8(0x24, 0x38, 0x34),
+    slate: Color::srgb_u8(0x62, 0x66, 0x78),
+    stone: Color::srgb_u8(0x7E, 0x80, 0x8E),
+    wall: Color::srgb_u8(0x5E, 0x60, 0x70),
+    bark: Color::srgb_u8(0x4A, 0x3C, 0x36),
+    path: Color::srgb_u8(0x84, 0x7A, 0x66),
+    bank: Color::srgb_u8(0x4C, 0x44, 0x3C),
+    riverbed: Color::srgb_u8(0x30, 0x3A, 0x44),
+    pond: Color::srgb_u8(0x46, 0x6E, 0x8A),
+    bloom: Color::srgb_u8(0xA8, 0x84, 0xC8),
+    marsh: Color::srgb_u8(0x50, 0x5A, 0x44),
+    abyss: Color::srgb_u8(0x2E, 0x2A, 0x40),
+    rope: Color::srgb_u8(0x70, 0x62, 0x50),
+    haze: Color::srgb_u8(0x74, 0x6C, 0x8C),
+    sky: Color::srgb_u8(0x84, 0x7C, 0xB4),
+    sky_brightness: 230.0,
+    sun: Color::srgb_u8(0xEC, 0xD4, 0xF4),
+    sun_illuminance: 3_800.0,
+    wilds: Wilds::Forest,
 };
 
 /// Riven Gorge: autumn highlands at sunset. Dry golden grass rising in terraces of red

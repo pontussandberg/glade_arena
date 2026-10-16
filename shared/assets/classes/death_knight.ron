@@ -1,0 +1,28 @@
+#![enable(unwrap_variant_newtypes)]
+// A Death Knight (field reference: README.md): a fallen revenant, charging through its prey,
+// in the waves mode.
+(
+    id: "death_knight",
+    name: "Death Knight",
+    role: "Monster",
+    blurb: "A revenant that forgot why it fights. Not how.",
+    playable: false,
+    max_hp: 200,
+    move_speed: 3.4,
+    attack: (
+        damage: 22,
+        attack_ticks: 44,
+        windup: 0.4,
+        kind: Melee(range: 2.8, width: 0.6, from: 1.4),
+    ),
+    abilities: [
+        (
+            name: "Rift Charge",
+            description: "Charges up to {ability_reach}, cutting everyone it passes for {ability_damage}.",
+            cooldown_ticks: 224,
+            kind: Dash(distance: 6.0, min_distance: Some(1.0), ticks: 6, damage: 20),
+        ),
+    ],
+    look: Some(figure: "revenant", size: 1.15, tint: (1.15, 0.55, 0.5), cloth: false),
+    mob: Some(brain: Chase, tricks: [Lunge(slot: 0, within: 7.0)], bounty: 30, cost: 5.0, from_wave: 11),
+)

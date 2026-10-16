@@ -6,6 +6,7 @@
 pub mod abilities;
 pub mod classes;
 pub mod config;
+pub mod items;
 pub mod map;
 pub mod protocol;
 pub mod rooms;

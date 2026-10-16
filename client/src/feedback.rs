@@ -47,14 +47,22 @@ const BAR_SIZE: Vec2 = Vec2::new(76.0, 10.0);
 const MONSTER_BAR_SIZE: Vec2 = Vec2::new(38.0, 5.0);
 
 /// The size of `class`'s health bar: a player's, or a monster's (a class no one picks).
-fn bar_size(class: ClassId) -> Vec2 {
-    if class.def().playable { BAR_SIZE } else { MONSTER_BAR_SIZE }
+fn bar_size(class: ClassId, elite: bool) -> Vec2 {
+    let def = class.def();
+    match () {
+        _ if def.playable => BAR_SIZE,
+        _ if def.is_boss() => MONSTER_BAR_SIZE * Vec2::new(2.2, 1.4),
+        _ if elite => MONSTER_BAR_SIZE * Vec2::new(1.4, 1.2),
+        _ => MONSTER_BAR_SIZE,
+    }
 }
 const BAR_HEIGHT: f32 = 2.3;
 /// The cast bar hangs right under the health bar, as wide and a bit thinner.
 const CAST_BAR_HEIGHT: f32 = 6.0;
 /// A mark across the health bar every this much health, for scale.
 const HP_PER_TICK: i32 = 25;
+/// The most marks a bar has.
+const MOST_TICKS: i32 = 12;
 const FLASH_SECONDS: f32 = 0.12;
 /// Health just lost stays on the bar as a pale chunk: white at the hit, paling to `SUN` over
 /// `TRAIL_HOLD` seconds (each new hit starts it over, so a combo adds up), then draining to the
@@ -78,6 +86,9 @@ const CRIT_NUMBER_SIZE: f32 = 26.0;
 const CRIT_POP: f32 = 0.6;
 const CRIT_POP_PART: f32 = 0.15;
 const NUMBER_SECONDS: f32 = 0.9;
+/// Plain damage to one fighter landing this soon (seconds) after its last number adds to that
+/// number instead of floating up a new one, so a flurry (arcs, bursts, a barrage) reads as one.
+const NUMBER_MERGE_SECONDS: f32 = 0.25;
 const CRIT_NUMBER_SECONDS: f32 = 1.2;
 const NUMBER_FADE_PART: f32 = 0.4;
 const NUMBER_RISE: f32 = 36.0;
@@ -132,6 +143,8 @@ struct DamageNumber {
     crit: bool,
     /// Sideways from the bar's center, in pixels.
     dx: f32,
+    /// For plain damage, how much it shows, for more landing on it (`NUMBER_MERGE_SECONDS`).
+    merges: Option<i32>,
 }
 
 /// What floats over the fighters (bars, damage numbers): under one screen-filling `GameUi` root,
@@ -149,7 +162,13 @@ fn spawn_world_ui(mut commands: Commands) {
 }
 
 /// Each fighter gets its bars once it has a body.
-fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, new: Query<(Entity, &ClassId, Has<Me>), (With<PlayerId>, Added<Mesh3d>)>) {
+#[allow(clippy::type_complexity)]
+fn spawn_bars(
+    mut commands: Commands,
+    world_ui: Single<Entity, With<WorldUi>>,
+    // The shopkeeper has none: no one can hurt them.
+    new: Query<(Entity, &ClassId, Has<Me>, Option<&MaxHealth>, Has<Elite>), (With<PlayerId>, Added<Mesh3d>, Without<Shopkeeper>)>,
+) {
     let fill = |color: Color| (Node { width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(color));
     let frame = |node: Node| {
         (
@@ -158,17 +177,19 @@ fn spawn_bars(mut commands: Commands, world_ui: Single<Entity, With<WorldUi>>, n
             BorderColor::all(palette::ui::PANEL),
         )
     };
-    for (player, class, is_me) in &new {
-        let size = bar_size(*class);
+    for (player, class, is_me, max, elite) in &new {
+        let size = bar_size(*class, elite);
         // Behind the fill (spawned before it), reaching past it to show health just lost.
         let trail = commands
             .spawn((Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(Color::WHITE)))
             .id();
         let health_fill = commands.spawn(fill(Relation::of(is_me, false).color())).id();
         // Over the fill (spawned after it), at every `HP_PER_TICK` of the fighter's health.
-        let max_hp = class.def().max_hp;
+        let max_hp = max.map_or(class.def().max_hp, |m| m.0);
+        // A tough one's marks further apart, so they don't run together.
+        let per_tick = HP_PER_TICK * (max_hp / (HP_PER_TICK * MOST_TICKS)).max(1);
         let ticks: Vec<Entity> = (1..)
-            .map(|n| n * HP_PER_TICK)
+            .map(|n| n * per_tick)
             .take_while(|&hp| hp < max_hp)
             .map(|hp| {
                 let left = percent(100.0 * hp as f32 / max_hp as f32);
@@ -221,8 +242,8 @@ fn color_bars(
 }
 
 /// Where a fighter's health bar is centered on screen (`None` off camera).
-fn over_bar(camera: &Camera, camera_transform: &GlobalTransform, pos: &Pos) -> Option<Vec2> {
-    camera.world_to_viewport(camera_transform, to_world(pos.0, BAR_HEIGHT)).ok()
+fn over_bar(camera: &Camera, camera_transform: &GlobalTransform, pos: &Pos, size: f32) -> Option<Vec2> {
+    camera.world_to_viewport(camera_transform, to_world(pos.0, BAR_HEIGHT * size.max(0.8))).ok()
 }
 
 /// How far behind the latest state from the server our own fighter is drawn, in ticks: enough
@@ -289,7 +310,7 @@ fn place_bars(
     time: Res<Time>,
     clock: AttackClock,
     camera: Single<(&Camera, &GlobalTransform)>,
-    players: Query<(&Pos, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Has<Me>)>,
+    players: Query<(&Pos, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Has<Me>, (Option<&MaxHealth>, Has<Elite>))>,
     mut bars: Query<(Entity, &Bars, &mut HealthTrail, &mut Node, &mut UiTransform, &mut Visibility)>,
     mut parts: Query<(&mut Node, &mut Visibility), Without<Bars>>,
     mut colors: Query<&mut BackgroundColor>,
@@ -297,19 +318,21 @@ fn place_bars(
     let (camera, camera_transform) = *camera;
     let now = time.elapsed_secs();
     for (bar, ids, mut trail, mut node, mut transform, mut visibility) in &mut bars {
-        let Ok((pos, class, health, crit_at, attack, is_me)) = players.get(ids.player) else {
+        let Ok((pos, class, health, crit_at, attack, is_me, (max, elite))) = players.get(ids.player) else {
             commands.entity(bar).despawn();
             continue;
         };
-        let health_fraction = health.map_or(1.0, |h| h.0 as f32 / class.def().max_hp as f32);
+        let max_hp = max.map_or(class.def().max_hp, |m| m.0);
+        let health_fraction = health.map_or(1.0, |h| h.0 as f32 / max_hp as f32);
         update_trail(&mut trail, health_fraction, crit_at.map(|c| c.0), now, time.delta_secs());
         let alive = health.is_none_or(Health::alive);
-        let Some(screen) = over_bar(camera, camera_transform, pos).filter(|_| alive) else {
+        let height = crate::rig::drawn_size(*class, elite);
+        let Some(screen) = over_bar(camera, camera_transform, pos, height).filter(|_| alive) else {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
         visibility.set_if_neq(Visibility::Inherited);
-        let size = bar_size(*class);
+        let size = bar_size(*class, elite);
         let (left, top) = (px(screen.x - size.x / 2.0), px(screen.y - size.y / 2.0));
         if node.left != left || node.top != top {
             node.left = left;
@@ -442,14 +465,36 @@ fn spawn_damage_numbers(
     time: Res<Time>,
     world_ui: Single<Entity, With<WorldUi>>,
     mut players: Query<(Entity, &RecentHits, Option<&mut ShownHits>, Has<Me>), Changed<RecentHits>>,
+    mut numbers: Query<(&mut DamageNumber, &mut Text)>,
 ) {
+    let now = time.elapsed_secs();
     for (player, recent, shown, is_me) in &mut players {
         let Some(mut shown) = shown else {
             commands.entity(player).insert(ShownHits(recent.seq()));
             continue;
         };
         let last = std::mem::replace(&mut shown.0, recent.seq());
-        for (i, hit) in recent.0.iter().filter(|hit| hit.seq > last).enumerate() {
+        // Plain damage first adds to a number just shown, or comes as one number for all of it.
+        let new: Vec<_> = recent.0.iter().filter(|hit| hit.seq > last).copied().collect();
+        let plain: i32 = new.iter().filter(|hit| hit.kind == HitKind::Damage).map(|hit| hit.amount).sum();
+        let merged = plain > 0
+            && numbers.iter_mut().filter(|(n, _)| n.player == player && n.merges.is_some() && now - n.born < NUMBER_MERGE_SECONDS).last().is_some_and(|(mut number, mut text)| {
+                let total = number.merges.unwrap_or(0) + plain;
+                number.merges = Some(total);
+                // Kept up a moment longer, without dropping back to the bar.
+                number.born = number.born.max(now - 0.2);
+                text.0 = total.to_string();
+                true
+            });
+        let mut plain_shown = merged;
+        for (i, hit) in new.iter().enumerate() {
+            let mut hit = *hit;
+            if hit.kind == HitKind::Damage {
+                if std::mem::replace(&mut plain_shown, true) {
+                    continue;
+                }
+                hit.amount = plain;
+            }
             let crit = hit.kind == HitKind::Crit;
             if crit {
                 commands.entity(player).insert(CritAt(time.elapsed_secs()));
@@ -464,7 +509,7 @@ fn spawn_damage_numbers(
             let side = if i % 2 == 0 { 1.0 } else { -1.0 };
             let lasts = if crit { CRIT_NUMBER_SECONDS } else { NUMBER_SECONDS };
             commands.spawn((
-                DamageNumber { player, born: time.elapsed_secs(), lasts, crit, dx: side * NUMBER_SPREAD * i.div_ceil(2) as f32 },
+                DamageNumber { player, born: now, lasts, crit, dx: side * NUMBER_SPREAD * i.div_ceil(2) as f32, merges: (hit.kind == HitKind::Damage).then_some(hit.amount) },
                 ChildOf(*world_ui),
                 ui_text(text, size, color),
                 TextShadow { offset: Vec2::splat(2.0), color: palette::ui::PANEL },
@@ -493,7 +538,7 @@ fn float_damage_numbers(
             commands.entity(number).despawn();
             continue;
         };
-        let screen = over_bar(camera, camera_transform, pos);
+        let screen = over_bar(camera, camera_transform, pos, 1.0);
         visibility.set_if_neq(shown(screen.is_some()));
         let Some(screen) = screen else { continue };
         let size = computed.size() * computed.inverse_scale_factor();

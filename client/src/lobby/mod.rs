@@ -8,7 +8,7 @@
 //!   and its passive and Q ability
 //! - the fighters to pick from in a row of tiles at the bottom (click, or press the number)
 //! - on the right, the side panel: at home, the lobbies to join or create (`browser.rs`, opened
-//!   with "Create / join lobby"); in a room, its name, mode and map, who's in it (by team), the
+//!   with "Lobbies"); in a room, its name, mode and map, who's in it (by team), the
 //!   team buttons, and for the leader the mode and map switches
 //! - the way in at the bottom right: at home, practice; in a room, the
 //!   leader's start, or once the match is on, into the arena
@@ -55,12 +55,13 @@ impl Plugin for LobbyPlugin {
         app.configure_sets(Update, CameraControl.run_if(in_state(Screen::InGame)));
         app.configure_sets(Update, crate::PlayerControls.run_if(in_state(Screen::InGame)));
         app.insert_resource(DetailsOpen(true));
+        app.init_resource::<room::RoomOpen>();
         app.add_systems(OnEnter(Picking), open_lobby);
         app.add_systems(OnExit(Picking), close_lobby);
         app.add_systems(
             Update,
             (
-                (pick_fighter, fold_details, show_fighter, show_details, (show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena).chain(),
+                (pick_fighter, fold_details, show_fighter, show_details, (fold_room, show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena, scroll_panel).chain(),
                 show_status,
                 (turn_stage_camera, place_name_tag).chain().in_set(CameraMoves),
                 liven_stage,
@@ -78,6 +79,9 @@ pub(crate) const GAP: f32 = 8.0;
 pub(crate) const MARGIN: f32 = 40.0;
 /// The side panel's width.
 const SIDE_WIDTH: f32 = 456.0;
+/// How tall the row of buttons at the bottom is (with the status line over it), which the side
+/// panel stops above.
+const BOTTOM_ROW: f32 = 84.0;
 
 /// What the lobby shows, while it's open.
 #[derive(Resource)]
@@ -232,13 +236,20 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
             screen.spawn((
                 SidePanel,
                 Visibility::Hidden,
+                Scrolls,
+                ScrollPosition::default(),
+                bevy::ui::RelativeCursorPosition::default(),
+                // Down to just above the buttons at the bottom, never over them: what doesn't fit
+                // scrolls (the mouse wheel over it).
                 Node {
                     position_type: PositionType::Absolute,
                     top: px(MARGIN),
+                    bottom: px(MARGIN + BOTTOM_ROW),
                     right: px(MARGIN),
                     width: px(SIDE_WIDTH),
                     flex_direction: FlexDirection::Column,
                     row_gap: px(GAP * 1.5),
+                    overflow: Overflow::scroll_y(),
                     ..default()
                 },
             ));
@@ -268,14 +279,16 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                         .spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Stretch, row_gap: px(GAP), ..default() })
                         .with_children(|column| {
                             column.spawn((Status, ui_text("", 12.0, palette::ui::MUTED), Node { align_self: AlignSelf::FlexEnd, ..default() }));
-                            column
-                                .spawn((
+                            // Practice beside the big button, not over it: one row.
+                            column.spawn(Node { column_gap: px(GAP), align_items: AlignItems::Stretch, ..default() }).with_children(|row| {
+                                row.spawn((
                                     PracticeButton,
                                     Button,
                                     ButtonFill(palette::ui::PANEL),
                                     Node {
-                                        padding: UiRect::axes(px(36.0), px(12.0)),
+                                        padding: UiRect::axes(px(20.0), px(16.0)),
                                         justify_content: JustifyContent::Center,
+                                        align_items: AlignItems::Center,
                                         border: UiRect::all(px(1.0)),
                                         ..default()
                                     },
@@ -283,14 +296,14 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                                     BackgroundColor(palette::ui::PANEL),
                                 ))
                                 .with_child(ui_text("PRACTICE", 14.0, palette::ui::TEXT));
-                            column
-                                .spawn((
+                                row.spawn((
                                     EnterButton,
                                     Button,
                                     Node { padding: UiRect::axes(px(36.0), px(16.0)), justify_content: JustifyContent::Center, ..default() },
                                     BackgroundColor(ACCENT),
                                 ))
-                                .with_child((EnterLabel, ui_text("CREATE / JOIN LOBBY", 18.0, palette::ui::PANEL)));
+                                .with_child((EnterLabel, ui_text("PLAY SOLO", 18.0, palette::ui::PANEL)));
+                            });
                         });
                 });
             });
@@ -307,5 +320,35 @@ fn hide_game_ui(mut game_ui: Query<&mut Visibility, With<GameUi>>) {
 fn show_game_ui(mut game_ui: Query<&mut Visibility, With<GameUi>>) {
     for mut visibility in &mut game_ui {
         visibility.set_if_neq(Visibility::Inherited);
+    }
+}
+
+/// How far (pixels) a notch of the mouse wheel scrolls the side panel.
+const WHEEL_STEP: f32 = 48.0;
+
+/// The mouse wheel scrolls what's under it (the side panel, a pane's body), never past its ends.
+pub(super) fn scroll_panel(
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    mut scrolling: Query<(&mut ScrollPosition, &bevy::ui::RelativeCursorPosition, &ComputedNode), With<Scrolls>>,
+) {
+    let mut by = 0.0;
+    for event in wheel.read() {
+        by -= match event.unit {
+            bevy::input::mouse::MouseScrollUnit::Line => event.y * WHEEL_STEP,
+            bevy::input::mouse::MouseScrollUnit::Pixel => event.y,
+        };
+    }
+    if by == 0.0 {
+        return;
+    }
+    for (mut scroll, cursor, node) in &mut scrolling {
+        if !cursor.cursor_over() {
+            continue;
+        }
+        let most = ((node.content_size.y - node.size.y) * node.inverse_scale_factor).max(0.0);
+        let y = (scroll.y + by).clamp(0.0, most);
+        if scroll.y != y {
+            scroll.y = y;
+        }
     }
 }

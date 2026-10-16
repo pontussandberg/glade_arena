@@ -24,8 +24,8 @@ shares (field reference in the README there):
 | Class | Role | Auto-attack | Q |
 |---|---|---|---|
 | Jav | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`) | **Deadeye**: at once, your next auto-attack will critically strike, with 50% more attack speed; press again to call it off (15s cooldown, from the throw; off the global cooldown) |
-| Revenant | Duelist | A heavy overhead blow of its dark glaive, the blade coming down flat on the ground from 1.6 m to 3.08 m ahead, tearing it open for 3s (inside the tear the revenant moves 30% faster); each hit empowers the glaive for the next swing if it follows within 10s (time to kite): a lane 50% further and wider, from 2 m to 4.62 m, 0.75 m wide, 50% more attack speed and a 50% crit chance (it never crits otherwise; an empowered hit renews it), lost on a miss (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash toward the cursor, 1 m to 6 m, damaging each enemy you pass through |
-| Frost Mage | Controller | Frostbolts: little damage and shorter range (mid range), but each hit slows (40% for 2s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5s (no walking, no dashing) |
+| Revenant | Duelist | A heavy overhead blow of its dark glaive, the blade coming down flat on the ground from 1.6 m to 3.08 m ahead, tearing it open for 3s (inside the tear the revenant moves 30% faster, and enemies standing in it burn for 4 every 0.5s, the revenant healing a third of it); each hit empowers the glaive for the next swing if it follows within 10s (time to kite): a lane 50% further and wider, from 2 m to 4.62 m, 0.75 m wide, 50% more attack speed and a 50% crit chance (it never crits otherwise; an empowered hit renews it), and it knocks enemies up for 0.3s (shorter than its own quickened attack, so it can't chain alone), lost on a miss (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash toward the cursor, 1 m to 6 m, damaging each enemy you pass through |
+| Frost Mage | Controller | Frostbolts (mid range) that shatter where they hit, the burst of ice hitting everyone round the one struck for most of the damage; every hit slows (40% for 2s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5s (no walking, no dashing) |
 
 Hits can carry **crowd control** (`chill` in the class files): a slow takes a share off walking
 and dashing speed (a dash still goes its full distance, just slower; a haste speeds it up the
@@ -56,6 +56,133 @@ Killed players sit out 3 seconds, then respawn at full health.
 
 Stack: **Bevy 0.19 + Lightyear 0.30** (pinned together), Rust everywhere. The browser client is
 the same Rust code compiled to WASM, talking WebTransport to the server.
+
+## Waves (PvE)
+
+Besides fighting each other (PvP: free-for-all or teams), a lobby can fight **Waves**: up to five
+players together, against endless waves of monsters, on a map of their own, **Hollow Wilds**.
+It's far bigger than the PvP maps, with a walled camp in the middle and places all around it: a
+graveyard and ruined chapel, a hedge maze, a lake with an island, a quarry with a burned
+watchtower, a rotting marsh with a witch's hut, a circle of standing stones, a chasm with a stone
+bridge and a rope one, and a dark grove. Waygates jump from the camp's outskirts to the far
+corners, and monsters come out of lairs out there (`shared/src/map/wilds.rs`).
+
+A run opens with time at the **merchant** in the camp (walk up to them to trade): a run starts
+with some gold, and every kill pays its bounty to the whole party (no kill stealing), every
+cleared wave pays more, and **chests** turn up out in the wilds during a wave (gold for everyone,
+if someone goes and gets them). Press F (or the banner's button) once you're ready; the next wave
+comes once everyone is, or when the countdown runs out. A boss leads every fifth wave (The
+Butcher, The Pale Lich, The Grave Lord, The Ember Archmage, The Plague Mother, then round again,
+tougher each time), and from wave 6 a few
+**elites** come along, bigger, tougher, worth more, and with a twist: Swift, Vampiric, Volatile
+(blows up where it dies), Frostbound or Splitting. Everyone has **one life**: a fallen player is
+**down** where they fell (marked by a ring of spirit light) until an ally stands over them for 3
+seconds to pick them up, the wave is cleared, or a boss falls; if everyone is down, the run is
+over (alone, the first fall ends it). Fury stones (pale yellow crossed blades) make you attack faster for a while; the blue winged boots make you walk faster.
+
+Every wave is the same every run: which monsters come, in what order, which are elites, and its
+omen are all the wave's own (only where they come out of, and where chests turn up, changes).
+From wave 4 the second and fourth wave after each boss (4, 7, 9, 12, 14, 17, 19, ...) come with
+an **omen**, in turn, shown while you shop for it: Gilded (double bounties), a Horde (half as many
+again), a Frenzy (every monster hasted), the Restless Dead (every third to die rises again), a
+Blood Moon (elites everywhere), Volatile (everything bursts as it dies), and round again.
+
+Players' auto-attacks
+knock monsters (zombies too) back a little, bosses aside, and the Jav's javelins pierce straight
+through monsters (never players).
+
+**Items** (`shared/src/items.rs`) never give stats: each does something, and each has its own
+pixel icon (`client/src/item_icons.rs`). Six at most; buying one
+you have raises it a level (up to 3), selling gives back half. A few are one class's own: the shop
+lists them first under "<class> ONLY", and their tiles are rimmed in gold. Items that go off on an
+ability go off when the ability deals damage (once a use; Deadeye's primed javelin counts). Only
+an auto-attack's own hits set off the on-hit items (a Hydra Spear's barrage counts: each javelin is
+thrown); what items deal (a ricochet's bounce, an arc, a burst), and a frostbolt's shatter round
+the one it struck, doesn't.
+
+Every map has a merchant. In practice everything is free, to try items out on the target dummies,
+or on three slow zombies placed side by side ("3 slow zombies" in the practice tools; they walk at
+half speed and come for you).
+In a PvP match everyone starts with nothing and earns gold only by their own kills (25 a zombie,
+60 a player), so items there are few and far between.
+
+What items and monsters do is drawn as little scenes, not marker circles (`client/src/fx/`):
+frost growing over the ground and thawing, scorched earth with glowing cracks and flames licking
+out, thorns bursting up, a void vortex, lightning, coins thrown, a ring of runes where something
+is about to land. Each effect is made of parts (`recipes.rs`) that live and fade on their own, in
+procedural shapes (`shapes.rs`).
+
+| Item | What it does |
+|---|---|
+| Storm Coil | Auto-attack hits arc lightning through more enemies |
+| Ember Heart | Kills burst into flame (bursts kill, and burst) |
+| Rime Sigil | Every few auto-attack hits freeze |
+| Bloodfang | Auto-attack hits heal you |
+| Bramble Mantle | Being hit lashes everyone around you |
+| Echo Stone | Your ability's damage echoes where it hit, as a burst |
+| Powder Keg | Lobs kegs at the nearest enemy now and then |
+| Wisp Lantern | Wisps circle you, burning what they touch |
+| Hoarfrost Boots | You leave hoarfrost behind that slows |
+| Doom Bell | Marks enemies; the bell tolls back a share of what you dealt them |
+| Midas Coin | Hits finish monsters low on health, for gold (not bosses) |
+| Thunder Crown | Every few hits call down lightning |
+| Void Orb | Your ability's damage opens a vortex where it hit that drags enemies in |
+| Mirror Shard | Your ability's damage leaves a decoy monsters go for; it shatters |
+| Berserker Totem | Kills stack a frenzy (walk and attack faster) |
+| Ricochet Charm | Shots that hit bounce on (ranged classes) |
+| Hydra Spear | Each auto-attack throws a barrage of 2-4 javelins (Jav only) |
+| Gravecaller Rift | Follow Through's empowered strike, and the rift it tears, 15/30/50% longer and wider by level (Revenant only) |
+| Heart of Winter | Frost Nova's damage leaves a blizzard (Frost Mage only) |
+
+They combine: a Hydra Spear's barrage pierces a whole line and sets off Storm Coil arcs, Ember Heart's bursts kill into
+more bursts and feed a Berserker Totem, a Void Orb gathers a pack for Thunder Crown and the kegs.
+
+**Monsters** are classes too (`shared/assets/classes/`, with a `mob` section: how it gets about,
+its tricks, its bounty and when it first comes), wearing the players' and the zombie's figures
+sized and tinted (`look`): zombies, packs of gnawers, pouncing ghouls, spear-throwing grave
+hunters that keep their distance, bloaters that burst, grave ogres that slam the ground, frost
+wraiths, bonecallers raising gnawers, rot priests mending the others, plague bombardiers lobbing
+bombs where you stand (keep moving), and death knights charging through you. Later on: void
+acolytes (13) that throw fans of void bolts and blink away from anyone who closes in, packs of
+ember imps (16) that throw themselves at you and burst into flame, and storm callers (19) that
+call lightning down where you stand (the air crackles there first). The Ember Archmage (20)
+throws fireballs that burst, rains meteors round you (their burning shadows show where), throws
+rings of fire, and blinks away from anyone who closes in, the spot it left blowing up a moment
+later; the Plague Mother (25) lumbers after you, slams out a wave of rot that slows, lobs volleys
+of plague bombs and births bloaters. The server runs them (`server/src/brain.rs`), the waves (`server/src/waves.rs`, where
+all the tuning is) and the items (`server/src/items.rs`).
+
+**Playing**: from home, **Play solo** starts a run against the waves of your own (never listed).
+**Play with friends** lists the lobbies and makes new ones (PvE first; a password is optional:
+only those who give it can join). In a lobby everyone readies up, and the leader starts once
+they all are; a leader who leaves passes the lead on, and the lobby is gone once everyone has
+left. A run's (or match's) end shows until each player leaves with its **Leave** button.
+
+**Leaderboards**: every run against the waves that ends (lost, or left under way) and was played
+from the first wave goes on the leaderboards, one for each party size (solo up to five), shown on
+the home screen under the lobbies: the top five of each, with each entry's name, hero, map and
+wave. Every run that ends asks each player, once they're out of the arena, for the name their
+entry goes by (all runs are kept, on the board or not). There's
+no database yet: the server appends each run to a CSV file (`ARENA_HIGHSCORES`, default
+`highscores.csv` where it runs; on the server, `/var/lib/arena/highscores.csv`) and reads it back
+when it starts (`server/src/highscores.rs`). Each line: the date (UTC), the game's version (the
+workspace's, `GAME_VERSION`, now 0.0.1), the wave, the map, and the party (names and heroes).
+
+**Measuring performance** (native): `ARENA_PERF=perf.txt` turns vsync off, notes every frame's
+time and counts what's in the world each second (entities, meshes drawn, effect parts, lights, UI
+nodes, assets), then writes a summary (average, median, 99th percentile, worst frame) and quits
+after `ARENA_PERF_SECS` (60 by default). `ARENA_PERF_OFF=lights,shadows,fog,ui,fx` switches parts
+of the scene off, to see what each costs. Building the client with `--features profile` also
+writes a Chrome trace (`trace-*.json`) of every system's time, every frame (it gets big: a few GB a
+minute). On a fast machine the frame rate hides costs that show on a slow one or in the browser,
+so compare frame times, not frame rates. `scripts/trace_sum.py` sums a trace per system; what
+we've measured so far, and how to run a perf loop, is in [docs/PERF.md](docs/PERF.md).
+
+To try a later wave natively: `ARENA_ROOM="Waves 10" cargo run -p arena-client -- 11 revenant`
+starts a run at wave 10 with the gold you'd have by then (`ARENA_BOT=1` to let the bot play it,
+`ARENA_SHOTS=<dir>` to save a screenshot every few seconds). `cargo test -p arena-server --test
+integration long_run -- --ignored --nocapture` plays a run with a bot that shops, printing how
+each wave goes (`ARENA_CLASS` picks its class).
 
 ## Layout
 
