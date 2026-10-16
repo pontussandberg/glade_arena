@@ -41,7 +41,6 @@ impl Plugin for RenderPlugin {
             crate::casting::CastingPlugin,
             crate::browser::BrowserPlugin,
             crate::lobby::LobbyPlugin,
-            crate::map_pick::MapPickPlugin,
             crate::esc_menu::EscMenuPlugin,
             crate::feedback::FeedbackPlugin,
             crate::rig::RigPlugin,
@@ -52,7 +51,7 @@ impl Plugin for RenderPlugin {
             crate::tooltip::TooltipPlugin,
             crate::practice::PracticePlugin,
         ));
-        app.add_plugins((crate::waygates::WaygatesPlugin, crate::scoreboard::ScoreboardPlugin));
+        app.add_plugins((crate::waygates::WaygatesPlugin, crate::scoreboard::ScoreboardPlugin, crate::waves::WavesPlugin, crate::fx::FxPlugin, crate::prompt::PromptPlugin));
         app.insert_resource(ControlsOpen(load_setting(CONTROLS_KEY).as_deref() == Some("open")));
         app.add_systems(Startup, setup_scene);
         // Right after the network's updates are in, before anything this frame reads positions.
@@ -65,7 +64,7 @@ impl Plugin for RenderPlugin {
             Update,
             (
                 (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
-                (add_visuals, sync_transforms).chain().before(crate::rig::Posing),
+                (add_visuals, sync_transforms, lift_fighters).chain().before(crate::rig::Posing),
                 (fly_shots, fade_wakes, fly_impacts, crate::rig::empty_hands).chain().after(crate::rig::Posing),
                 (show_novas, grow_bursts, end_fleeting, show_frost),
                 align_to_world.after(crate::rig::Posing).after(fly_shots),
@@ -75,6 +74,29 @@ impl Plugin for RenderPlugin {
                 (mark_relations, light_buttons),
             ),
         );
+    }
+}
+
+/// What a fighter's figure's colors are multiplied by: its class's tint (`ClassDef::tint`), white
+/// for most.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct Tint(pub(crate) Color);
+
+impl Tint {
+    pub(crate) fn of(class: ClassId) -> Tint {
+        let (r, g, b) = class.def().tint();
+        Tint(Color::linear_rgb(r, g, b))
+    }
+}
+
+/// What an elite's twist is marked in.
+pub(crate) fn affix_color(affix: Affix) -> Color {
+    match affix {
+        Affix::Swift => palette::HASTE,
+        Affix::Vampiric => Color::srgb_u8(0xE0, 0x30, 0x40),
+        Affix::Volatile => palette::TORCH_FLAME,
+        Affix::Frostbound => palette::ICE,
+        Affix::Splitting => Color::srgb_u8(0xB0, 0x70, 0xF0),
     }
 }
 
@@ -120,6 +142,9 @@ pub(crate) struct Visuals {
     range_circles: HashMap<ClassId, [Handle<Mesh>; 2]>,
     /// Each nova's burst (see `arena::NovaMeshes`), by its class and slot.
     novas: HashMap<(ClassId, AbilitySlot), arena::NovaMeshes<Handle<Mesh>>>,
+    /// The ring an elite monster stands in, and its material by its twist.
+    elite_ring: Handle<Mesh>,
+    elite_rings: HashMap<Affix, Handle<StandardMaterial>>,
     /// The ice around a frozen (rooted) fighter's feet, and the frost under a slowed one's.
     ice_prison: Handle<Mesh>,
     frost_rune: Handle<Mesh>,
@@ -165,6 +190,10 @@ pub(crate) enum Look {
     Frost,
     /// Brighter, bluer see-through glow: the frost under a slowed fighter's feet.
     Chill,
+    /// Casters' bolts: a fireball, a bolt of the void, a spark.
+    Ember,
+    Void,
+    Storm,
 }
 
 impl Visuals {
@@ -198,6 +227,9 @@ impl Visuals {
                     Look::Range => arena::translucent(Color::WHITE, 0.2, 1.0),
                     Look::Frost => arena::translucent(palette::ICE, 0.45, 1.6),
                     Look::Chill => arena::translucent(palette::FROST_GLOW, 0.75, 2.5),
+                    Look::Ember => arena::glow(palette::TORCH_FLAME, 7.0),
+                    Look::Void => arena::glow(Color::srgb_u8(0xA0, 0x60, 0xFF), 6.0),
+                    Look::Storm => arena::glow(Color::srgb_u8(0xC8, 0xE4, 0xFF), 8.0),
                 })
             })
             .clone()
@@ -231,7 +263,7 @@ fn setup_scene(
         Visibility::Hidden,
     ));
     commands.insert_resource(Visuals {
-        fighters: ClassId::all().map(|c| (c, meshes.add(arena::fighter_mesh(&c.def().id)))).collect(),
+        fighters: ClassId::all().map(|c| (c, meshes.add(arena::fighter_mesh(c.def().figure())))).collect(),
         // Where an auto-attack stops reaching: a fighter whose body reaches over the circle can be
         // hit.
         range_circles: ClassId::all()
@@ -252,6 +284,8 @@ fn setup_scene(
                 Some(((c, slot), arena::NovaMeshes { disc: add(disc), ring: add(ring), shard: add(shard), eruption: add(eruption) }))
             })
             .collect(),
+        elite_ring: meshes.add(Annulus::new(0.62, 0.8).mesh().resolution(24).build()),
+        elite_rings: HashMap::default(),
         ice_prison: meshes.add(arena::ice_prison_mesh()),
         frost_rune: meshes.add(arena::frost_rune_mesh()),
         projectiles: ClassId::all()
@@ -302,15 +336,30 @@ fn add_visuals(
     mut commands: Commands,
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    players: Query<(Entity, &PlayerId, &ClassId, &Pos), Without<Mesh3d>>,
+    players: Query<(Entity, &PlayerId, &ClassId, &Pos, Option<&Elite>), Without<Mesh3d>>,
     projectiles: Query<(Entity, &Projectile, &Pos), Without<Mesh3d>>,
     me: Query<&PlayerId, With<Me>>,
 ) {
     // Wait until we know which player is ours, so colors are right from the first frame.
     let Ok(me) = me.single() else { return };
-    for (entity, id, class, pos) in &players {
+    for (entity, id, class, pos, elite) in &players {
         let is_me = id.0 == me.0;
         let material = visuals.material(&mut materials, id.0, Look::Body);
+        // A borrowed figure in its own colors.
+        let tint = Tint::of(*class);
+        if let Some(mut m) = materials.get_mut(&material) {
+            m.base_color = tint.0;
+        }
+        // An elite stands in a ring of its twist's color.
+        if let Some(elite) = elite {
+            let ring = visuals.elite_rings.entry(elite.0).or_insert_with(|| materials.add(arena::translucent(affix_color(elite.0), 0.55, 3.0))).clone();
+            commands.entity(entity).with_child((
+                Mesh3d(visuals.elite_ring.clone()),
+                MeshMaterial3d(ring),
+                WorldAligned(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2), 0.05),
+                NotShadowCaster,
+            ));
+        }
         let prison = commands
             .spawn((
                 Mesh3d(visuals.ice_prison.clone()),
@@ -335,6 +384,7 @@ fn add_visuals(
                 Transform::from_translation(to_world(pos.0, 0.0)),
                 SeenCasts::default(),
                 Frost { prison, rune, shown: (false, false) },
+                tint,
             ))
             .add_children(&[prison, rune]);
         if is_me && let Some([circle, _]) = visuals.range_circles.get(class).cloned() {
@@ -359,6 +409,9 @@ fn add_visuals(
             arena::ShotGlow::Spirit => Look::Spirit,
             arena::ShotGlow::Ice => Look::Ice,
             arena::ShotGlow::Pale => Look::Shot,
+            arena::ShotGlow::Ember => Look::Ember,
+            arena::ShotGlow::Void => Look::Void,
+            arena::ShotGlow::Storm => Look::Storm,
         };
         let body = visuals.material(&mut materials, projectile.owner, look);
         let mut shot = commands.entity(entity);

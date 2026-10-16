@@ -102,8 +102,9 @@ pub(crate) fn leaving_hand(held: &Transform) -> Transform {
 /// below 3/4 speed; one behind it is caught up within `SETTLE_SECONDS` however far behind it is,
 /// so others' spears (which reach us late, already meters down their path) shoot out of the hand
 /// fast and are where they really are almost at once. It leaves its wake behind it as it goes
-/// (`Wake`). A thrown Q isn't the held javelin (that stays in the hand): it
-/// shoots straight out from where the sim threw it, already pointing the way it flies.
+/// (`Wake`). A thrown Q isn't the held javelin (that stays in the hand), nor is one an item threw
+/// (a barrage's, a bounce): it shoots straight out from where the sim threw it, already pointing
+/// the way it flies.
 pub(super) fn fly_shots(
     mut commands: Commands,
     time: Res<Time>,
@@ -131,6 +132,7 @@ pub(super) fn fly_shots(
             // Not yet let go of: the thrower's hand still swinging it (our own fighter is drawn a
             // moment behind the news of its throw). Out of sight until it is, or until it's late.
             None if projectile.ability.is_none()
+                && !projectile.extra
                 && tick < projectile.spawn_tick as f32 + MAX_HOLD_TICKS
                 && holders.iter().any(|(id, held)| id.0 == projectile.owner && held.let_go.is_none_or(|at| at < projectile.spawn_tick)) =>
             {
@@ -143,7 +145,7 @@ pub(super) fn fly_shots(
                 // sim threw it (just outside the thrower's body), along its flight; an
                 // auto-attack just as the held javelin is this frame (its point, held pointing up,
                 // +Y, a shot along +X, as big as the thrower draws it), the hand letting go of it.
-                let start = if projectile.ability.is_some() {
+                let start = if projectile.ability.is_some() || projectile.extra {
                     Some((to_world(projectile.origin, height), along, Vec3::ONE))
                 } else {
                     holders.iter_mut().find(|(id, _)| id.0 == projectile.owner).map(|(_, mut held)| {

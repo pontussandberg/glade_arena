@@ -1,6 +1,6 @@
 #![enable(unwrap_variant_newtypes)]
 // The Zombie (field reference: README.md): not a class anyone picks. The server spawns them in
-// lobby matches; they shamble toward the nearest fighter and claw at it.
+// lobby matches and the waves; they shamble toward the nearest fighter and claw at it.
 (
     id: "zombie",
     name: "Zombie",
@@ -17,4 +17,5 @@
         kind: Melee(range: 1.4, width: 0.9),
     ),
     abilities: [],
+    mob: Some(brain: Chase, bounty: 5, cost: 1.0, from_wave: 1),
 )

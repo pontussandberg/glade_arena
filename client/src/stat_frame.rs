@@ -60,6 +60,8 @@ pub struct HealthParts {
     pub range: Entity,
     pub crit: Entity,
     pub speed: Entity,
+    /// And move speed, with every slow and haste on it.
+    pub move_speed: Entity,
 }
 
 /// Where a stat frame is shown, which sets its look.
@@ -79,7 +81,7 @@ pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, style: Fra
         FrameStyle::Card => (auto(), lobby::CARD_PADDING, 0.0, lobby::card_fill()),
     };
     let placeholder = Entity::PLACEHOLDER;
-    let mut parts = HealthParts { frame: placeholder, text: placeholder, range: placeholder, crit: placeholder, speed: placeholder };
+    let mut parts = HealthParts { frame: placeholder, text: placeholder, range: placeholder, crit: placeholder, speed: placeholder, move_speed: placeholder };
     parts.frame = parent
         .spawn((
             Node {
@@ -116,6 +118,7 @@ pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, style: Fra
                     RANGE_LABEL => parts.range = shown,
                     CRIT_LABEL => parts.crit = shown,
                     SPEED_LABEL => parts.speed = shown,
+                    MOVE_LABEL => parts.move_speed = shown,
                     _ => {}
                 }
                 let mut row = frame.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() });
@@ -158,7 +161,7 @@ fn tooltip(text: String) -> impl Bundle {
 fn stats(def: &ClassDef) -> [(&'static str, String, Option<String>); 5] {
     let crit_tip = def.describe("The chance your auto-attacks land a critical strike, dealing {crit_multiplier} of normal damage.");
     [
-        ("MOVE SPEED", format!("{} m/s", def.move_speed), None),
+        (MOVE_LABEL, move_text(def.move_speed), None),
         (CRIT_LABEL, crit_text(def, false, false), Some(crit_tip)),
         ("ATTACK DAMAGE", def.attack.damage.to_string(), None),
         (SPEED_LABEL, speed_text(def, false, 0.0), None),
@@ -167,6 +170,12 @@ fn stats(def: &ClassDef) -> [(&'static str, String, Option<String>); 5] {
 }
 
 const RANGE_LABEL: &str = "ATTACK RANGE";
+const MOVE_LABEL: &str = "MOVE SPEED";
+
+/// A walking speed, as the frame shows it.
+fn move_text(speed: f32) -> String {
+    format!("{} m/s", (speed * 10.0).round() / 10.0)
+}
 const CRIT_LABEL: &str = "CRIT CHANCE";
 const SPEED_LABEL: &str = "ATTACK SPEED";
 
@@ -244,18 +253,21 @@ fn spawn_my_frame(
 
 /// Your attack range, crit chance and attack speed, as your next attack will have them:
 /// highlighted, each that's changed, while your `follow_up` empowers it, a prime readies it or a
-/// frenzy speeds it up.
+/// frenzy speeds it up. And how fast you walk now, just as the server moves you: slowed (red),
+/// hasted, in a frenzy, in your own rift (highlighted), in a marsh.
+#[allow(clippy::type_complexity)]
 fn update_live_stats(
     clock: crate::feedback::AttackClock,
-    me: Query<(&ClassId, &AttackState, Option<&Frenzy>), (With<Me>, With<PlayerId>)>,
+    map: Res<crate::rooms::CurrentMap>,
+    me: Query<(&ClassId, &AttackState, (Option<&Frenzy>, Option<&Fury>), (&Pos, Option<&Chilled>, Option<&Hasted>, Option<&crate::swish::TornRifts>)), (With<Me>, With<PlayerId>)>,
     frame: Option<Single<&MyFrame>>,
     mut texts: Query<(&mut Text, &mut TextColor)>,
 ) {
-    let (Some(frame), Ok((class, attack, frenzy))) = (frame, me.single()) else { return };
+    let (Some(frame), Ok((class, attack, (frenzy, fury), (pos, chilled, hasted, rifts)))) = (frame, me.single()) else { return };
     let def = class.def();
     let now = clock.now(true);
     let empowered = attack.armed_at(now) && def.attack.follow_up.is_some();
-    let haste = attack.primed.map_or(0.0, |(_, speed)| speed) + frenzy.map_or(0.0, |frenzy| frenzy.at(now));
+    let haste = attack.primed.map_or(0.0, |(_, speed)| speed) + frenzy.map_or(0.0, |frenzy| frenzy.at(now)) + fury.map_or(0.0, |fury| fury.0.at(now));
     let shown = [
         (frame.0.range, range_text(def, empowered), range_text(def, false)),
         (frame.0.crit, crit_text(def, empowered, attack.primed.is_some()), crit_text(def, false, false)),
@@ -268,16 +280,40 @@ fn update_live_stats(
             text.0 = label;
         }
     }
+    // Walking: every slow and haste on it, as `sim::move_player_boosted` has them.
+    let tick = now as u32;
+    // Hasted in our own rift (the most hasting, if we stand in several), as `move_players` has it.
+    let rift = rifts.map_or(0.0, |rifts| rifts.0.iter().filter(|rift| rift.holds(pos.0, tick)).fold(0.0f32, |most, rift| most.max(rift.haste)));
+    let factor = chilled.map_or(1.0, |c| c.speed_factor(tick))
+        * hasted.map_or(1.0, |h| h.speed_factor(tick))
+        * (1.0 + frenzy.map_or(0.0, |f| f.at(now)))
+        * (1.0 + rift)
+        * map.map().speed_factor_at(pos.0);
+    let speed = def.move_speed * factor;
+    if let Ok((mut text, mut color)) = texts.get_mut(frame.0.move_speed) {
+        let label = move_text(speed);
+        let tint = if label == move_text(def.move_speed) {
+            palette::ui::TEXT
+        } else if speed < def.move_speed {
+            palette::ENEMY
+        } else {
+            ACCENT
+        };
+        color.set_if_neq(TextColor(tint));
+        if text.0 != label {
+            text.0 = label;
+        }
+    }
 }
 
 /// Your health, as it is.
 fn update_health(
-    me: Query<(&ClassId, Option<&Health>), (With<Me>, With<PlayerId>)>,
+    me: Query<(&ClassId, Option<&Health>, Option<&MaxHealth>), (With<Me>, With<PlayerId>)>,
     frame: Option<Single<&MyFrame>>,
     mut texts: Query<&mut Text>,
 ) {
-    let (Some(frame), Ok((class, health))) = (frame, me.single()) else { return };
-    let max = class.def().max_hp;
+    let (Some(frame), Ok((class, health, max))) = (frame, me.single()) else { return };
+    let max = max.map_or(class.def().max_hp, |m| m.0);
     let hp = health.map_or(max, |h| h.0);
     let label = format!("{hp} / {max}");
     if let Ok(mut text) = texts.get_mut(frame.0.text)

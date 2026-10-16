@@ -1,0 +1,19 @@
+#![enable(unwrap_variant_newtypes)]
+// The Merchant (field reference: README.md): the shopkeeper of the waves mode's camp. No one can
+// hurt them, and they never fight.
+(
+    id: "merchant",
+    name: "Merchant",
+    role: "Shopkeeper",
+    blurb: "Sells what the dead left behind. No refunds.",
+    playable: false,
+    max_hp: 100,
+    move_speed: 1.0,
+    attack: (
+        damage: 1,
+        attack_ticks: 32,
+        windup: 0.5,
+        kind: Melee(range: 1.0, width: 0.5),
+    ),
+    abilities: [],
+)

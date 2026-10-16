@@ -1,0 +1,41 @@
+#![enable(unwrap_variant_newtypes)]
+// The Plague Mother (field reference: README.md): the fifth boss of the waves, a vast swollen
+// corpse. Lumbers after you, slams out a wave of rot that slows, lobs volleys of plague bombs, and
+// births bloaters as she goes. Rages when she is nearly done.
+(
+    id: "plague_mother",
+    name: "The Plague Mother",
+    role: "Boss",
+    blurb: "Every plague in the wilds came from somewhere.",
+    playable: false,
+    max_hp: 3400,
+    move_speed: 2.2,
+    attack: (
+        damage: 34,
+        attack_ticks: 52,
+        windup: 0.45,
+        kind: Melee(range: 3.2, width: 1.0),
+    ),
+    abilities: [
+        (
+            name: "Rot Wave",
+            description: "Everyone within {ability_reach} takes {ability_damage} damage and is slowed.",
+            cooldown_ticks: 288,
+            kind: Nova(radius: 4.5, damage: 20, chill: (slow: 0.5, slow_ticks: 96)),
+        ),
+    ],
+    look: Some(figure: "zombie", size: 2.6, tint: (0.7, 1.15, 0.5)),
+    mob: Some(
+        brain: Chase,
+        tricks: [
+            Slam(slot: 0, within: 4.0),
+            Mortar(damage: 24, radius: 2.4, fuse_ticks: 48, every_ticks: 224, count: 3, scatter: 3.5),
+            Summon(class: "bloater", count: 2, every_ticks: 320, max: 6),
+            Enrage(below: 0.3),
+        ],
+        bounty: 200,
+        cost: 0.0,
+        from_wave: 25,
+        boss: true,
+    ),
+)

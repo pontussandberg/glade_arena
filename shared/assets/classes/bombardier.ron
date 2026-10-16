@@ -1,0 +1,27 @@
+#![enable(unwrap_variant_newtypes)]
+// A Plague Bombardier (field reference: README.md): keeps well back and lobs bombs that land a
+// moment later where its prey stood, in the waves mode. Keep moving.
+(
+    id: "bombardier",
+    name: "Plague Bombardier",
+    role: "Monster",
+    blurb: "Throws what it brewed. Mind where you stand.",
+    playable: false,
+    max_hp: 70,
+    move_speed: 2.7,
+    attack: (
+        damage: 6,
+        attack_ticks: 56,
+        windup: 0.45,
+        kind: Projectile(speed: 11.0, radius: 0.25, range: 10.0),
+    ),
+    abilities: [],
+    look: Some(figure: "javelinist", size: 1.05, tint: (1.25, 0.7, 0.4), cloth: false),
+    mob: Some(
+        brain: Kite(keep: 10.0),
+        tricks: [Mortar(damage: 24, radius: 2.2, fuse_ticks: 40, every_ticks: 128)],
+        bounty: 14,
+        cost: 3.0,
+        from_wave: 7,
+    ),
+)

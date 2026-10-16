@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn projectile_expires_at_its_range_and_at_walls() {
-        let proj = Projectile { owner: PeerId::Netcode(1), class: shooter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false };
+        let proj = Projectile { owner: PeerId::Netcode(1), class: shooter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false, extra: false };
         let lifetime = shooter().def().shot(None).unwrap().lifetime_ticks();
         assert!(!projectile_expired(map(), Vec2::ZERO, &proj, 5 + lifetime - 1));
         assert!(projectile_expired(map(), Vec2::ZERO, &proj, 5 + lifetime));
@@ -563,7 +563,7 @@ mod tests {
 
         // A weaker slow doesn't replace a stronger one; the same one again renews it.
         let mut again = chilled;
-        again.apply(Chill { slow: chill.slow / 2.0, slow_ticks: 1000, root_ticks: 0 }, 110);
+        again.apply(Chill { slow: chill.slow / 2.0, slow_ticks: 1000, root_ticks: 0, lift_ticks: 0 }, 110);
         assert_eq!(again, chilled);
         again.apply(chill, 110);
         assert_eq!(again.slowed, crate::protocol::Span { from: 111, until: 111 + chill.slow_ticks });
@@ -636,7 +636,7 @@ mod tests {
     #[test]
     fn only_auto_attacks_chill() {
         let class = chiller();
-        let shot = Projectile { owner: PeerId::Netcode(1), class, origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 1, ability: None, crit: false };
+        let shot = Projectile { owner: PeerId::Netcode(1), class, origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 1, ability: None, crit: false, extra: false };
         assert_eq!(projectile_chill(&shot), class.def().attack.chill);
         assert!(projectile_chill(&Projectile { class: primer(), ability: Some(Q), ..shot }).is_none());
     }
@@ -646,22 +646,22 @@ mod tests {
         let class = fighter();
         let at = spawns()[0];
         let reach = class.def().attack.kind.reach() - 0.05;
-        assert!(melee_hits(map(), at, Vec2::Y, false, class, at + Vec2::Y * reach), "straight ahead, at the edge of reach");
-        assert!(!melee_hits(map(), at, Vec2::Y, false, class, at + Vec2::Y * (reach + 0.2)), "just out of reach");
-        assert!(!melee_hits(map(), at, Vec2::Y, false, class, at - Vec2::Y * 1.0), "behind");
+        assert!(melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at + Vec2::Y * reach), "straight ahead, at the edge of reach");
+        assert!(!melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at + Vec2::Y * (reach + 0.2)), "just out of reach");
+        assert!(!melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at - Vec2::Y * 1.0), "behind");
         let AttackKind::Melee { width, from, .. } = class.def().attack.kind else { unreachable!() };
         // Bodies overlapping connect when the lane starts at the attacker; one starting further
         // out misses what's closer than that.
-        assert_eq!(melee_hits(map(), at, Vec2::Y, false, class, at - Vec2::Y * 0.3), from == 0.0, "bodies overlapping");
+        assert_eq!(melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at - Vec2::Y * 0.3), from == 0.0, "bodies overlapping");
         if from > 0.0 {
-            assert!(melee_hits(map(), at, Vec2::Y, false, class, at + Vec2::Y * (from - PLAYER_RADIUS + 0.05)), "touching the lane's near end");
-            assert!(!melee_hits(map(), at, Vec2::Y, false, class, at + Vec2::Y * (from - PLAYER_RADIUS - 0.05)), "short of the lane");
+            assert!(melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at + Vec2::Y * (from - PLAYER_RADIUS + 0.05)), "touching the lane's near end");
+            assert!(!melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at + Vec2::Y * (from - PLAYER_RADIUS - 0.05)), "short of the lane");
         }
         let edge = width / 2.0 + PLAYER_RADIUS;
         let middle = from.max(1.0);
-        assert!(melee_hits(map(), at, Vec2::Y, false, class, at + Vec2::new(edge - 0.05, middle)), "a body overlapping the lane");
-        assert!(!melee_hits(map(), at, Vec2::Y, false, class, at + Vec2::new(edge + 0.05, middle)), "beside the lane");
-        assert!(!melee_hits(map(), at, Vec2::Y, false, shooter(), at + Vec2::Y), "projectile classes don't swing");
+        assert!(melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at + Vec2::new(edge - 0.05, middle)), "a body overlapping the lane");
+        assert!(!melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at + Vec2::new(edge + 0.05, middle)), "beside the lane");
+        assert!(!melee_hits(map(), at, Vec2::Y, (false, 0.0), shooter(), at + Vec2::Y), "projectile classes don't swing");
     }
 
     #[test]
@@ -669,7 +669,7 @@ mod tests {
         let Some(class) = ClassId::all().find(|c| c.def().attack.rift.is_some()) else { return };
         let def = class.def().attack.rift.unwrap();
         let at = spawns()[0];
-        let swing = LastSwing { tick: 10, dir: Vec2::Y, empowered: false };
+        let swing = LastSwing { tick: 10, dir: Vec2::Y, empowered: false, grown: 0.0 };
         let rift = Rift::torn(PeerId::Netcode(1), class, at, &swing).unwrap();
         let (from, range, _) = class.def().attack.lane(false).unwrap();
         let inside = at + Vec2::Y * (from + range) / 2.0;
@@ -693,8 +693,8 @@ mod tests {
         let beyond = at + Vec2::Y * (range + PLAYER_RADIUS + 0.2);
         let aside = at + Vec2::new(width / 2.0 + PLAYER_RADIUS + (wide - width) / 4.0, (near + far) / 2.0);
         for target in [beyond, aside] {
-            assert!(!melee_hits(map(), at, Vec2::Y, false, class, target), "a plain swing reached {target}");
-            assert!(melee_hits(map(), at, Vec2::Y, true, class, target), "an empowered swing missed {target}");
+            assert!(!melee_hits(map(), at, Vec2::Y, (false, 0.0), class, target), "a plain swing reached {target}");
+            assert!(melee_hits(map(), at, Vec2::Y, (true, 0.0), class, target), "an empowered swing missed {target}");
         }
     }
 

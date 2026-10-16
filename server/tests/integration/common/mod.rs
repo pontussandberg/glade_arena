@@ -19,7 +19,7 @@ pub fn map() -> &'static Map {
 
 /// A started server. `setup` can add test-only systems or resources before it starts.
 pub fn start_server(port: u16, setup: impl FnOnce(&mut App)) -> App {
-    let mut server = build_server_app(ServerSettings { port, certificate: Certificate::SelfSigned { digest_out: None } });
+    let mut server = build_server_app(ServerSettings { port, certificate: Certificate::SelfSigned { digest_out: None }, high_scores: None });
     setup(&mut server);
     server.finish();
     server.cleanup();
@@ -51,6 +51,11 @@ pub fn start_client(id: u64, port: u16, class: &str, conditioner: Option<LinkCon
 /// A headless client that connects and waits in the server browser (the test tells it what to
 /// do about rooms); it enters the arena as `class` once its room has started.
 pub fn start_guest(id: u64, port: u16, class: &str) -> App {
+    start_guest_with(id, port, class, |_| {})
+}
+
+/// `start_guest`, with `setup` adding to the client (a bot, say) before it starts.
+pub fn start_guest_with(id: u64, port: u16, class: &str, setup: impl FnOnce(&mut App)) -> App {
     let mut client = build_headless_client_app(ClientSettings {
         client_id: id,
         server_addr: SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port),
@@ -61,6 +66,7 @@ pub fn start_guest(id: u64, port: u16, class: &str) -> App {
         quick_join: None,
         guest_name: None,
     });
+    setup(&mut client);
     client.finish();
     client.cleanup();
     client

@@ -37,6 +37,15 @@ mod dummies;
 use dummies::*;
 mod zombies;
 use zombies::*;
+mod brain;
+use brain::*;
+mod fx;
+use fx::*;
+mod items;
+use items::*;
+mod waves;
+use waves::*;
+mod highscores;
 
 pub mod logging;
 pub mod rooms;
@@ -44,6 +53,8 @@ pub mod rooms;
 pub struct ServerSettings {
     pub port: u16,
     pub certificate: Certificate,
+    /// The CSV file the leaderboards are kept in (`highscores`); none: only in memory.
+    pub high_scores: Option<PathBuf>,
 }
 
 /// The TLS certificate WebTransport runs on.
@@ -68,6 +79,7 @@ pub fn build_server_app(settings: ServerSettings) -> App {
     ));
     app.add_plugins(ServerPlugins { tick_duration: TICK_DURATION });
     app.add_plugins(ServerGamePlugin);
+    app.world_mut().resource_mut::<rooms::Lobby>().scores = highscores::HighScores::load(settings.high_scores.clone());
     spawn_server_entity(&mut app, settings);
     app
 }
@@ -107,29 +119,17 @@ impl Plugin for ServerGamePlugin {
         app.insert_resource(ReplicationMetadata::new(SEND_INTERVAL));
         app.add_observer(on_new_link);
         app.init_resource::<Rifts>();
+        app.init_resource::<HitLog>().init_resource::<Barrages>().init_resource::<Pending>().init_resource::<Zones>();
+        app.init_resource::<Fields>().init_resource::<Deeds>();
         // As soon as they're received, before this frame's ticks run.
         app.add_systems(PreUpdate, apply_commands.after(MessageSystems::Receive));
         app.add_systems(
             FixedUpdate,
             (
-                chase,
-                move_players,
-                walk_dummies,
-                take_pickups,
-                use_gates,
-                attack,
-                use_abilities,
-                move_projectiles,
-                resolve_projectile_hits,
-                rooms::count_kills,
-                feed_frenzy,
-                restore_dummies,
-                respawn,
-                bury_zombies,
-                raise_zombies,
-                place_players,
-                use_up_clicks,
-                close_rifts,
+                (chase, think, do_deeds, move_players, shove, spread_out, walk_dummies, take_pickups, use_gates).chain(),
+                (attack, use_abilities, move_projectiles, resolve_projectile_hits, burn_rifts, tick_items, react).chain(),
+                (rooms::count_kills, feed_frenzy, fall, revive, pay_bounties, restore_dummies, respawn, bury_zombies, raise_zombies).chain(),
+                (run_waves, shelter, sync_satchels, place_players, use_up_clicks, close_rifts, end_fx).chain(),
             )
                 .chain(),
         );

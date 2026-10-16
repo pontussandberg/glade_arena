@@ -1,0 +1,40 @@
+#![enable(unwrap_variant_newtypes)]
+// The Butcher (field reference: README.md): the first boss of the waves. Charges, cleaves, throws
+// cleavers, and calls its little ones; rages when it is nearly done.
+(
+    id: "butcher",
+    name: "The Butcher",
+    role: "Boss",
+    blurb: "It was a cook once. It still is.",
+    playable: false,
+    max_hp: 1700,
+    move_speed: 2.9,
+    attack: (
+        damage: 34,
+        attack_ticks: 56,
+        windup: 0.55,
+        kind: Melee(range: 3.2, width: 2.2),
+    ),
+    abilities: [
+        (
+            name: "Charge",
+            description: "Charges up to {ability_reach}, trampling everyone it passes for {ability_damage}.",
+            cooldown_ticks: 256,
+            kind: Dash(distance: 9.0, min_distance: Some(2.0), ticks: 10, damage: 30),
+        ),
+    ],
+    look: Some(figure: "zombie", size: 2.3, tint: (1.0, 0.55, 0.5)),
+    mob: Some(
+        brain: Chase,
+        tricks: [
+            Lunge(slot: 0, within: 10.0),
+            Summon(class: "gnawer", count: 4, every_ticks: 320, max: 8),
+            Mortar(damage: 30, radius: 2.5, fuse_ticks: 36, every_ticks: 192),
+            Enrage(below: 0.35),
+        ],
+        bounty: 150,
+        cost: 0.0,
+        from_wave: 5,
+        boss: true,
+    ),
+)

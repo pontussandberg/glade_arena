@@ -4,15 +4,17 @@
     id: "frost_mage",
     name: "Frost Mage",
     role: "Controller",
-    blurb: "Bends the cold. Little damage, but its frostbolts slow, its nova freezes, and it always crits the frozen.",
+    blurb: "Bends the cold. Its frostbolts shatter into bursts of ice that slow whole packs, its nova freezes, and it always crits the frozen.",
     max_hp: 100,
     move_speed: 3.7,
     attack: (
-        damage: 8,
+        damage: 11,
         attack_ticks: 26,
         windup: 0.32,
         kind: Projectile(speed: 17.0, radius: 0.28, range: 10.0),
         chill: (slow: 0.4, slow_ticks: 64),
+        // A frostbolt shatters where it hits: the cold bursts out over everyone round its mark.
+        burst: Some(radius: 1.8, share: 0.7),
     ),
     abilities: [
         (
@@ -24,7 +26,7 @@
     ],
     passive: Some(
         name: "Shatter",
-        description: "On hit, auto-attacks slow by {attack_slow} for {attack_slow_time}. Against frozen enemies, gain {crit_vs_frozen} crit chance.",
+        description: "Frostbolts shatter where they hit: enemies within {burst_radius} of the one struck take {burst_share} of the damage. Everyone they hit is slowed by {attack_slow} for {attack_slow_time}. Against frozen enemies, gain {crit_vs_frozen} crit chance.",
     ),
     crit: (vs_frozen: 1.0),
 )

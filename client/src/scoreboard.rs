@@ -103,13 +103,15 @@ fn show_score(
         match view.mode {
             Mode::Ffa => ffa_rows(panel, view, my_id),
             Mode::Teams => team_row(panel, view, my_id),
+            // Never won by kills: the waves have their own banner (`waves.rs`).
+            Mode::Waves => {}
         }
     });
     if let Some(winner) = winner {
         let line = if winner == "You" { "You win!".to_string() } else { format!("{winner} wins!") };
         commands.entity(banner).with_children(|banner| {
             banner.spawn(ui_text(line, 36.0, ACCENT));
-            banner.spawn(ui_text("Back to the lobby in a moment", 13.0, palette::ui::MUTED));
+            banner.spawn(crate::waves::leave_over_button());
         });
     }
 }

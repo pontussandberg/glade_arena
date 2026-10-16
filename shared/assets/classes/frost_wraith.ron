@@ -1,0 +1,29 @@
+#![enable(unwrap_variant_newtypes)]
+// A Frost Wraith (field reference: README.md): a dead mage's cold, slowing from afar and
+// freezing whoever gets close, in the waves mode.
+(
+    id: "frost_wraith",
+    name: "Frost Wraith",
+    role: "Monster",
+    blurb: "What is left of a frost mage. Still cold.",
+    playable: false,
+    max_hp: 60,
+    move_speed: 3.0,
+    attack: (
+        damage: 7,
+        attack_ticks: 44,
+        windup: 0.4,
+        kind: Projectile(speed: 13.0, radius: 0.28, range: 10.0),
+        chill: (slow: 0.3, slow_ticks: 48),
+    ),
+    abilities: [
+        (
+            name: "Chill Burst",
+            description: "Everyone within {ability_reach} takes {ability_damage} damage and is frozen for {ability_root}.",
+            cooldown_ticks: 320,
+            kind: Nova(radius: 3.0, damage: 6, chill: (root_ticks: 26)),
+        ),
+    ],
+    look: Some(figure: "frost_mage", size: 1.0, tint: (0.7, 1.0, 1.1), cloth: false),
+    mob: Some(brain: Kite(keep: 6.5), tricks: [Slam(slot: 0, within: 2.6)], bounty: 12, cost: 2.5, from_wave: 7),
+)

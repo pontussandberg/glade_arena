@@ -16,6 +16,9 @@ test = false
 default = ["render"]
 # Window, 3D rendering and keyboard/mouse input. Off for headless test bots.
 render = ["bevy/3d", "bevy/ui"]
+# Every system's time, every frame, into a Chrome trace (trace-*.json, open it in Perfetto or
+# chrome://tracing), for finding what a frame spends its time on. Native only.
+profile = ["bevy/trace_chrome"]
 
 [dependencies]
 arena-shared.workspace = true

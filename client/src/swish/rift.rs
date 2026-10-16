@@ -221,15 +221,31 @@ pub(super) fn strike_ground(
     time: Res<Time>,
     assets: Res<SwishAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut fighters: Query<(&mut Blade, &LastSwing, &Pos, &ClassId)>,
+    mut fighters: Query<(Entity, &mut Blade, &LastSwing, &Pos, &ClassId, (&PlayerId, Option<&Team>), Option<&mut TornRifts>)>,
 ) {
     let now = time.elapsed_secs();
-    for (mut blade, swing, pos, class) in &mut fighters {
+    for (entity, mut blade, swing, pos, class, (id, team), torn) in &mut fighters {
         if !std::mem::take(&mut blade.striking) {
             continue;
         }
+        if let Some(rift) = arena_shared::sim::Rift::torn(id.0, *class, pos.0, swing) {
+            // Where it burns its striker's foes (`burn_in_rifts`), while it's open.
+            if rift.burn > 0 {
+                let open = (rift.until - swing.tick) as f32 / arena_shared::config::TICK_HZ as f32;
+                commands.spawn(RiftZone { rift, tick: swing.tick, team: team.copied(), until: now + open });
+            }
+            // And where it hastes its striker, kept from where they stood as they struck: the
+            // live move speed (`stat_frame`) reads it, as the server grants it.
+            match torn {
+                Some(mut torn) => {
+                    torn.0.retain(|r| r.until > swing.tick);
+                    torn.0.push(rift);
+                }
+                None => _ = commands.entity(entity).insert(TornRifts(vec![rift])),
+            }
+        }
         // The plain strike's break, and an empowered one's: the same, grown to its lane.
-        let (Some((from, range, width)), Some((near_end, far_end, wide))) = (class.def().attack.lane(false), class.def().attack.lane(swing.empowered)) else { continue };
+        let (Some((from, range, width)), Some((near_end, far_end, wide))) = (class.def().attack.lane(false), class.def().attack.lane_grown(swing.empowered, swing.grown)) else { continue };
         let (grown, grown_across) = ((far_end - near_end) / (range - from), wide / width);
         // Drawn as long as its rift is open, if it tears one.
         let life = class.def().attack.rift.map_or(RIFT_LIFE, |rift| {
@@ -373,6 +389,55 @@ pub(super) fn drive_impacts(
             if dust_material.0 != faded {
                 dust_material.0 = faded;
             }
+        }
+    }
+}
+
+/// The rifts a fighter's strikes tore that are still open (`RiftDef`), each from where they stood
+/// as they struck: their own ground hastes them (the server's `move_players`).
+#[derive(Component)]
+pub(crate) struct TornRifts(pub(crate) Vec<arena_shared::sim::Rift>);
+
+/// An open rift that burns its striker's foes standing in it (`RiftDef::burn`), as the server
+/// has it: torn at `tick`, by one on `team`, gone at `until` (seconds).
+#[derive(Component)]
+pub(super) struct RiftZone {
+    rift: arena_shared::sim::Rift,
+    tick: u32,
+    team: Option<Team>,
+    until: f32,
+}
+
+/// How often (seconds) a foe burning in a rift gives off a green flame.
+const BURN_EVERY: f32 = 0.12;
+
+/// Foes standing in an open rift burn: green flames licking up off them now and then. Rifts
+/// gone are let go.
+#[allow(clippy::type_complexity)]
+pub(super) fn burn_in_rifts(
+    mut commands: Commands,
+    time: Res<Time>,
+    art: Res<crate::fx::FxArt>,
+    zones: Query<(Entity, &RiftZone)>,
+    fighters: Query<(&Pos, &Health, Option<&Team>), (With<PlayerId>, Without<Shopkeeper>)>,
+    mut next: Local<(f32, u32)>,
+) {
+    let now = time.elapsed_secs();
+    for (entity, zone) in &zones {
+        if now >= zone.until {
+            commands.entity(entity).despawn();
+        }
+    }
+    if now < next.0 {
+        return;
+    }
+    *next = (now + BURN_EVERY, next.1.wrapping_add(1));
+    let mut k = next.1.wrapping_mul(97);
+    for (pos, health, team) in &fighters {
+        let foe = |zone: &RiftZone| !zone.team.zip(team).is_some_and(|(theirs, mine)| theirs.allied(*mine));
+        if health.alive() && zones.iter().any(|(_, zone)| now < zone.until && foe(zone) && zone.rift.holds(pos.0, zone.tick)) {
+            k = k.wrapping_add(1);
+            crate::fx::sparkle(&mut commands, &art, now, to_world(pos.0, 0.0), crate::fx::Sparkle::Burn, k);
         }
     }
 }

@@ -1,0 +1,27 @@
+#![enable(unwrap_variant_newtypes)]
+// A Ghoul (field reference: README.md): pounces on whoever comes near, in the waves mode.
+(
+    id: "ghoul",
+    name: "Ghoul",
+    role: "Monster",
+    blurb: "Crouches, waits, then leaps.",
+    playable: false,
+    max_hp: 55,
+    move_speed: 3.3,
+    attack: (
+        damage: 12,
+        attack_ticks: 40,
+        windup: 0.45,
+        kind: Melee(range: 1.4, width: 0.9),
+    ),
+    abilities: [
+        (
+            name: "Pounce",
+            description: "Leaps up to {ability_reach}, clawing whoever it lands through for {ability_damage}.",
+            cooldown_ticks: 160,
+            kind: Dash(distance: 4.5, min_distance: Some(1.0), ticks: 6, damage: 14),
+        ),
+    ],
+    look: Some(figure: "zombie", size: 1.0, tint: (0.66, 0.8, 1.0)),
+    mob: Some(brain: Chase, tricks: [Lunge(slot: 0, within: 5.5)], bounty: 8, cost: 1.6, from_wave: 5),
+)

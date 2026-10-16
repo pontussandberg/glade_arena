@@ -198,6 +198,7 @@ fn build_arena(
 
     let mut props = Props::new(theme);
     let wall_tops = props.walls(m, &mut rng);
+    props.stall(m);
     props.bridges(m, &mut rng);
     props.rope_bridges(m, &mut rng);
     props.fords(m, &mut rng);
@@ -370,7 +371,8 @@ impl Props {
     pub(super) fn walls(&mut self, m: &Map, rng: &mut Lcg) -> HashMap<IVec2, f32> {
         let mut tops = HashMap::default();
         for (t, tile) in m.tiles() {
-            if tile != Tile::Wall {
+            // The merchant's counter is their stall's (`stall`), not a ruin.
+            if tile != Tile::Wall || m.counter.contains(&t) {
                 continue;
             }
             let c = Map::center(t);
@@ -395,6 +397,105 @@ impl Props {
             }
         }
         tops
+    }
+
+    /// The merchant's stall, round their counter (`Map::counter`): a plank counter with a cloth
+    /// hung down its front and wares on top (coin piles, a strongbox, sacks), four posts holding
+    /// a striped awning that slopes down over it with a scalloped edge, shelves of bottles at the
+    /// back, barrels and crates at its sides, and a sign with a gold coin on a post.
+    pub(super) fn stall(&mut self, m: &Map) {
+        if m.counter.is_empty() {
+            return;
+        }
+        let tiles: Vec<Vec2> = m.counter.iter().map(|t| Map::center(*t)).collect();
+        let c = tiles.iter().sum::<Vec2>() / tiles.len() as f32;
+        // Its front faces where the merchant does; `side` runs along the counter.
+        let front = m.shop_faces.normalize_or(Vec2::NEG_Y);
+        let side = front.perp();
+        let half = tiles.iter().map(|t| (*t - c).dot(side).abs()).fold(0.0f32, f32::max) + 0.5;
+        // Turned so a block's X runs along the counter and its Z out to the front.
+        let along = to_world(side, 0.0) - to_world(Vec2::ZERO, 0.0);
+        let turn = Quat::from_rotation_y((-along.z).atan2(along.x));
+        let out_z = (turn * Vec3::Z).dot(to_world(front, 0.0) - to_world(Vec2::ZERO, 0.0)).signum();
+        let at = |p: Vec2, h: f32| Transform::from_translation(to_world(p, h)).with_rotation(turn);
+        let (wood, plank) = (BARK, BARK.lighter(0.12));
+        let len = half * 2.0;
+
+        // The counter, its top overhanging, a striped cloth down its front.
+        self.block(Vec3::new(len, 1.0, 0.85), wood.darker(0.1), at(c, 0.5));
+        self.block(Vec3::new(len + 0.25, 0.08, 1.0), plank, at(c, 1.04));
+        let stripes = 7;
+        for i in 0..stripes {
+            let x = -half + 0.1 + (len - 0.2) * (i as f32 + 0.5) / stripes as f32;
+            let color = if i % 2 == 0 { MERCHANT_RUG } else { GOLD.darker(0.35) };
+            self.block(Vec3::new((len - 0.2) / stripes as f32, 0.6, 0.03), color, at(c + side * x + front * 0.44, 0.62));
+        }
+        // Wares on the counter: coin piles, a strongbox, sacks.
+        for (x, s) in [(-0.6, 0.16), (-0.35, 0.12), (0.7, 0.14)] {
+            self.add(Shape::Ball, GOLD, Transform::from_translation(to_world(c + side * x + front * 0.15, 1.1)).with_scale(Vec3::new(s, s * 0.45, s)));
+        }
+        self.block(Vec3::new(0.42, 0.26, 0.3), wood.darker(0.25), at(c + side * 0.1 - front * 0.1, 1.21));
+        self.block(Vec3::new(0.44, 0.06, 0.32), GOLD.darker(0.2), at(c + side * 0.1 - front * 0.1, 1.36));
+        for x in [-half + 0.3, half - 0.35] {
+            self.add(Shape::Ball, CANVAS, Transform::from_translation(to_world(c + side * x - front * 0.2, 1.25)).with_scale(Vec3::new(0.2, 0.24, 0.2)));
+        }
+
+        // Posts: two at the counter's front corners, two taller ones at the back.
+        let back = -1.3;
+        for (out, h) in [(0.5, 2.4), (back, 2.95)] {
+            for s in [-1.0, 1.0] {
+                self.block(Vec3::new(0.13, h, 0.13), wood, at(c + side * s * (half + 0.05) + front * out, h / 2.0));
+            }
+        }
+        // The back: a board wall with two shelves of bottles.
+        let wall = c + front * (back - 0.05);
+        self.block(Vec3::new(len + 0.1, 2.3, 0.08), wood.darker(0.15), at(wall, 1.15));
+        let colors = [MERCHANT_FEATHER, FROST_BLUE, HEAL, GOLD, SPIRIT, AWNING_RED];
+        for (row, h) in [(0, 1.3), (1, 1.9)] {
+            let shelf = c + front * (back + 0.15);
+            self.block(Vec3::new(len, 0.05, 0.34), plank, at(shelf, h));
+            for i in 0..7 {
+                let x = -half + 0.25 + (len - 0.5) * i as f32 / 6.0;
+                let color = colors[(i + row * 3) % colors.len()];
+                self.block(Vec3::new(0.1, 0.22, 0.1), color, at(shelf + side * x, h + 0.14));
+            }
+        }
+
+        // The awning, sloping from the back posts' tops down past the counter's front, in stripes,
+        // and a scalloped edge hanging from its front.
+        let (top, low): ((f32, f32), (f32, f32)) = ((back, 2.95), (0.95, 2.25));
+        let run = top.0 - low.0;
+        let slope = (top.1 - low.1).atan2(run.abs());
+        let length = (run * run + (top.1 - low.1) * (top.1 - low.1)).sqrt() + 0.1;
+        let middle = c + front * (top.0 + low.0) / 2.0;
+        let stripes = 8;
+        let width = (len + 0.5) / stripes as f32;
+        for i in 0..stripes {
+            let x = -(len + 0.5) / 2.0 + width * (i as f32 + 0.5);
+            let color = if i % 2 == 0 { AWNING_RED } else { AWNING_CREAM };
+            let t = Transform::from_translation(to_world(middle + side * x, (top.1 + low.1) / 2.0)).with_rotation(turn * Quat::from_rotation_x(slope * out_z));
+            self.block(Vec3::new(width, 0.05, length), color, t);
+            // A scallop under the front edge, the same stripe.
+            self.add(Shape::Ball, color, Transform::from_translation(to_world(c + side * x + front * (low.0 + 0.02), low.1 - 0.06)).with_rotation(turn).with_scale(Vec3::new(width * 0.5, 0.14, 0.04)));
+        }
+
+        // Barrels and crates at its sides.
+        for (s, out) in [(-1.0, 0.1), (1.0, -0.4)] {
+            let p = c + side * s * (half + 0.55) + front * out;
+            self.push(tinted(cylinder(0.3, 0.8, 12).translated_by(to_world(p, 0.4)), wood.darker(0.05)), wood.darker(0.05));
+            self.push(tinted(cylinder(0.31, 0.06, 12).translated_by(to_world(p, 0.62)), IRON), IRON);
+            self.push(tinted(cylinder(0.31, 0.06, 12).translated_by(to_world(p, 0.18)), IRON), IRON);
+        }
+        self.block(Vec3::new(0.5, 0.45, 0.5), plank, at(c - side * (half + 0.6) + front * (back + 0.4), 0.225));
+        self.block(Vec3::new(0.4, 0.35, 0.4), plank.darker(0.1), at(c - side * (half + 0.6) + front * (back + 0.4), 0.62));
+
+        // A sign on the front post: a board with a gold coin painted on it.
+        let post = c + side * (half + 0.05) + front * 0.5;
+        let sign = post + side * 0.42;
+        self.block(Vec3::new(0.7, 0.05, 0.05), wood, at(post + side * 0.3, 2.15));
+        self.block(Vec3::new(0.55, 0.4, 0.05), plank, at(sign, 1.85));
+        let coin = Transform::from_translation(to_world(sign + front * 0.035 * out_z.abs(), 1.85)).with_rotation(turn * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
+        self.push(tinted(cylinder(0.13, 0.03, 16).transformed_by(coin), GOLD), GOLD);
     }
 
     /// Stone bridges, tile by tile: paving slabs, a parapet along every side that drops into

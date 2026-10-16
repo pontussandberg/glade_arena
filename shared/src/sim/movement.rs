@@ -69,7 +69,7 @@ pub fn move_player_boosted(
     boost: f32,
 ) -> Vec2 {
     let speed = chilled.speed_factor(tick) * hasted.speed_factor(tick);
-    if chilled.rooted_at(tick) {
+    if chilled.rooted_at(tick) || chilled.lifted_at(tick) {
         pos
     } else if let Some(dash) = &mut dashing.0 {
         let pace = match class.def().ability(dash.slot).map(|ability| ability.kind) {
@@ -97,6 +97,10 @@ pub struct Rift {
     pub width: f32,
     pub until: u32,
     pub haste: f32,
+    /// What it burns its striker's foes standing in it for, a pulse, and the share of that its
+    /// striker is healed (`RiftDef`).
+    pub burn: i32,
+    pub leech: f32,
 }
 
 impl Rift {
@@ -104,9 +108,9 @@ impl Rift {
     /// (empowered or not), from where `owner` stood at `pos`.
     pub fn torn(owner: PeerId, class: ClassId, pos: Vec2, swing: &LastSwing) -> Option<Rift> {
         let attack = &class.def().attack;
-        let (rift, (from, range, width)) = (attack.rift?, attack.lane(swing.empowered)?);
+        let (rift, (from, range, width)) = (attack.rift?, attack.lane_grown(swing.empowered, swing.grown)?);
         let dir = swing.dir.normalize_or_zero();
-        Some(Rift { owner, origin: pos, dir, from, range, width, until: swing.tick + rift.ticks, haste: rift.haste })
+        Some(Rift { owner, origin: pos, dir, from, range, width, until: swing.tick + rift.ticks, haste: rift.haste, burn: rift.burn, leech: rift.leech })
     }
 
     /// Is a body at `at` in it (touching it at all) at `tick`?

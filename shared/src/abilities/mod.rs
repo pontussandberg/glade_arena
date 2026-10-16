@@ -201,7 +201,7 @@ pub enum Cast {
     Dash,
     /// `ability`, a nova, bursts around the caster; the server resolves who it hits
     /// (`NovaDef::hits`).
-    Nova { ability: &'static AbilityDef, nova: NovaDef },
+    Nova { slot: AbilitySlot, ability: &'static AbilityDef, nova: NovaDef },
     /// The next auto-attack readied (`AttackState::primed`) by the ability in `slot`.
     Prime { slot: AbilitySlot, prime: PrimeDef },
 }
@@ -223,7 +223,8 @@ pub fn step(
     cooldowns: &mut Cooldowns,
     dashing: &mut Dashing,
 ) -> Vec<Cast> {
-    let rooted = chilled.rooted_at(tick);
+    // Knocked up, as rooted: no dashing, no casting.
+    let rooted = chilled.rooted_at(tick) || chilled.lifted_at(tick);
     if dashing.0.is_some_and(|dash| dash.over()) || rooted {
         dashing.0 = None;
     }
@@ -246,7 +247,7 @@ pub fn step(
                 Cast::Dash
             }
             (AbilityKind::Dash(_), _) => continue,
-            (AbilityKind::Nova(nova), _) => Cast::Nova { ability, nova },
+            (AbilityKind::Nova(nova), _) => Cast::Nova { slot, ability, nova },
         });
         // A prime's own cooldown waits for the attack it readies (`Cooldowns::start_own`).
         if matches!(ability.kind, AbilityKind::Prime(_)) {

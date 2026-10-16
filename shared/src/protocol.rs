@@ -38,7 +38,7 @@ impl Ease for Pos {
     }
 }
 
-/// Server-authoritative and replicated. The maximum is the class's `max_hp`.
+/// Server-authoritative and replicated. The maximum is its `MaxHealth`.
 /// Zero means dead and waiting to respawn: hidden, and can't move or attack.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Health(pub i32);
@@ -49,6 +49,11 @@ impl Health {
         self.0 > 0
     }
 }
+
+/// The most health a fighter has: its class's `max_hp`, or more for a monster grown with the
+/// waves (or an elite). Server-authoritative and replicated.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct MaxHealth(pub i32);
 
 /// The last few hits a player took, for the damage numbers over it. Server-authoritative and
 /// replicated like `Health`. Every hit gets the next running number, so a client shows each one
@@ -232,6 +237,8 @@ pub struct Chilled {
     pub slow: f32,
     pub slowed: Span,
     pub rooted: Span,
+    /// Knocked up: off its feet, no walking, dashing or attacking (an attack winding up is lost).
+    pub lifted: Span,
 }
 
 /// Ticks `from` (inclusive) to `until` (exclusive). The default covers none.
@@ -269,6 +276,14 @@ impl Chilled {
         if chill.root_ticks > 0 {
             self.rooted = self.rooted.renewed(now, chill.root_ticks);
         }
+        if chill.lift_ticks > 0 {
+            self.lifted = self.lifted.renewed(now, chill.lift_ticks);
+        }
+    }
+
+    /// Off its feet (knocked up) at `tick`.
+    pub fn lifted_at(&self, tick: u32) -> bool {
+        self.lifted.covers(tick as f32)
     }
 
     /// What's left of a player's speed at `tick` (1 unslowed).
@@ -310,6 +325,12 @@ pub struct Frenzy {
     pub strength: f32,
 }
 
+/// A fury stone's rush (`PickupKind::Fury`): attacking `FURY_HASTE` faster, fading to nothing
+/// over `FURY_TICKS`, as a `Frenzy` does; but walking no faster. Server-authoritative and
+/// replicated.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
+pub struct Fury(pub Frenzy);
+
 impl Frenzy {
     /// The frenzy from a zombie kill at `now`, after `kills` others this match, for a fighter
     /// that fights in `melee` or not (a melee fighter's lasts longer).
@@ -334,6 +355,141 @@ pub enum PickupKind {
     Heal,
     /// Walking `HASTE_FACTOR` times as fast for `HASTE_TICKS`.
     Haste,
+    /// A treasure chest, in the waves mode: gold for everyone in the run. Lies out in the wilds
+    /// during a wave, gone once taken or the wave's over.
+    Chest,
+    /// A fury stone: attacking faster for a while (`Fury`), walking no faster (that's a haste's).
+    Fury,
+}
+
+/// A monster made stronger than its kind, in the waves mode: bigger, tougher, worth more, and
+/// with a twist of its own. Server-authoritative and replicated (the client draws it bigger, in
+/// its twist's color).
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+pub struct Elite(pub Affix);
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
+pub enum Affix {
+    /// Always hasted.
+    Swift,
+    /// Heals by what it deals.
+    Vampiric,
+    /// Blows up where it dies, a moment later.
+    Volatile,
+    /// Its hits freeze for a moment.
+    Frostbound,
+    /// Splits into smaller monsters as it dies.
+    Splitting,
+}
+
+impl Affix {
+    pub const ALL: [Affix; 5] = [Affix::Swift, Affix::Vampiric, Affix::Volatile, Affix::Frostbound, Affix::Splitting];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Affix::Swift => "Swift",
+            Affix::Vampiric => "Vampiric",
+            Affix::Volatile => "Volatile",
+            Affix::Frostbound => "Frostbound",
+            Affix::Splitting => "Splitting",
+        }
+    }
+}
+
+/// The shopkeeper, in the waves mode: a fighter no one can hurt, standing at the map's camp
+/// (`Map::shop`). Near them, players buy and sell items. Replicated, so the client draws them as
+/// the shop.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct Shopkeeper;
+
+/// How close to the shopkeeper a player has to be to trade.
+pub const SHOP_RADIUS: f32 = 4.0;
+
+/// A player down in a run against the waves (they have one life a wave), `rescue` of the way
+/// (0 to 1) to being picked back up by an ally standing over them for `REVIVE_TICKS`. Stepping
+/// off loses it. Server-authoritative and replicated: the client marks where they lie, and how
+/// far along their rescue is. Gone once they're back up.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
+pub struct Downed {
+    pub rescue: f32,
+}
+
+/// How close (center to center) an ally has to stand to pick a downed player up, and for how long.
+pub const REVIVE_RADIUS: f32 = 1.6;
+pub const REVIVE_TICKS: u32 = 3 * crate::config::TICK_HZ as u32;
+
+/// What an effect looks like: its color and feel.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
+pub enum FxColor {
+    Fire,
+    Spirit,
+    Frost,
+    Gold,
+    Blood,
+    Poison,
+    Void,
+    Storm,
+    Thorn,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
+pub enum FxKind {
+    /// An arc of lightning from `at` to `to`.
+    Arc,
+    /// A burst out to `radius` around `at`, at once.
+    Blast(FxColor),
+    /// Ground marked out to `radius` around `at` until `until`: a frost patch, a blizzard, a
+    /// vortex, a healing circle.
+    Zone(FxColor),
+    /// Something about to land at `at` (out to `radius`) at `until`: a keg's fuse, a strike from
+    /// the sky, a bloater swelling. Drawn filling up until then.
+    Warn(FxColor),
+    /// Something thrown from `at` to `to`, landing at `until`: a keg (fire), a plague bomb (poison).
+    Lob(FxColor),
+    /// Monsters out to `radius` round `at` mended (a rot priest's prayer).
+    Mend,
+    /// Lightning down from the sky onto `at`.
+    Bolt,
+    /// Gold flying up from `at`.
+    Coins,
+    /// A monster clawing its way up out of the ground at `at`.
+    Rise,
+    /// Rime left on the ground out to `radius` round `at` until `until` (Hoarfrost Boots): a
+    /// frost rune, ice shards bursting up and sinking again as it thaws, a cold mist.
+    Rime,
+    /// An Echo Stone's echo going off out to `radius` round `at`: the ability's hit, again.
+    Echo,
+    /// A meteor falling burning out of the sky onto `at`, landing at `until` (out to `radius`).
+    Meteor,
+    /// A monster vanishing at `at` and reappearing at `to` (a blink).
+    Blink,
+    /// A Doom Bell's mark on its victim, where it was struck, until the bell tolls at `until`.
+    Doom,
+}
+
+/// A passing effect of an item or a monster, for the client to draw: what, where, and from when
+/// to when (ticks). Server-authoritative, replicated; despawned once it's over. Gameplay never
+/// reads it: what it shows has already happened on the server, or is about to.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct Fx {
+    pub kind: FxKind,
+    pub at: Vec2,
+    pub to: Vec2,
+    pub radius: f32,
+    pub from: u32,
+    pub until: u32,
+}
+
+impl Fx {
+    /// An effect at one spot, out to `radius`, from `now` for `ticks`.
+    pub fn at(kind: FxKind, at: Vec2, radius: f32, now: u32, ticks: u32) -> Fx {
+        Fx { kind, at, to: at, radius, from: now, until: now + ticks }
+    }
+
+    /// An effect from `at` to `to` (an arc, a lob), from `now` for `ticks`.
+    pub fn between(kind: FxKind, at: Vec2, to: Vec2, radius: f32, now: u32, ticks: u32) -> Fx {
+        Fx { kind, at, to, radius, from: now, until: now + ticks }
+    }
 }
 
 /// A pickup lying at `at` (one of its map's `pickups`), or, while `back_at` is set, taken (last
@@ -376,6 +532,9 @@ pub struct LastSwing {
     pub tick: u32,
     pub dir: Vec2,
     pub empowered: bool,
+    /// An empowered swing's lane grown bigger again (0.2: a fifth), by an item
+    /// (`AttackDef::lane_grown`).
+    pub grown: f32,
 }
 
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
@@ -392,6 +551,9 @@ pub struct Projectile {
     pub ability: Option<AbilitySlot>,
     /// A primed auto-attack's (`AttackState::primed`): sure to crit. Set by the server.
     pub crit: bool,
+    /// Thrown by an item (a barrage's javelin, a bounce), not from the hand: drawn straight from
+    /// where it starts, and nothing an auto-attack's throw sets off goes off again for it.
+    pub extra: bool,
 }
 
 impl Projectile {
@@ -512,13 +674,16 @@ pub struct Hello {
 /// `LobbyEvent::Room`, or `LobbyEvent::Refused` saying why not.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum RoomRequest {
-    /// Make a room on `map` and lead it.
-    Create { name: String, mode: Mode, map: MapId },
-    Join(RoomKey),
+    /// Make a room on `map` and lead it: open to anyone, or only to those who give `password`.
+    Create { name: String, mode: Mode, map: MapId, password: Option<String> },
+    /// Join this room, with its password if it has one.
+    Join(RoomKey, Option<String>),
     /// Join the room called this, or make it and start it right away: for bots and tests.
     QuickJoin(String),
     /// A room of our own on this map, never listed, straight into its arena.
     Practice(MapId),
+    /// A run against the waves of our own: never listed, straight into its arena.
+    PlaySolo,
     Leave,
     /// Into the room's arena, once its match is on, as our picked class.
     EnterArena,
@@ -534,9 +699,20 @@ pub enum RoomRequest {
     /// Practice only: a target dummy at this point, the next class in turn: standing there, or
     /// (`walks`) walking back and forth along a line through it.
     PlaceDummy { at: Vec2, walks: bool },
+    /// Practice only: three slow zombies side by side at this point, coming for us.
+    PlaceZombies { at: Vec2 },
     /// Practice only: our abilities with no cooldowns of their own (ready again the moment
     /// they're used), or back to normal.
     NoCooldowns(bool),
+    /// Waves only, near the shopkeeper: buy this item, or raise it a level.
+    Buy(crate::items::Item),
+    /// Waves only, near the shopkeeper: sell the item in this slot.
+    Sell(u8),
+    /// In a room's lobby, before the start: we're ready to (or not, again); the leader starts
+    /// once everyone is. Waves only, between waves: we're ready for the next.
+    Ready(bool),
+    /// The name our entry on the leaderboards goes by (after `LobbyEvent::NameYourScore`).
+    NameScore(String),
 }
 
 /// What the server tells a client about guests and rooms.
@@ -552,6 +728,13 @@ pub enum LobbyEvent {
     Left(LeaveReason),
     /// A request that couldn't be done.
     Refused(String),
+    /// The leaderboards: the best runs against the waves for each party size
+    /// (`LEADERBOARD_ROWS` of each at most), on arrival and whenever a run makes them.
+    HighScores(Vec<crate::rooms::HighScore>),
+    /// Our run ended, at `wave`, and is kept: `place` of all `of` runs by `size` fighters (1: the
+    /// best; on the board if within `LEADERBOARD_ROWS`). We may name our entry
+    /// (`RoomRequest::NameScore`); it goes by `name` until we do.
+    NameYourScore { wave: u32, place: usize, of: usize, size: usize, name: String },
 }
 
 /// Reliable, ordered channel for the few messages we send.
@@ -580,7 +763,14 @@ impl Plugin for ProtocolPlugin {
         app.component::<RecentHits>().replicate();
         app.component::<Hasted>().replicate();
         app.component::<Frenzy>().replicate();
+        app.component::<Fury>().replicate();
         app.component::<Pickup>().replicate();
+        app.component::<MaxHealth>().replicate();
+        app.component::<crate::items::Satchel>().replicate();
+        app.component::<Elite>().replicate();
+        app.component::<Shopkeeper>().replicate();
+        app.component::<Downed>().replicate();
+        app.component::<Fx>().replicate();
         app.component::<Waygate>().replicate();
         // Others' fighters are interpolated (smooth, a little in the past); our own isn't: it's
         // shown as the server last said it was, for the least delay after a command.

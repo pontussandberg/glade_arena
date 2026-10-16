@@ -38,12 +38,16 @@ pub mod practice;
 #[cfg(feature = "render")]
 pub mod feedback;
 #[cfg(feature = "render")]
+pub mod fx;
+#[cfg(all(feature = "render", not(target_family = "wasm")))]
+pub mod perf;
+#[cfg(feature = "render")]
+mod item_icons;
+#[cfg(feature = "render")]
 pub mod arena;
 #[cfg(feature = "render")]
 pub mod lobby;
 
-#[cfg(feature = "render")]
-pub mod map_pick;
 #[cfg(feature = "render")]
 pub mod minimap;
 #[cfg(feature = "render")]
@@ -55,6 +59,8 @@ pub mod rig;
 pub mod rooms;
 #[cfg(feature = "render")]
 pub mod scoreboard;
+#[cfg(feature = "render")]
+pub mod prompt;
 #[cfg(all(test, feature = "render"))]
 mod preview;
 #[cfg(feature = "render")]
@@ -69,6 +75,8 @@ pub mod swish;
 pub mod tooltip;
 #[cfg(feature = "render")]
 pub mod waygates;
+#[cfg(feature = "render")]
+pub mod waves;
 
 #[derive(Clone)]
 pub struct ClientSettings {

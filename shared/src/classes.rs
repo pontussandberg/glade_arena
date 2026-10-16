@@ -13,15 +13,35 @@ use serde::{Deserialize, Serialize};
 pub use crate::abilities::{AbilityDef, AbilityKind, AbilitySlot};
 use crate::abilities::MAX_ABILITIES;
 use crate::config::{PLAYER_RADIUS, TICK_HZ};
+use crate::protocol::FxColor;
 
 /// The class files, compiled into both server and client so they can't disagree. Their order is
 /// the classes' order everywhere: the class picker and its number keys, the default pick, and the
 /// order target dummies come in. The ones no one picks (`ClassDef::playable`) go last.
-const CLASS_FILES: [&str; 4] = [
+const CLASS_FILES: [&str; 23] = [
     include_str!("../assets/classes/revenant.ron"),
     include_str!("../assets/classes/javelinist.ron"),
     include_str!("../assets/classes/frost_mage.ron"),
     include_str!("../assets/classes/zombie.ron"),
+    include_str!("../assets/classes/gnawer.ron"),
+    include_str!("../assets/classes/ghoul.ron"),
+    include_str!("../assets/classes/grave_hunter.ron"),
+    include_str!("../assets/classes/bloater.ron"),
+    include_str!("../assets/classes/grave_ogre.ron"),
+    include_str!("../assets/classes/frost_wraith.ron"),
+    include_str!("../assets/classes/bonecaller.ron"),
+    include_str!("../assets/classes/rot_priest.ron"),
+    include_str!("../assets/classes/death_knight.ron"),
+    include_str!("../assets/classes/bombardier.ron"),
+    include_str!("../assets/classes/void_acolyte.ron"),
+    include_str!("../assets/classes/ember_imp.ron"),
+    include_str!("../assets/classes/storm_caller.ron"),
+    include_str!("../assets/classes/butcher.ron"),
+    include_str!("../assets/classes/pale_lich.ron"),
+    include_str!("../assets/classes/grave_lord.ron"),
+    include_str!("../assets/classes/ember_archmage.ron"),
+    include_str!("../assets/classes/plague_mother.ron"),
+    include_str!("../assets/classes/merchant.ron"),
 ];
 
 /// What every class shares.
@@ -52,7 +72,7 @@ impl Common {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct ClassDef {
-    /// Stable key; the client also uses it to pick the class's look.
+    /// Stable key; the client also uses it to pick the class's look (`figure`).
     pub id: String,
     pub name: String,
     pub role: String,
@@ -71,6 +91,140 @@ pub struct ClassDef {
     /// Critical hits (none by default).
     #[serde(default)]
     pub crit: Crit,
+    /// How it's drawn, if not as its own figure (`id`): monsters wear another class's figure,
+    /// sized and tinted.
+    #[serde(default)]
+    pub look: Option<LookDef>,
+    /// What the waves mode does with it, if it's a monster that comes in waves.
+    #[serde(default)]
+    pub mob: Option<MobDef>,
+}
+
+/// A class drawn as another's figure (`figure`, a class id with a look of its own), `size` times
+/// as big, its colors multiplied by `tint` (linear RGB, 0 to 1), with or without its cloth.
+#[derive(Deserialize, Debug, Clone)]
+pub struct LookDef {
+    pub figure: String,
+    #[serde(default = "one")]
+    pub size: f32,
+    #[serde(default = "white")]
+    pub tint: (f32, f32, f32),
+    #[serde(default = "yes")]
+    pub cloth: bool,
+    /// What its shots glow (a caster's: fire, the void, a storm's sparks), not its figure's.
+    #[serde(default)]
+    pub bolts: Option<FxColor>,
+}
+
+fn white() -> (f32, f32, f32) {
+    (1.0, 1.0, 1.0)
+}
+
+/// A monster of the waves: how it fights (`brain`, `tricks`), what it's worth and when it first
+/// comes.
+#[derive(Deserialize, Debug, Clone)]
+pub struct MobDef {
+    pub brain: Brain,
+    #[serde(default)]
+    pub tricks: Vec<Trick>,
+    /// Gold for everyone in the run when it dies.
+    pub bounty: u32,
+    /// How much of a wave's budget one takes.
+    pub cost: f32,
+    /// The first wave it comes in (bosses: the waves they lead, `boss_every`).
+    pub from_wave: u32,
+    /// How many come at once.
+    #[serde(default = "one_u32")]
+    pub pack: u32,
+    /// A boss: one leads every wave that's a multiple of the boss waves, in turn.
+    #[serde(default)]
+    pub boss: bool,
+}
+
+fn one_u32() -> u32 {
+    1
+}
+
+/// How a monster gets about.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+pub enum Brain {
+    /// Straight at the nearest prey, attacking once in reach.
+    Chase,
+    /// Keeps this far from its prey, shooting from there; backs off if it comes closer.
+    Kite { keep: f32 },
+}
+
+/// What else a monster does, now and then.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub enum Trick {
+    /// Uses the ability in `slot` (a dash) at its prey once it's nearer than `within`.
+    Lunge { slot: u8, within: f32 },
+    /// Uses the ability in `slot` (a nova) once its prey is nearer than `within`.
+    Slam { slot: u8, within: f32 },
+    /// Swells and bursts once its prey is nearer than `within`, and as it dies: `damage` to its
+    /// foes within `radius`, in `color` (a plague's by default).
+    Burst {
+        within: f32,
+        damage: i32,
+        radius: f32,
+        #[serde(default = "plague")]
+        color: FxColor,
+    },
+    /// Every `every_ticks`, `count` of `class` rise around it, while it has fewer than `max` up.
+    Summon { class: String, count: u32, every_ticks: u32, max: u32 },
+    /// Every `every_ticks`, monsters within `radius` (itself too) heal `amount`.
+    Mend { radius: f32, amount: i32, every_ticks: u32 },
+    /// Every `every_ticks`, fires its attack's shot `count` times, all round it.
+    Ring { count: u32, every_ticks: u32 },
+    /// Every `every_ticks`, fires its attack's shot `count` times, fanned `spread` (radians) at its prey.
+    Fan { count: u32, spread: f32, every_ticks: u32 },
+    /// Below `below` of its health, it rages: always hasted, hitting harder.
+    Enrage { below: f32 },
+    /// Every `every_ticks`, `count` shells (one by default) at where its prey stands, the rest
+    /// scattered up to `scatter` round it: `damage` to its foes within `radius` of each,
+    /// `fuse_ticks` later (time to step out). What comes down is its `shell`'s.
+    Mortar {
+        damage: i32,
+        radius: f32,
+        fuse_ticks: u32,
+        every_ticks: u32,
+        #[serde(default = "one_u32")]
+        count: u32,
+        #[serde(default)]
+        scatter: f32,
+        #[serde(default)]
+        shell: Shell,
+    },
+    /// Once its prey is nearer than `within`, vanishes and reappears `distance` away from it (at
+    /// most every `every_ticks`), leaving `leaves` damage behind (none by default): a burst of the
+    /// void where it stood, a moment later.
+    Blink {
+        within: f32,
+        distance: f32,
+        every_ticks: u32,
+        #[serde(default)]
+        leaves: i32,
+    },
+}
+
+/// What a monster's mortar (`Trick::Mortar`) brings down.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default)]
+pub enum Shell {
+    /// A bomb of plague, lobbed.
+    #[default]
+    Bomb,
+    /// Lightning, called down out of the sky.
+    Lightning,
+    /// A meteor, falling burning out of the sky.
+    Meteor,
+}
+
+fn plague() -> FxColor {
+    FxColor::Poison
+}
+
+fn frost() -> FxColor {
+    FxColor::Frost
 }
 
 /// The odds that an auto-attack hit this class deals is critical (an ability's never is), for
@@ -115,6 +269,24 @@ pub struct AttackDef {
     /// there (none by default).
     #[serde(default)]
     pub rift: Option<RiftDef>,
+    /// Its shots fly on through monsters (never players), hitting each once (no by default).
+    #[serde(default)]
+    pub pierces: bool,
+    /// Its shots burst where they hit, hitting the struck one's foes round it too (none by
+    /// default).
+    #[serde(default)]
+    pub burst: Option<BurstDef>,
+}
+
+/// A shot's burst where it hits (`AttackDef::burst`): everyone else within `radius` of the one
+/// struck takes `share` of the shot's damage, and its chill.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct BurstDef {
+    pub radius: f32,
+    pub share: f32,
+    /// What it bursts in: frost by default (a frostbolt shattering), fire (a fireball).
+    #[serde(default = "frost")]
+    pub color: FxColor,
 }
 
 /// The ground a strike tears open over its lane (`AttackDef::lane`, empowered or not): it lasts
@@ -123,6 +295,12 @@ pub struct AttackDef {
 pub struct RiftDef {
     pub ticks: u32,
     pub haste: f32,
+    /// Its striker's foes standing in it burn: this much every `ZONE_PULSE_TICKS` (none by
+    /// default), the striker healed `leech` of what it burns.
+    #[serde(default)]
+    pub burn: i32,
+    #[serde(default)]
+    pub leech: f32,
 }
 
 /// Landing an auto-attack empowers the next one, if started within `within_ticks` of the hit:
@@ -141,6 +319,10 @@ pub struct FollowUp {
     /// set: the whole lane scaled out).
     #[serde(default)]
     pub near: Option<f32>,
+    /// The empowered attack knocks those it hits up, off their feet this long (none by default).
+    /// Shorter than the empowered attack itself, so it can't keep anyone in the air alone.
+    #[serde(default)]
+    pub lift_ticks: u32,
 }
 
 fn one() -> f32 {
@@ -162,11 +344,14 @@ pub struct Chill {
     pub slow_ticks: u32,
     #[serde(default)]
     pub root_ticks: u32,
+    /// Knocked up (`Chilled::lifted`): off its feet this long, no walking, dashing or attacking.
+    #[serde(default)]
+    pub lift_ticks: u32,
 }
 
 impl Chill {
     pub fn is_none(&self) -> bool {
-        (self.slow == 0.0 || self.slow_ticks == 0) && self.root_ticks == 0
+        (self.slow == 0.0 || self.slow_ticks == 0) && self.root_ticks == 0 && self.lift_ticks == 0
     }
 }
 
@@ -223,6 +408,31 @@ impl Shot {
 }
 
 impl ClassDef {
+    /// Which figure it's drawn as: its own, or the one its `look` borrows.
+    pub fn figure(&self) -> &str {
+        self.look.as_ref().map_or(&self.id, |look| &look.figure)
+    }
+
+    /// How big it's drawn, as a share of its figure's size.
+    pub fn size(&self) -> f32 {
+        self.look.as_ref().map_or(1.0, |look| look.size)
+    }
+
+    /// What its figure's colors are multiplied by.
+    pub fn tint(&self) -> (f32, f32, f32) {
+        self.look.as_ref().map_or((1.0, 1.0, 1.0), |look| look.tint)
+    }
+
+    /// Whether it's a boss of the waves.
+    pub fn is_boss(&self) -> bool {
+        self.mob.as_ref().is_some_and(|m| m.boss)
+    }
+
+    /// Whether its figure wears its cloth.
+    pub fn cloth(&self) -> bool {
+        self.look.as_ref().is_none_or(|look| look.cloth)
+    }
+
     /// The ability in `slot`, if the class has one there.
     pub fn ability(&self, slot: AbilitySlot) -> Option<&AbilityDef> {
         self.abilities.get(slot.0 as usize)
@@ -266,13 +476,17 @@ impl ClassDef {
             ("crit_multiplier", percent(common().crit_multiplier)),
         ];
         if let Some(rift) = self.attack.rift {
-            all.extend([("rift_time", seconds(rift.ticks)), ("rift_haste", percent(rift.haste))]);
+            all.extend([("rift_time", seconds(rift.ticks)), ("rift_haste", percent(rift.haste)), ("rift_burn", rift.burn.to_string()), ("rift_leech", percent(rift.leech))]);
+        }
+        if let Some(burst) = self.attack.burst {
+            all.extend([("burst_radius", format!("{} m", burst.radius)), ("burst_share", percent(burst.share))]);
         }
         if let Some(follow_up) = self.attack.follow_up {
             all.extend([
                 ("follow_up_time", seconds(follow_up.within_ticks)),
                 ("follow_up_speed", percent(follow_up.attack_speed)),
                 ("follow_up_reach", percent(follow_up.reach - 1.0)),
+                ("follow_up_lift", seconds(follow_up.lift_ticks)),
             ]);
         }
         all
@@ -303,8 +517,14 @@ impl AttackDef {
     /// times as far, its start `near` times, as the weapon grows): (where it starts, where it
     /// ends, how wide it is), from the attacker's center. `None` for a ranged attack.
     pub fn lane(&self, empowered: bool) -> Option<(f32, f32, f32)> {
+        self.lane_grown(empowered, 0.0)
+    }
+
+    /// `lane`, an empowered one `grown` bigger again (0.2: a fifth longer and wider, from an item:
+    /// `LastSwing::grown`).
+    pub fn lane_grown(&self, empowered: bool, grown: f32) -> Option<(f32, f32, f32)> {
         let AttackKind::Melee { range, width, from } = self.kind else { return None };
-        let (reach, near) = self.follow_up.filter(|_| empowered).map_or((1.0, 1.0), |f| (f.reach, f.near.unwrap_or(f.reach)));
+        let (reach, near) = self.follow_up.filter(|_| empowered).map_or((1.0, 1.0), |f| (f.reach * (1.0 + grown), f.near.unwrap_or(f.reach)));
         Some((from * near, range * reach, width * reach))
     }
 
@@ -313,7 +533,12 @@ impl AttackDef {
     /// lane that starts further out than a body's radius has a dead zone in front of you, where
     /// nothing is hit. `None` for a ranged attack.
     pub fn hit_span(&self, empowered: bool) -> Option<(f32, f32)> {
-        let (from, range, _) = self.lane(empowered)?;
+        self.hit_span_grown(empowered, 0.0)
+    }
+
+    /// `hit_span` of a lane `grown` (`lane_grown`).
+    pub fn hit_span_grown(&self, empowered: bool, grown: f32) -> Option<(f32, f32)> {
+        let (from, range, _) = self.lane_grown(empowered, grown)?;
         Some((if from > 0.0 { from - PLAYER_RADIUS } else { 0.0 }, range + PLAYER_RADIUS))
     }
 
@@ -483,7 +708,32 @@ mod tests {
         assert!(!all.is_empty() && all.len() <= u8::MAX as usize);
         for (i, c) in all.iter().enumerate() {
             assert!(all[..i].iter().all(|o| o.id != c.id), "duplicate class id {}", c.id);
-            assert!((1..=1000).contains(&c.max_hp), "{}: max_hp", c.id);
+            // Bosses are far tougher than anyone who picks a class.
+            let most_hp = if c.playable { 1000 } else { 5000 };
+            assert!((1..=most_hp).contains(&c.max_hp), "{}: max_hp", c.id);
+            if let Some(look) = &c.look {
+                let figure = ClassId::by_key(&look.figure).unwrap_or_else(|| panic!("{}: its figure {} isn't a class", c.id, look.figure));
+                assert!(figure.def().look.is_none(), "{}: its figure {} borrows another's itself", c.id, look.figure);
+                assert!((0.3..=3.0).contains(&look.size), "{}: size", c.id);
+            }
+            if let Some(mob) = &c.mob {
+                assert!(!c.playable, "{}: a monster players pick", c.id);
+                assert!(mob.from_wave >= 1 && mob.pack >= 1 && (mob.boss || mob.cost > 0.0), "{}: mob", c.id);
+                for trick in &mob.tricks {
+                    let kind = |slot: &u8| c.ability(AbilitySlot(*slot)).map(|a| a.kind);
+                    match trick {
+                        Trick::Lunge { slot, .. } => assert!(matches!(kind(slot), Some(AbilityKind::Dash(_))), "{}: lunges without a dash", c.id),
+                        Trick::Slam { slot, .. } => assert!(matches!(kind(slot), Some(AbilityKind::Nova(_))), "{}: slams without a nova", c.id),
+                        Trick::Summon { class, .. } => {
+                            assert!(ClassId::by_key(class).is_some_and(|s| s.def().mob.is_some()), "{}: summons {class}, no monster", c.id)
+                        }
+                        Trick::Ring { .. } | Trick::Fan { .. } => assert!(c.attack.kind.shot().is_some(), "{}: shots it can't fire", c.id),
+                        Trick::Mortar { count, .. } => assert!(*count >= 1, "{}: a mortar of no shells", c.id),
+                        Trick::Blink { distance, .. } => assert!(*distance > 1.0, "{}: blinks nowhere", c.id),
+                        Trick::Burst { .. } | Trick::Mend { .. } | Trick::Enrage { .. } => {}
+                    }
+                }
+            }
             assert!((1.0..=12.0).contains(&c.move_speed), "{}: move_speed", c.id);
             assert!(c.attack.damage > 0 && c.attack.attack_ticks > 1, "{}: attack", c.id);
             assert!(c.attack.windup > 0.0 && c.attack.windup < 1.0, "{}: windup must be a part of the attack", c.id);
@@ -530,11 +780,19 @@ mod tests {
                 assert!(!filled.contains(['{', '}']), "{what}: unknown placeholder in {filled:?}");
             }
             chill_is_sane(&c.id, c.attack.chill);
-            if let Some(RiftDef { ticks, haste }) = c.attack.rift {
+            assert!(!c.attack.pierces || c.attack.kind.shot().is_some(), "{}: pierces, but throws nothing", c.id);
+            assert!(c.attack.burst.is_none() || c.attack.kind.shot().is_some(), "{}: bursts, but throws nothing", c.id);
+            // A knock-up shorter than the empowered attack: the striker alone can't chain it.
+            if let Some(follow_up) = c.attack.follow_up {
+                let quickest = c.attack.period_ticks(c.attack.speed(true));
+                assert!(follow_up.lift_ticks < quickest, "{}: a knock-up of {} ticks, as long as its empowered attack ({quickest})", c.id, follow_up.lift_ticks);
+            }
+            if let Some(RiftDef { ticks, haste, burn, leech }) = c.attack.rift {
                 assert!(matches!(c.attack.kind, AttackKind::Melee { .. }), "{}: a rift from a projectile", c.id);
                 assert!((1..=10 * TICK_HZ as u32).contains(&ticks) && (0.0..=2.0).contains(&haste), "{}: rift", c.id);
+                assert!(burn >= 0 && (0.0..=1.0).contains(&leech), "{}: rift burn", c.id);
             }
-            if let Some(FollowUp { within_ticks, attack_speed, reach, near }) = c.attack.follow_up {
+            if let Some(FollowUp { within_ticks, attack_speed, reach, near, lift_ticks: _ }) = c.attack.follow_up {
                 assert!((1.0..=4.0).contains(&reach) && near.is_none_or(|near| (0.5..=reach).contains(&near)), "{}: follow_up reach", c.id);
                 // Only a swing knows it landed when it goes off (`server::attack`).
                 assert!(matches!(c.attack.kind, AttackKind::Melee { .. }), "{}: follow_up on a projectile", c.id);
@@ -581,7 +839,7 @@ mod tests {
     #[test]
     fn far_scale_scales_with_distance() {
         let kind = |far_scale| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_scale };
-        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None };
+        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None, pierces: false, burst: None };
         assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(3.0))).damage_at(d)), [10, 20, 30, 30]);
         assert_eq!(attack(kind(None)).damage_at(5.0), 10);
     }

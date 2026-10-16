@@ -5,8 +5,11 @@
 //! - `keep`: a ruined keep on an island in its moat, marshes around it that slow whoever wades in.
 //! - `gorge`: highlands split by a chasm that shots fly over but no one walks, crossed by a stone
 //!   arch and two rope bridges, and by waygates that jump a fighter to the far side.
+//! - `wilds`: the waves mode's map, far bigger: a camp in the middle and places to explore all
+//!   round it, monsters coming out of lairs out there.
 //!
-//! Every layout is point-symmetric, (x, y) -> (-x, -y), so both halves are equally good. Tile
+//! Every PvP layout (`MapId::PVP`) is point-symmetric, (x, y) -> (-x, -y), so both halves are
+//! equally good; the wilds aren't, there are no sides there. Tile
 //! `t` covers [t, t + 1) in meters: the grid of a map of `size` tiles runs from `-size / 2` to
 //! `size / 2`, centered on (0, 0), and where a point is on it doesn't depend on the map.
 //!
@@ -29,6 +32,7 @@ use crate::protocol::PickupKind;
 mod crossing;
 mod gorge;
 mod keep;
+mod wilds;
 
 /// Player clearance used when checking straight-line movement against walls. Smaller than the
 /// drawn pawn (0.48 m), so a fighter can brush a wall corner slightly; it must stay below 0.5 so
@@ -84,19 +88,25 @@ pub enum MapId {
     #[default]
     Keep,
     Gorge,
+    /// The waves mode's.
+    Wilds,
 }
 
 impl MapId {
-    pub const ALL: [MapId; 3] = [MapId::Crossing, MapId::Keep, MapId::Gorge];
+    pub const ALL: [MapId; 4] = [MapId::Crossing, MapId::Keep, MapId::Gorge, MapId::Wilds];
+    /// The maps for fighting each other: mirrored, of a size for it.
+    pub const PVP: [MapId; 3] = [MapId::Crossing, MapId::Keep, MapId::Gorge];
 
     pub fn map(self) -> &'static Map {
         static CROSSING: LazyLock<Map> = LazyLock::new(crossing::build);
         static KEEP: LazyLock<Map> = LazyLock::new(keep::build);
         static GORGE: LazyLock<Map> = LazyLock::new(gorge::build);
+        static WILDS: LazyLock<Map> = LazyLock::new(wilds::build);
         match self {
             MapId::Crossing => &CROSSING,
             MapId::Keep => &KEEP,
             MapId::Gorge => &GORGE,
+            MapId::Wilds => &WILDS,
         }
     }
 
@@ -111,6 +121,7 @@ impl MapId {
             MapId::Crossing => "River Crossing",
             MapId::Keep => "Sunken Keep",
             MapId::Gorge => "Riven Gorge",
+            MapId::Wilds => "Hollow Wilds",
         }
     }
 
@@ -120,6 +131,7 @@ impl MapId {
             MapId::Crossing => "A river, a bridge and two fords",
             MapId::Keep => "A moated keep; marshes slow you",
             MapId::Gorge => "A chasm to shoot across; waygates",
+            MapId::Wilds => "A camp in the wilds; monsters all round",
         }
     }
 }
@@ -138,12 +150,28 @@ pub struct Map {
     pub gates: Vec<[Vec2; 2]>,
     /// Torch positions (decoration, but part of the layout).
     pub torches: Vec<Vec2>,
+    /// Where monsters come out, in the waves mode (tile centers).
+    pub lairs: Vec<Vec2>,
+    /// Where chests may turn up during a wave (tile centers).
+    pub chests: Vec<Vec2>,
+    /// Where the shopkeeper stands, if the map has a shop.
+    pub shop: Option<Vec2>,
+    /// Which way the shopkeeper faces: toward whoever comes to trade.
+    pub shop_faces: Vec2,
+    /// The tiles of the shopkeeper's counter, behind them (walls), drawn as their stall.
+    pub counter: Vec<IVec2>,
     /// Meters inside the playable area's edge (negative outside). Continuous, for terrain and
     /// decoration.
     edge: fn(Vec2) -> f32,
     /// What the land is beyond the playable area, for the scene: forest, unless water or a chasm
     /// runs on out there.
     beyond: fn(Vec2) -> Tile,
+}
+
+/// A rounded square's "radius" through `p`: the same along its sides, smaller across its corners.
+fn squircle(p: Vec2) -> f32 {
+    let (x2, y2) = (p.x * p.x, p.y * p.y);
+    (x2 * x2 + y2 * y2).sqrt().sqrt()
 }
 
 /// Smooth periodic wave in [-1, 1] with period 4 (a sine look-alike from a cubic), using only
@@ -168,6 +196,11 @@ impl Map {
             pickups: Vec::new(),
             gates: Vec::new(),
             torches: Vec::new(),
+            lairs: Vec::new(),
+            chests: Vec::new(),
+            shop: None,
+            shop_faces: Vec2::NEG_Y,
+            counter: Vec::new(),
             edge,
             beyond,
         };
@@ -200,13 +233,36 @@ impl Map {
         }
     }
 
+    /// Sets the tile `p` is on (no mirror: for layouts that aren't mirrored).
+    fn set(&mut self, p: Vec2, tile: Tile) {
+        if let Some(i) = self.index(Map::tile_of(p)) {
+            self.tiles[i] = tile;
+        }
+    }
+
+    /// Every tile from `a` to `b` (tile centers, in a straight or diagonal line), no mirror.
+    fn line(&mut self, a: Vec2, b: Vec2, tile: Tile) {
+        for p in line_points(a, b) {
+            self.set(p, tile);
+        }
+    }
+
     /// Every tile from `a` to `b` (tile centers, in a straight or diagonal line), mirrored.
     fn line_mirrored(&mut self, a: Vec2, b: Vec2, tile: Tile) {
-        let steps = (b - a).abs().max_element() as i32;
-        for s in 0..=steps {
-            let p = a + (b - a) * if steps == 0 { 0.0 } else { s as f32 / steps as f32 };
+        for p in line_points(a, b) {
             self.set_mirrored(p, tile);
         }
+    }
+
+    /// Where a walker on tile `here` can step next, and what the step costs (10 straight, 14
+    /// diagonal): the eight tiles round it that are walkable, never cutting a blocked corner.
+    fn steps(&self, here: IVec2) -> impl Iterator<Item = (IVec2, u32)> + '_ {
+        [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)].into_iter().filter_map(move |(dx, dy)| {
+            let next = here + IVec2::new(dx, dy);
+            let diagonal = dx != 0 && dy != 0;
+            let clear = self.walkable(next) && (!diagonal || (self.walkable(here + IVec2::new(dx, 0)) && self.walkable(here + IVec2::new(0, dy))));
+            clear.then_some((next, if diagonal { 14 } else { 10 }))
+        })
     }
 
     /// Walls (from, to, a torch on the `from` end), rocks and trees on one half, mirrored. Returns
@@ -404,16 +460,9 @@ impl Map {
                 return Some(path);
             }
             let here = self.tile_at(i);
-            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
-                let next = here + IVec2::new(dx, dy);
-                let diagonal = dx != 0 && dy != 0;
-                if !self.walkable(next)
-                    || (diagonal && !(self.walkable(here + IVec2::new(dx, 0)) && self.walkable(here + IVec2::new(0, dy))))
-                {
-                    continue;
-                }
+            for (next, step) in self.steps(here) {
                 let j = self.index(next).unwrap();
-                let c = cost[i] + if diagonal { 14 } else { 10 };
+                let c = cost[i] + step;
                 if c < cost[j] {
                     cost[j] = c;
                     came_from[j] = i;
@@ -492,6 +541,12 @@ impl Map {
     }
 }
 
+/// The tile centers from `a` to `b` (tile centers, in a straight or diagonal line).
+fn line_points(a: Vec2, b: Vec2) -> impl Iterator<Item = Vec2> {
+    let steps = (b - a).abs().max_element() as i32;
+    (0..=steps).map(move |s| a + (b - a) * if steps == 0 { 0.0 } else { s as f32 / steps as f32 })
+}
+
 /// A remembered path (`None`: there's no way).
 type Path = Option<Rc<[IVec2]>>;
 
@@ -509,6 +564,73 @@ impl Map {
             }
             paths.entry((self.id, from, to)).or_insert_with(|| self.find_path(from, to).map(Rc::from)).clone()
         })
+    }
+}
+
+/// How far every walkable tile is from the nearest of some sources, walking (10 a step, 14 a
+/// diagonal one, no cutting corners): for many walkers all headed for the nearest of a few
+/// points, one search instead of one each (`downhill`). Only the server uses it, for monsters.
+pub struct FlowField {
+    dist: Vec<u32>,
+}
+
+impl Map {
+    /// The field toward `sources` (points on the map; ones off walkable ground are skipped).
+    pub fn flow_field(&self, sources: impl IntoIterator<Item = Vec2>) -> FlowField {
+        let mut dist = vec![u32::MAX; self.tiles.len()];
+        let mut open = BinaryHeap::new();
+        for p in sources {
+            let t = Map::tile_of(p);
+            if let Some(i) = self.index(t).filter(|_| self.walkable(t)) {
+                dist[i] = 0;
+                open.push(Reverse((0, i)));
+            }
+        }
+        while let Some(Reverse((d, i))) = open.pop() {
+            if d > dist[i] {
+                continue;
+            }
+            let here = self.tile_at(i);
+            for (next, step) in self.steps(here) {
+                let j = self.index(next).expect("walkable tiles are on the grid");
+                let nd = d + step;
+                if nd < dist[j] {
+                    dist[j] = nd;
+                    open.push(Reverse((nd, j)));
+                }
+            }
+        }
+        FlowField { dist }
+    }
+
+    /// How far `p` is from the field's nearest source, walking (`None`: it can't get there).
+    #[cfg(test)]
+    pub fn flow_distance(&self, field: &FlowField, p: Vec2) -> Option<u32> {
+        self.index(Map::tile_of(p)).map(|i| field.dist[i]).filter(|d| *d != u32::MAX)
+    }
+
+    /// Where a walker at `pos` heads to get nearer the field's sources: the farthest tile center
+    /// it can see in a straight line, of the next few tiles downhill. `None` if there's no way.
+    pub fn downhill(&self, field: &FlowField, pos: Vec2) -> Option<Vec2> {
+        let mut at = Map::tile_of(pos);
+        let mut best = None;
+        for _ in 0..8 {
+            let here = self.index(at).map(|i| field.dist[i])?;
+            if here == 0 || here == u32::MAX {
+                break;
+            }
+            let next = self.steps(at).filter_map(|(t, _)| self.index(t).map(|i| (field.dist[i], t))).min_by_key(|(d, _)| *d)?;
+            if next.0 >= here {
+                break;
+            }
+            at = next.1;
+            if self.line_walkable(pos, Map::center(at)) {
+                best = Some(Map::center(at));
+            } else if best.is_some() {
+                break;
+            }
+        }
+        best.or_else(|| Some(Map::center(Map::tile_of(pos))))
     }
 }
 
@@ -545,9 +667,14 @@ mod tests {
         MapId::ALL.into_iter().map(MapId::map)
     }
 
+    /// The mirrored ones, for fighting each other.
+    fn pvp_maps() -> impl Iterator<Item = &'static Map> {
+        MapId::PVP.into_iter().map(MapId::map)
+    }
+
     #[test]
     fn layouts_are_point_symmetric() {
-        for m in maps() {
+        for m in pvp_maps() {
             for (t, tile) in m.tiles() {
                 let mirror = -t - IVec2::ONE;
                 assert_eq!(tile, m.get(mirror), "{:?}: {t} vs {mirror}", m.id);
@@ -597,7 +724,7 @@ mod tests {
 
     #[test]
     fn pickups_lie_mirrored_on_open_ground_away_from_spawns() {
-        for m in maps() {
+        for m in pvp_maps() {
             assert!(!m.pickups.is_empty());
             for &(at, kind) in &m.pickups {
                 assert_eq!(at, Map::center(Map::tile_of(at)), "{:?}: {at} isn't a tile center", m.id);
@@ -612,7 +739,7 @@ mod tests {
 
     #[test]
     fn waygates_stand_free_mirrored_and_apart() {
-        for m in maps() {
+        for m in pvp_maps() {
             for &[a, b] in &m.gates {
                 assert_eq!(a, -b, "{:?}: gate {a} - {b} isn't its own mirror", m.id);
                 for end in [a, b] {
@@ -632,7 +759,7 @@ mod tests {
 
     #[test]
     fn halves_connect() {
-        for m in maps() {
+        for m in pvp_maps() {
             let (west, east) = (m.spawn_points[0], -m.spawn_points[0]);
             assert!(m.find_path(Map::tile_of(west), Map::tile_of(east)).is_some(), "{:?}: halves must be connected", m.id);
         }
@@ -656,7 +783,7 @@ mod tests {
     #[test]
     fn maps_fit_twice_the_first_at_most() {
         let area = |id: MapId| id.map().size.x * id.map().size.y;
-        for id in MapId::ALL {
+        for id in MapId::PVP {
             let m = id.map();
             assert!(m.size.x % 2 == 0 && m.size.y % 2 == 0);
             assert!(area(id) <= 2 * area(MapId::Crossing), "{id:?} is too big");
@@ -776,6 +903,63 @@ mod tests {
                 };
                 assert_eq!(m.next_waypoint(pos, target), plain(pos, target), "{:?}: {pos} -> {target}", m.id);
             }
+        }
+    }
+
+    #[test]
+    fn every_map_has_a_merchant_on_open_ground() {
+        for id in MapId::ALL {
+            let m = id.map();
+            assert!(m.shop.is_some_and(|shop| m.walkable_at(shop)), "{id:?}");
+        }
+    }
+
+    #[test]
+    fn the_wilds_have_a_camp_lairs_and_chests_on_open_ground() {
+        let m = MapId::Wilds.map();
+        let shop = m.shop.expect("the wilds have a shop");
+        assert!(m.walkable_at(shop));
+        assert!(m.lairs.len() >= 6 && m.chests.len() >= 8);
+        for &p in m.lairs.iter().chain(&m.chests).chain(m.pickups.iter().map(|(p, _)| p)) {
+            assert!(m.walkable_at(p), "{p} isn't on open ground");
+            assert_eq!(p, Map::center(Map::tile_of(p)), "{p} isn't a tile center");
+        }
+        for &lair in &m.lairs {
+            assert!(m.spawn_points.iter().all(|s| s.distance(lair) > 25.0), "a lair at {lair} is too near the camp");
+            assert!(m.find_path(Map::tile_of(lair), Map::tile_of(m.spawn_points[0])).is_some(), "a lair at {lair} is cut off");
+        }
+        for &[a, b] in &m.gates {
+            for end in [a, b] {
+                for d in [IVec2::ZERO, IVec2::X, -IVec2::X, IVec2::Y, -IVec2::Y] {
+                    assert!(m.walkable(Map::tile_of(end) + d), "gate {end} is hemmed in");
+                }
+            }
+        }
+        // Everyone spawns where they can reach the shop.
+        for &s in &m.spawn_points {
+            assert!(s.distance(shop) < crate::config::JUMP * 4.0);
+        }
+        let count = |tile: Tile| m.tiles().filter(|(_, t)| *t == tile).count();
+        assert!(count(Tile::Water) > 100 && count(Tile::Chasm) > 50 && count(Tile::Marsh) > 100 && count(Tile::Planks) > 0);
+    }
+
+    #[test]
+    fn a_flow_field_leads_downhill_to_its_sources() {
+        let m = MapId::Wilds.map();
+        let goal = m.spawn_points[0];
+        let field = m.flow_field([goal]);
+        for &lair in &m.lairs {
+            let mut p = lair;
+            let start = m.flow_distance(&field, p).expect("every lair reaches the camp");
+            for _ in 0..4000 {
+                if m.line_walkable(p, goal) {
+                    break;
+                }
+                let next = m.downhill(&field, p).expect("a way on");
+                assert!(m.line_walkable(p, next), "{p} -> {next} goes through something");
+                p = p.move_towards(next, 0.25);
+            }
+            assert!(m.line_walkable(p, goal), "from {lair} ({start}) stuck at {p}");
         }
     }
 

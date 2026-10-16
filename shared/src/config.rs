@@ -11,6 +11,9 @@ pub const SEND_INTERVAL: Duration = TICK_DURATION;
 
 pub const SERVER_PORT: u16 = 5888;
 /// Includes the class file's hash: clients built with different class numbers can't connect.
+/// The game's version (the workspace's): kept with every run on the leaderboards.
+pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub const PROTOCOL_ID: u64 = 0xA4E7_0009 ^ crate::classes::classes_hash();
 /// Netcode key shared by server and client. Fine for local dev; real auth will have the
 /// account service mint connect tokens instead (see README).
@@ -55,3 +58,10 @@ pub const FRENZY_MELEE_TICKS: u32 = 5 * TICK_HZ as u32;
 pub const GATE_RADIUS: f32 = 0.6;
 /// How long both ends stay closed after someone goes through (8 s).
 pub const GATE_CLOSED_TICKS: u32 = 8 * TICK_HZ as u32;
+
+// Fury stones and chests (`PickupKind`), in the waves mode's wilds.
+/// A fury stone's rush (`Fury`): how much faster its taker attacks, fading over this long.
+pub const FURY_HASTE: f32 = 0.35;
+pub const FURY_TICKS: u32 = 8 * TICK_HZ as u32;
+/// How long a used fury stone takes to come back.
+pub const FURY_RESPAWN_TICKS: u32 = 45 * TICK_HZ as u32;

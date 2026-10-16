@@ -10,3 +10,4 @@ mod inputs;
 mod netcode;
 mod pickups;
 mod rooms;
+mod waves;

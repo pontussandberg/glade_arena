@@ -1,5 +1,6 @@
-//! Pickups lying in the arena, and what taking one shows: a glowing green cross (a heal) or a
-//! blue winged boot (a haste, like a sprint's) floating over a glow on the ground, bobbing and turning, gone while
+//! Pickups lying in the arena, and what taking one shows: a glowing green cross (a heal), a blue
+//! winged boot (a haste: walking faster, like a sprint's) or pale yellow crossed blades (a fury
+//! stone: attacking faster) floating over a glow on the ground, bobbing and turning, gone while
 //! they're waiting to come back. A heal bursts around whoever takes it, even at full health (a
 //! ring spreading on the ground, sparks spiraling up); a hasted fighter trails blue wind streaks while it runs, like a
 //! sprint. Who takes a pickup is the server's call (`Pickup`, `Hasted`); a heal's number is in
@@ -12,7 +13,8 @@ use bevy::prelude::*;
 
 use crate::Me;
 use crate::feedback::AttackClock;
-use crate::arena::{self, palette, to_world};
+use crate::arena::{self, FlatMesh, palette, to_world};
+use crate::fx::{FxArt, Sparkle, sparkle};
 use crate::render::shown;
 
 pub struct PickupsPlugin;
@@ -35,6 +37,12 @@ const BOB_RATE: f32 = 2.2;
 const TURN_RATE: f32 = 1.4;
 /// How brightly pickups glow.
 const GLOW: f32 = 3.0;
+/// How often (seconds) a pickup lying out may give off a sparkle (`fx::sparkle`), and the odds,
+/// each time, that it does: a haste's wind always, the rest now and then.
+const SPARKLE_EVERY: f32 = 0.05;
+/// How fast a heal breathes (a second), and by how much.
+const PULSE_RATE: f32 = 1.3;
+const PULSE: f32 = 0.08;
 
 /// A heal's burst: how long it lasts (seconds), how wide its ring spreads (meters), and its
 /// sparks: how many, how far out from the fighter they start, how high they rise and how far
@@ -62,6 +70,15 @@ struct PickupLooks {
     ground: Handle<Mesh>,
     heal: (Handle<StandardMaterial>, Handle<StandardMaterial>),
     haste: (Handle<StandardMaterial>, Handle<StandardMaterial>),
+    chest: (Handle<StandardMaterial>, Handle<StandardMaterial>),
+    fury: (Handle<StandardMaterial>, Handle<StandardMaterial>),
+    /// A chest's box and lid (in plain wood), its gold bands; a fury stone's blade and hilt.
+    chest_box: Handle<Mesh>,
+    chest_lid: Handle<Mesh>,
+    chest_band: Handle<Mesh>,
+    wood: Handle<StandardMaterial>,
+    blade: Handle<Mesh>,
+    hilt: Handle<Mesh>,
     /// The winged boot: its shaft, its foot, a feather of its wings (one meter long along +X,
     /// scaled to its length), and the wings' pale glow.
     boot_shaft: Handle<Mesh>,
@@ -82,6 +99,8 @@ impl PickupLooks {
         match kind {
             PickupKind::Heal => &self.heal,
             PickupKind::Haste => &self.haste,
+            PickupKind::Chest => &self.chest,
+            PickupKind::Fury => &self.fury,
         }
     }
 }
@@ -91,6 +110,8 @@ pub(crate) fn color(kind: PickupKind) -> Color {
     match kind {
         PickupKind::Heal => palette::HEAL,
         PickupKind::Haste => palette::HASTE,
+        PickupKind::Chest => palette::GOLD,
+        PickupKind::Fury => palette::FURY,
     }
 }
 
@@ -99,6 +120,8 @@ pub(crate) fn icon(kind: PickupKind) -> &'static str {
     match kind {
         PickupKind::Heal => "+",
         PickupKind::Haste => ">>",
+        PickupKind::Chest => "$",
+        PickupKind::Fury => "X",
     }
 }
 
@@ -108,9 +131,18 @@ fn load_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mate
         (materials.add(arena::glow(c, GLOW)), materials.add(arena::translucent(c, 0.3, 1.5)))
     };
     let (heal, haste) = (kind(PickupKind::Heal), kind(PickupKind::Haste));
+    let (chest, fury) = (kind(PickupKind::Chest), kind(PickupKind::Fury));
     commands.insert_resource(PickupLooks {
+        chest,
+        fury,
+        chest_box: meshes.add(Cuboid::new(0.8, 0.42, 0.55)),
+        chest_lid: meshes.add(Cuboid::new(0.84, 0.16, 0.59)),
+        chest_band: meshes.add(Cuboid::new(0.1, 0.6, 0.62)),
+        wood: materials.add(arena::matte(palette::BARK)),
+        blade: meshes.add(Cuboid::new(0.08, 0.72, 0.03)),
+        hilt: meshes.add(Cuboid::new(0.26, 0.05, 0.06)),
         bar: meshes.add(Cuboid::new(0.14, 0.5, 0.14)),
-        ground: meshes.add(Circle::new(0.6).mesh().resolution(24).build()),
+        ground: meshes.add(soft_glow(0.75)),
         heal,
         haste,
         boot_shaft: meshes.add(Cuboid::new(0.16, 0.32, 0.17)),
@@ -145,6 +177,27 @@ fn add_pickup_visuals(mut commands: Commands, looks: Res<PickupLooks>, new: Quer
                     cross.spawn(bar(Vec3::ZERO, 90.0));
                 });
             }
+            PickupKind::Chest => {
+                // On the ground, not floating: a wooden chest, banded in glowing gold.
+                commands.entity(floating).with_children(|chest| {
+                    chest.spawn((Mesh3d(looks.chest_box.clone()), MeshMaterial3d(looks.wood.clone()), Transform::from_xyz(0.0, -FLOAT_HEIGHT + 0.21, 0.0)));
+                    chest.spawn((Mesh3d(looks.chest_lid.clone()), MeshMaterial3d(looks.wood.clone()), Transform::from_xyz(0.0, -FLOAT_HEIGHT + 0.5, 0.0)));
+                    for x in [-0.26, 0.26] {
+                        chest.spawn((Mesh3d(looks.chest_band.clone()), MeshMaterial3d(body.clone()), Transform::from_xyz(x, -FLOAT_HEIGHT + 0.3, 0.0)));
+                    }
+                });
+            }
+            PickupKind::Fury => {
+                // Two blades crossed, points up, each with its crossguard: strike faster.
+                commands.entity(floating).with_children(|blades| {
+                    for side in [-1.0f32, 1.0] {
+                        let tilt = Quat::from_rotation_z(side * 0.6);
+                        blades.spawn((Mesh3d(looks.blade.clone()), MeshMaterial3d(body.clone()), Transform::from_rotation(tilt)));
+                        let guard = tilt * Vec3::new(0.0, -0.22, 0.0);
+                        blades.spawn((Mesh3d(looks.hilt.clone()), MeshMaterial3d(body.clone()), Transform::from_translation(guard).with_rotation(tilt)));
+                    }
+                });
+            }
             PickupKind::Haste => {
                 let part = |mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>, transform: Transform| {
                     (Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), transform)
@@ -167,13 +220,7 @@ fn add_pickup_visuals(mut commands: Commands, looks: Res<PickupLooks>, new: Quer
                 });
             }
         }
-        let ground = commands
-            .spawn((
-                Mesh3d(looks.ground.clone()),
-                MeshMaterial3d(glow),
-                Transform::from_xyz(0.0, 0.03, 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)),
-            ))
-            .id();
+        let ground = commands.spawn((Mesh3d(looks.ground.clone()), MeshMaterial3d(glow), Transform::from_xyz(0.0, 0.03, 0.0))).id();
         commands
             .entity(entity)
             .insert((Transform::from_translation(to_world(pickup.at, 0.0)), Visibility::Hidden, Floating(floating)))
@@ -181,22 +228,75 @@ fn add_pickup_visuals(mut commands: Commands, looks: Res<PickupLooks>, new: Quer
     }
 }
 
-/// Bobs and turns the pickups that are lying there; hides the taken ones.
+/// A soft glow on the ground, `radius` round: bright in the middle, fading to nothing at its
+/// edge (no rim).
+fn soft_glow(radius: f32) -> Mesh {
+    let mut b = FlatMesh::default();
+    let segments = 28;
+    for i in 0..segments {
+        let at = |i: u32| {
+            let a = i as f32 / segments as f32 * std::f32::consts::TAU;
+            Vec3::new(a.cos() * radius, 0.0, -a.sin() * radius)
+        };
+        b.tri_faded_both([Vec3::ZERO, at(i), at(i + 1)], [1.0, 0.0, 0.0]);
+    }
+    b.build()
+}
+
+/// What each kind gives off as it lies there, and the odds it does each `SPARKLE_EVERY`.
+fn sparkles(kind: PickupKind) -> (Sparkle, f32) {
+    match kind {
+        PickupKind::Heal => (Sparkle::Heal, 0.4),
+        PickupKind::Haste => (Sparkle::Haste, 1.0),
+        PickupKind::Fury => (Sparkle::Fury, 0.35),
+        PickupKind::Chest => (Sparkle::Gold, 0.12),
+    }
+}
+
+/// Bobs and turns the pickups that are lying there, a heal breathing, a haste and a fury stone
+/// spinning eager, each giving off its sparkles; hides the taken ones.
 fn float_pickups(
+    mut commands: Commands,
     time: Res<Time>,
-    mut pickups: Query<(&Pickup, &Floating, &mut Visibility)>,
+    art: Res<FxArt>,
+    mut pickups: Query<(Entity, &Pickup, &Floating, &mut Visibility)>,
     mut floating: Query<&mut Transform>,
+    mut next: Local<(f32, u32)>,
 ) {
     let t = time.elapsed_secs();
-    for (pickup, float, mut visibility) in &mut pickups {
+    let sparkling = t >= next.0;
+    if sparkling {
+        *next = (t + SPARKLE_EVERY, next.1.wrapping_add(1));
+    }
+    for (entity, pickup, float, mut visibility) in &mut pickups {
         let there = pickup.back_at.is_none();
         visibility.set_if_neq(shown(there));
         if !there {
             continue;
         }
+        let height = if pickup.kind == PickupKind::Chest { 0.4 } else { FLOAT_HEIGHT };
+        let middle = to_world(pickup.at, height);
+        if sparkling {
+            let (kind, odds) = sparkles(pickup.kind);
+            let k = (entity.to_bits() as u32).wrapping_mul(7919).wrapping_add(next.1);
+            if crate::swish::noise(k, 99) < odds {
+                sparkle(&mut commands, &art, t, middle, kind, k);
+            }
+        }
+        // A chest sits still on the ground.
+        if pickup.kind == PickupKind::Chest {
+            continue;
+        }
+        let pulse = match pickup.kind {
+            PickupKind::Heal => 1.0 + PULSE * (t * PULSE_RATE * std::f32::consts::TAU).sin(),
+            _ => 1.0,
+        };
+        // A haste and a fury stone spin faster, eager to go.
+        let turn = if matches!(pickup.kind, PickupKind::Haste | PickupKind::Fury) { TURN_RATE * 2.2 } else { TURN_RATE };
         if let Ok(mut transform) = floating.get_mut(float.0) {
             transform.translation.y = FLOAT_HEIGHT + BOB * (t * BOB_RATE).sin();
-            transform.rotation = Quat::from_rotation_y(t * TURN_RATE);
+            transform.rotation = Quat::from_rotation_y(t * turn);
+            transform.scale = Vec3::splat(pulse);
         }
     }
 }

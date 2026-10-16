@@ -128,11 +128,11 @@ pub(super) fn show_frost(
     clock: AttackClock,
     time: Res<Time>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut fighters: Query<(&Chilled, &MeshMaterial3d<StandardMaterial>, &mut Frost, Has<Me>)>,
+    mut fighters: Query<(&Chilled, &MeshMaterial3d<StandardMaterial>, &mut Frost, Has<Me>, Option<&super::Tint>)>,
     mut parts: Query<(&mut Visibility, &mut WorldAligned)>,
 ) {
     let turn = Quat::from_rotation_y(time.elapsed_secs() * RUNE_TURN_RATE);
-    for (chilled, material, mut frost, is_me) in &mut fighters {
+    for (chilled, material, mut frost, is_me, tint) in &mut fighters {
         let now = clock.now(is_me);
         let (slowed, rooted) = (chilled.slowed.covers(now), chilled.rooted.covers(now));
         if slowed && !rooted
@@ -145,7 +145,9 @@ pub(super) fn show_frost(
         }
         frost.shown = (slowed, rooted);
         if let Some(mut m) = materials.get_mut(&material.0) {
-            m.base_color = if slowed || rooted { palette::FROSTBITE } else { Color::WHITE };
+            let own = tint.map_or(Color::WHITE, |t| t.0).to_linear();
+            let cast = if slowed || rooted { palette::FROSTBITE.to_linear() } else { LinearRgba::WHITE };
+            m.base_color = Color::from(LinearRgba::rgb(own.red * cast.red, own.green * cast.green, own.blue * cast.blue));
         }
         for (part, visible) in [(frost.prison, rooted), (frost.rune, slowed && !rooted)] {
             if let Ok((mut visibility, _)) = parts.get_mut(part) {
