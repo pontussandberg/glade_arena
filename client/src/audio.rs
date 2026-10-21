@@ -15,7 +15,7 @@ pub struct AudioPlugin;
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SoundQueue>();
-        app.add_systems(Update, swing_sounds);
+        app.add_systems(Update, (swing_sounds, heartbeat));
         #[cfg(target_family = "wasm")]
         {
             app.init_non_send::<web::AudioLazy>();
@@ -55,6 +55,8 @@ pub enum Sfx {
     BossHorn,
     /// The run is over.
     Dirge,
+    /// Your own heart, when you're nearly done.
+    Heart,
 }
 
 /// A sound asked for: played next frame (or `delay` seconds later, for one whose cause is yet
@@ -94,6 +96,28 @@ impl SoundQueue {
 /// How loud a sound `away` meters off is, out to `reach`: full up close, nothing past it.
 pub fn earshot(away: f32, reach: f32) -> f32 {
     (1.0 - away / reach).clamp(0.0, 1.0)
+}
+
+/// Below a quarter of your health, your own heart thuds under the mix, quicker the lower you
+/// get: danger you can hear without looking at the bar.
+fn heartbeat(
+    time: Res<Time>,
+    me: Query<(&arena_shared::protocol::Health, Option<&arena_shared::protocol::MaxHealth>, &arena_shared::protocol::ClassId), With<crate::Me>>,
+    mut queue: ResMut<SoundQueue>,
+    mut next: Local<f32>,
+) {
+    let Ok((health, max, class)) = me.single() else { return };
+    let max = max.map_or(class.def().max_hp, |m| m.0);
+    let fraction = health.0 as f32 / max.max(1) as f32;
+    if !health.alive() || fraction >= 0.25 {
+        return;
+    }
+    let now = time.elapsed_secs();
+    if now < *next {
+        return;
+    }
+    *next = now + 0.5 + 1.6 * fraction;
+    queue.push(Sfx::Heart, 0.45 + (0.25 - fraction));
 }
 
 /// Every melee swing nearby cuts the air (`LastSwing` comes from the server, once per strike).
@@ -383,6 +407,13 @@ mod web {
                         if let Some(e) = self.env(now, 0.4, peak * g, 1.8) {
                             let f = 55.0 * detune;
                             self.osc(Sawtooth, f, f * 0.97, now, 1.8, &e);
+                        }
+                    }
+                }
+                Sfx::Heart => {
+                    for (at, peak) in [(now, 0.5), (now + 0.16, 0.3)] {
+                        if let Some(e) = self.env(at, 0.01, peak * g, 0.12) {
+                            self.osc(Sine, 64.0, 44.0, at, 0.12, &e);
                         }
                     }
                 }
