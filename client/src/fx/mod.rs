@@ -14,6 +14,7 @@ use bevy::prelude::*;
 use crate::arena::{self, palette};
 use crate::feedback::AttackClock;
 
+mod death;
 mod downed;
 mod recipes;
 mod shapes;
@@ -23,7 +24,7 @@ pub struct FxPlugin;
 impl Plugin for FxPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_art);
-        app.add_systems(Update, ((recipes::play_new, downed::mark_downed), drive_parts).chain());
+        app.add_systems(Update, ((recipes::play_new, downed::mark_downed, death::burst_deaths), drive_parts).chain());
     }
 }
 
@@ -62,6 +63,8 @@ pub(crate) enum Ink {
     PoisonLight,
     PoisonMist,
     Blood,
+    /// Bone chips and splinters off the slain.
+    Bone,
     Heal,
     /// A heal's glow pooled on the ground, faint.
     HealMist,
@@ -70,7 +73,7 @@ pub(crate) enum Ink {
 }
 
 impl Ink {
-    const ALL: [Ink; 27] = [
+    const ALL: [Ink; 28] = [
         Ink::Scorch,
         Ink::Smoke,
         Ink::Earth,
@@ -94,6 +97,7 @@ impl Ink {
         Ink::PoisonLight,
         Ink::PoisonMist,
         Ink::Blood,
+        Ink::Bone,
         Ink::Heal,
         Ink::HealMist,
         Ink::Wisp,
@@ -127,6 +131,7 @@ impl Ink {
             Ink::PoisonLight => (rgb(0xA4, 0xE6, 0x54), 0.9, 3.0, 3),
             Ink::PoisonMist => (rgb(0x8C, 0xC8, 0x50), 0.22, 1.5, 1),
             Ink::Blood => (rgb(0x6E, 0x0E, 0x16), 0.85, 0.4, 1),
+            Ink::Bone => (rgb(0xD8, 0xCE, 0xB0), 1.0, 0.1, 2),
             Ink::Heal => (palette::HEAL, 0.9, 4.0, 3),
             Ink::HealMist => (palette::HEAL, 0.22, 2.0, 1),
             Ink::Wisp => (palette::WISP, 0.85, 6.0, 4),

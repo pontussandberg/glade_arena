@@ -403,22 +403,36 @@ fn flash_on_hit(
     mut commands: Commands,
     time: Res<Time>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut shake: ResMut<crate::camera::Shake>,
+    mut sounds: ResMut<crate::audio::SoundQueue>,
+    me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     mut players: Query<
-        (Entity, &Health, &MeshMaterial3d<StandardMaterial>, Option<&mut ShownHealth>, Option<&mut HitFlash>),
+        (Entity, &Health, &Pos, &MeshMaterial3d<StandardMaterial>, Option<&mut ShownHealth>, Option<&mut HitFlash>, Has<Me>),
         Or<(Changed<Health>, Added<MeshMaterial3d<StandardMaterial>>)>,
     >,
 ) {
     let until = time.elapsed_secs() + FLASH_SECONDS;
-    for (player, health, material, shown, flashing) in &mut players {
+    for (player, health, pos, material, shown, flashing, is_me) in &mut players {
         let Some(mut shown) = shown else {
             commands.entity(player).insert(ShownHealth(health.0));
             continue;
         };
-        let was_hit = health.0 < shown.0;
+        let lost = shown.0 - health.0;
+        let was_hit = lost > 0;
         shown.0 = health.0;
         if !was_hit {
             continue;
         }
+        // A blow we take stirs the camera and thuds; one landing near us slaps, fainter with
+        // distance and lighter for chip damage.
+        if is_me {
+            shake.add((lost as f32 / 120.0).clamp(0.08, 0.3));
+            sounds.push(crate::audio::Sfx::Hurt, (0.5 + lost as f32 / 60.0).min(1.0));
+        } else if let Ok(me) = me.single() {
+            let heft = (0.4 + lost as f32 / 50.0).min(1.0);
+            sounds.push(crate::audio::Sfx::Hit, crate::audio::earshot(pos.0.distance(me.0), 18.0) * heft);
+        }
+        commands.entity(player).insert(crate::rig::HitSquash { at: time.elapsed_secs() });
         match flashing {
             Some(mut flash) => flash.until = until,
             None => {
@@ -464,6 +478,7 @@ fn spawn_damage_numbers(
     mut commands: Commands,
     time: Res<Time>,
     world_ui: Single<Entity, With<WorldUi>>,
+    mut sounds: ResMut<crate::audio::SoundQueue>,
     mut players: Query<(Entity, &RecentHits, Option<&mut ShownHits>, Has<Me>), Changed<RecentHits>>,
     mut numbers: Query<(&mut DamageNumber, &mut Text)>,
 ) {
@@ -498,6 +513,10 @@ fn spawn_damage_numbers(
             let crit = hit.kind == HitKind::Crit;
             if crit {
                 commands.entity(player).insert(CritAt(time.elapsed_secs()));
+                sounds.push(crate::audio::Sfx::Crit, 0.8);
+            }
+            if hit.kind == HitKind::Heal && is_me {
+                sounds.push(crate::audio::Sfx::Heal, 0.8);
             }
             let (text, size, color) = match (hit.kind, is_me) {
                 (HitKind::Heal, _) => (format!("+{}", hit.amount), NUMBER_SIZE, palette::HEAL),

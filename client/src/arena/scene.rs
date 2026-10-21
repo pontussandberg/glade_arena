@@ -211,8 +211,9 @@ fn build_arena(
             Tile::Rock if theme.wilds == Wilds::Highlands => props.sandstone(&mut rng, c),
             Tile::Rock => props.boulder(&mut rng, c),
             Tile::Grass if theme.wilds == Wilds::Fen => props.fen_grass(&mut rng, c),
+            Tile::Grass => props.floor_detail(m, &mut rng, t, c),
+            Tile::Path if rng.next() < 0.12 => props.pebbles(&mut rng, c),
             Tile::Tree => props.map_tree(&mut rng, c),
-            Tile::Grass if rng.next() < 0.02 => props.flower(&mut rng, c),
             Tile::Marsh => props.bog(&mut rng, c),
             _ => {}
         }
@@ -842,6 +843,96 @@ impl Props {
         }
     }
 
+    /// What litters the fight floor's grass (forest and highlands; the fen has `fen_grass`):
+    /// tufts, pebbles, a flower, a patch of bare earth — and in the lee of cover (trees, walls,
+    /// rock, the forest's edge) thicker growth, mushrooms and a stump or two, so the clearing
+    /// reads as a lived-in place and not an empty board. Everything is below the ankle: detail,
+    /// never obstacle.
+    pub(super) fn floor_detail(&mut self, m: &Map, rng: &mut Lcg, t: IVec2, c: Vec2) {
+        let near_cover = SIDES.iter().any(|&d| matches!(m.scene_tile(t + d), Tile::Tree | Tile::Forest | Tile::Wall | Tile::Rock));
+        let woods = self.theme.wilds == Wilds::Forest;
+        let pick = rng.next();
+        if near_cover {
+            match () {
+                _ if pick < 0.3 => self.grass_tuft(rng, c),
+                _ if pick < 0.36 && woods => self.mushrooms(rng, c),
+                _ if pick < 0.4 && woods => self.stump(rng, c),
+                _ if pick < 0.46 => self.pebbles(rng, c),
+                _ if pick < 0.52 => self.earth_patch(rng, c),
+                _ if pick < 0.56 => self.flower(rng, c),
+                _ => {}
+            }
+        } else {
+            match () {
+                _ if pick < 0.14 => self.grass_tuft(rng, c),
+                _ if pick < 0.18 => self.pebbles(rng, c),
+                _ if pick < 0.24 => self.earth_patch(rng, c),
+                _ if pick < 0.27 => self.flower(rng, c),
+                _ => {}
+            }
+        }
+    }
+
+    /// A tuft of grass blades, a shade lusher or drier than the lawn they stand on.
+    fn grass_tuft(&mut self, rng: &mut Lcg, c: Vec2) {
+        let p = c + Vec2::new(rng.range(-0.35, 0.35), rng.range(-0.35, 0.35));
+        let lush = self.theme.fern.mix(&self.theme.grass, 0.45);
+        let dry = self.theme.meadow.mix(&self.theme.path, 0.35);
+        for _ in 0..3 + (rng.next() * 2.0) as usize {
+            let at = p + Vec2::new(rng.range(-0.12, 0.12), rng.range(-0.12, 0.12));
+            let h = rng.range(0.12, 0.26);
+            let lean = Quat::from_euler(EulerRot::XYZ, rng.range(-0.35, 0.35), 0.0, rng.range(-0.35, 0.35));
+            let color = if rng.next() < 0.5 { lush } else { dry };
+            self.add(Shape::Reed, color, Transform::from_translation(to_world(at, h / 2.0)).with_rotation(lean).with_scale(Vec3::new(1.8, h, 1.8)));
+        }
+    }
+
+    /// A pebble or two, half sunk in the turf.
+    pub(super) fn pebbles(&mut self, rng: &mut Lcg, c: Vec2) {
+        for _ in 0..1 + (rng.next() * 2.0) as usize {
+            let p = c + Vec2::new(rng.range(-0.4, 0.4), rng.range(-0.4, 0.4));
+            let s = rng.range(0.07, 0.16);
+            let t = Transform::from_translation(to_world(p, s * 0.25))
+                .with_rotation(Quat::from_euler(EulerRot::XYZ, rng.range(0.0, 3.0), rng.range(0.0, 3.0), 0.0))
+                .with_scale(Vec3::new(s, s * 0.6, s));
+            self.add(Shape::Rock, self.theme.stone.mix(&self.theme.path, rng.next() * 0.5), t);
+        }
+    }
+
+    /// A worn patch of bare earth showing through the grass.
+    fn earth_patch(&mut self, rng: &mut Lcg, c: Vec2) {
+        let p = c + Vec2::new(rng.range(-0.25, 0.25), rng.range(-0.25, 0.25));
+        let size = Vec3::new(rng.range(0.3, 0.55), 1.0, rng.range(0.25, 0.45));
+        let color = self.theme.path.mix(&self.theme.grass, rng.range(0.2, 0.5)).darker(0.03);
+        let t = Transform::from_translation(to_world(p, 0.008)).with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0))).with_scale(size);
+        self.add(Shape::Puddle, color, t);
+    }
+
+    /// A few toadstools huddled together: pale stems under caps the map's bloom color.
+    fn mushrooms(&mut self, rng: &mut Lcg, c: Vec2) {
+        let p = c + Vec2::new(rng.range(-0.3, 0.3), rng.range(-0.3, 0.3));
+        let stem_color = self.theme.stone.lighter(0.15);
+        for _ in 0..2 + (rng.next() * 3.0) as usize {
+            let at = p + Vec2::new(rng.range(-0.18, 0.18), rng.range(-0.18, 0.18));
+            let h = rng.range(0.07, 0.15);
+            self.add(Shape::Stick, stem_color, Transform::from_translation(to_world(at, h / 2.0)).with_scale(Vec3::new(h * 0.7, h, h * 0.7)));
+            let cap = Transform::from_translation(to_world(at, h))
+                .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
+                .with_scale(Vec3::new(h * 0.9, h * 0.45, h * 0.9));
+            self.add(Shape::Ball, self.theme.bloom.darker(0.08), cap);
+        }
+    }
+
+    /// A stump, cut low, its top rings showing.
+    fn stump(&mut self, rng: &mut Lcg, c: Vec2) {
+        let p = c + Vec2::new(rng.range(-0.3, 0.3), rng.range(-0.3, 0.3));
+        let h = rng.range(0.18, 0.3);
+        let s = rng.range(0.8, 1.1);
+        self.add(Shape::Trunk, self.theme.bark, Transform::from_translation(to_world(p, h / 2.0)).with_scale(Vec3::new(s, h / 1.2, s)));
+        let top = Transform::from_translation(to_world(p, h + 0.005)).with_scale(Vec3::new(0.2 * s, 1.0, 0.2 * s));
+        self.add(Shape::Puddle, self.theme.path.lighter(0.08), top);
+    }
+
     /// What grows on the fen's fight floor here and there: tufts of sedge, bog cotton and pads of
     /// moss, all below the ankle.
     fn fen_grass(&mut self, rng: &mut Lcg, c: Vec2) {
@@ -1022,7 +1113,8 @@ fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
             continue;
         }
         let c = Map::center(t);
-        let checker = if (t.x + t.y) % 2 == 0 { 1.03 } else { 0.97 };
+        // Faint: just enough for distances to read, well under the patches' wander.
+        let checker = if (t.x + t.y) % 2 == 0 { 1.012 } else { 0.988 };
         let base = match tile {
             // Paved: the slabs go on top (`Props::flagstones`); this is the moss between them.
             Tile::Path if theme.wilds == Wilds::Fen => theme.fern.mix(&theme.marsh, rng.next() * 0.4),
@@ -1030,8 +1122,12 @@ fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
             Tile::Marsh => theme.marsh.mix(&theme.bank, rng.next() * 0.35),
             // Damp ground: wet hollows and drier rises wandering across the grass.
             _ if theme.wilds == Wilds::Fen => theme.meadow.mix(&theme.marsh, patches(c)).mix(&theme.grass, rng.next() * 0.3),
-            _ => theme.grass.mix(&theme.meadow, rng.next() * 0.25),
+            // Lusher and drier sweeps wandering across the lawn, not a tile-by-tile dither.
+            _ => theme.grass.mix(&theme.meadow, (patches(c) * 0.75 + rng.next() * 0.25).clamp(0.0, 1.0) * 0.6),
         };
+        // Grass in the lee of the trees sits in their shade.
+        let shaded = tile == Tile::Grass && SIDES.iter().any(|&d| matches!(m.scene_tile(t + d), Tile::Forest | Tile::Tree));
+        let base = if shaded { base.mix(&theme.fern, 0.3) } else { base };
         let color = Color::from(base.to_linear() * checker);
         let (lo, hi) = (c - Vec2::splat(0.5), c + Vec2::splat(0.5));
         b.quad([to_world(lo, 0.0), to_world(Vec2::new(hi.x, lo.y), 0.0), to_world(hi, 0.0), to_world(Vec2::new(lo.x, hi.y), 0.0)], color);

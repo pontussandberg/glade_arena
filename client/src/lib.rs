@@ -18,6 +18,8 @@ use lightyear::prelude::*;
 
 #[cfg(feature = "render")]
 pub mod abilities;
+
+pub mod audio;
 #[cfg(feature = "render")]
 pub mod action_bar;
 pub mod bot;

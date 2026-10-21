@@ -16,10 +16,13 @@ pub(super) fn play_new(
     clock: AttackClock,
     art: Res<FxArt>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut sounds: ResMut<crate::audio::SoundQueue>,
+    me: Query<&Pos, With<crate::Me>>,
     new: Query<&Fx, Added<Fx>>,
 ) {
     let now = fx_now(&clock);
     for fx in &new {
+        sound_of(fx, &mut sounds, &me, now);
         let late = secs((now - fx.from as f32).max(0.0));
         let start = time.elapsed_secs() - late;
         let seed = fx.from.wrapping_mul(2_654_435_761) ^ fx.at.x.to_bits() ^ fx.at.y.to_bits().rotate_left(16);
@@ -52,6 +55,23 @@ pub(super) fn play_new(
             FxKind::Mend => mend(c, &art, &scene),
         }
     }
+}
+
+/// The sound an effect makes, if any: loud up close, faint far off; what lands later (a meteor,
+/// a lob, a bolt gathering) sounds as it lands, not as the warning shows.
+fn sound_of(fx: &Fx, sounds: &mut crate::audio::SoundQueue, me: &Query<&Pos, With<crate::Me>>, now: f32) {
+    use crate::audio::{Sfx, earshot};
+    let Ok(me) = me.single() else { return };
+    let lands = secs((fx.until as f32 - now).max(0.0));
+    let (sfx, reach, delay) = match fx.kind {
+        FxKind::Blast(FxColor::Fire) => (Sfx::Explosion, 34.0, 0.0),
+        FxKind::Meteor => (Sfx::Explosion, 44.0, lands),
+        FxKind::Blast(FxColor::Storm) => (Sfx::Thunder, 44.0, 0.0),
+        FxKind::Bolt => (Sfx::Thunder, 44.0, lands),
+        FxKind::Coins => (Sfx::Coin, 16.0, 0.0),
+        _ => return,
+    };
+    sounds.push_in(sfx, earshot(fx.at.distance(me.0), reach), delay);
 }
 
 /// Where and when an effect plays: from `start` (seconds), at `at` (and toward `to`, in the

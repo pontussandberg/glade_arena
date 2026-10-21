@@ -165,12 +165,36 @@ fn spawn_hud(mut commands: Commands) {
 }
 
 /// The banner: rebuilt whenever the room changes.
-fn show_banner(mut commands: Commands, room: Res<CurrentRoom>, me: Option<Res<crate::rooms::Me>>, banner: Single<(Entity, &mut Node), With<Banner>>) {
+fn show_banner(
+    mut commands: Commands,
+    room: Res<CurrentRoom>,
+    me: Option<Res<crate::rooms::Me>>,
+    mut sounds: ResMut<crate::audio::SoundQueue>,
+    mut heard: Local<Option<(u32, u8)>>,
+    banner: Single<(Entity, &mut Node), With<Banner>>,
+) {
     if !room.is_changed() {
         return;
     }
     let (banner, mut node) = banner.into_inner();
     let run = room.run();
+    // A horn as a wave breaks (deeper for a boss's), a dirge as the run ends. Only on a change
+    // heard in play: joining mid-run says nothing.
+    let key = run.map(|run| (run.wave, match run.phase { Phase::Shop { .. } => 0, Phase::Fight => 1, Phase::Over { .. } => 2 }));
+    let last = std::mem::replace(&mut *heard, key);
+    if let (Some(run), Some((_, 1)), Some(last)) = (run, key, last)
+        && key != Some(last)
+    {
+        match run.boss.is_some() {
+            true => sounds.push(crate::audio::Sfx::BossHorn, 1.0),
+            false => sounds.push(crate::audio::Sfx::Horn, 0.9),
+        }
+    }
+    if let (Some((_, 2)), Some((_, phase))) = (key, last)
+        && phase != 2
+    {
+        sounds.push(crate::audio::Sfx::Dirge, 0.9);
+    }
     node.display = if run.is_some() { Display::Flex } else { Display::None };
     commands.entity(banner).despawn_children();
     let Some(run) = run else { return };

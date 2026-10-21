@@ -124,11 +124,53 @@ impl CameraMode {
     }
 }
 
+/// Camera shake: `trauma` builds with nearby violence (a kill, a blow taken) and decays
+/// steadily; the camera tips by smooth noise scaled by trauma squared, so chip damage barely
+/// stirs it and a boss's death rocks it.
+#[derive(Resource, Default)]
+pub struct Shake {
+    trauma: f32,
+}
+
+impl Shake {
+    pub fn add(&mut self, amount: f32) {
+        self.trauma = (self.trauma + amount).min(1.0);
+    }
+}
+
+/// Trauma lost per second, and how far the camera tips at full trauma (radians).
+const SHAKE_DECAY: f32 = 2.2;
+const SHAKE_TILT: f32 = 0.014;
+const SHAKE_ROLL: f32 = 0.010;
+
+/// Tips the camera off what the controls set this frame, between them and `place_camera` (the
+/// controls write the whole transform each frame, so nothing accumulates). Only the MOBA
+/// camera: the free one is a viewing tool.
+fn shake_camera(time: Res<Time>, mode: Res<CameraMode>, mut shake: ResMut<Shake>, mut camera: Single<&mut Transform, With<Camera3d>>) {
+    if shake.trauma <= 0.0 {
+        return;
+    }
+    shake.trauma = (shake.trauma - SHAKE_DECAY * time.delta_secs()).max(0.0);
+    if mode.free {
+        return;
+    }
+    let s = shake.trauma * shake.trauma;
+    let t = time.elapsed_secs();
+    // Two incommensurate sines per axis: smooth, never repeating, no RNG flicker.
+    let wob = |f: f32, p: f32| (t * f + p).sin() * 0.62 + (t * f * 1.83 + p * 2.0).sin() * 0.38;
+    let pitch = s * SHAKE_TILT * wob(31.0, 0.0);
+    let yaw = s * SHAKE_TILT * wob(27.0, 1.7);
+    let roll = s * SHAKE_ROLL * wob(23.0, 4.1);
+    camera.rotation *= Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
+}
+
 pub struct CameraPlugin;
 
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CameraMode>();
+        app.init_resource::<Shake>();
+        app.add_systems(Update, shake_camera.in_set(CameraMoves).after(CameraControl));
         app.configure_sets(
             Update,
             (CameraMoves.after(crate::rig::Posing), CameraControl.in_set(CameraMoves), CameraPlaced.after(CameraMoves)),

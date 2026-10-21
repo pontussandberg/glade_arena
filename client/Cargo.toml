@@ -40,5 +40,11 @@ lightyear = { workspace = true, features = ["webtransport_dangerous_configuratio
 console_error_panic_hook = "0.1"
 js-sys = "0.3"
 wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = ["Window", "Document", "EventTarget", "Storage"] }
+web-sys = { version = "0.3", features = [
+    "Window", "Document", "EventTarget", "Storage",
+    # Sound, synthesized in the browser (`audio`).
+    "AudioContext", "AudioContextState", "AudioDestinationNode", "AudioNode", "AudioParam",
+    "OscillatorNode", "OscillatorType", "GainNode", "BiquadFilterNode", "BiquadFilterType",
+    "AudioBuffer", "AudioBufferSourceNode", "DynamicsCompressorNode",
+] }
 getrandom = { version = "0.3", features = ["wasm_js"] }

@@ -86,6 +86,15 @@ impl Plugin for RigPlugin {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Posing;
 
+/// A fighter flinching from a blow (`feedback` sets it on each confirmed hit): squashed, then
+/// springing back over `SQUASH_SECONDS`.
+#[derive(Component)]
+pub struct HitSquash {
+    pub at: f32,
+}
+
+const SQUASH_SECONDS: f32 = 0.18;
+
 /// Walk cycles per meter walked (the swing and bob: `pose`).
 const STRIDES_PER_METER: f32 = 0.4;
 /// How much bigger an elite monster is drawn than its kind.
@@ -395,12 +404,14 @@ fn pose_rigs(
         (&Cooldowns, &Dashing),
         Option<&SeenThrows>,
         Has<Me>,
+        Option<&HitSquash>,
     )>,
     mut parts: Query<(&mut Transform, &mut Visibility), Without<Rig>>,
 ) {
     let ease_walk = rate(&time, WALK_RATE);
     let dt = time.delta_secs().min(0.1);
-    for (mut rig, facing, mut body, mut held_at, class, attack, (cooldowns, dashing), seen, is_me) in &mut rigs {
+    let wall_clock = time.elapsed_secs();
+    for (mut rig, facing, mut body, mut held_at, class, attack, (cooldowns, dashing), seen, is_me, squash) in &mut rigs {
         let rig = &mut *rig;
         // Dashing, it glides along in its pose without a stride.
         let gliding = dashing.0.is_some();
@@ -515,9 +526,13 @@ fn pose_rigs(
         let aimed = targets(moves, phase, 0.0, rig.walking);
         let walk = rig.walking * (1.0 - phase.braced());
         let posed = assemble(moves, &angles, &aimed, facing.look, stride, walk, stretch * smear, blade, 1.0 - phase.braced());
+        // Just hit, the whole figure flinches: squashed wide and short, springing back over
+        // `SQUASH_SECONDS`, so a blow visibly lands in the body and not just on the health bar.
+        let flinch = squash.map_or(0.0, |s| (1.0 - (wall_clock - s.at) / SQUASH_SECONDS).clamp(0.0, 1.0).powi(2));
+        let squashed = Vec3::new(1.0 + 0.12 * flinch, 1.0 - 0.16 * flinch, 1.0 + 0.12 * flinch);
         let placed = Transform {
             translation: body.translation.with_y(posed.body.translation.y * rig.size),
-            scale: posed.body.scale * rig.size,
+            scale: posed.body.scale * rig.size * squashed,
             ..posed.body
         };
         body.set_if_neq(placed);
