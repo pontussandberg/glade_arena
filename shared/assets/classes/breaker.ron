@@ -1,0 +1,31 @@
+#![enable(unwrap_variant_newtypes)]
+// The Breaker (field reference: README.md): a slow maul whose every blow lands like a verdict.
+(
+    id: "breaker",
+    name: "Breaker",
+    role: "Juggernaut",
+    blurb: "The maul comes down slow, and whatever it finds stops mattering.",
+    max_hp: 150,
+    move_speed: 3.4,
+    attack: (
+        damage: 30,
+        attack_ticks: 60,
+        windup: 0.55,
+        kind: Melee(range: 2.0, width: 1.5, from: 0.6),
+    ),
+    abilities: [
+        (
+            name: "Quake",
+            description: "Hammer the earth: enemies within {ability_reach} take {ability_damage} damage and are slowed by {ability_slow} for {ability_slow_time}.",
+            cooldown_ticks: 288,
+            kind: Nova(radius: 3.6, damage: 20, chill: (slow: 0.35, slow_ticks: 40)),
+        ),
+        (
+            name: "Bull Rush",
+            description: "Barrel up to {ability_reach} forward. Enemies you pass through take {ability_damage} damage.",
+            cooldown_ticks: 320,
+            kind: Dash(distance: 7.0, min_distance: Some(2.0), ticks: 8, damage: 16),
+        ),
+    ],
+    crit: (chance: 0.05),
+)

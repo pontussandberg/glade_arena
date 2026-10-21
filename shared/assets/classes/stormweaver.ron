@@ -1,0 +1,34 @@
+#![enable(unwrap_variant_newtypes)]
+// The Stormweaver (field reference: README.md): a quick skirmishing caster who is never where
+// the answer lands.
+(
+    id: "stormweaver",
+    name: "Stormweaver",
+    role: "Tempest",
+    blurb: "Keeps the sky in hand. Quick bolts, a heavier one for whoever stands out, and a step of wind to be gone.",
+    max_hp: 90,
+    move_speed: 3.7,
+    attack: (
+        damage: 10,
+        attack_ticks: 28,
+        windup: 0.32,
+        kind: Projectile(speed: 16.0, radius: 0.26, range: 10.5),
+    ),
+    abilities: [
+        (
+            name: "Skybolt",
+            description: "Loose a heavy bolt up to {ability_reach} for {ability_damage} damage.",
+            cooldown_ticks: 224,
+            kind: Projectile(speed: 18.0, radius: 0.3, range: 11.0, damage: 22),
+        ),
+        (
+            name: "Gale Step",
+            description: "Ride the wind up to {ability_reach}.",
+            cooldown_ticks: 256,
+            kind: Dash(distance: 7.0, min_distance: Some(1.0), ticks: 5, damage: 0),
+        ),
+    ],
+    // Her own figure; only the bolts borrow a look (the storm's).
+    look: Some(figure: "stormweaver", size: 1.0, tint: (1.0, 1.0, 1.0), bolts: Some(Storm)),
+    crit: (chance: 0.1),
+)

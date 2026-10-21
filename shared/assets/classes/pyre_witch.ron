@@ -1,0 +1,39 @@
+#![enable(unwrap_variant_newtypes)]
+// The Pyre Witch (field reference: README.md): a fire caster whose every bolt splashes.
+(
+    id: "pyre_witch",
+    name: "Pyre Witch",
+    role: "Scourge",
+    blurb: "Feeds the fire. Every bolt bursts into cinders, and her ring burns whole packs at once.",
+    max_hp: 95,
+    move_speed: 3.6,
+    attack: (
+        damage: 12,
+        attack_ticks: 34,
+        windup: 0.38,
+        kind: Projectile(speed: 13.0, radius: 0.3, range: 9.5),
+        // Every bolt splashes a share of its fire over those around the one struck.
+        burst: Some(radius: 1.6, share: 0.5),
+    ),
+    abilities: [
+        (
+            name: "Pyre Bolt",
+            description: "Hurl a heavy gout of fire up to {ability_reach} for {ability_damage} damage.",
+            cooldown_ticks: 224,
+            kind: Projectile(speed: 14.0, radius: 0.45, range: 10.0, damage: 26),
+        ),
+        (
+            name: "Ring of Cinders",
+            description: "The ground ignites: enemies within {ability_reach} take {ability_damage} damage.",
+            cooldown_ticks: 256,
+            kind: Nova(radius: 3.4, damage: 16),
+        ),
+    ],
+    passive: Some(
+        name: "Cinders",
+        description: "Bolts burst where they hit: enemies within {burst_radius} of the one struck take {burst_share} of the damage.",
+    ),
+    // Her own figure; only the bolts borrow a look (fire).
+    look: Some(figure: "pyre_witch", size: 1.0, tint: (1.0, 1.0, 1.0), bolts: Some(Fire)),
+    crit: (chance: 0.1),
+)

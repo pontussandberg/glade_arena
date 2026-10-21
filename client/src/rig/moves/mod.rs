@@ -116,6 +116,11 @@ pub(crate) fn moves(class_key: &str) -> &'static Moves {
         "revenant" => &REVENANT,
         "frost_mage" => &FROST_MAGE,
         "zombie" => &ZOMBIE,
+        // The recruits borrow the archetype that fits their weapon: the heavy overhead blow for
+        // sword and maul, the staff caster's casts, the claw-swipe for the knives.
+        "warden" | "breaker" => &REVENANT,
+        "pyre_witch" | "stormweaver" => &FROST_MAGE,
+        "shade" => &ZOMBIE,
         // The merchant stands like a mage with a staff (it never fights).
         "merchant" => &FROST_MAGE,
         _ => unreachable!("no moves for class {class_key:?}"),

@@ -18,10 +18,15 @@ use crate::protocol::FxColor;
 /// The class files, compiled into both server and client so they can't disagree. Their order is
 /// the classes' order everywhere: the class picker and its number keys, the default pick, and the
 /// order target dummies come in. The ones no one picks (`ClassDef::playable`) go last.
-const CLASS_FILES: [&str; 23] = [
+const CLASS_FILES: [&str; 28] = [
     include_str!("../assets/classes/revenant.ron"),
     include_str!("../assets/classes/javelinist.ron"),
     include_str!("../assets/classes/frost_mage.ron"),
+    include_str!("../assets/classes/warden.ron"),
+    include_str!("../assets/classes/pyre_witch.ron"),
+    include_str!("../assets/classes/shade.ron"),
+    include_str!("../assets/classes/breaker.ron"),
+    include_str!("../assets/classes/stormweaver.ron"),
     include_str!("../assets/classes/zombie.ron"),
     include_str!("../assets/classes/gnawer.ron"),
     include_str!("../assets/classes/ghoul.ron"),
@@ -713,7 +718,9 @@ mod tests {
             assert!((1..=most_hp).contains(&c.max_hp), "{}: max_hp", c.id);
             if let Some(look) = &c.look {
                 let figure = ClassId::by_key(&look.figure).unwrap_or_else(|| panic!("{}: its figure {} isn't a class", c.id, look.figure));
-                assert!(figure.def().look.is_none(), "{}: its figure {} borrows another's itself", c.id, look.figure);
+                // A class may wear its own figure (to color only its bolts), but never a
+                // borrowed figure that is itself borrowed: the client resolves one level.
+                assert!(look.figure == c.id || figure.def().look.is_none(), "{}: its figure {} borrows another's itself", c.id, look.figure);
                 assert!((0.3..=3.0).contains(&look.size), "{}: size", c.id);
             }
             if let Some(mob) = &c.mob {

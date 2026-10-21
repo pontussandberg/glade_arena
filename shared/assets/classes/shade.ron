@@ -1,0 +1,36 @@
+#![enable(unwrap_variant_newtypes)]
+// The Shade (field reference: README.md): a fast, frail knife-dancer who lives on crits.
+(
+    id: "shade",
+    name: "Shade",
+    role: "Assassin",
+    blurb: "Two knives and nowhere to be. Steps through the fight and cuts what it leaves behind.",
+    max_hp: 85,
+    move_speed: 3.95,
+    attack: (
+        damage: 8,
+        attack_ticks: 22,
+        windup: 0.28,
+        kind: Melee(range: 1.35, width: 0.9),
+    ),
+    abilities: [
+        (
+            name: "Shadowstep",
+            description: "Step up to {ability_reach} in a blink. Enemies you pass through take {ability_damage} damage.",
+            cooldown_ticks: 224,
+            kind: Dash(distance: 6.5, min_distance: Some(1.0), ticks: 5, damage: 10),
+        ),
+        (
+            name: "Marked Knife",
+            description: "Your next auto-attack gains +{ability_attack_speed} attack speed and will critically strike. Press again to call it off.",
+            cooldown_ticks: 416,
+            global_cooldown: false,
+            kind: Prime(attack_speed: 0.6),
+        ),
+    ],
+    passive: Some(
+        name: "Cutthroat",
+        description: "A quarter of your cuts strike true ({crit} crit chance).",
+    ),
+    crit: (chance: 0.25),
+)

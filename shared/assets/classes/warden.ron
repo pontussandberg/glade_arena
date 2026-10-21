@@ -1,0 +1,31 @@
+#![enable(unwrap_variant_newtypes)]
+// The Warden (field reference: README.md): a shielded knight who holds the line.
+(
+    id: "warden",
+    name: "Warden",
+    role: "Bulwark",
+    blurb: "A wall with a sword. Rushes in behind the shield and slams the ground to slow the press.",
+    max_hp: 165,
+    move_speed: 3.3,
+    attack: (
+        damage: 17,
+        attack_ticks: 44,
+        windup: 0.4,
+        kind: Melee(range: 1.7, width: 1.1),
+    ),
+    abilities: [
+        (
+            name: "Shield Rush",
+            description: "Charge up to {ability_reach} behind the shield. Enemies you pass through take {ability_damage} damage.",
+            cooldown_ticks: 288,
+            kind: Dash(distance: 5.5, min_distance: Some(1.0), ticks: 6, damage: 12),
+        ),
+        (
+            name: "Ground Slam",
+            description: "Slam the ground: enemies within {ability_reach} take {ability_damage} damage and are slowed by {ability_slow} for {ability_slow_time}.",
+            cooldown_ticks: 256,
+            kind: Nova(radius: 3.2, damage: 14, chill: (slow: 0.5, slow_ticks: 48)),
+        ),
+    ],
+    crit: (chance: 0.05),
+)

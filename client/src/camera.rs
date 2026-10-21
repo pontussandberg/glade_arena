@@ -232,6 +232,11 @@ pub(crate) fn wheel_notches(scroll: &AccumulatedMouseScroll) -> f32 {
 fn spawn_camera(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
+        // HDR with a filmic tonemap and a whisper of bloom: torches, eyes and spell glow bleed
+        // light instead of clipping to flat white, and the dusk rolls off instead of banding.
+        bevy::camera::Hdr,
+        bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
+        bevy::post_process::bloom::Bloom { intensity: 0.12, ..bevy::post_process::bloom::Bloom::NATURAL },
         Transform::from_translation(OFFSET * ZOOM_RANGE.1).looking_at(Vec3::ZERO, Vec3::Y),
         arena::haze(),
         CameraRig { focus: Vec3::ZERO, zoom: ZOOM_RANGE.1 },

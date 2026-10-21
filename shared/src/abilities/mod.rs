@@ -117,6 +117,10 @@ impl AbilityKind {
         if effect.chill.root_ticks > 0 {
             all.push(("ability_root", seconds(effect.chill.root_ticks)));
         }
+        if effect.chill.slow > 0.0 {
+            all.push(("ability_slow", format!("{:.0}%", effect.chill.slow * 100.0)));
+            all.push(("ability_slow_time", seconds(effect.chill.slow_ticks)));
+        }
         if let AbilityKind::Prime(prime) = self {
             all.push(("ability_attack_speed", format!("{:.0}%", prime.attack_speed * 100.0)));
         }

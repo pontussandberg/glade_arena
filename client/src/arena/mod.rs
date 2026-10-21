@@ -25,6 +25,8 @@ mod zombie;
 use zombie::*;
 mod merchant;
 use merchant::*;
+mod recruits;
+use recruits::*;
 mod shots;
 pub use shots::*;
 mod scene;
@@ -210,7 +212,8 @@ pub fn faceted(mesh: Mesh) -> Mesh {
 /// Class ids that have their own figure in `fighter_mesh`. Every class in `assets/classes/` needs
 /// one (and its parts in `fighter_rig` and its moves in `rig/`): the client won't start
 /// without them, and a test checks every class has one.
-pub const FIGHTER_LOOKS: [&str; 5] = ["javelinist", "revenant", "frost_mage", "zombie", "merchant"];
+pub const FIGHTER_LOOKS: [&str; 10] =
+    ["javelinist", "revenant", "frost_mage", "zombie", "merchant", "warden", "pyre_witch", "shade", "breaker", "stormweaver"];
 
 /// Class ids whose shots have their own look in `shot_look` (the rest throw round bolts).
 pub const SHOT_LOOKS: [&str; 2] = ["javelinist", "frost_mage"];
@@ -352,6 +355,86 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             held_glint: None,
             wardrobe: None,
         },
+        "warden" => RigMeshes {
+            head: warden_helm(),
+            arm: warden_arm(),
+            forearm: None,
+            shin: None,
+            lead_arm: Some(warden_shield_arm()),
+            leg: booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.085, 0.07),
+            held: arming_sword(),
+            eyes: slit_eyes(WARDEN_EYES),
+            glow: palette::GOLD,
+            held_glow: None,
+            body_glow: None,
+            held_aura: None,
+            held_glint: None,
+            wardrobe: None,
+        },
+        "pyre_witch" => RigMeshes {
+            head: pyre_witch_hood(),
+            arm: pyre_witch_arm(),
+            forearm: None,
+            shin: None,
+            lead_arm: None,
+            leg: booted_leg(palette::ASH, palette::DARK_LEATHER, 0.08, 0.065),
+            held: pyre_staff(),
+            eyes: spectral_eyes(Vec2::ONE),
+            glow: palette::TORCH_FLAME,
+            held_glow: Some(pyre_staff_glow()),
+            body_glow: None,
+            held_aura: None,
+            held_glint: None,
+            wardrobe: None,
+        },
+        "shade" => RigMeshes {
+            head: shade_hood(),
+            arm: shade_arm(),
+            forearm: None,
+            shin: None,
+            lead_arm: Some(shade_offhand()),
+            leg: booted_leg(palette::HUNTER, palette::DARK_LEATHER, 0.075, 0.062),
+            held: shade_knife(),
+            eyes: spectral_eyes(Vec2::ONE),
+            glow: palette::SPIRIT,
+            held_glow: None,
+            body_glow: None,
+            held_aura: None,
+            held_glint: None,
+            wardrobe: None,
+        },
+        "breaker" => RigMeshes {
+            head: breaker_helm(),
+            arm: breaker_arm(),
+            forearm: None,
+            shin: None,
+            lead_arm: None,
+            leg: booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.095, 0.078),
+            held: maul(),
+            eyes: slit_eyes(BREAKER_EYES),
+            glow: palette::GOLD,
+            held_glow: None,
+            body_glow: None,
+            held_aura: None,
+            held_glint: None,
+            wardrobe: None,
+        },
+        "stormweaver" => RigMeshes {
+            head: stormweaver_hood(),
+            arm: stormweaver_arm(),
+            forearm: None,
+            shin: None,
+            lead_arm: None,
+            leg: booted_leg(recruits::STORM_DARK, palette::DARK_LEATHER, 0.08, 0.065),
+            held: storm_staff(),
+            eyes: spectral_eyes(Vec2::ONE),
+            glow: recruits::STORM_GLOW,
+            held_glow: Some(storm_staff_glow()),
+            body_glow: None,
+            held_aura: None,
+            held_glint: None,
+            wardrobe: None,
+        },
         _ => unreachable!("no rig for class {class_key:?} (add it to FIGHTER_LOOKS)"),
     }
 }
@@ -382,6 +465,12 @@ pub fn fighter_mesh(class_key: &str) -> Mesh {
         // The shopkeeper (no one picks it): a stout trader in a long burgundy coat, a pack piled
         // with wares on its back, a wide hat with a feather, a lantern hanging off its staff.
         "merchant" => merchant_body(),
+        // The recruits (`recruits.rs`): the five classes that joined after the first three.
+        "warden" => warden_body(),
+        "pyre_witch" => pyre_witch_body(),
+        "shade" => shade_body(),
+        "breaker" => breaker_body(),
+        "stormweaver" => stormweaver_body(),
         _ => unreachable!("no figure for class {class_key:?} (add it to FIGHTER_LOOKS)"),
     }
 }
