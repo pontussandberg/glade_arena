@@ -253,22 +253,23 @@ pub(super) fn shade_arm() -> Mesh {
 
 /// The lead arm holds its knife reversed: the same arm, the blade running down past the fist.
 pub(super) fn shade_offhand() -> Mesh {
-    let blade = sweep(&[Vec3::new(0.02, -0.46, 0.0), Vec3::new(0.035, -0.68, 0.0)], &[0.016, 0.0], 4, palette::STEEL);
+    let blade = sweep(&[Vec3::new(0.02, -0.46, 0.0), Vec3::new(0.04, -0.72, 0.0)], &[0.02, 0.0], 4, palette::SILVER);
     sculpted(vec![shade_arm(), faceted(blade)])
 }
 
-/// A knife: a short pale blade, an ash guard, a dark grip.
+/// A knife: a short bright blade (silver, or it vanishes against the wraps), an ash guard, a
+/// dark grip.
 pub(super) fn shade_knife() -> Mesh {
     let blade = faceted(tube(
         &[
-            Section::new(Vec3::Y * 0.1, Vec2::new(0.009, 0.032), palette::STEEL).squared(1.0).exact(),
-            Section::new(Vec3::Y * 0.3, Vec2::new(0.008, 0.024), palette::STEEL).squared(1.0).exact(),
-            Section::new(Vec3::new(0.015, 0.44, 0.0), Vec2::new(0.0, 0.0), palette::SILVER).exact(),
+            Section::new(Vec3::Y * 0.1, Vec2::new(0.011, 0.042), palette::SILVER).squared(1.0).exact(),
+            Section::new(Vec3::Y * 0.32, Vec2::new(0.01, 0.032), palette::SILVER).squared(1.0).exact(),
+            Section::new(Vec3::new(0.018, 0.48, 0.0), Vec2::new(0.0, 0.0), palette::SILVER).exact(),
         ],
         4,
         (true, true),
     ));
-    let guard = faceted(bevel_box(Vec3::new(0.035, 0.02, 0.11), 0.007, palette::ASH).translated_by(Vec3::Y * 0.085));
+    let guard = faceted(bevel_box(Vec3::new(0.035, 0.02, 0.12), 0.007, palette::ASH).translated_by(Vec3::Y * 0.085));
     let grip = band(-0.02, 0.08, 0.015, 8, palette::DARK_LEATHER);
     let pommel = tinted(ball(0.02).translated_by(Vec3::Y * -0.035), palette::IRON);
     sculpted(vec![blade, guard, grip, pommel])
@@ -299,24 +300,29 @@ pub(super) fn breaker_body() -> Mesh {
     sculpted(vec![torso, girdle, buckle, strap])
 }
 
-/// A flat-topped iron helm with short horns out the sides.
+/// A rounded iron helm with short horns swept up off its crown, and a dark eye slit.
 pub(super) fn breaker_helm() -> Mesh {
     let iron = palette::IRON;
     let dome = faceted(tube(
-        &[
-            ring(0.0, -0.02, (0.095, 0.095), iron).exact(),
-            ring(0.01, 0.08, (0.12, 0.12), iron).exact(),
-            ring(0.01, 0.22, (0.125, 0.125), iron).exact(),
-            ring(0.0, 0.3, (0.115, 0.115), iron).exact(),
-            ring(0.0, 0.32, (0.0, 0.0), iron).exact(),
-        ],
-        10,
+        &smoothed(
+            &[
+                ring(0.0, -0.02, (0.095, 0.095), iron),
+                ring(0.01, 0.08, (0.12, 0.12), iron),
+                ring(0.01, 0.2, (0.122, 0.122), iron),
+                ring(0.0, 0.3, (0.095, 0.095), iron),
+                ring(-0.01, 0.35, (0.045, 0.045), iron),
+                ring(-0.01, 0.37, (0.0, 0.0), iron),
+            ],
+            1,
+        ),
+        12,
         (true, true),
     ));
     let mut parts = vec![dome];
     for side in [1.0f32, -1.0] {
-        let out = Quat::from_rotation_x(-side * 1.35);
-        let horn = cone(0.038, 0.16, 6).rotated_by(out).translated_by(Vec3::new(0.0, 0.22, side * 0.13));
+        // Up and out off the crown, curving back: a bull's sweep, not bolts at the ears.
+        let out = Quat::from_rotation_x(-side * 0.8) * Quat::from_rotation_z(-0.25);
+        let horn = cone(0.034, 0.17, 6).rotated_by(out).translated_by(Vec3::new(-0.02, 0.3, side * 0.09));
         parts.push(tinted(faceted(horn), palette::ASH));
     }
     parts.push(tinted(ball(1.0).scaled_by(Vec3::new(0.026, 0.015, 0.08)).translated_by(Vec3::new(0.112, 0.14, 0.0)), palette::DARK_LEATHER));
