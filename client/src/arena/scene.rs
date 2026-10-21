@@ -222,7 +222,7 @@ fn build_arena(
     let extent = scene.extent.as_vec2() - Vec2::splat(4.0);
     let open = |p: Vec2| [Vec2::ZERO, Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y].iter().all(|d| scene.get(Map::tile_of(p + *d * 1.5)) == Tile::Forest);
     let density = match theme.wilds {
-        Wilds::Forest => 0.035,
+        Wilds::Forest => 0.055,
         Wilds::Fen => 0.04,
         Wilds::Highlands => 0.02,
     };
@@ -639,11 +639,36 @@ impl Props {
     fn tree(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
         self.add(Shape::Trunk, self.theme.bark, Transform::from_translation(to_world(p, ground + 0.6 * s)).with_scale(Vec3::splat(s)));
         let tiers = 2 + (rng.next() * 2.0) as usize;
+        // Each tree leans its own way between the two greens, so the stand isn't a print.
+        let lean = rng.next() * 0.2;
         for k in 0..tiers {
             let t = Transform::from_translation(to_world(p, ground + (1.5 + k as f32 * 0.85) * s))
                 .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
                 .with_scale(Vec3::splat(s));
-            self.add(Shape::Cone(k), if k % 2 == 0 { self.theme.fern } else { self.theme.pine }, t);
+            let leaf = if k % 2 == 0 { self.theme.fern } else { self.theme.pine };
+            self.add(Shape::Cone(k), leaf.mix(&self.theme.meadow, lean), t);
+        }
+    }
+
+    /// What grows at a forest tree's feet: a fern clump or two, and now and then a branch of
+    /// deadfall lying in the needles.
+    fn understory(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+        for _ in 0..1 + (rng.next() * 2.0) as usize {
+            let at = p + Vec2::new(rng.range(-1.0, 1.0), rng.range(-1.0, 1.0));
+            let s = rng.range(0.25, 0.5);
+            let t = Transform::from_translation(to_world(at, ground + s * 0.4))
+                .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
+                .with_scale(Vec3::new(s * 1.5, s, s * 1.5));
+            self.add(Shape::Ball, self.theme.fern.mix(&self.theme.grass, rng.next() * 0.4), t);
+        }
+        if rng.next() < 0.5 {
+            let at = p + Vec2::new(rng.range(-1.2, 1.2), rng.range(-1.2, 1.2));
+            let yaw = rng.range(0.0, std::f32::consts::TAU);
+            let long = rng.range(0.8, 1.6);
+            let t = Transform::from_translation(to_world(at, ground + 0.05))
+                .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2 + rng.range(-0.1, 0.1)))
+                .with_scale(Vec3::new(1.6, long, 1.6));
+            self.add(Shape::Stick, self.theme.bark.mix(&self.theme.slate, 0.3), t);
         }
     }
 
@@ -655,7 +680,12 @@ impl Props {
     /// A map's tree (a `Tile::Tree`), as its wilds grow them.
     fn map_tree(&mut self, rng: &mut Lcg, c: Vec2) {
         match self.theme.wilds {
-            Wilds::Forest => self.tree(rng, c, 0.0, 1.25),
+            Wilds::Forest => {
+                self.tree(rng, c, 0.0, 1.25);
+                if rng.next() < 0.5 {
+                    self.understory(rng, c, 0.0);
+                }
+            }
             Wilds::Fen => self.willow(rng, c, 0.0, 1.1),
             Wilds::Highlands => self.round_tree(rng, c, 0.0, 1.0),
         }
@@ -666,7 +696,12 @@ impl Props {
         let pick = rng.next();
         let s = rng.range(0.9, 1.8);
         match self.theme.wilds {
-            Wilds::Forest => self.tree(rng, p, ground, s),
+            Wilds::Forest => {
+                self.tree(rng, p, ground, s);
+                if rng.next() < 0.45 {
+                    self.understory(rng, p, ground);
+                }
+            }
             Wilds::Fen if pick < 0.1 => self.snag(rng, p, ground, s),
             Wilds::Fen if pick < 0.18 => self.willow(rng, p, ground, s * 0.8),
             Wilds::Fen => self.reed_bed(rng, p, ground),

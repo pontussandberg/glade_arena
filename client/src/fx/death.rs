@@ -24,6 +24,12 @@ const BOSS_SHAKE: f32 = 0.6;
 const SHAKE_REACH: f32 = 18.0;
 const BOSS_SHAKE_REACH: f32 = 60.0;
 
+/// A kill chain: kills this close together (seconds) sound a step higher each, up the scale to
+/// `CHAIN_TOP`, so a cleared swarm sings upward — and silence resets it.
+const CHAIN_SECONDS: f32 = 2.0;
+const CHAIN_STEP: f32 = 0.059;
+const CHAIN_TOP: u32 = 8;
+
 pub(super) fn burst_deaths(
     mut commands: Commands,
     time: Res<Time>,
@@ -33,6 +39,7 @@ pub(super) fn burst_deaths(
     me: Query<&Pos, With<Me>>,
     mut fighters: Query<(Entity, &ClassId, &Pos, &Health, Option<&mut SeenAlive>, Has<Elite>), Changed<Health>>,
     mut seed: Local<u32>,
+    mut chain: Local<(f32, u32)>,
 ) {
     let now = time.elapsed_secs();
     for (fighter, class, pos, health, seen, elite) in &mut fighters {
@@ -58,9 +65,13 @@ pub(super) fn burst_deaths(
         if let Ok(me) = me.single() {
             let away = pos.0.distance(me.0);
             shake.add(amount * (1.0 - away / reach).clamp(0.0, 1.0));
+            *chain = if now - chain.0 < CHAIN_SECONDS { (now, (chain.1 + 1).min(CHAIN_TOP)) } else { (now, 0) };
             match def.is_boss() {
                 true => sounds.push(Sfx::BossKill, 1.0),
-                false => sounds.push(Sfx::Kill, (0.3 + 0.7 * earshot(away, 22.0)) * if elite { 1.0 } else { 0.8 }),
+                false => {
+                    let gain = (0.3 + 0.7 * earshot(away, 22.0)) * if elite { 1.0 } else { 0.8 };
+                    sounds.push_pitched(Sfx::Kill, gain, 0.0, 1.0 + CHAIN_STEP * chain.1 as f32);
+                }
             }
             if bounty {
                 sounds.push_in(Sfx::Coin, 0.3 * earshot(away, 16.0), 0.1);

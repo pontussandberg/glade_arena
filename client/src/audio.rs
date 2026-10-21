@@ -64,6 +64,8 @@ struct Sound {
     kind: Sfx,
     gain: f32,
     delay: f32,
+    /// A pitch multiplier: a kill chain climbs, so a cleared swarm sings up a little scale.
+    pitch: f32,
 }
 
 /// What wants to sound this frame. Push with a gain of 0 to 1 — usually how close the cause is;
@@ -79,8 +81,12 @@ impl SoundQueue {
     }
 
     pub fn push_in(&mut self, kind: Sfx, gain: f32, delay: f32) {
+        self.push_pitched(kind, gain, delay, 1.0);
+    }
+
+    pub fn push_pitched(&mut self, kind: Sfx, gain: f32, delay: f32, pitch: f32) {
         if gain > 0.01 {
-            self.sounds.push(Sound { kind, gain: gain.min(1.0), delay });
+            self.sounds.push(Sound { kind, gain: gain.min(1.0), delay, pitch });
         }
     }
 }
@@ -158,7 +164,7 @@ mod web {
             }
             let crowd = sounds.iter().filter(|s| s.kind == sound.kind).count();
             let gain = sound.gain * (1.0 + (crowd.saturating_sub(VOICES) as f32) * 0.1).min(1.6);
-            out.play(sound.kind, gain.min(1.0), sound.delay as f64 + k as f64 * STAGGER);
+            out.play(sound.kind, gain.min(1.0), sound.delay as f64 + k as f64 * STAGGER, sound.pitch);
         }
     }
 
@@ -271,12 +277,12 @@ mod web {
             }
         }
 
-        fn play(&mut self, kind: Sfx, gain: f32, delay: f64) {
+        fn play(&mut self, kind: Sfx, gain: f32, delay: f64, pitch: f32) {
             use BiquadFilterType::{Bandpass, Highpass, Lowpass};
             use OscillatorType::{Sawtooth, Sine, Triangle};
             let now = self.ctx.current_time() + 0.01 + delay;
             let g = gain;
-            let p = self.vary(0.12);
+            let p = self.vary(0.12) * pitch;
             match kind {
                 Sfx::Swing => {
                     if let Some(e) = self.env(now, 0.05, 0.14 * g, 0.16) {
