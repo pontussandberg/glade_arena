@@ -208,6 +208,13 @@ fn show_banner(
                 if let Some(omen) = run.omen {
                     banner.spawn(ui_text(format!("OMEN: {}  -  {}", omen.label().to_uppercase(), omen.blurb()), 12.0, palette::BLOOD));
                 }
+                // A court of the bastion opened for this shop: its gate stands torn open.
+                if let Some(view) = &room.0
+                    && let Some(opened) = view.map.opened_blurb()
+                    && view.map != view.map.at_stage(run.wave.max(2) - 1)
+                {
+                    banner.spawn(ui_text(opened, 12.0, palette::SPIRIT));
+                }
                 let ready = run.ready.contains(&my_id);
                 let label = if ready { format!("READY  {}/{}", run.ready.len(), party) } else { "READY (F)".to_string() };
                 let fill = if ready { palette::ui::SELECTED } else { palette::ui::BACKDROP };

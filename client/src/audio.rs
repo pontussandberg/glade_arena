@@ -15,7 +15,7 @@ pub struct AudioPlugin;
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SoundQueue>();
-        app.add_systems(Update, (swing_sounds, heartbeat));
+        app.add_systems(Update, (swing_sounds, loose_sounds, heartbeat));
         #[cfg(target_family = "wasm")]
         {
             app.init_non_send::<web::AudioLazy>();
@@ -31,6 +31,8 @@ impl Plugin for AudioPlugin {
 pub enum Sfx {
     /// A blade (or claw) cutting the air: any melee swing nearby.
     Swing,
+    /// A shot loosed: a bolt, a javelin, a gout of fire leaving the hand.
+    Loose,
     /// A blow landing on someone else.
     Hit,
     /// A crit landing.
@@ -96,6 +98,18 @@ impl SoundQueue {
 /// How loud a sound `away` meters off is, out to `reach`: full up close, nothing past it.
 pub fn earshot(away: f32, reach: f32) -> f32 {
     (1.0 - away / reach).clamp(0.0, 1.0)
+}
+
+/// Every shot loosed nearby sounds as it leaves the hand: bolts, javelins, gouts of fire.
+fn loose_sounds(
+    me: Query<&arena_shared::protocol::Pos, With<crate::Me>>,
+    shots: Query<&arena_shared::protocol::Pos, Added<arena_shared::protocol::Projectile>>,
+    mut queue: ResMut<SoundQueue>,
+) {
+    let Ok(me) = me.single() else { return };
+    for pos in &shots {
+        queue.push(Sfx::Loose, 0.6 * earshot(pos.0.distance(me.0), 14.0));
+    }
 }
 
 /// Below a quarter of your health, your own heart thuds under the mix, quicker the lower you
@@ -311,6 +325,11 @@ mod web {
                 Sfx::Swing => {
                     if let Some(e) = self.env(now, 0.05, 0.14 * g, 0.16) {
                         self.noise(Bandpass, 500.0 * p, 1500.0 * p, 1.4, now, 0.16, &e);
+                    }
+                }
+                Sfx::Loose => {
+                    if let Some(e) = self.env(now, 0.008, 0.12 * g, 0.09) {
+                        self.noise(Highpass, 1100.0 * p, 1600.0 * p, 0.9, now, 0.09, &e);
                     }
                 }
                 Sfx::Hit => {

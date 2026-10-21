@@ -157,6 +157,16 @@ impl MapId {
         bastion::gate_opened(self)
     }
 
+    /// The court this staged bastion opened, said for the banner.
+    pub fn opened_blurb(self) -> Option<&'static str> {
+        match self {
+            MapId::Bastion2 => Some("THE CISTERN LIES OPEN"),
+            MapId::Bastion3 => Some("THE ARMORY LIES OPEN"),
+            MapId::Bastion4 => Some("THE SANCTUM LIES OPEN"),
+            _ => None,
+        }
+    }
+
     /// The one after it in `ALL`, round to the first.
     pub fn next(self) -> MapId {
         let at = MapId::ALL.iter().position(|m| *m == self.base()).expect("every map is in ALL");
