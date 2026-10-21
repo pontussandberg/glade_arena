@@ -76,6 +76,9 @@ const CRIT_BAR_POP: f32 = 0.15;
 const CRIT_BAR_POP_SECONDS: f32 = 0.15;
 /// How bright the flash is (emissive white on the fighter's own material).
 const FLASH_GLOW: f32 = 3.0;
+/// Damage under this doesn't flinch the body (`rig::HitSquash`) or spark: a damage-over-time
+/// pulse flashes and counts, but only a real blow rocks the figure.
+const SQUASH_DAMAGE: i32 = 4;
 
 /// Damage numbers: text size in pixels (a crit's, and how much bigger it pops in at, settling
 /// over the first `CRIT_POP_PART` of its life), how long one shows (fading out over the last
@@ -410,8 +413,11 @@ fn flash_on_hit(
         (Entity, &Health, &Pos, &MeshMaterial3d<StandardMaterial>, Option<&mut ShownHealth>, Option<&mut HitFlash>, Has<Me>),
         Or<(Changed<Health>, Added<MeshMaterial3d<StandardMaterial>>)>,
     >,
+    // When a Hit and a Hurt last sounded.
+    mut heard: Local<(f32, f32)>,
 ) {
-    let until = time.elapsed_secs() + FLASH_SECONDS;
+    let now = time.elapsed_secs();
+    let until = now + FLASH_SECONDS;
     for (player, health, pos, material, shown, flashing, is_me) in &mut players {
         let Some(mut shown) = shown else {
             commands.entity(player).insert(ShownHealth(health.0));
@@ -424,15 +430,25 @@ fn flash_on_hit(
             continue;
         }
         // A blow we take stirs the camera and thuds; one landing near us slaps, fainter with
-        // distance and lighter for chip damage.
+        // distance and lighter for chip damage. Rate-limited, or burning ground pulsing through
+        // a pack would be a wall of slaps.
         if is_me {
             shake.add((lost as f32 / 120.0).clamp(0.08, 0.3));
-            sounds.push(crate::audio::Sfx::Hurt, (0.5 + lost as f32 / 60.0).min(1.0));
-        } else if let Ok(me) = me.single() {
+            if now - heard.1 > 0.15 {
+                heard.1 = now;
+                sounds.push(crate::audio::Sfx::Hurt, (0.5 + lost as f32 / 60.0).min(1.0));
+            }
+        } else if now - heard.0 > 0.09
+            && let Ok(me) = me.single()
+        {
+            heard.0 = now;
             let heft = (0.4 + lost as f32 / 50.0).min(1.0);
             sounds.push(crate::audio::Sfx::Hit, crate::audio::earshot(pos.0.distance(me.0), 18.0) * heft);
         }
-        commands.entity(player).insert(crate::rig::HitSquash { at: time.elapsed_secs() });
+        // Chip damage (a burn's pulse) doesn't flinch the body or spark: a blow does.
+        if lost >= SQUASH_DAMAGE {
+            commands.entity(player).insert(crate::rig::HitSquash { at: now });
+        }
         match flashing {
             Some(mut flash) => flash.until = until,
             None => {
@@ -479,11 +495,12 @@ fn spawn_damage_numbers(
     time: Res<Time>,
     world_ui: Single<Entity, With<WorldUi>>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
-    mut players: Query<(Entity, &RecentHits, Option<&mut ShownHits>, Has<Me>), Changed<RecentHits>>,
+    me: Query<&Pos, (With<Me>, With<PlayerId>)>,
+    mut players: Query<(Entity, &RecentHits, &Pos, Option<&mut ShownHits>, Has<Me>), Changed<RecentHits>>,
     mut numbers: Query<(&mut DamageNumber, &mut Text)>,
 ) {
     let now = time.elapsed_secs();
-    for (player, recent, shown, is_me) in &mut players {
+    for (player, recent, pos, shown, is_me) in &mut players {
         let Some(mut shown) = shown else {
             commands.entity(player).insert(ShownHits(recent.seq()));
             continue;
@@ -513,7 +530,8 @@ fn spawn_damage_numbers(
             let crit = hit.kind == HitKind::Crit;
             if crit {
                 commands.entity(player).insert(CritAt(time.elapsed_secs()));
-                sounds.push(crate::audio::Sfx::Crit, 0.8);
+                let near = me.single().map_or(1.0, |me| crate::audio::earshot(pos.0.distance(me.0), 24.0));
+                sounds.push(crate::audio::Sfx::Crit, 0.4 + 0.5 * near);
             }
             if hit.kind == HitKind::Heal && is_me {
                 sounds.push(crate::audio::Sfx::Heal, 0.8);
