@@ -454,6 +454,11 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, now: 
             info!(room = key.0, wave, pay, "wave cleared");
             lobby.give_gold(key, pay);
             lobby.note_best(key, wave);
+            // The bastion's next court may open with the coming wave: thunder tears its gate
+            // open while everyone shops.
+            if let Some(gate) = crate::rooms::stage_map(lobby, commands, key, wave + 1) {
+                spawn_fx(commands, room, Fx::at(FxKind::Blast(FxColor::Storm), gate, 3.5, now, 24));
+            }
             bring_back(party, room, now);
             for (_, r, _, mut health, max, dead) in party.iter_mut() {
                 if *r == room && dead.is_none() {

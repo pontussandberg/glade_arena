@@ -66,14 +66,15 @@ impl Mode {
     /// The maps it may be played on: the waves have theirs.
     pub fn maps(self) -> &'static [MapId] {
         match self {
-            Mode::Waves => &[MapId::Wilds],
+            Mode::Waves => &[MapId::Wilds, MapId::Bastion],
             _ => &MapId::PVP,
         }
     }
 
-    /// `map` if it may be played on, else the first that may.
+    /// `map` if it may be played on, else the first that may. A staged map counts as its base:
+    /// fitting never turns a mid-run bastion into another map.
     pub fn fit_map(self, map: MapId) -> MapId {
-        if self.maps().contains(&map) { map } else { self.maps()[0] }
+        if self.maps().contains(&map.base()) { map } else { self.maps()[0] }
     }
 }
 

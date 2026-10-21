@@ -49,11 +49,12 @@ pub enum Wilds {
 
 impl Theme {
     pub fn of(map: MapId) -> &'static Theme {
-        match map {
+        match map.base() {
             MapId::Crossing => &GLADE,
             MapId::Keep => &FEN,
             MapId::Gorge => &HIGHLANDS,
             MapId::Wilds => &HOLLOW,
+            _ => &BASTION,
         }
     }
 }
@@ -109,6 +110,33 @@ const FEN: Theme = Theme {
     sky_brightness: 210.0,
     sun: Color::srgb_u8(0xC4, 0xD4, 0xFF),
     sun_illuminance: 2_600.0,
+    wilds: Wilds::Fen,
+};
+
+/// Sunken Bastion: a drowned fortress under a cold moon. Grey-green turf between pale stone,
+/// black water in the cistern, a thin blue mist; the torches at the gates carry the color.
+const BASTION: Theme = Theme {
+    grass: Color::srgb_u8(0x5E, 0x6E, 0x58),
+    meadow: Color::srgb_u8(0x6E, 0x7C, 0x62),
+    fern: Color::srgb_u8(0x42, 0x58, 0x4C),
+    pine: Color::srgb_u8(0x26, 0x38, 0x36),
+    slate: Color::srgb_u8(0x66, 0x6E, 0x7E),
+    stone: Color::srgb_u8(0x88, 0x8E, 0x9A),
+    wall: Color::srgb_u8(0x62, 0x6A, 0x78),
+    bark: Color::srgb_u8(0x46, 0x3E, 0x38),
+    path: Color::srgb_u8(0x7E, 0x7C, 0x70),
+    bank: Color::srgb_u8(0x4A, 0x48, 0x42),
+    riverbed: Color::srgb_u8(0x28, 0x32, 0x38),
+    pond: Color::srgb_u8(0x38, 0x56, 0x66),
+    bloom: Color::srgb_u8(0xB0, 0xBC, 0xC8),
+    marsh: Color::srgb_u8(0x4E, 0x58, 0x4C),
+    abyss: Color::srgb_u8(0x26, 0x2C, 0x3A),
+    rope: Color::srgb_u8(0x64, 0x5C, 0x4E),
+    haze: Color::srgb_u8(0x62, 0x72, 0x84),
+    sky: Color::srgb_u8(0x74, 0x8C, 0xB8),
+    sky_brightness: 200.0,
+    sun: Color::srgb_u8(0xC8, 0xD8, 0xFF),
+    sun_illuminance: 2_400.0,
     wilds: Wilds::Fen,
 };
 

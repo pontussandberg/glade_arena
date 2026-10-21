@@ -201,7 +201,8 @@ impl Room {
         // Shopping for the next: the last one fought is as far as it got.
         let wave = if matches!(run.phase, RunPhase::Shop { .. }) { run.wave - 1 } else { run.wave };
         let party = run.party.iter().map(|(_, name, class)| (name.clone(), *class)).collect();
-        let score = HighScore { wave, map: self.map, party, date: crate::highscores::today(), version: arena_shared::config::GAME_VERSION.to_string() };
+        // Under the map's base: a run that opened the bastion's courts is still the bastion's.
+        let score = HighScore { wave, map: self.map.base(), party, date: crate::highscores::today(), version: arena_shared::config::GAME_VERSION.to_string() };
         Some((scores.record(score), run.party.iter().map(|(id, ..)| *id).collect()))
     }
 }
@@ -671,6 +672,10 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                     key
                 }
             };
+            // One started mid-list ("Waves 10") begins on that wave's stage of its map.
+            if let Some(wave) = lobby.rooms.get(&key).and_then(|room| room.run.as_ref()).map(|run| run.wave) {
+                stage_map(lobby, &mut ctx.commands, key, wave);
+            }
             lobby.guests.get_mut(&link).expect("a guest").playing = true;
             join(lobby, ctx, link, key)?;
         }
@@ -926,6 +931,8 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                     guest.satchel = Satchel { gold, ..default() };
                 }
             }
+            // A fresh run starts on the map's base stage (the last run may have opened it up).
+            stage_map(lobby, &mut ctx.commands, key, 1);
             lobby.clear_score(key);
             for member in members {
                 if let Some(guest) = lobby.guests.get_mut(&member) {
@@ -984,6 +991,28 @@ fn spawn_room_things(commands: &mut Commands, room: InRoom, map: MapId) -> Vec<E
         things.push(spawn_shopkeeper(commands, room, at));
     }
     things
+}
+
+/// Room `key`'s map onto the stage `wave` has reached (`MapId::at_stage`): on the bastion, a
+/// sealed court's gate opens between waves, and what lies in it (pickups, the court's lairs and
+/// chest spots through the map itself) comes with it. Unlike `switch_map`, fighters stay exactly
+/// where they stand: a stage only ever opens ground. Returns the gate just opened (none going
+/// back to the base for a fresh run), for the thunder at it.
+pub(super) fn stage_map(lobby: &mut Lobby, commands: &mut Commands, key: RoomKey, wave: u32) -> Option<Vec2> {
+    let room = lobby.rooms.get_mut(&key)?;
+    let staged = room.map.at_stage(wave);
+    if staged == room.map {
+        return None;
+    }
+    info!(room = key.0, from = ?room.map, to = ?staged, wave, "the bastion's gate opens");
+    room.map = staged;
+    room.changed = true;
+    lobby.list_changed = true;
+    let room = lobby.rooms.get_mut(&key).expect("still here");
+    room.clear_things(commands);
+    let in_room = room.in_room(key);
+    room.things = spawn_room_things(commands, in_room, staged);
+    staged.gate_opened()
 }
 
 /// Room `key` onto `map`: what lay on the old map goes, and the new one's comes. Practice may

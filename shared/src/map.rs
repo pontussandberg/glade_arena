@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::protocol::PickupKind;
 
+mod bastion;
 mod crossing;
 mod gorge;
 mod keep;
@@ -90,10 +91,19 @@ pub enum MapId {
     Gorge,
     /// The waves mode's.
     Wilds,
+    /// The waves mode's second map: a drowned fortress whose courts unlock as the run deepens.
+    /// The staged variants are the same bastion with more of it open (`at_stage`); only the base
+    /// is ever picked, the server advances the stage between waves.
+    Bastion,
+    Bastion2,
+    Bastion3,
+    Bastion4,
 }
 
 impl MapId {
-    pub const ALL: [MapId; 4] = [MapId::Crossing, MapId::Keep, MapId::Gorge, MapId::Wilds];
+    /// Every pickable map (the bastion's staged variants aren't: they're reached through
+    /// `at_stage` alone).
+    pub const ALL: [MapId; 5] = [MapId::Crossing, MapId::Keep, MapId::Gorge, MapId::Wilds, MapId::Bastion];
     /// The maps for fighting each other: mirrored, of a size for it.
     pub const PVP: [MapId; 3] = [MapId::Crossing, MapId::Keep, MapId::Gorge];
 
@@ -102,36 +112,75 @@ impl MapId {
         static KEEP: LazyLock<Map> = LazyLock::new(keep::build);
         static GORGE: LazyLock<Map> = LazyLock::new(gorge::build);
         static WILDS: LazyLock<Map> = LazyLock::new(wilds::build);
+        static BASTION: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion, 0));
+        static BASTION2: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion2, 1));
+        static BASTION3: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion3, 2));
+        static BASTION4: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion4, 3));
         match self {
             MapId::Crossing => &CROSSING,
             MapId::Keep => &KEEP,
             MapId::Gorge => &GORGE,
             MapId::Wilds => &WILDS,
+            MapId::Bastion => &BASTION,
+            MapId::Bastion2 => &BASTION2,
+            MapId::Bastion3 => &BASTION3,
+            MapId::Bastion4 => &BASTION4,
         }
+    }
+
+    /// The map without its stage: what pickers offer, and what records are kept under.
+    pub fn base(self) -> MapId {
+        match self {
+            MapId::Bastion2 | MapId::Bastion3 | MapId::Bastion4 => MapId::Bastion,
+            id => id,
+        }
+    }
+
+    /// This map at the stage `wave` has reached: on the bastion, a court unlocks with waves 5, 9
+    /// and 13; every other map is all there from the start. A stage only ever opens ground, so
+    /// advancing never shuts anyone in.
+    pub fn at_stage(self, wave: u32) -> MapId {
+        if self.base() != MapId::Bastion {
+            return self;
+        }
+        match (wave.max(1) - 1) / 4 {
+            0 => MapId::Bastion,
+            1 => MapId::Bastion2,
+            2 => MapId::Bastion3,
+            _ => MapId::Bastion4,
+        }
+    }
+
+    /// The middle of the gate this staged bastion just opened (none for any base map): where
+    /// the opening's thunder lands.
+    pub fn gate_opened(self) -> Option<Vec2> {
+        bastion::gate_opened(self)
     }
 
     /// The one after it in `ALL`, round to the first.
     pub fn next(self) -> MapId {
-        let at = MapId::ALL.iter().position(|m| *m == self).expect("every map is in ALL");
+        let at = MapId::ALL.iter().position(|m| *m == self.base()).expect("every map is in ALL");
         MapId::ALL[(at + 1) % MapId::ALL.len()]
     }
 
     pub fn label(self) -> &'static str {
-        match self {
+        match self.base() {
             MapId::Crossing => "River Crossing",
             MapId::Keep => "Sunken Keep",
             MapId::Gorge => "Riven Gorge",
             MapId::Wilds => "Hollow Wilds",
+            _ => "Sunken Bastion",
         }
     }
 
     /// One line on what's special about it.
     pub fn blurb(self) -> &'static str {
-        match self {
+        match self.base() {
             MapId::Crossing => "A river, a bridge and two fords",
             MapId::Keep => "A moated keep; marshes slow you",
             MapId::Gorge => "A chasm to shoot across; waygates",
             MapId::Wilds => "A camp in the wilds; monsters all round",
+            _ => "A drowned fortress; its courts unlock as you survive",
         }
     }
 }
@@ -941,6 +990,36 @@ mod tests {
         }
         let count = |tile: Tile| m.tiles().filter(|(_, t)| *t == tile).count();
         assert!(count(Tile::Water) > 100 && count(Tile::Chasm) > 50 && count(Tile::Marsh) > 100 && count(Tile::Planks) > 0);
+    }
+
+    #[test]
+    fn the_bastion_opens_court_by_court() {
+        let stages = [MapId::Bastion, MapId::Bastion2, MapId::Bastion3, MapId::Bastion4];
+        // A spot well inside each court, in the order the gates open: east, west, north.
+        let courts = [Vec2::new(26.5, -24.5), Vec2::new(-26.5, 24.5), Vec2::new(9.5, 26.5)];
+        for (stage, id) in stages.into_iter().enumerate() {
+            let m = id.map();
+            let camp = m.spawn_points[0];
+            assert!(m.shop.is_some_and(|shop| m.walkable_at(shop)), "{id:?}");
+            assert!(!m.lairs.is_empty() && !m.chests.is_empty(), "{id:?}");
+            for &p in m.lairs.iter().chain(&m.chests).chain(m.pickups.iter().map(|(p, _)| p)) {
+                assert!(m.walkable_at(p), "{id:?}: {p} isn't on open ground");
+                assert!(m.find_path(Map::tile_of(camp), Map::tile_of(p)).is_some(), "{id:?}: {p} is cut off");
+            }
+            // The sealed courts really are sealed, and every opened one can be walked into.
+            for (k, &court) in courts.iter().enumerate() {
+                let open = k < stage;
+                let path = m.find_path(Map::tile_of(camp), Map::tile_of(court));
+                assert_eq!(path.is_some(), open, "{id:?}: the court at {court}");
+            }
+        }
+        assert_eq!(MapId::Bastion.at_stage(1), MapId::Bastion);
+        assert_eq!(MapId::Bastion.at_stage(4), MapId::Bastion);
+        assert_eq!(MapId::Bastion.at_stage(5), MapId::Bastion2);
+        assert_eq!(MapId::Bastion4.at_stage(2), MapId::Bastion);
+        assert_eq!(MapId::Bastion.at_stage(13), MapId::Bastion4);
+        assert_eq!(MapId::Wilds.at_stage(13), MapId::Wilds);
+        assert_eq!(MapId::Bastion2.gate_opened(), Some(Vec2::new(11.5, -0.5)));
     }
 
     #[test]
