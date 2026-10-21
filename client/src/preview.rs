@@ -511,3 +511,51 @@ fn preview_attacks() {
         }
     }
 }
+
+/// Every map from above, one pixel image per map (`map-<id>.png`): tiles in the theme's colors,
+/// lairs red, chests gold, pickups green, spawns blue, the shop white. The bastion's staged
+/// variants too: the layout and its unlocks, seen without running the game.
+#[test]
+#[ignore = "writes images; run by hand when working on maps"]
+fn preview_maps() {
+    use arena_shared::map::{Map, MapId};
+
+    let dir = std::env::var("PREVIEW_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    for id in [MapId::Crossing, MapId::Keep, MapId::Gorge, MapId::Wilds, MapId::Bastion, MapId::Bastion2, MapId::Bastion3, MapId::Bastion4] {
+        let m = id.map();
+        let theme = crate::arena::Theme::of(id);
+        const S: usize = 4;
+        let (w, h) = (m.size.x as usize * S, m.size.y as usize * S);
+        let mut image = vec![[0u8; 3]; w * h];
+        let spot = |t: bevy::math::IVec2| (((t.x + m.size.x / 2) as usize) * S, ((m.size.y / 2 - 1 - t.y) as usize) * S);
+        let paint = |image: &mut Vec<[u8; 3]>, t: bevy::math::IVec2, rgb: [u8; 3]| {
+            let (x0, y0) = spot(t);
+            for dy in 0..S {
+                for dx in 0..S {
+                    image[(y0 + dy) * w + x0 + dx] = rgb;
+                }
+            }
+        };
+        for (t, tile) in m.tiles() {
+            let c = crate::arena::tile_color(theme, tile).to_srgba();
+            paint(&mut image, t, [(c.red * 255.0) as u8, (c.green * 255.0) as u8, (c.blue * 255.0) as u8]);
+        }
+        let mut dot = |image: &mut Vec<[u8; 3]>, p: bevy::math::Vec2, rgb: [u8; 3]| paint(image, Map::tile_of(p), rgb);
+        for &p in &m.lairs {
+            dot(&mut image, p, [220, 40, 40]);
+        }
+        for &p in &m.chests {
+            dot(&mut image, p, [240, 200, 60]);
+        }
+        for &(p, _) in &m.pickups {
+            dot(&mut image, p, [80, 230, 120]);
+        }
+        for &p in &m.spawn_points {
+            dot(&mut image, p, [80, 160, 255]);
+        }
+        if let Some(shop) = m.shop {
+            dot(&mut image, shop, [255, 255, 255]);
+        }
+        std::fs::write(dir.join(format!("map-{id:?}.png")), png(w, h, &image)).unwrap();
+    }
+}
