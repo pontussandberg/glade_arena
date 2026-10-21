@@ -657,11 +657,18 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                 Some(key) => key,
                 None => {
                     // One called "Waves..." is a run against the waves, on from the off; "Waves 10"
-                    // starts at wave 10 (for trying later waves out).
-                    let mode = if name.to_lowercase().starts_with("waves") { Mode::Waves } else { Mode::Ffa };
+                    // starts at wave 10 (for trying later waves out). "Bastion..." likewise, on
+                    // the bastion ("Bastion 9" starts at wave 9, its armory already open).
+                    let lower = name.to_lowercase();
+                    let bastion = lower.starts_with("bastion");
+                    let mode = if lower.starts_with("waves") || bastion { Mode::Waves } else { Mode::Ffa };
                     let from_wave = name.split_whitespace().nth(1).and_then(|n| n.parse::<u32>().ok()).filter(|n| (1..=200).contains(n));
                     // The default map, if it's one of the mode's; else the mode's own (the wilds).
-                    let map = mode.maps().iter().copied().find(|&map| map == MapId::default()).unwrap_or(mode.maps()[0]);
+                    let map = if bastion {
+                        MapId::Bastion
+                    } else {
+                        mode.maps().iter().copied().find(|&map| map == MapId::default()).unwrap_or(mode.maps()[0])
+                    };
                     let key = create(lobby, allocator, ctx, link, name, mode, map);
                     let now = ctx.now();
                     let room = lobby.rooms.get_mut(&key).expect("just made");

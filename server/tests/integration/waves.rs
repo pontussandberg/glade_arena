@@ -801,3 +801,13 @@ fn a_run_left_under_way_makes_the_leaderboards() {
     }
     assert_eq!(boards(&p)[0].party[0].0, "Tester");
 }
+
+/// Quick-joining "Bastion 5" opens a run on the bastion already at its second stage: the east
+/// gate torn open, the room's map (and so every guest's) the staged variant — and a new class
+/// (the warden) spawns into it like any other.
+#[test]
+fn the_bastion_stages_with_the_run() {
+    let mut p = Party::new(5905, "warden", false);
+    p.ask(RoomRequest::QuickJoin("Bastion 5".into()));
+    p.until(Duration::from_secs(15), "on the staged bastion", |p| p.room().is_some_and(|r| r.map == MapId::Bastion2));
+}
