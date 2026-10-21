@@ -140,8 +140,8 @@ impl Shake {
 
 /// Trauma lost per second, and how far the camera tips at full trauma (radians).
 const SHAKE_DECAY: f32 = 2.2;
-const SHAKE_TILT: f32 = 0.014;
-const SHAKE_ROLL: f32 = 0.010;
+const SHAKE_TILT: f32 = 0.03;
+const SHAKE_ROLL: f32 = 0.022;
 
 /// Tips the camera off what the controls set this frame, between them and `place_camera` (the
 /// controls write the whole transform each frame, so nothing accumulates). Only the MOBA
@@ -154,7 +154,8 @@ fn shake_camera(time: Res<Time>, mode: Res<CameraMode>, mut shake: ResMut<Shake>
     if mode.free {
         return;
     }
-    let s = shake.trauma * shake.trauma;
+    // Eased, not squared: a lone kill barely stirs it, a chain or a heavy blow clearly kicks.
+    let s = shake.trauma.powf(1.5);
     let t = time.elapsed_secs();
     // Two incommensurate sines per axis: smooth, never repeating, no RNG flicker.
     let wob = |f: f32, p: f32| (t * f + p).sin() * 0.62 + (t * f * 1.83 + p * 2.0).sin() * 0.38;

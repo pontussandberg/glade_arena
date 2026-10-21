@@ -48,7 +48,8 @@ pub(super) fn burst_deaths(
         *seed = seed.wrapping_add(1);
         let def = class.def();
         let size = crate::rig::drawn_size(*class, elite);
-        burst(&mut commands, &art, now, to_world(pos.0, 0.0), size, def.is_boss(), *seed);
+        let bounty = def.mob.as_ref().is_some_and(|mob| mob.bounty > 0);
+        burst(&mut commands, &art, now, to_world(pos.0, 0.0), size, def.is_boss(), bounty, *seed);
         let (amount, reach) = match () {
             _ if def.is_boss() => (BOSS_SHAKE, BOSS_SHAKE_REACH),
             _ if elite => (ELITE_SHAKE, SHAKE_REACH),
@@ -61,12 +62,45 @@ pub(super) fn burst_deaths(
                 true => sounds.push(Sfx::BossKill, 1.0),
                 false => sounds.push(Sfx::Kill, (0.3 + 0.7 * earshot(away, 22.0)) * if elite { 1.0 } else { 0.8 }),
             }
+            if bounty {
+                sounds.push_in(Sfx::Coin, 0.3 * earshot(away, 16.0), 0.1);
+            }
         }
     }
 }
 
-/// The burst itself, `size` the monster's drawn size, bigger and longer for a boss.
-fn burst(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3, size: f32, boss: bool, seed: u32) {
+/// A blow striking home: a short-lived glint or two at the victim's body, so the impact has a
+/// place, not just a number. Rides on `HitSquash`, which `feedback` refreshes per confirmed hit.
+pub(super) fn spark_hits(
+    mut commands: Commands,
+    time: Res<Time>,
+    art: Res<FxArt>,
+    hit: Query<(&Pos, &ClassId, Has<Elite>), Changed<crate::rig::HitSquash>>,
+    mut seed: Local<u32>,
+) {
+    let now = time.elapsed_secs();
+    for (pos, class, elite) in &hit {
+        *seed = seed.wrapping_add(1);
+        let r = |k: u32| noise(*seed, k);
+        let s = crate::rig::drawn_size(*class, elite);
+        let at = to_world(pos.0, 0.0) + Vec3::Y * 0.9 * s;
+        for k in 0..2 {
+            let n = |i: u32| r(k * 7 + i);
+            let off = Vec3::new(n(0) - 0.5, n(1) - 0.5, n(2) - 0.5) * 0.5 * s;
+            let part = Part::new(now, [0.015, 0.03, 0.12], Ink::Spark, at + off)
+                .size(0.2 + 0.15 * n(3))
+                .facing(n(4) * std::f32::consts::TAU)
+                .grow(0.3)
+                .shrink(0.2)
+                .spin(8.0);
+            put(&mut commands, &art, &art.glint, part);
+        }
+    }
+}
+
+/// The burst itself, `size` the monster's drawn size, bigger and longer for a boss. A kill that
+/// pays (`bounty`) also tosses up a coin or two, so every kill visibly pays.
+fn burst(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3, size: f32, boss: bool, bounty: bool, seed: u32) {
     let r = |k: u32| noise(seed, k);
     let s = size * if boss { 1.4 } else { 1.0 };
     // A puff of dust where it fell.
@@ -91,6 +125,20 @@ fn burst(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3, size: f32, bo
             .motion(Motion::Thrown { velocity, gravity: 9.0, tumble })
             .shrink(0.5);
         put(commands, art, &art.chunk, part);
+    }
+    // The kill pays: a coin or two tossed up, spinning, catching the light.
+    if bounty {
+        for k in 0..2 + boss as u32 * 4 {
+            let n = |i: u32| r(400 + k * 5 + i);
+            let angle = n(0) * TAU;
+            let velocity = Vec3::new(angle.cos() * 0.7 * n(1), 2.6 + 1.2 * n(2), -angle.sin() * 0.7 * n(1));
+            let toss = Motion::Thrown { velocity, gravity: 7.0, tumble: Vec3::new(6.0, 2.0, 6.0) };
+            let part = Part::new(now + 0.05, [0.03, 0.55, 0.75], Ink::Gold, at + Vec3::Y * 0.6 * s)
+                .size(0.14)
+                .motion(toss)
+                .shrink(0.4);
+            put(commands, art, &art.coin, part);
+        }
     }
     // Its soul slips away: a pale wisp (or a few, off a boss) drifting up, guttering out.
     let souls = if boss { 3 } else { 1 };

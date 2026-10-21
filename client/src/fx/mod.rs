@@ -24,7 +24,7 @@ pub struct FxPlugin;
 impl Plugin for FxPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_art);
-        app.add_systems(Update, ((recipes::play_new, downed::mark_downed, death::burst_deaths), drive_parts).chain());
+        app.add_systems(Update, ((recipes::play_new, downed::mark_downed, death::burst_deaths, death::spark_hits), drive_parts).chain());
     }
 }
 

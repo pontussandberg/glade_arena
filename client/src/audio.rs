@@ -112,10 +112,12 @@ mod web {
     /// kills squeezes instead of clipping), then the master gain, then out.
     pub(super) struct AudioOut {
         ctx: AudioContext,
-        _master: GainNode,
+        master: GainNode,
         squeeze: DynamicsCompressorNode,
         noise: AudioBuffer,
         seed: u32,
+        /// The wind is started once, the first time sound gets through.
+        ambience_on: bool,
     }
 
     /// Built the first time a sound is asked for.
@@ -143,6 +145,7 @@ mod web {
             let _ = out.ctx.resume();
             return;
         }
+        out.ambience();
         // The loudest few of each kind sound, briefly staggered; the rest only thicken them.
         sounds.sort_by(|a, b| a.kind.cmp(&b.kind).then(b.gain.total_cmp(&a.gain)));
         let mut k = 0;
@@ -177,7 +180,7 @@ mod web {
                 samples.push((seed >> 8) as f32 / (1u32 << 23) as f32 - 1.0);
             }
             noise.copy_to_channel(&samples, 0).ok()?;
-            Some(AudioOut { ctx, _master: master, squeeze, noise, seed: 1 })
+            Some(AudioOut { ctx, master, squeeze, noise, seed: 1, ambience_on: false })
         }
 
         /// A number in 0..1, never the same twice.
@@ -234,6 +237,37 @@ mod web {
                 // web-sys deprecated this spelling, but it's the one way to schedule the stop.
                 #[allow(deprecated)]
                 let _ = source.stop_with_when(when + dur + 0.05);
+            }
+        }
+
+        /// A quiet bed of wind under everything: looped noise through a low filter, swelling and
+        /// dying on a slow breath, so the world is never dead silent. Skips the compressor: the
+        /// fights shouldn't pump the wind.
+        fn ambience(&mut self) {
+            if std::mem::replace(&mut self.ambience_on, true) {
+                return;
+            }
+            let now = self.ctx.current_time();
+            let (Ok(source), Ok(filter), Ok(gain), Ok(lfo), Ok(depth)) =
+                (self.ctx.create_buffer_source(), self.ctx.create_biquad_filter(), self.ctx.create_gain(), self.ctx.create_oscillator(), self.ctx.create_gain())
+            else {
+                return;
+            };
+            source.set_buffer(Some(&self.noise));
+            source.set_loop(true);
+            filter.set_type(BiquadFilterType::Lowpass);
+            filter.frequency().set_value(240.0);
+            gain.gain().set_value(0.022);
+            lfo.frequency().set_value(0.08);
+            depth.gain().set_value(0.013);
+            let connected = source.connect_with_audio_node(&filter).is_ok()
+                && filter.connect_with_audio_node(&gain).is_ok()
+                && gain.connect_with_audio_node(&self.master).is_ok()
+                && lfo.connect_with_audio_node(&depth).is_ok()
+                && depth.connect_with_audio_param(&gain.gain()).is_ok();
+            if connected {
+                let _ = source.start_with_when(now);
+                let _ = lfo.start_with_when(now);
             }
         }
 
