@@ -306,6 +306,22 @@ impl Chilled {
     }
 }
 
+/// Ablaze (`BurnDef`): how many stacks of fire are on a fighter, and until when (a tick; none
+/// once it's past). Server-authoritative like `Chilled`, and in ticks for the same reason;
+/// clients draw the flames.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
+pub struct Burning {
+    pub stacks: u32,
+    pub until: u32,
+}
+
+impl Burning {
+    /// How many stacks burn at `tick` (a fractional one for drawing in between).
+    pub fn at(&self, tick: f32) -> u32 {
+        if tick < self.until as f32 { self.stacks } else { 0 }
+    }
+}
+
 /// Walking faster: `HASTE_FACTOR` times as fast during the span. From a haste pickup.
 /// Server-authoritative like `Chilled` (in ticks for the same reason).
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
@@ -477,6 +493,8 @@ pub enum FxKind {
     Doom,
     /// Someone shoved into a wall at `at` (`ShoveDef`): the slam, dust and grit off it.
     Wallop,
+    /// A burning fighter at `at` igniting (`BurnDef`): fire bursting out to `radius`.
+    Ignite,
 }
 
 /// A passing effect of an item or a monster, for the client to draw: what, where, and from when
@@ -772,6 +790,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<Team>().replicate();
         app.component::<Health>().replicate();
         app.component::<Chilled>().replicate();
+        app.component::<Burning>().replicate();
         app.component::<RecentHits>().replicate();
         app.component::<Hasted>().replicate();
         app.component::<Frenzy>().replicate();

@@ -4,7 +4,7 @@
     id: "pyre_witch",
     name: "Pyre Witch",
     role: "Scourge",
-    blurb: "Feeds the fire. Every bolt bursts into cinders, and her ring burns whole packs at once.",
+    blurb: "Feeds the fire. Every bolt sets its mark alight, and a mark fed enough goes up in a burst that lights the rest.",
     max_hp: 95,
     move_speed: 3.6,
     attack: (
@@ -12,8 +12,9 @@
         attack_ticks: 34,
         windup: 0.38,
         kind: Projectile(speed: 13.0, radius: 0.3, range: 9.5),
-        // Every bolt splashes a share of its fire over those around the one struck.
-        burst: Some(radius: 1.6, share: 0.5),
+        // Every bolt sets its mark ablaze, a stack more each time; at full stacks it ignites,
+        // bursting fire over everyone round it, and starts over.
+        burn: Some(damage: 3, ticks: 128, stacks: 3, ignite_radius: 1.8, ignite_share: 1.0),
     ),
     abilities: [
         (
@@ -30,8 +31,8 @@
         ),
     ],
     passive: Some(
-        name: "Cinders",
-        description: "Bolts burst where they hit: enemies within {burst_radius} of the one struck take {burst_share} of the damage.",
+        name: "Kindling",
+        description: "Bolts set their target ablaze for {burn_time}: {burn_damage} damage every 0.5s per stack, a stack more per bolt. At {burn_stacks} stacks it ignites: enemies within {ignite_radius} of it take {ignite_share} of a bolt's damage, and the fire goes out.",
     ),
     // Her own figure; only the bolts borrow a look (fire).
     look: Some(figure: "pyre_witch", size: 1.0, tint: (1.0, 1.0, 1.0), bolts: Some(Fire)),

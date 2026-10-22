@@ -5,7 +5,7 @@
     id: "stormweaver",
     name: "Stormweaver",
     role: "Tempest",
-    blurb: "Keeps the sky in hand. Quick bolts, a heavier one for whoever stands out, and a step of wind to be gone.",
+    blurb: "Keeps the sky in hand. Every bolt leaps on from the one it strikes to the next, a heavier one comes down on whoever stands out, and a step of wind takes her out of reach.",
     max_hp: 90,
     move_speed: 3.7,
     attack: (
@@ -13,6 +13,9 @@
         attack_ticks: 28,
         windup: 0.32,
         kind: Projectile(speed: 16.0, radius: 0.26, range: 10.5),
+        // A bolt that lands arcs on to the nearest enemy, and on again: one shot, three struck,
+        // if they stand close enough.
+        chain: Some(hops: 2, reach: 4.0, share: 0.6),
     ),
     abilities: [
         (
@@ -28,6 +31,10 @@
             kind: Dash(distance: 7.0, min_distance: Some(1.0), ticks: 5, damage: 0),
         ),
     ],
+    passive: Some(
+        name: "Chain Lightning",
+        description: "Bolts arc from the enemy struck to the nearest other within {chain_reach}, and on again, up to {chain_hops} times; each arc deals {chain_share} of the bolt's damage.",
+    ),
     // Her own figure; only the bolts borrow a look (the storm's).
     look: Some(figure: "stormweaver", size: 1.0, tint: (1.0, 1.0, 1.0), bolts: Some(Storm)),
     crit: (chance: 0.1),

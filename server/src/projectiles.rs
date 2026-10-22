@@ -52,8 +52,10 @@ pub(super) fn resolve_projectile_hits(
 ) {
     let now = timeline.tick();
     // Frostbolts' bursts (`AttackDef::burst`), dealt once every shot's hit is: where, by whom,
-    // how hard, and whom they spare (the one struck).
+    // how hard, and whom they spare (the one struck). And storm bolts' chains (`AttackDef::chain`)
+    // likewise: from the one struck, on to the nearest.
     let mut bursts = Vec::new();
+    let mut chains = Vec::new();
     for (projectile_entity, projectile_pos, projectile, room, team, might, spares, (bounces, mut pierced)) in &mut projectiles {
         let pierces = projectile.ability.is_none() && projectile.class.def().attack.pierces;
         let mut through: Vec<PeerId> = pierced.as_ref().map_or_else(Vec::new, |p| p.0.clone());
@@ -93,6 +95,9 @@ pub(super) fn resolve_projectile_hits(
             if let Some(burst) = def.attack.burst.filter(|_| source == Source::Attack) {
                 bursts.push((burst, target_pos.0, target_id.0, *projectile, mighty(amount, burst.share), chill, (*room, *team)));
             }
+            if let Some(chain) = def.attack.chain.filter(|_| source == Source::Attack) {
+                chains.push((chain, target_pos.0, target_id.0, *projectile, mighty(amount, chain.share), chill, (*room, *team)));
+            }
             if !goes_on {
                 break;
             }
@@ -111,5 +116,27 @@ pub(super) fn resolve_projectile_hits(
         let reach = burst.radius + PLAYER_RADIUS;
         let blow = Blow::attack(amount, chill, false, projectile.crit);
         hit_foes(&mut commands, &mut log, now.0, &mut targets, (projectile.owner, projectile.class, "auto-attack"), (side, Source::Splash), blow, |id, p| id != struck && p.distance(at) <= reach);
+    }
+    // Each arc leaps to the nearest foe within reach of the last one struck that hasn't been
+    // struck by this bolt, and on from there, so a shot into a pack runs through it.
+    for (chain, mut from, struck, projectile, amount, chill, side) in chains {
+        let mut hit = vec![struck];
+        let reach = chain.reach + PLAYER_RADIUS;
+        for _ in 0..chain.hops {
+            let next = targets
+                .iter()
+                .filter(|(_, id, (room, team), pos, health, _, _, _, (sheltered, decoy))| {
+                    !hit.contains(&id.0) && id.0 != projectile.owner && health.0 > 0 && !*sheltered && !owns(projectile.owner, *decoy) && foes(side, (**room, **team)) && pos.0.distance(from) <= reach
+                })
+                .min_by(|a, b| a.3.0.distance(from).total_cmp(&b.3.0.distance(from)))
+                .map(|(entity, id, _, pos, ..)| (entity, id.0, pos.0));
+            let Some((entity, id, at)) = next else { break };
+            crate::fx::spawn_fx(&mut commands, side.0, Fx::between(FxKind::Arc, from, at, 0.0, now.0, 6));
+            let Ok((.., mut health, mut chilled, mut recent, _, _)) = targets.get_mut(entity) else { break };
+            let blow = Blow::attack(amount, chill, false, projectile.crit);
+            damage(&mut commands, &mut log, now.0, (entity, id, at), (&mut health, &mut chilled, &mut recent), blow, (projectile.owner, projectile.class, "auto-attack"), (side, Source::Splash, None));
+            hit.push(id);
+            from = at;
+        }
     }
 }

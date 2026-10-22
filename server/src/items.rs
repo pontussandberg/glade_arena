@@ -78,6 +78,12 @@ pub(crate) struct Doomed {
 #[derive(Component, Clone, Copy)]
 pub(crate) struct Bounces(pub(crate) u8);
 
+/// Server-only: who set a fighter ablaze (`Burning`), credited with what it burns for.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct Kindled {
+    by: By,
+}
+
 /// A javelin of a Hydra Spear's barrage, to be thrown at `at` by the first's thrower, the way it was
 /// (`shot`), `might` as hard.
 #[derive(Clone, Copy, Debug)]
@@ -347,6 +353,7 @@ pub(super) struct Reacting<'w, 's> {
     fighters: Query<'w, 's, (Entity, &'static PlayerId)>,
     zombies: Query<'w, 's, &'static ClassId, With<Zombie>>,
     classes: Query<'w, 's, &'static ClassId>,
+    burning: Query<'w, 's, &'static mut Burning>,
     /// Every fighter by its id, made once a tick: hits name who dealt them by id.
     ids: Local<'s, HashMap<PeerId, Entity>>,
 }
@@ -446,6 +453,7 @@ fn on_hit(r: &mut Reacting, now: u32, hit: Landed) {
     // Monsters' own: an elite's twist, a bloater's last burst, a split.
     monster_hit(r, now, &hit);
     knock_back(r, &hit);
+    kindle(r, now, &hit);
     if let Some(holder) = holder(r, hit.attacker) {
         ability_items(r, now, &hit, holder);
         attacker_items(r, now, &hit, holder);
@@ -479,6 +487,60 @@ fn knock_back(r: &mut Reacting, hit: &Landed) {
     if dir != Vec2::ZERO {
         let (distance, slam) = shove.map_or((KNOCKBACK, 0), |shove| (shove.distance, shove.wall_root_ticks));
         r.commands.entity(hit.victim).try_insert(Shoved { dir, left: distance / class.def().size().max(0.5), slam });
+    }
+}
+
+/// An attack that burns (`AttackDef::burn`, a pyre witch's bolts) sets the one it struck ablaze
+/// (`Burning`, pulsed by `burn_kindled`), a stack more each hit with the fire's time starting
+/// over, until at full stacks it ignites instead: a blast of fire on the struck one's foes round
+/// it (not the struck one: it's had the hit), and the fire is out.
+fn kindle(r: &mut Reacting, now: u32, hit: &Landed) {
+    if hit.source != Source::Attack || hit.killed {
+        return;
+    }
+    let Some(burn) = hit.class.def().attack.burn else { return };
+    let Ok(mut burning) = r.burning.get_mut(hit.victim) else { return };
+    let stacks = if burning.until > now { burning.stacks + 1 } else { 1 };
+    if stacks < burn.stacks {
+        burning.set_if_neq(Burning { stacks, until: now + burn.ticks });
+        let by = By { id: hit.attacker, class: hit.class, side: hit.side, source: Source::Passive };
+        r.commands.entity(hit.victim).try_insert(Kindled { by });
+        return;
+    }
+    burning.set_if_neq(Burning::default());
+    r.commands.entity(hit.victim).remove::<Kindled>();
+    let struck = hit.victim_id;
+    let (at, reach) = (hit.at, burn.ignite_radius + PLAYER_RADIUS);
+    let amount = (hit.class.def().attack.damage as f32 * burn.ignite_share).round() as i32;
+    let by = By { id: hit.attacker, class: hit.class, side: hit.side, source: Source::Splash };
+    spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Ignite, at, burn.ignite_radius, now, 8));
+    strike(&mut r.commands, &mut r.log, now, &mut r.targets, by, Blow::ability(amount, Chill::default()), |id, p| id != struck && p.distance(at) <= reach);
+}
+
+/// Fire on the burning (`Burning`, lit by `kindle`): every `ZONE_PULSE_TICKS`, each burns for
+/// its stacks' worth, credited to whoever lit it; out when its time is up, or when it falls.
+pub(super) fn burn_kindled(
+    mut commands: Commands,
+    timeline: Res<LocalTimeline>,
+    mut targets: Targets,
+    mut burning: Query<(Entity, &mut Burning, &Kindled)>,
+    mut log: ResMut<HitLog>,
+) {
+    let now = timeline.tick().0;
+    for (entity, mut burning, kindled) in &mut burning {
+        let Ok((_, id, _, pos, mut health, mut chilled, mut hits, _, _)) = targets.get_mut(entity) else { continue };
+        if burning.until <= now || health.0 <= 0 {
+            burning.set_if_neq(Burning::default());
+            commands.entity(entity).remove::<Kindled>();
+            continue;
+        }
+        let Some(burn) = kindled.by.class.def().attack.burn else { continue };
+        if !now.is_multiple_of(items::ZONE_PULSE_TICKS) {
+            continue;
+        }
+        let blow = Blow::ability(burn.damage * burning.stacks as i32, Chill::default());
+        let by = kindled.by;
+        damage(&mut commands, &mut log, now, (entity, id.0, pos.0), (&mut health, &mut chilled, &mut hits), blow, (by.id, by.class, "kindling"), (by.side, Source::Passive, None));
     }
 }
 

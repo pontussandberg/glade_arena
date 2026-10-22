@@ -7,11 +7,9 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 
 use crate::arena::{FlatMesh, palette, to_world};
 
-/// The mark a strike leaves: how long it lasts (seconds), where along the blade it starts (a
-/// fraction of its length; it runs to the tip), and how many steps it fades in (one shared
-/// material each).
+/// The mark a strike leaves: how long it lasts (seconds; it runs from where the blade starts to
+/// its tip, `Blade::from`), and how many steps it fades in (one shared material each).
 const MARK_LIFE: f32 = 0.32;
-const MARK_FROM: f32 = BLADE_FROM;
 /// How high over the ground a mark lies along its strike's lane (meters): over the tear.
 const MARK_HEIGHT: f32 = 0.05;
 pub(super) const MARK_FADES: usize = 8;
@@ -94,7 +92,7 @@ pub(super) fn show_marks(
             }
             None => {
                 let Ok(held) = blades.get(blade.held) else { continue };
-                Mark { started: now, from: blade.at(held, MARK_FROM), to: blade.at(held, 1.0) }
+                Mark { started: now, from: blade.at(held, blade.from), to: blade.at(held, 1.0) }
             }
         };
         let transform = mark.transform(0.0);

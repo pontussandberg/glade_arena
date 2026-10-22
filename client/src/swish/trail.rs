@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 
-use crate::arena::{self, FlatMesh};
+use crate::arena::FlatMesh;
 use crate::render::shown;
 
 /// How long the trail lingers (seconds), how fast the blade's tip must move for it to show
@@ -16,10 +16,6 @@ use crate::render::shown;
 /// (from its base, through where it's brightest, to its tip, as fractions of its length).
 const TRAIL_LIFE: f32 = 0.16;
 const TRAIL_SPEED: (f32, f32) = (6.0, 13.0);
-const TRAIL_BLADE: [f32; 3] = [BLADE_FROM, (BLADE_FROM + 1.0) / 2.0, 1.0];
-/// Where the blade starts along the weapon (a fraction of its length): a glaive's is its outer
-/// half, past the shaft.
-pub(super) const BLADE_FROM: f32 = arena::BLADE_START / arena::BLADE_LENGTH;
 /// How bright the trail is when the blade isn't quickened (`Blade::quickened`; it's 1 when it is).
 const TRAIL_DIM: f32 = 0.5;
 
@@ -97,7 +93,8 @@ pub(super) fn trail_blades(
     for (blade, mut trail, visible) in &mut fighters {
         let Ok(held) = blades.get(blade.held) else { continue };
         let trail = &mut *trail;
-        let place = TRAIL_BLADE.map(|up| blade.at(held, up));
+        // From where the blade starts, through its middle, to its tip.
+        let place = [blade.from, (blade.from + 1.0) / 2.0, 1.0].map(|up| blade.at(held, up));
         // A jump (through a waygate, or a respawn) leaves no trail across the map behind it.
         if trail.samples.back().is_some_and(|(_, last)| last[0].distance(place[0]) > arena_shared::config::JUMP) {
             trail.samples.clear();

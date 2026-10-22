@@ -14,6 +14,12 @@ mod warden;
 use warden::*;
 mod breaker;
 use breaker::*;
+mod pyre_witch;
+use pyre_witch::*;
+mod stormweaver;
+use stormweaver::*;
+mod shade;
+use shade::*;
 
 /// How a rigged class moves. Keyframes are (carrying, fully drawn back, released, dashing),
 /// radians. Limbs: positive swings forward. Twist: negative turns the weapon (right, +Z)
@@ -122,10 +128,9 @@ pub(crate) fn moves(class_key: &str) -> &'static Moves {
         "zombie" => &ZOMBIE,
         "warden" => &WARDEN,
         "breaker" => &BREAKER,
-        // The recruits still to get moves of their own borrow the archetype that fits their
-        // weapon: the staff caster's casts, the claw-swipe for the knives.
-        "pyre_witch" | "stormweaver" => &FROST_MAGE,
-        "shade" => &ZOMBIE,
+        "pyre_witch" => &PYRE_WITCH,
+        "stormweaver" => &STORMWEAVER,
+        "shade" => &SHADE,
         // The merchant stands like a mage with a staff (it never fights).
         "merchant" => &FROST_MAGE,
         _ => unreachable!("no moves for class {class_key:?}"),

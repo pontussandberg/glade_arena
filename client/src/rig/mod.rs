@@ -321,7 +321,12 @@ fn add_rigs(
             crate::cloth::dress(&mut commands, player, (rig.legs, rig.knees, rig.arms[0]), own, wardrobe);
         }
         if matches!(rig.moves.held, Held::Gripped { .. }) {
-            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length: arena::BLADE_LENGTH, shown: 0, quickened: false, striking: false, dragged: None, corner: arena::glaive_edge(1.0), rasp: 0, embers: (0.0, 0) });
+            let figure = class.def().figure();
+            let (from, length) = arena::blade_span(figure);
+            // A glaive's broad edge reaches the ground at its corner before its point; a plain
+            // blade's lowest point is its point.
+            let corner = if figure == "revenant" { arena::glaive_edge(1.0) } else { Vec3::Y * length };
+            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length, from: from / length, shown: 0, quickened: false, striking: false, dragged: None, corner, rasp: 0, embers: (0.0, 0) });
         }
         commands.entity(player).insert((
             rig,

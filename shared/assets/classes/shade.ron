@@ -4,14 +4,16 @@
     id: "shade",
     name: "Shade",
     role: "Assassin",
-    blurb: "Two knives and nowhere to be. Steps through the fight and cuts what it leaves behind.",
+    blurb: "Two knives and nowhere to be. Every attack cuts twice, and the first cut into anyone who wasn't watching goes deep.",
     max_hp: 85,
     move_speed: 3.95,
     attack: (
-        damage: 8,
+        damage: 6,
         attack_ticks: 22,
         windup: 0.28,
         kind: Melee(range: 1.35, width: 0.9),
+        // One knife, then the other, a beat behind.
+        twice: Some(5),
     ),
     abilities: [
         (
@@ -29,10 +31,10 @@
         ),
     ],
     passive: Some(
-        name: "Cutthroat",
-        description: "A quarter of your cuts strike true ({crit} crit chance).",
+        name: "Ambush",
+        description: "Every auto-attack cuts twice. The first cut into an enemy you haven't cut in {ambush_time} always crits; the rest crit {crit} of the time.",
     ),
     // Its own figure, slighter than anyone: hard to see is the point.
     look: Some(figure: "shade", size: 0.92, tint: (1.0, 1.0, 1.0)),
-    crit: (chance: 0.25),
+    crit: (chance: 0.15, ambush_ticks: 128),
 )

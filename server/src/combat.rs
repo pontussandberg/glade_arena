@@ -209,6 +209,21 @@ pub(super) fn hit_foes(
     blow: Blow,
     mut hits: impl FnMut(PeerId, Vec2) -> bool,
 ) -> usize {
+    hit_foes_each(commands, log, now, targets, attacker, (side, source), |id, at| hits(id, at).then_some(blow))
+}
+
+/// `hit_foes`, with a blow of its own for each foe (`blow_for`, by who and where they are:
+/// `None` for one not hit).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn hit_foes_each(
+    commands: &mut Commands,
+    log: &mut HitLog,
+    now: u32,
+    targets: &mut Targets,
+    attacker: Attacker,
+    (side, source): (Side, Source),
+    mut blow_for: impl FnMut(PeerId, Vec2) -> Option<Blow>,
+) -> usize {
     let mut count = 0;
     for (target, target_id, (room, team), target_pos, mut health, mut chilled, mut recent, _, (sheltered, decoy)) in targets {
         if owns(attacker.0, decoy) {
@@ -216,7 +231,12 @@ pub(super) fn hit_foes(
         }
         // One killed already this tick (`damage`) isn't hit: a swing that only struck a body
         // didn't land. Nor is one just back and sheltered.
-        if health.0 > 0 && !sheltered && target_id.0 != attacker.0 && foes(side, (*room, *team)) && hits(target_id.0, target_pos.0) {
+        if health.0 > 0
+            && !sheltered
+            && target_id.0 != attacker.0
+            && foes(side, (*room, *team))
+            && let Some(blow) = blow_for(target_id.0, target_pos.0)
+        {
             let hit = (&mut *health, &mut *chilled, &mut *recent);
             damage(commands, log, now, (target, target_id.0, target_pos.0), hit, blow, attacker, (side, source, None));
             count += 1;
@@ -224,6 +244,24 @@ pub(super) fn hit_foes(
     }
     count
 }
+
+/// Server-only: the second cut of an attack that cuts twice (`AttackDef::twice`), still to come
+/// at `at`: the swing it follows, how hard, and with what chill.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct SecondCut {
+    at: u32,
+    swing: LastSwing,
+    amount: i32,
+    chill: Chill,
+}
+
+/// Server-only: when each attacker last hit each victim with an auto-attack, for the classes
+/// whose first hit into someone not hit lately is sure to crit (`Crit::ambush_ticks`).
+#[derive(Resource, Default)]
+pub(crate) struct Ambushes(std::collections::HashMap<(PeerId, PeerId), u32>);
+
+/// How often (ticks) the ambush memory forgets hits too old to matter.
+const AMBUSH_FORGET_EVERY: u32 = 256;
 
 /// Auto-attacks, as they go off after their windup: projectiles are spawned; melee swings are
 /// resolved right here. Starting an attack drops the destination: afterwards the fighter stands
@@ -241,8 +279,13 @@ pub(super) fn attack(
     mut targets: Targets,
     mut rifts: ResMut<Rifts>,
     mut log: ResMut<HitLog>,
+    mut ambushes: ResMut<Ambushes>,
 ) {
     let now = timeline.tick();
+    if now.0.is_multiple_of(AMBUSH_FORGET_EVERY) {
+        let longest = ClassId::all().map(|c| c.def().crit.ambush_ticks).max().unwrap_or(0);
+        ambushes.0.retain(|_, last| now.0.saturating_sub(*last) <= longest);
+    }
     for (entity, id, class, pos, mut input, mut state, mut last_swing, (room, team), (frenzy, fury), (mut cooldowns, might, satchel)) in &mut attackers {
         let might = might_of(might);
         let side = (*room, *team);
@@ -285,9 +328,20 @@ pub(super) fn attack(
                 }
                 let blow = Blow::attack(amount, chill, swing.empowered, primed);
                 let with = (id.0, *class, "auto-attack");
-                let landed = hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Attack), blow, |_, at| {
-                    sim::melee_hits(lobby.map(room), pos.0, swing.dir, (swing.empowered, swing.grown), *class, at)
+                // An ambush (`Crit::ambush_ticks`): the first hit into someone not hit lately is
+                // sure to crit. Each hit is noted as it lands.
+                let ambush = class.def().crit.ambush_ticks;
+                let landed = hit_foes_each(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Attack), |target, at| {
+                    if !sim::melee_hits(lobby.map(room), pos.0, swing.dir, (swing.empowered, swing.grown), *class, at) {
+                        return None;
+                    }
+                    let fresh = ambush > 0 && ambushes.0.insert((id.0, target), now.0).is_none_or(|last| now.0 - last > ambush);
+                    Some(Blow { sure_crit: blow.sure_crit || fresh, ..blow })
                 });
+                // The second cut, a beat behind.
+                if let Some(gap) = class.def().attack.twice {
+                    commands.entity(entity).insert(SecondCut { at: now.0 + gap, swing, amount, chill });
+                }
                 if landed > 0
                     && let Some(follow_up) = class.def().attack.follow_up
                 {
@@ -317,6 +371,34 @@ pub(super) fn attack(
         }
         // Only on change: AttackState is replicated.
         state.set_if_neq(next);
+    }
+}
+
+/// The second cut of an attack that cuts twice (`SecondCut`), as its time comes: the same lane,
+/// from where its striker stands now. Never an ambush (the first cut was the ambush), and never
+/// from one who has fallen since.
+pub(super) fn second_cuts(
+    mut commands: Commands,
+    timeline: Res<LocalTimeline>,
+    lobby: Res<Lobby>,
+    cutters: Query<(Entity, &PlayerId, &ClassId, &Pos, (&InRoom, &Team), &SecondCut)>,
+    mut targets: Targets,
+    mut log: ResMut<HitLog>,
+) {
+    let now = timeline.tick().0;
+    for (entity, id, class, pos, (room, team), cut) in &cutters {
+        if cut.at > now {
+            continue;
+        }
+        commands.entity(entity).remove::<SecondCut>();
+        if !targets.get(entity).is_ok_and(|(_, _, _, _, health, ..)| health.0 > 0) {
+            continue;
+        }
+        let blow = Blow::attack(cut.amount, cut.chill, cut.swing.empowered, false);
+        let with = (id.0, *class, "auto-attack");
+        hit_foes(&mut commands, &mut log, now, &mut targets, with, ((*room, *team), Source::Attack), blow, |_, at| {
+            sim::melee_hits(lobby.map(room), pos.0, cut.swing.dir, (cut.swing.empowered, cut.swing.grown), *class, at)
+        });
     }
 }
 

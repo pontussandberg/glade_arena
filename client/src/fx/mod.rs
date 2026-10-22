@@ -6,6 +6,8 @@
 //! holding, fading, moving as it's thrown or whirled, then gone. Their shapes are in
 //! `shapes.rs`, drawn in shared see-through materials that fade in steps (`Ink`).
 
+use std::f32::consts::{FRAC_PI_2, TAU};
+
 use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
@@ -24,7 +26,51 @@ pub struct FxPlugin;
 impl Plugin for FxPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_art);
-        app.add_systems(Update, ((recipes::play_new, strike_fx, downed::mark_downed, death::burst_deaths, death::spark_hits), drive_parts).chain());
+        app.add_systems(Update, ((recipes::play_new, strike_fx, burning_flames, downed::mark_downed, death::burst_deaths, death::spark_hits), drive_parts).chain());
+    }
+}
+
+/// How often (seconds) a burning fighter sheds a new round of flames.
+const FLAME_EVERY: f32 = 0.08;
+
+/// Fire on the burning (`Burning`): tongues of flame licking up off them, more the more stacks,
+/// and embers rising, for as long as the fire lasts, on the timeline each fighter is drawn on.
+fn burning_flames(
+    mut commands: Commands,
+    time: Res<Time>,
+    clock: AttackClock,
+    art: Res<FxArt>,
+    fighters: Query<(&Pos, &Burning, Has<crate::Me>)>,
+    mut next: Local<f32>,
+) {
+    let now = time.elapsed_secs();
+    if now < *next {
+        return;
+    }
+    *next = now + FLAME_EVERY;
+    for (pos, burning, is_me) in &fighters {
+        let stacks = burning.at(clock.now(is_me));
+        if stacks == 0 {
+            continue;
+        }
+        let at = arena::to_world(pos.0, 0.0);
+        let seed = (now * 997.0) as u32 ^ pos.0.x.to_bits().rotate_left(7) ^ pos.0.y.to_bits();
+        for i in 0..2 + 2 * stacks {
+            let r = |n: u32| crate::swish::noise(seed, i * 8 + n);
+            let angle = r(1) * TAU;
+            let out = 0.12 + 0.25 * r(2);
+            let from = at + Vec3::new(angle.cos() * out, 0.1 + 1.0 * r(3), -angle.sin() * out);
+            // The tongue lies along +X: stood up, leaning a little, turned any way.
+            let lick = Quat::from_rotation_y(r(4) * TAU) * Quat::from_rotation_z(FRAC_PI_2 - 0.4 * r(5));
+            let length = 0.35 + 0.35 * r(6);
+            let rise = Motion::Thrown { velocity: Vec3::Y * (1.0 + 0.7 * r(7)), gravity: -0.6, tumble: Vec3::ZERO };
+            let tongue = Part::new(now, [0.05, 0.18, 0.45], Ink::Flame, from).sized(Vec3::new(length, 1.0, length * 0.6));
+            put(&mut commands, &art, &art.tongue, tongue.turn(lick).grow(0.3).shrink(0.2).flicker(0.3).motion(rise));
+            if r(0) < 0.4 {
+                let ember = Motion::Thrown { velocity: Vec3::new(r(1) - 0.5, 1.5 + r(2), r(3) - 0.5), gravity: -0.3, tumble: Vec3::ZERO };
+                put(&mut commands, &art, &art.mote, Part::new(now, [0.02, 0.3, 0.7], Ink::Spark, from + Vec3::Y * 0.3).size(0.03 + 0.02 * r(4)).motion(ember).flicker(0.5).shrink(0.2));
+            }
+        }
     }
 }
 

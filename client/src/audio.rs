@@ -45,8 +45,11 @@ pub enum Sfx {
     MaulSwing,
     /// The breaker winding up: the haft creaking as the whole body loads behind it.
     MaulReady,
-    /// The shade's knives: two quick snicks, one hand after the other.
+    /// The shade's knives: one snick, then the other hand's a beat behind, with a touch of
+    /// steel on the second.
     KnifeSwing,
+    /// The shade gathering: next to nothing, a catch of breath and the knives turning in the hands.
+    KnifeReady,
     /// A zombie's claws: a ragged, breathy swipe, nothing clean about it.
     ClawSwing,
     /// The faint gather of air before any attack goes off.
@@ -55,12 +58,20 @@ pub enum Sfx {
     Loose,
     /// A spear taking flight: wind whistling over the shaft.
     SpearLoose,
-    /// A gout of fire leaving the hand: a soft whoof.
+    /// A gout of fire tossed: it catches with a snap, whoomps away, and crackles after.
     FireLoose,
+    /// The pyre witch gathering: fire catching in the hand, a fuse of a hiss.
+    KindleReady,
+    /// A burning fighter going up all at once.
+    Ignite,
     /// A frostbolt leaving the hand: a glassy shiver.
     FrostLoose,
-    /// A storm bolt leaving the hand: a dry crackle.
+    /// A storm bolt let go: one hard crack, a buzz of charge under it, a fizz of static after.
     StormLoose,
+    /// The stormweaver gathering: static crackling up the staff, quicker and quicker.
+    StormReady,
+    /// Lightning arcing from one to the next.
+    Arc,
     /// A blow landing on someone else.
     Hit,
     /// A crit landing.
@@ -144,7 +155,10 @@ fn attack_voice(class: arena_shared::protocol::ClassId) -> (Sfx, Sfx, f32) {
         "revenant" => (Sfx::Windup, Sfx::GlaiveSwing, 1.0),
         "warden" => (Sfx::ShieldReady, Sfx::ShieldThrust, 1.0),
         "breaker" => (Sfx::MaulReady, Sfx::MaulSwing, 1.0),
-        "shade" => (Sfx::Windup, Sfx::KnifeSwing, 1.0),
+        // Casters' shots sound as they leave the hand (`loose_sounds`): only the gather is theirs here.
+        "pyre_witch" => (Sfx::KindleReady, Sfx::Swing, 1.0),
+        "stormweaver" => (Sfx::StormReady, Sfx::Swing, 1.0),
+        "shade" => (Sfx::KnifeReady, Sfx::KnifeSwing, 1.0),
         "zombie" => (Sfx::Windup, Sfx::ClawSwing, 1.0),
         _ => (Sfx::Windup, Sfx::Swing, weapon_pitch(class)),
     }
@@ -530,12 +544,28 @@ mod web {
                         self.noise(Highpass, 3200.0, 3200.0, 0.7, now + 0.09, 0.22, &e);
                     }
                 }
+                Sfx::KnifeReady => {
+                    // Next to nothing: a catch of breath, and the knives turning in the hands,
+                    // a whisper of steel on leather.
+                    if let Some(e) = self.env(now, 0.02, 0.025 * g, 0.06) {
+                        self.noise(Bandpass, 900.0 * p, 900.0 * p, 0.6, now, 0.06, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.02, 0.004, 0.02 * g, 0.04) {
+                        self.noise(Highpass, 6500.0, 6500.0, 0.8, now + 0.02, 0.04, &e);
+                    }
+                }
                 Sfx::KnifeSwing => {
-                    // Two snicks, one hand after the other.
-                    for (at, peak) in [(now, 0.1), (now + 0.045, 0.07)] {
+                    // Two cuts as they really come: one snick, then the other hand's a beat
+                    // behind (the second cut's own moment), that one with a touch of steel
+                    // ringing off it, so the pair reads as two blades and not an echo.
+                    let beat = 5.0 / arena_shared::config::TICK_HZ as f64;
+                    for (at, peak) in [(now, 0.1), (now + beat, 0.085)] {
                         if let Some(e) = self.env(at, 0.004, peak * g, 0.055) {
                             self.noise(Bandpass, 2400.0 * p, 1500.0, 1.5, at, 0.055, &e);
                         }
+                    }
+                    if let Some(e) = self.env(now + beat + 0.01, 0.002, 0.025 * g, 0.07) {
+                        self.osc(Triangle, 3100.0 * p, 3100.0 * p, now + beat + 0.01, 0.07, &e);
                     }
                 }
                 Sfx::ClawSwing => {
@@ -564,10 +594,54 @@ mod web {
                         self.noise(Bandpass, 1100.0 * p, 1100.0 * p, 0.7, now, 0.08, &e);
                     }
                 }
+                Sfx::KindleReady => {
+                    // Fire catching in the hand: a thin hiss swelling like a fuse, and the first
+                    // small crackles as it takes.
+                    if let Some(e) = self.env(now, 0.18, 0.04 * g, 0.24) {
+                        self.noise(Bandpass, 2600.0 * p, 2600.0 * p, 1.6, now, 0.24, &e);
+                    }
+                    for (at, peak) in [(now + 0.1, 0.03), (now + 0.17, 0.025)] {
+                        if let Some(e) = self.env(at, 0.001, peak * g, 0.02) {
+                            self.noise(Highpass, 4200.0, 4200.0, 0.8, at, 0.02, &e);
+                        }
+                    }
+                }
                 Sfx::FireLoose => {
-                    // A soft whoof, all low air.
-                    if let Some(e) = self.env(now, 0.012, 0.16 * g, 0.16) {
-                        self.noise(Lowpass, 750.0 * p, 320.0, 0.8, now, 0.16, &e);
+                    // A gout of fire tossed: it catches with a snap, then the whoomp of it
+                    // leaving (low air with a soft thump under it), and crackles trailing off
+                    // behind it. Snap, whoomp, crackle: how fire actually goes.
+                    if let Some(e) = self.env(now, 0.001, 0.09 * g, 0.03) {
+                        self.noise(Highpass, 3800.0, 3800.0, 0.8, now, 0.03, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.01, 0.02, 0.17 * g, 0.2) {
+                        self.noise(Lowpass, 720.0 * p, 260.0, 0.8, now + 0.01, 0.2, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.01, 0.01, 0.1 * g, 0.12) {
+                        self.osc(Sine, 120.0 * p, 62.0, now + 0.01, 0.12, &e);
+                    }
+                    for (at, peak) in [(now + 0.08, 0.035), (now + 0.13, 0.03), (now + 0.19, 0.022)] {
+                        if let Some(e) = self.env(at, 0.001, peak * g, 0.018) {
+                            self.noise(Bandpass, 3000.0 * p, 3000.0 * p, 1.4, at, 0.018, &e);
+                        }
+                    }
+                }
+                Sfx::Ignite => {
+                    // A burning body going up all at once: a hard whoomp (a gulp of low air with
+                    // a thump in it), a flare of hiss over the top, and a scatter of crackles
+                    // dying away after.
+                    if let Some(e) = self.env(now, 0.012, 0.42 * g, 0.3) {
+                        self.noise(Lowpass, 900.0 * p, 200.0, 0.8, now, 0.3, &e);
+                    }
+                    if let Some(e) = self.env(now, 0.004, 0.3 * g, 0.16) {
+                        self.osc(Sine, 105.0 * p, 48.0, now, 0.16, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.01, 0.03, 0.09 * g, 0.22) {
+                        self.noise(Highpass, 3000.0, 3000.0, 0.7, now + 0.01, 0.22, &e);
+                    }
+                    for (at, peak) in [(now + 0.12, 0.05), (now + 0.19, 0.04), (now + 0.27, 0.035), (now + 0.36, 0.025)] {
+                        if let Some(e) = self.env(at, 0.001, peak * g, 0.02) {
+                            self.noise(Bandpass, 2800.0 * p, 2800.0 * p, 1.4, at, 0.02, &e);
+                        }
                     }
                 }
                 Sfx::FrostLoose => {
@@ -579,12 +653,46 @@ mod web {
                         self.noise(Bandpass, 2600.0 * p, 2600.0 * p, 1.8, now, 0.07, &e);
                     }
                 }
-                Sfx::StormLoose => {
-                    // A dry double crackle.
-                    for (at, peak) in [(now, 0.12), (now + 0.018, 0.08)] {
-                        if let Some(e) = self.env(at, 0.001, peak * g, 0.025) {
-                            self.noise(Bandpass, 3100.0 * p, 2400.0, 1.4, at, 0.025, &e);
+                Sfx::StormReady => {
+                    // Static gathering up the staff: ticks of crackle coming quicker and
+                    // louder, over a thin hum held under them.
+                    for (i, at) in [0.0, 0.08, 0.14, 0.19, 0.23].into_iter().enumerate() {
+                        if let Some(e) = self.env(now + at, 0.001, (0.02 + 0.006 * i as f32) * g, 0.015) {
+                            self.noise(Highpass, 5000.0, 5000.0, 0.8, now + at, 0.015, &e);
                         }
+                    }
+                    if let Some(e) = self.env(now, 0.2, 0.025 * g, 0.28) {
+                        self.osc(Sine, 160.0 * p, 160.0 * p, now, 0.28, &e);
+                    }
+                }
+                Sfx::StormLoose => {
+                    // A bolt let go: one hard crack (a click with a dry snap on it), a short
+                    // buzz of charge under it, and a fizz of static after. No sweep anywhere:
+                    // lightning is a crack, not a pew.
+                    if let Some(e) = self.env(now, 0.001, 0.14 * g, 0.012) {
+                        self.noise(Highpass, 6000.0, 6000.0, 0.8, now, 0.012, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.004, 0.001, 0.16 * g, 0.035) {
+                        self.noise(Bandpass, 2900.0 * p, 2900.0 * p, 1.3, now + 0.004, 0.035, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.004, 0.003, 0.05 * g, 0.07) {
+                        self.osc(Sawtooth, 92.0 * p, 92.0 * p, now + 0.004, 0.07, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.03, 0.01, 0.04 * g, 0.1) {
+                        self.noise(Highpass, 4200.0, 4200.0, 0.7, now + 0.03, 0.1, &e);
+                    }
+                }
+                Sfx::Arc => {
+                    // Lightning leaping to the next: a snap, and a short buzz of it finding its
+                    // way, with a fizz off the end.
+                    if let Some(e) = self.env(now, 0.001, 0.12 * g, 0.025) {
+                        self.noise(Bandpass, 3200.0 * p, 3200.0 * p, 1.4, now, 0.025, &e);
+                    }
+                    if let Some(e) = self.env(now, 0.004, 0.045 * g, 0.06) {
+                        self.osc(Sawtooth, 110.0 * p, 110.0 * p, now, 0.06, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.02, 0.005, 0.03 * g, 0.05) {
+                        self.noise(Highpass, 5000.0, 5000.0, 0.8, now + 0.02, 0.05, &e);
                     }
                 }
                 Sfx::Loose => {

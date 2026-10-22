@@ -54,8 +54,35 @@ pub(super) fn play_new(
             FxKind::Rise => rise(c, &art, &scene),
             FxKind::Mend => mend(c, &art, &scene),
             FxKind::Wallop => wallop(c, &art, &scene),
+            FxKind::Ignite => ignite(c, &art, &scene),
         }
     }
+}
+
+/// A burning fighter igniting: the fire on it going up all at once, a flash of flame racing out
+/// over the ground, tongues of it flung out and up all round, embers thrown, a scorch where it
+/// stood and a puff of smoke after. Smaller and quicker than a blast: a flare, not a bomb.
+fn ignite(c: &mut Commands, art: &FxArt, s: &Scene) {
+    let r = s.radius;
+    put(c, art, s.pick(1, &art.splotch), Part::new(s.start, [0.05, 0.6, 1.4], Ink::Scorch, ground(s.at, 0.02)).size(r * 0.6).facing(s.r(2) * TAU).grow(0.3));
+    put(c, art, &art.band, Part::new(s.start, [0.1, 0.1, 0.32], Ink::Flame, ground(s.at, 0.06)).sized(Vec3::new(r, 1.0, r)).grow(0.15).shrink(1.1));
+    put(c, art, &art.glint, Part::new(s.start, [0.02, 0.06, 0.2], Ink::Spark, s.at + Vec3::Y * 0.9).size(r * 0.9).facing(s.r(3) * TAU).grow(0.3).shrink(0.5));
+    let tongues = 8;
+    for i in 0..tongues {
+        let k = 20 + i * 4;
+        let angle = (i as f32 + s.r(k)) / tongues as f32 * TAU;
+        let lick = Quat::from_rotation_y(angle) * Quat::from_rotation_z(0.9 + 0.5 * s.r(k + 1));
+        let length = r * (0.5 + 0.4 * s.r(k + 2));
+        put(c, art, &art.tongue, Part::new(s.start + 0.02 * s.r(k + 3), [0.06, 0.14, 0.42], Ink::Flame, s.at + Vec3::Y * 0.5).sized(Vec3::new(length, 1.0, length * 0.7)).turn(lick).grow(0.2).shrink(0.3).flicker(0.3));
+    }
+    for i in 0..10 {
+        let k = 100 + i * 6;
+        let velocity = s.out(k) * (1.0 + 2.0 * s.r(k + 1)) + Vec3::Y * (2.5 + 2.5 * s.r(k + 2));
+        let part = Part::new(s.start, [0.02, 0.5, 0.9 + 0.4 * s.r(k + 3)], Ink::Spark, s.at + Vec3::Y * 0.8).size(0.04 + 0.04 * s.r(k + 4));
+        put(c, art, &art.mote, part.motion(Motion::Thrown { velocity, gravity: 5.0, tumble: Vec3::ZERO }).flicker(0.5).shrink(0.3));
+    }
+    let smoke = Part::new(s.start + 0.1, [0.25, 0.5, 1.3], Ink::Smoke, s.at + Vec3::Y * 0.9).size(r * 0.5);
+    put(c, art, s.pick(7, &art.splotch), smoke.motion(Motion::Thrown { velocity: Vec3::Y * 0.7, gravity: -0.2, tumble: Vec3::ZERO }).grow(0.4).shrink(1.6).spin(0.5));
 }
 
 /// The warden's shield driving in: the air shoved ahead of it as a fan of dust streaking out
@@ -143,6 +170,8 @@ fn sound_of(fx: &Fx, sounds: &mut crate::audio::SoundQueue, me: &Query<&Pos, Wit
         FxKind::Bolt => (Sfx::Thunder, 44.0, lands),
         FxKind::Coins => (Sfx::Coin, 16.0, 0.0),
         FxKind::Wallop => (Sfx::Wallop, 22.0, 0.0),
+        FxKind::Ignite => (Sfx::Ignite, 26.0, 0.0),
+        FxKind::Arc => (Sfx::Arc, 20.0, 0.0),
         _ => return,
     };
     sounds.push_in(sfx, earshot(fx.at.distance(me.0), reach), delay);

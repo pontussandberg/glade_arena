@@ -275,6 +275,18 @@ pub const RIG_KNEE: Vec3 = Vec3::new(0.0, -0.4, 0.0);
 pub const RIG_ELBOW: Vec3 = Vec3::new(0.0, -0.26, 0.0);
 
 /// A class's moving parts: its hood, sleeves, legs, weapon and (if it has one) cape.
+/// Where a figure's gripped weapon cuts, along its length up from the grip (meters): where its
+/// blade (or its head) starts, and how far its point reaches. The trail and the mark it leaves in
+/// the air follow that stretch, not the whole shaft.
+pub fn blade_span(class_key: &str) -> (f32, f32) {
+    match class_key {
+        "warden" => (0.18, 1.02),
+        "breaker" => (0.88, 1.2),
+        "shade" => (0.1, 0.48),
+        _ => (BLADE_START, BLADE_LENGTH),
+    }
+}
+
 pub fn fighter_rig(class_key: &str) -> RigMeshes {
     match class_key {
         "javelinist" => RigMeshes {

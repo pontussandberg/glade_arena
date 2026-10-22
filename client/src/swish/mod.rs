@@ -49,6 +49,9 @@ impl Plugin for SwishPlugin {
 pub(crate) struct Blade {
     pub(crate) held: Entity,
     pub(crate) length: f32,
+    /// Where along it the blade starts (a fraction of its length): a glaive's is its outer half,
+    /// past the shaft; a knife's is nearly all of it.
+    pub(crate) from: f32,
     pub(crate) shown: u32,
     pub(crate) quickened: bool,
     /// A strike that has just gone off: the ground breaks over its hitbox this frame.

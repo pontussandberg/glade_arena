@@ -241,6 +241,9 @@ pub struct Crit {
     pub chance: f32,
     pub vs_frozen: f32,
     pub empowered: f32,
+    /// An ambush: an auto-attack into a target this attacker hasn't hit within this many ticks
+    /// is sure to crit (0: never).
+    pub ambush_ticks: u32,
 }
 
 impl Crit {
@@ -287,6 +290,40 @@ pub struct AttackDef {
     /// Nothing stops the swing: while winding up, no slow, root or knock-up takes (`Chilled::steady`).
     #[serde(default)]
     pub unstoppable: bool,
+    /// Each hit sets the one struck ablaze, a stack more each time, igniting at full stacks
+    /// (none by default).
+    #[serde(default)]
+    pub burn: Option<BurnDef>,
+    /// Its hits arc on to more foes near the one struck (none by default).
+    #[serde(default)]
+    pub chain: Option<ChainDef>,
+    /// It cuts twice: a second blow down the same lane this many ticks after the first goes
+    /// off, from wherever the striker stands then (melee only; none by default).
+    #[serde(default)]
+    pub twice: Option<u32>,
+}
+
+/// A hit arcs on (`AttackDef::chain`): from the one struck to the nearest foe within `reach` of
+/// it not yet struck, and on again from there, `hops` times at most, each arc for `share` of the
+/// hit's damage.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct ChainDef {
+    pub hops: u32,
+    pub reach: f32,
+    pub share: f32,
+}
+
+/// A hit sets the one struck ablaze (`AttackDef::burn`, `Burning`): `damage` every
+/// `ZONE_PULSE_TICKS` for `ticks`, once per stack; each hit adds a stack (the time starting over)
+/// up to `stacks`, where it ignites instead: a blast of `ignite_share` of the attack's damage on
+/// the struck one's foes within `ignite_radius`, and the fire is out.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct BurnDef {
+    pub damage: i32,
+    pub ticks: u32,
+    pub stacks: u32,
+    pub ignite_radius: f32,
+    pub ignite_share: f32,
 }
 
 /// A hit shoves the one struck (`AttackDef::shove`): `distance` meters straight away from the
@@ -496,6 +533,7 @@ impl ClassDef {
             ("crit_vs_frozen", percent(self.crit.vs_frozen)),
             ("crit_empowered", percent(self.crit.empowered)),
             ("crit_multiplier", percent(common().crit_multiplier)),
+            ("ambush_time", seconds(self.crit.ambush_ticks)),
         ];
         if let Some(rift) = self.attack.rift {
             all.extend([("rift_time", seconds(rift.ticks)), ("rift_haste", percent(rift.haste)), ("rift_burn", rift.burn.to_string()), ("rift_leech", percent(rift.leech))]);
@@ -505,6 +543,18 @@ impl ClassDef {
         }
         if let Some(shove) = self.attack.shove {
             all.extend([("shove_distance", format!("{} m", shove.distance)), ("wall_stun", seconds(shove.wall_root_ticks))]);
+        }
+        if let Some(chain) = self.attack.chain {
+            all.extend([("chain_hops", chain.hops.to_string()), ("chain_reach", format!("{} m", chain.reach)), ("chain_share", percent(chain.share))]);
+        }
+        if let Some(burn) = self.attack.burn {
+            all.extend([
+                ("burn_damage", burn.damage.to_string()),
+                ("burn_time", seconds(burn.ticks)),
+                ("burn_stacks", burn.stacks.to_string()),
+                ("ignite_radius", format!("{} m", burn.ignite_radius)),
+                ("ignite_share", percent(burn.ignite_share)),
+            ]);
         }
         if let Some(follow_up) = self.attack.follow_up {
             all.extend([
@@ -819,6 +869,19 @@ mod tests {
             if let Some(ShoveDef { distance, wall_root_ticks }) = c.attack.shove {
                 assert!((0.2..=4.0).contains(&distance) && wall_root_ticks <= 2 * TICK_HZ as u32, "{}: shove", c.id);
             }
+            if let Some(gap) = c.attack.twice {
+                assert!(matches!(c.attack.kind, AttackKind::Melee { .. }), "{}: a second cut from a projectile", c.id);
+                let backswing = c.attack.period_ticks(1.0) - c.attack.windup_ticks(1.0);
+                assert!(gap >= 1 && gap < backswing, "{}: the second cut comes after the next attack may start", c.id);
+            }
+            if let Some(ChainDef { hops, reach, share }) = c.attack.chain {
+                assert!(c.attack.kind.shot().is_some(), "{}: chains, but throws nothing", c.id);
+                assert!((1..=8).contains(&hops) && (0.5..=10.0).contains(&reach) && (0.0..=1.0).contains(&share), "{}: chain", c.id);
+            }
+            if let Some(BurnDef { damage, ticks, stacks, ignite_radius, ignite_share }) = c.attack.burn {
+                assert!(damage > 0 && (TICK_HZ as u32 / 2..=10 * TICK_HZ as u32).contains(&ticks), "{}: burn", c.id);
+                assert!((1..=10).contains(&stacks) && (0.5..=6.0).contains(&ignite_radius) && (0.0..=3.0).contains(&ignite_share), "{}: ignite", c.id);
+            }
             // A knock-up shorter than the empowered attack: the striker alone can't chain it.
             if let Some(follow_up) = c.attack.follow_up {
                 let quickest = c.attack.period_ticks(c.attack.speed(true));
@@ -842,8 +905,9 @@ mod tests {
                 let filled = c.describe(&passive.description);
                 assert!(!filled.contains(['{', '}']), "{}: unknown placeholder in {filled:?}", c.id);
             }
-            let Crit { chance, vs_frozen, empowered } = c.crit;
+            let Crit { chance, vs_frozen, empowered, ambush_ticks } = c.crit;
             assert!([chance, vs_frozen, empowered].iter().all(|odds| (0.0..=1.0).contains(odds)), "{}: crit odds", c.id);
+            assert!(ambush_ticks <= 30 * TICK_HZ as u32, "{}: an ambush that waits too long", c.id);
             assert!(empowered == 0.0 || c.attack.follow_up.is_some(), "{}: empowered crit odds without a follow_up", c.id);
         }
     }
@@ -877,7 +941,7 @@ mod tests {
     #[test]
     fn far_scale_scales_with_distance() {
         let kind = |far_scale| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_scale };
-        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None, pierces: false, burst: None, shove: None, unstoppable: false };
+        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None, pierces: false, burst: None, shove: None, unstoppable: false, burn: None, chain: None, twice: None };
         assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(3.0))).damage_at(d)), [10, 20, 30, 30]);
         assert_eq!(attack(kind(None)).damage_at(5.0), 10);
     }
