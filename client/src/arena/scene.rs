@@ -46,7 +46,7 @@ pub struct ArenaPlugin;
 impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClearColor(HAZE));
-        app.insert_resource(GlobalAmbientLight { color: SKY, brightness: 160.0, ..default() });
+        app.insert_resource(GlobalAmbientLight { color: SKY, brightness: 340.0, ..default() });
         app.add_systems(Startup, spawn_sun);
         // The scene is built from our room's map, and built again when it changes.
         app.add_systems(Update, ((build_arena, light_scene).run_if(resource_exists_and_changed::<CurrentMap>), flicker_torches));
@@ -132,8 +132,9 @@ fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight,
 fn spawn_sun(mut commands: Commands) {
     commands.spawn((
         DirectionalLight { color: SUN, illuminance: 4_000.0, shadow_maps_enabled: true, ..default() },
-        // Low dusk sun from the upper left, so shadows are long and fall toward the camera's right.
-        Transform::from_xyz(-32.0, 14.0, -18.0).looking_at(Vec3::ZERO, Vec3::Y),
+        // A dusk sun from the upper left — low enough for the light to feel like evening, high
+        // enough that trees don't drag slabs of shadow across half the arena.
+        Transform::from_xyz(-32.0, 26.0, -18.0).looking_at(Vec3::ZERO, Vec3::Y),
         sun_shadows(SUN_SHADOWS),
     ));
 }
@@ -1149,7 +1150,7 @@ fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
         }
         let c = Map::center(t);
         // Faint: just enough for distances to read, well under the patches' wander.
-        let checker = if (t.x + t.y) % 2 == 0 { 1.012 } else { 0.988 };
+        let checker = if (t.x + t.y) % 2 == 0 { 1.006 } else { 0.994 };
         let base = match tile {
             // Paved: the slabs go on top (`Props::flagstones`); this is the moss between them.
             Tile::Path if theme.wilds == Wilds::Fen => theme.fern.mix(&theme.marsh, rng.next() * 0.4),
