@@ -148,7 +148,7 @@ pub(super) fn turn_stage_camera(
     motion: Res<AccumulatedMouseMotion>,
     buttons: Query<&Interaction>,
     mut lobby: ResMut<Lobby>,
-    camera: Single<(&mut Transform, &mut DistanceFog), With<Camera3d>>,
+    camera: Single<(&mut Transform, &mut DistanceFog), With<crate::camera::CameraRig>>,
     mut swaying_for: Local<f32>,
 ) {
     let (mut camera, mut haze) = camera.into_inner();
@@ -172,7 +172,7 @@ pub(super) fn turn_stage_camera(
 
 /// Keeps the name badge's bottom edge at `TAG_HEIGHT` over the stage, on screen. The camera only
 /// turns around the stage's upright, so that stays the same height while it sways or is dragged.
-pub(super) fn place_name_tag(camera: Single<(&Camera, &Transform), With<Camera3d>>, mut tag: Single<&mut Node, With<NameTag>>) {
+pub(super) fn place_name_tag(camera: Single<(&Camera, &Transform), With<crate::camera::CameraRig>>, mut tag: Single<&mut Node, With<NameTag>>) {
     let (camera, transform) = *camera;
     let (Some(size), Ok(at)) = (camera.logical_viewport_size(), camera.world_to_viewport(&GlobalTransform::from(*transform), stage_at(TAG_HEIGHT)))
     else {

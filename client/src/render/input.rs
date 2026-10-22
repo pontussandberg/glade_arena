@@ -35,7 +35,7 @@ pub(super) fn read_local_input(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     window: Option<Single<&Window>>,
-    camera: Single<(&Camera, &GlobalTransform)>,
+    camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
     me: Query<(&Pos, &ClassId, &Cooldowns), (With<Me>, With<PlayerId>)>,
     (mode, cast_mode, clock, map): (Res<CameraMode>, Res<CastMode>, AttackClock, Res<crate::rooms::CurrentMap>),
     hud: Query<

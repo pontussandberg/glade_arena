@@ -171,7 +171,7 @@ fn open_lobby(
 fn close_lobby(
     mut commands: Commands,
     parts: Query<Entity, With<LobbyPart>>,
-    mut haze: Single<&mut DistanceFog, With<Camera3d>>,
+    mut haze: Single<&mut DistanceFog, With<crate::camera::CameraRig>>,
     mut shadows: Single<&mut CascadeShadowConfig, With<DirectionalLight>>,
 ) {
     haze.falloff = arena::haze().falloff;

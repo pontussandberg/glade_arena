@@ -312,7 +312,7 @@ fn place_bars(
     mut commands: Commands,
     time: Res<Time>,
     clock: AttackClock,
-    camera: Single<(&Camera, &GlobalTransform)>,
+    camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
     players: Query<(&Pos, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Has<Me>, (Option<&MaxHealth>, Has<Elite>))>,
     mut bars: Query<(Entity, &Bars, &mut HealthTrail, &mut Node, &mut UiTransform, &mut Visibility)>,
     mut parts: Query<(&mut Node, &mut Visibility), Without<Bars>>,
@@ -574,7 +574,7 @@ fn spawn_damage_numbers(
 fn float_damage_numbers(
     mut commands: Commands,
     time: Res<Time>,
-    camera: Single<(&Camera, &GlobalTransform)>,
+    camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
     players: Query<&Pos>,
     mut numbers: Query<(Entity, &DamageNumber, &ComputedNode, &mut Node, &mut UiTransform, &mut TextColor, &mut Visibility)>,
 ) {

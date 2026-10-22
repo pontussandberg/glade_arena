@@ -542,7 +542,7 @@ fn update_gate_marks(
 /// Frame the ground the camera sees: where the screen's corners hit the ground, boxed.
 fn frame_view(
     current: Res<CurrentMap>,
-    camera: Single<(&Camera, &GlobalTransform), Changed<GlobalTransform>>,
+    camera: Single<(&Camera, &GlobalTransform), (With<crate::camera::CameraRig>, Changed<GlobalTransform>)>,
     mut frame: Single<&mut Node, With<ViewFrame>>,
 ) {
     let map = current.map();

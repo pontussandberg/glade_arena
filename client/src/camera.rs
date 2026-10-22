@@ -43,8 +43,10 @@ const FREE_KEY_TURN: f32 = 2.0;
 const FREE_KEY_ZOOM: f32 = 4.0;
 const DRAG_PX: f32 = 6.0;
 
+/// The camera showing the world — the one queries mean by "the camera". Not the only one:
+/// every face in the practice picker has a little camera of its own (`picker::load_faces`).
 #[derive(Component)]
-struct CameraRig {
+pub(crate) struct CameraRig {
     /// Point on the floor the camera looks at.
     focus: Vec3,
     zoom: f32,
@@ -146,7 +148,7 @@ const SHAKE_ROLL: f32 = 0.022;
 /// Tips the camera off what the controls set this frame, between them and `place_camera` (the
 /// controls write the whole transform each frame, so nothing accumulates). Only the MOBA
 /// camera: the free one is a viewing tool.
-fn shake_camera(time: Res<Time>, mode: Res<CameraMode>, mut shake: ResMut<Shake>, mut camera: Single<&mut Transform, With<Camera3d>>) {
+fn shake_camera(time: Res<Time>, mode: Res<CameraMode>, mut shake: ResMut<Shake>, mut camera: Single<&mut Transform, With<CameraRig>>) {
     if shake.trauma <= 0.0 {
         return;
     }
@@ -210,7 +212,7 @@ pub struct CameraPlaced;
 
 /// Brings the camera's `GlobalTransform` up to date with where it was just moved (it has no
 /// parent, so they're the same).
-fn place_camera(mut camera: Single<(&Transform, &mut GlobalTransform), With<Camera3d>>) {
+fn place_camera(mut camera: Single<(&Transform, &mut GlobalTransform), With<CameraRig>>) {
     let placed = GlobalTransform::from(*camera.0);
     camera.1.set_if_neq(placed);
 }
@@ -237,7 +239,7 @@ fn spawn_camera(mut commands: Commands) {
         // light instead of clipping to flat white, and the dusk rolls off instead of banding.
         bevy::camera::Hdr,
         bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
-        bevy::post_process::bloom::Bloom { intensity: 0.16, ..bevy::post_process::bloom::Bloom::NATURAL },
+        bevy::post_process::bloom::Bloom { intensity: 0.08, ..bevy::post_process::bloom::Bloom::NATURAL },
         // A light grade: just enough saturation to undo what the filmic tonemap takes, nothing
         // moody — the toy look wants colors read straight.
         ColorGrading {
@@ -294,9 +296,9 @@ fn follow_camera(
     scroll: Res<AccumulatedMouseScroll>,
     mut mode: ResMut<CameraMode>,
     // Its own transform, set this frame (`GlobalTransform` lags a frame and would jitter).
-    me: Query<&Transform, (With<Me>, With<PlayerId>, Without<Camera3d>)>,
-    fighters: Query<&Transform, (With<PlayerId>, Without<Camera3d>)>,
-    mut camera: Single<&mut Transform, With<Camera3d>>,
+    me: Query<&Transform, (With<Me>, With<PlayerId>, Without<CameraRig>)>,
+    fighters: Query<&Transform, (With<PlayerId>, Without<CameraRig>)>,
+    mut camera: Single<&mut Transform, With<CameraRig>>,
     window: Single<(&mut Window, &mut CursorOptions)>,
 ) {
     let (mut window, mut cursor) = window.into_inner();

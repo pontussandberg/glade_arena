@@ -101,7 +101,7 @@ fn place_dummy(
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     window: Single<&Window>,
-    camera: Single<(&Camera, &GlobalTransform)>,
+    camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
     controls: Query<&Interaction, With<HudButton>>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
     map: Res<CurrentMap>,
@@ -153,7 +153,7 @@ fn spawn_marker(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ma
 fn show_marker(
     placing: Res<Placing>,
     window: Single<&Window>,
-    camera: Single<(&Camera, &GlobalTransform)>,
+    camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
     marker: Single<(&Marker, &mut Transform, &mut MeshMaterial3d<StandardMaterial>, &mut Visibility)>,
     map: Res<CurrentMap>,
 ) {

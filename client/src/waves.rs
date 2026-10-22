@@ -604,7 +604,7 @@ fn name_in_world(
 /// Names follow their fighters on screen, hidden while they're dead; gone with them.
 fn place_names(
     mut commands: Commands,
-    camera: Single<(&Camera, &GlobalTransform)>,
+    camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
     fighters: Query<(&Pos, Option<&Health>)>,
     mut names: Query<(Entity, &NameOver, &mut Node, &mut Visibility, &ComputedNode)>,
 ) {

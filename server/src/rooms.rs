@@ -1211,6 +1211,7 @@ fn handle_class_choices(
             let Some(class) = class.pickable() else { continue };
             let Some(guest) = lobby.guests.get_mut(&link) else { continue };
             guest.active_at = now;
+            let again = guest.class == Some(class);
             guest.class = Some(class);
             let (id, team, key) = (guest.peer, guest.team, guest.room);
             if let Some(key) = key
@@ -1218,8 +1219,10 @@ fn handle_class_choices(
             {
                 room.changed = true;
                 // Practicing, a class is tried on on the spot: the old fighter goes and a fresh
-                // one spawns as the pick (`enter_arena` only dresses the empty-handed).
-                if room.practice && room.started
+                // one spawns as the pick (`enter_arena` only dresses the empty-handed). Only a
+                // new pick: the client repeats its choice after every respawn, and respawning
+                // for the repeat would respawn forever.
+                if room.practice && room.started && !again
                     && let Some(player) = ctx.player_of(link)
                 {
                     let in_room = room.in_room(key);
