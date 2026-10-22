@@ -346,6 +346,7 @@ pub(super) struct Reacting<'w, 's> {
     doomed: Query<'w, 's, &'static mut Doomed>,
     fighters: Query<'w, 's, (Entity, &'static PlayerId)>,
     zombies: Query<'w, 's, &'static ClassId, With<Zombie>>,
+    classes: Query<'w, 's, &'static ClassId>,
     /// Every fighter by its id, made once a tick: hits name who dealt them by id.
     ids: Local<'s, HashMap<PeerId, Entity>>,
 }
@@ -457,13 +458,17 @@ fn on_hit(r: &mut Reacting, now: u32, hit: Landed) {
 }
 
 /// A player's auto-attack knocks a monster (a zombie, or one of the waves') back a little, away
-/// from them (along a shot's flight), a bigger one less; bosses stand firm.
+/// from them (along a shot's flight), a bigger one less; bosses stand firm. An attack that shoves
+/// (`AttackDef::shove`, a warden's) shoves anyone it hits, player or monster, as far as it says,
+/// and one driven into a wall is stunned there.
 fn knock_back(r: &mut Reacting, hit: &Landed) {
-    if hit.source != Source::Attack || hit.killed || !matches!(hit.attacker, PeerId::Netcode(_)) {
+    if hit.source != Source::Attack || hit.killed {
         return;
     }
-    let Ok(class) = r.zombies.get(hit.victim) else { return };
-    if class.def().is_boss() {
+    let shove = hit.class.def().attack.shove;
+    let Ok(class) = r.classes.get(hit.victim) else { return };
+    let monster = r.zombies.contains(hit.victim);
+    if class.def().is_boss() || (shove.is_none() && !(monster && matches!(hit.attacker, PeerId::Netcode(_)))) {
         return;
     }
     let from = r.ids.get(&hit.attacker).and_then(|e| r.targets.get(*e).ok()).map(|(.., pos, _, _, _, _, _)| pos.0);
@@ -472,7 +477,8 @@ fn knock_back(r: &mut Reacting, hit: &Landed) {
         None => from.map_or(Vec2::ZERO, |from| (hit.at - from).normalize_or_zero()),
     };
     if dir != Vec2::ZERO {
-        r.commands.entity(hit.victim).try_insert(Shoved { dir, left: KNOCKBACK / class.def().size().max(0.5) });
+        let (distance, slam) = shove.map_or((KNOCKBACK, 0), |shove| (shove.distance, shove.wall_root_ticks));
+        r.commands.entity(hit.victim).try_insert(Shoved { dir, left: distance / class.def().size().max(0.5), slam });
     }
 }
 

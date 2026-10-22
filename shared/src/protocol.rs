@@ -239,6 +239,8 @@ pub struct Chilled {
     pub rooted: Span,
     /// Knocked up: off its feet, no walking, dashing or attacking (an attack winding up is lost).
     pub lifted: Span,
+    /// Unstoppable (`AttackDef::unstoppable`, winding up): nothing applied meanwhile takes.
+    pub steady: Span,
 }
 
 /// Ticks `from` (inclusive) to `until` (exclusive). The default covers none.
@@ -264,8 +266,11 @@ impl Span {
 
 impl Chilled {
     /// A hit at `now` applies `chill`, from the next tick. A new slow replaces a running one if
-    /// it's at least as strong; a root extends a running one.
+    /// it's at least as strong; a root extends a running one. Nothing takes while `steady`.
     pub fn apply(&mut self, chill: Chill, now: u32) {
+        if self.steady.covers(now as f32) {
+            return;
+        }
         if chill.slow > 0.0 && chill.slow_ticks > 0 {
             let running = self.slowed.covers(now as f32 + 1.0);
             if !running || chill.slow >= self.slow {
@@ -293,6 +298,11 @@ impl Chilled {
 
     pub fn rooted_at(&self, tick: u32) -> bool {
         self.rooted.covers(tick as f32)
+    }
+
+    /// Unstoppable at `tick` (a fractional one for drawing in between).
+    pub fn steady_at(&self, tick: f32) -> bool {
+        self.steady.covers(tick)
     }
 }
 
@@ -465,6 +475,8 @@ pub enum FxKind {
     Blink,
     /// A Doom Bell's mark on its victim, where it was struck, until the bell tolls at `until`.
     Doom,
+    /// Someone shoved into a wall at `at` (`ShoveDef`): the slam, dust and grit off it.
+    Wallop,
 }
 
 /// A passing effect of an item or a monster, for the client to draw: what, where, and from when
@@ -801,6 +813,16 @@ mod tests {
         assert!((first.at(half) - 0.05).abs() < 1e-6, "fades linearly");
         assert_eq!(first.at(99.0), 0.0);
         assert_eq!(first.at(first.until as f32), 0.0);
+    }
+
+    #[test]
+    fn nothing_takes_while_steady() {
+        let chill = Chill { slow: 0.5, slow_ticks: 20, root_ticks: 10, lift_ticks: 5 };
+        let mut chilled = Chilled { steady: Span { from: 10, until: 20 }, ..Chilled::default() };
+        chilled.apply(chill, 15);
+        assert_eq!(chilled, Chilled { steady: Span { from: 10, until: 20 }, ..Chilled::default() }, "unstoppable mid-windup");
+        chilled.apply(chill, 20);
+        assert!(chilled.rooted_at(21) && chilled.lifted_at(21) && chilled.speed_factor(21) < 1.0, "takes once the blow is off");
     }
 
     #[test]

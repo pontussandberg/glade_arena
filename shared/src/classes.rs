@@ -281,6 +281,22 @@ pub struct AttackDef {
     /// default).
     #[serde(default)]
     pub burst: Option<BurstDef>,
+    /// Each hit shoves the one struck back, away from the striker (none by default).
+    #[serde(default)]
+    pub shove: Option<ShoveDef>,
+    /// Nothing stops the swing: while winding up, no slow, root or knock-up takes (`Chilled::steady`).
+    #[serde(default)]
+    pub unstoppable: bool,
+}
+
+/// A hit shoves the one struck (`AttackDef::shove`): `distance` meters straight away from the
+/// striker (a bigger one less; a boss not at all). One shoved into what it can't pass (a wall, a
+/// rock, a tree) is stunned there, rooted `wall_root_ticks`.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct ShoveDef {
+    pub distance: f32,
+    #[serde(default)]
+    pub wall_root_ticks: u32,
 }
 
 /// A shot's burst where it hits (`AttackDef::burst`): everyone else within `radius` of the one
@@ -475,6 +491,7 @@ impl ClassDef {
             ("far_scale", percent(self.attack.far_scale())),
             ("attack_slow", percent(self.attack.chill.slow)),
             ("attack_slow_time", seconds(self.attack.chill.slow_ticks)),
+            ("attack_lift", seconds(self.attack.chill.lift_ticks)),
             ("crit", percent(self.crit.chance)),
             ("crit_vs_frozen", percent(self.crit.vs_frozen)),
             ("crit_empowered", percent(self.crit.empowered)),
@@ -485,6 +502,9 @@ impl ClassDef {
         }
         if let Some(burst) = self.attack.burst {
             all.extend([("burst_radius", format!("{} m", burst.radius)), ("burst_share", percent(burst.share))]);
+        }
+        if let Some(shove) = self.attack.shove {
+            all.extend([("shove_distance", format!("{} m", shove.distance)), ("wall_stun", seconds(shove.wall_root_ticks))]);
         }
         if let Some(follow_up) = self.attack.follow_up {
             all.extend([
@@ -796,6 +816,9 @@ mod tests {
             chill_is_sane(&c.id, c.attack.chill);
             assert!(!c.attack.pierces || c.attack.kind.shot().is_some(), "{}: pierces, but throws nothing", c.id);
             assert!(c.attack.burst.is_none() || c.attack.kind.shot().is_some(), "{}: bursts, but throws nothing", c.id);
+            if let Some(ShoveDef { distance, wall_root_ticks }) = c.attack.shove {
+                assert!((0.2..=4.0).contains(&distance) && wall_root_ticks <= 2 * TICK_HZ as u32, "{}: shove", c.id);
+            }
             // A knock-up shorter than the empowered attack: the striker alone can't chain it.
             if let Some(follow_up) = c.attack.follow_up {
                 let quickest = c.attack.period_ticks(c.attack.speed(true));
@@ -854,7 +877,7 @@ mod tests {
     #[test]
     fn far_scale_scales_with_distance() {
         let kind = |far_scale| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_scale };
-        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None, pierces: false, burst: None };
+        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None, pierces: false, burst: None, shove: None, unstoppable: false };
         assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(3.0))).damage_at(d)), [10, 20, 30, 30]);
         assert_eq!(attack(kind(None)).damage_at(5.0), 10);
     }

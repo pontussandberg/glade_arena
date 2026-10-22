@@ -4,7 +4,7 @@
     id: "breaker",
     name: "Breaker",
     role: "Juggernaut",
-    blurb: "The maul comes down slow, and whatever it finds stops mattering.",
+    blurb: "The maul comes round slow, and nothing on earth makes it stop. Whatever it finds is knocked off its feet.",
     max_hp: 150,
     move_speed: 3.4,
     attack: (
@@ -12,6 +12,11 @@
         attack_ticks: 60,
         windup: 0.55,
         kind: Melee(range: 2.0, width: 1.5, from: 0.6),
+        // Every blow knocks its targets down, briefly: a stagger, not a launch.
+        chill: (lift_ticks: 8),
+        // And nothing stops the swing once it's started: slows, roots and knock-ups bounce off
+        // him while he winds up.
+        unstoppable: true,
     ),
     abilities: [
         (
@@ -27,6 +32,10 @@
             kind: Dash(distance: 7.0, min_distance: Some(2.0), ticks: 8, damage: 16),
         ),
     ],
+    passive: Some(
+        name: "Unstoppable",
+        description: "Nothing stops the swing: while winding up an auto-attack you can't be slowed, rooted or knocked up. Every blow knocks its targets off their feet for {attack_lift}.",
+    ),
     // His own figure, bigger than anyone: the silhouette is the warning.
     look: Some(figure: "breaker", size: 1.14, tint: (1.0, 1.0, 1.0)),
     crit: (chance: 0.05),

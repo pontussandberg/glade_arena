@@ -53,7 +53,80 @@ pub(super) fn play_new(
             FxKind::Coins => coins(c, &art, &scene),
             FxKind::Rise => rise(c, &art, &scene),
             FxKind::Mend => mend(c, &art, &scene),
+            FxKind::Wallop => wallop(c, &art, &scene),
         }
+    }
+}
+
+/// The warden's shield driving in: the air shoved ahead of it as a fan of dust streaking out
+/// low along the thrust, and grit kicked forward off the ground under it. Where the thrust went,
+/// from `at` along `dir`.
+pub(super) fn shield_push(c: &mut Commands, art: &FxArt, now: f32, at: Vec2, dir: Vec2, seed: u32) {
+    let s = Scene { start: now, seed, at: to_world(at + dir * 0.9, 0.0), to: to_world(at + dir * 1.7, 0.0), radius: 0.5, lasts: 0.3 };
+    let forward = (s.to - s.at).normalize_or(Vec3::X);
+    let across = Vec3::new(-forward.z, 0.0, forward.x);
+    // The tongue lies along +X: turned about the up to point the way the shield went. A fan of
+    // three, the middle one longest, each racing on ahead as it thins out.
+    let yaw = (-forward.z).atan2(forward.x);
+    for (i, spread) in [-0.4f32, 0.0, 0.4].into_iter().enumerate() {
+        let k = 60 + i as u32 * 4;
+        let length = (0.9 - 0.3 * spread.abs()) * (0.85 + 0.3 * s.r(k));
+        let streak = Motion::Thrown { velocity: forward * (2.5 + 1.5 * s.r(k + 1)), gravity: 0.0, tumble: Vec3::ZERO };
+        let part = Part::new(s.start + 0.01 * i as f32, [0.04, 0.1, 0.32], Ink::Dust, ground(s.at + across * spread * 0.35, 0.05)).sized(Vec3::new(length, 1.0, 0.32));
+        put(c, art, &art.tongue, part.facing(yaw + spread).grow(0.3).shrink(1.5).flicker(0.2).motion(streak));
+    }
+    for i in 0..7 {
+        let k = 20 + i * 6;
+        let velocity = forward * (1.5 + 2.5 * s.r(k)) + across * (s.r(k + 1) - 0.5) * 1.6 + Vec3::Y * (0.6 + 1.4 * s.r(k + 2));
+        let tumble = Vec3::new(s.r(k + 3) - 0.5, s.r(k + 4) - 0.5, s.r(k + 5) - 0.5) * 20.0;
+        let part = Part::new(s.start, [0.01, 0.3, 0.5], Ink::Earth, s.at + across * (s.r(k + 6) - 0.5) * 0.8 + Vec3::Y * 0.1).size(0.03 + 0.04 * s.r(k + 1));
+        put(c, art, &art.chunk, part.motion(Motion::Thrown { velocity, gravity: 11.0, tumble }).shrink(0.0));
+    }
+}
+
+/// Someone slammed into a wall: a flash of the hit, a cloud of dust knocked off the stone
+/// welling up and hanging, grit and chips knocked off it and falling, and, for as long as they're
+/// stunned there (`lasts`), motes of dust reeling round their head.
+fn wallop(c: &mut Commands, art: &FxArt, s: &Scene) {
+    let r = s.radius;
+    let dazed = s.lasts.max(0.3);
+    put(c, art, &art.glint, Part::new(s.start, [0.0, 0.1, 0.3], Ink::Glint, s.at + Vec3::Y * 0.9).size(r * 1.3).facing(s.r(1) * TAU).shrink(0.4));
+    for i in 0..3u32 {
+        let k = 10 + i * 4;
+        let puff = Motion::Thrown { velocity: s.out(k) * 0.5 + Vec3::Y * (0.6 + 0.4 * s.r(k + 1)), gravity: -0.25, tumble: Vec3::ZERO };
+        let part = Part::new(s.start + 0.03 * i as f32, [0.08, 0.5, 1.3], Ink::Dust, s.at + Vec3::Y * (0.3 + 0.3 * i as f32)).size(r * (0.9 + 0.3 * s.r(k + 2)));
+        put(c, art, s.pick(k + 3, &art.splotch), part.grow(0.3).shrink(1.8).spin(0.6).motion(puff));
+    }
+    for i in 0..11 {
+        let k = 30 + i * 6;
+        let velocity = s.out(k) * (1.2 + 2.0 * s.r(k + 1)) + Vec3::Y * (1.2 + 2.4 * s.r(k + 2));
+        let tumble = Vec3::new(s.r(k + 3) - 0.5, s.r(k + 4) - 0.5, s.r(k + 5) - 0.5) * 24.0;
+        let part = Part::new(s.start, [0.01, 0.5, 0.8], Ink::Earth, s.at + Vec3::Y * (0.4 + 0.7 * s.r(k + 6))).size(0.04 + 0.06 * s.r(k + 1));
+        put(c, art, &art.chunk, part.motion(Motion::Thrown { velocity, gravity: 12.0, tumble }).shrink(0.0));
+    }
+    // Seeing stars: dust reeling round the head while the stun lasts.
+    for i in 0..5 {
+        let motion = Motion::Orbit { center: s.at, angle: i as f32 / 5.0 * TAU, speed: 7.0, radius: (0.42, 0.3), height: (1.55, 1.7) };
+        put(c, art, &art.mote, Part::new(s.start + 0.05, [0.1, dazed - 0.1, dazed], Ink::Dust, s.at).size(0.09).motion(motion).flicker(0.25));
+    }
+}
+
+/// The breaker's maul coming down: the ground breaking under the blow all along its lane, dark
+/// cracks spreading from where the head lands, earth thrown up and tumbling back, and a low
+/// pall of dust rolling out from it.
+pub(super) fn tremor(c: &mut Commands, art: &FxArt, now: f32, at: Vec2, dir: Vec2, seed: u32) {
+    let s = Scene { start: now, seed, at: to_world(at + dir * 1.3, 0.0), to: to_world(at + dir * 2.0, 0.0), radius: 0.9, lasts: 0.5 };
+    let r = s.radius;
+    put(c, art, s.pick(1, &art.cracks), Part::new(s.start, [0.04, 1.0, 1.8], Ink::Scorch, ground(s.at, 0.025)).sized(Vec3::new(r * 1.3, 1.0, r * 1.3)).facing(s.r(2) * TAU).grow(0.2));
+    put(c, art, s.pick(3, &art.streaks), Part::new(s.start, [0.05, 0.8, 1.5], Ink::Scorch, ground(s.at, 0.022)).sized(Vec3::new(r * 1.1, 1.0, r * 1.1)).facing(s.r(4) * TAU).grow(0.3));
+    // Dust bursting out from under the head: a ragged splotch, not a ring.
+    put(c, art, s.pick(5, &art.splotch), Part::new(s.start, [0.08, 0.15, 0.55], Ink::Dust, ground(s.at, 0.05)).size(r * 0.6).facing(s.r(6) * TAU).grow(0.2).shrink(2.4));
+    clods(c, art, &s, 10, 2.2, Ink::Earth);
+    for i in 0..3u32 {
+        let k = 80 + i * 5;
+        let roll = Motion::Thrown { velocity: s.out(k) * 0.8 + Vec3::Y * 0.3, gravity: -0.15, tumble: Vec3::ZERO };
+        let part = Part::new(s.start + 0.05 * i as f32, [0.12, 0.4, 1.1], Ink::Dust, s.spot(k + 1, 0.6) + Vec3::Y * 0.15).size(r * 0.7);
+        put(c, art, s.pick(k + 2, &art.splotch), part.grow(0.3).shrink(1.9).spin(0.5).motion(roll));
     }
 }
 
@@ -69,6 +142,7 @@ fn sound_of(fx: &Fx, sounds: &mut crate::audio::SoundQueue, me: &Query<&Pos, Wit
         FxKind::Blast(FxColor::Storm) => (Sfx::Thunder, 44.0, 0.0),
         FxKind::Bolt => (Sfx::Thunder, 44.0, lands),
         FxKind::Coins => (Sfx::Coin, 16.0, 0.0),
+        FxKind::Wallop => (Sfx::Wallop, 22.0, 0.0),
         _ => return,
     };
     sounds.push_in(sfx, earshot(fx.at.distance(me.0), reach), delay);

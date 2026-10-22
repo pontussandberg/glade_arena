@@ -24,7 +24,34 @@ pub struct FxPlugin;
 impl Plugin for FxPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_art);
-        app.add_systems(Update, ((recipes::play_new, downed::mark_downed, death::burst_deaths, death::spark_hits), drive_parts).chain());
+        app.add_systems(Update, ((recipes::play_new, strike_fx, downed::mark_downed, death::burst_deaths, death::spark_hits), drive_parts).chain());
+    }
+}
+
+/// Each hero's auto-attack lands with a contact effect of its own, where its swing went
+/// (`LastSwing`): the warden's shield shoving the air ahead of it, the breaker's maul breaking
+/// the ground. Once per swing, by the swing's own tick, never by the component's change flag
+/// (replication marks it changed every update).
+fn strike_fx(
+    mut commands: Commands,
+    time: Res<Time>,
+    art: Res<FxArt>,
+    swings: Query<(Entity, &Pos, &ClassId, &LastSwing), (Changed<LastSwing>, With<PlayerId>)>,
+    mut seen: Local<bevy::platform::collections::HashMap<Entity, u32>>,
+) {
+    let now = time.elapsed_secs();
+    for (entity, pos, class, swing) in &swings {
+        // The first sighting only notes the swing: it may be long past.
+        match seen.insert(entity, swing.tick) {
+            Some(before) if before != swing.tick => {}
+            _ => continue,
+        }
+        let dir = swing.dir.normalize_or(Vec2::X);
+        match class.def().figure() {
+            "warden" => recipes::shield_push(&mut commands, &art, now, pos.0, dir, swing.tick),
+            "breaker" => recipes::tremor(&mut commands, &art, now, pos.0, dir, swing.tick),
+            _ => {}
+        }
     }
 }
 
@@ -70,10 +97,12 @@ pub(crate) enum Ink {
     HealMist,
     Wisp,
     Haste,
+    /// Dust and grit kicked up: pale, see-through.
+    Dust,
 }
 
 impl Ink {
-    const ALL: [Ink; 28] = [
+    const ALL: [Ink; 29] = [
         Ink::Scorch,
         Ink::Smoke,
         Ink::Earth,
@@ -102,6 +131,7 @@ impl Ink {
         Ink::HealMist,
         Ink::Wisp,
         Ink::Haste,
+        Ink::Dust,
     ];
 
     /// (color, opacity at most, glow, layer).
@@ -136,6 +166,7 @@ impl Ink {
             Ink::HealMist => (palette::HEAL, 0.22, 2.0, 1),
             Ink::Wisp => (palette::WISP, 0.85, 6.0, 4),
             Ink::Haste => (palette::HASTE, 0.9, 5.0, 4),
+            Ink::Dust => (rgb(0xC6, 0xB6, 0x96), 0.5, 0.4, 4),
         }
     }
 }

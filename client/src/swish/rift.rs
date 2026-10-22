@@ -228,6 +228,11 @@ pub(super) fn strike_ground(
         if !std::mem::take(&mut blade.striking) {
             continue;
         }
+        // Only a blade that tears the ground open (the revenant's) breaks it: every other
+        // weapon lands with an effect of its own (`fx::strike_fx`).
+        if class.def().attack.rift.is_none() {
+            continue;
+        }
         if let Some(rift) = arena_shared::sim::Rift::torn(id.0, *class, pos.0, swing) {
             // Where it burns its striker's foes (`burn_in_rifts`), while it's open.
             if rift.burn > 0 {

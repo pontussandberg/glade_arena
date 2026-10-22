@@ -305,17 +305,29 @@ pub(super) fn attack(
         if next.swing.is_some_and(|w| w.started_at == now.0) {
             input.move_to = None;
         }
+        // Unstoppable: nothing applied through the windup takes (`Chilled::steady`), from the
+        // click to the blow going off.
+        if class.def().attack.unstoppable
+            && let Ok((.., mut chilled, _, _, _)) = targets.get_mut(entity)
+        {
+            let steady = next.winding_up().map_or(Span::default(), |swing| Span { from: swing.started_at, until: swing.releases_at(&class.def().attack) });
+            if chilled.steady != steady {
+                chilled.steady = steady;
+            }
+        }
         // Only on change: AttackState is replicated.
         state.set_if_neq(next);
     }
 }
 
-/// Server-only: knocked back along `dir` (a monster hit by a player's auto-attack), `left` meters
-/// of it still to go.
+/// Server-only: knocked back along `dir` (a monster hit by a player's auto-attack, anyone hit by
+/// an attack that shoves), `left` meters of it still to go. Meeting a wall before then with
+/// `slam` ticks of stun to give, it's stunned there (`ShoveDef::wall_root_ticks`).
 #[derive(Component)]
 pub(crate) struct Shoved {
     pub(crate) dir: Vec2,
     pub(crate) left: f32,
+    pub(crate) slam: u32,
 }
 
 /// How far a player's auto-attack knocks a monster back (a bigger one less; bosses not at all),
@@ -323,9 +335,19 @@ pub(crate) struct Shoved {
 pub(crate) const KNOCKBACK: f32 = 0.55;
 const SHOVE_SPEED: f32 = 7.0;
 
-/// The knocked back slide, a step a tick, until it's gone its way or meets a wall.
-pub(super) fn shove(mut commands: Commands, lobby: Res<Lobby>, mut shoved: Query<(Entity, &mut Pos, &InRoom, &mut Shoved)>) {
-    for (entity, mut pos, room, mut shove) in &mut shoved {
+/// How far round someone slammed into a wall the wallop shows.
+const WALLOP_RADIUS: f32 = 0.7;
+
+/// The knocked back slide, a step a tick, until it's gone its way or meets a wall: slammed into
+/// it, if the shove had a slam in it, stunned there, the wallop shown.
+pub(super) fn shove(
+    mut commands: Commands,
+    timeline: Res<LocalTimeline>,
+    lobby: Res<Lobby>,
+    mut shoved: Query<(Entity, &mut Pos, &InRoom, &mut Shoved, &mut Chilled)>,
+) {
+    let now = timeline.tick().0;
+    for (entity, mut pos, room, mut shove, mut chilled) in &mut shoved {
         let step = shove.left.min(SHOVE_SPEED * TICK_DT);
         let next = pos.0 + shove.dir * step;
         if lobby.map(room).line_walkable(pos.0, next) {
@@ -333,6 +355,10 @@ pub(super) fn shove(mut commands: Commands, lobby: Res<Lobby>, mut shoved: Query
             shove.left -= step;
         } else {
             shove.left = 0.0;
+            if shove.slam > 0 {
+                chilled.apply(Chill { root_ticks: shove.slam, ..Chill::default() }, now);
+                crate::fx::spawn_fx(&mut commands, *room, Fx::at(FxKind::Wallop, pos.0, WALLOP_RADIUS, now, shove.slam));
+            }
         }
         if shove.left <= 1e-4 {
             commands.entity(entity).remove::<Shoved>();

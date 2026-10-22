@@ -4,7 +4,7 @@
     id: "warden",
     name: "Warden",
     role: "Bulwark",
-    blurb: "A wall with a sword. Rushes in behind the shield and slams the ground to slow the press.",
+    blurb: "A wall with a sword. Every thrust drives the shield in first: whatever it hits goes backward, and what meets a wall stays there.",
     max_hp: 165,
     move_speed: 3.3,
     attack: (
@@ -12,6 +12,9 @@
         attack_ticks: 44,
         windup: 0.4,
         kind: Melee(range: 1.7, width: 1.1),
+        // The shield goes in ahead of the blade: whoever it hits is driven back, and one driven
+        // into a wall is stunned against it.
+        shove: Some(distance: 1.2, wall_root_ticks: 24),
     ),
     abilities: [
         (
@@ -27,6 +30,10 @@
             kind: Nova(radius: 3.2, damage: 14, chill: (slow: 0.5, slow_ticks: 48)),
         ),
     ],
+    passive: Some(
+        name: "Hold the Line",
+        description: "Every auto-attack hit shoves its target {shove_distance} back. An enemy shoved into a wall is stunned for {wall_stun}.",
+    ),
     // His own figure, a head over the crowd: plate reads as weight.
     look: Some(figure: "warden", size: 1.06, tint: (1.0, 1.0, 1.0)),
     crit: (chance: 0.05),

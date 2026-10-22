@@ -34,10 +34,17 @@ pub enum Sfx {
     Swing,
     /// The revenant's glaive: a broad, heavy cut with a hiss off the edge.
     GlaiveSwing,
-    /// The warden's arming sword: one crisp cut with a whisper of steel in it.
-    SwordSwing,
-    /// The breaker's maul: a long, deep haul of air with real mass behind it.
+    /// The warden's thrust: the shield's face driven in first, the sword's steel a beat behind.
+    ShieldThrust,
+    /// The warden gathering: the shield coming up, the sword drawn back behind its rim.
+    ShieldReady,
+    /// Someone slammed into a wall.
+    Wallop,
+    /// The breaker's maul coming round: a long, deep haul of air, then the head landing in the
+    /// earth, the haft groaning with it.
     MaulSwing,
+    /// The breaker winding up: the haft creaking as the whole body loads behind it.
+    MaulReady,
     /// The shade's knives: two quick snicks, one hand after the other.
     KnifeSwing,
     /// A zombie's claws: a ragged, breathy swipe, nothing clean about it.
@@ -129,6 +136,20 @@ fn weapon_pitch(class: arena_shared::protocol::ClassId) -> f32 {
     (40.0 / class.def().attack.attack_ticks as f32).clamp(0.65, 1.35)
 }
 
+/// What a class's auto-attack sounds like: as it gathers (the windup) and as it goes off, and
+/// the pitch both play at. Each hero's is engineered for its weapon and the fantasy behind it; a
+/// figure without its own gets the plain gather and swish, pitched by its weapon's weight.
+fn attack_voice(class: arena_shared::protocol::ClassId) -> (Sfx, Sfx, f32) {
+    match class.def().figure() {
+        "revenant" => (Sfx::Windup, Sfx::GlaiveSwing, 1.0),
+        "warden" => (Sfx::ShieldReady, Sfx::ShieldThrust, 1.0),
+        "breaker" => (Sfx::MaulReady, Sfx::MaulSwing, 1.0),
+        "shade" => (Sfx::Windup, Sfx::KnifeSwing, 1.0),
+        "zombie" => (Sfx::Windup, Sfx::ClawSwing, 1.0),
+        _ => (Sfx::Windup, Sfx::Swing, weapon_pitch(class)),
+    }
+}
+
 /// Every shot loosed nearby sounds as it leaves the hand, as what it is: wind over a spear, a
 /// whoof of fire, a shiver of frost, a crackle of storm.
 fn loose_sounds(
@@ -168,7 +189,8 @@ fn windup_sounds(
         // The first sighting only notes the swing: it may be long past.
         match heard.insert(attacker, swing.started_at) {
             Some(seen) if seen != swing.started_at => {
-                queue.push_pitched(Sfx::Windup, 0.4 * earshot(pos.0.distance(me.0), 10.0), 0.0, weapon_pitch(*class));
+                let (gather, _, pitch) = attack_voice(*class);
+                queue.push_pitched(gather, 0.4 * earshot(pos.0.distance(me.0), 10.0), 0.0, pitch);
             }
             _ => {}
         }
@@ -232,17 +254,8 @@ fn swing_sounds(
         // The first sighting only notes the swing: it may be long past.
         match heard.insert(swinger, swing.tick) {
             Some(seen) if seen != swing.tick => {
-                // Each figure strikes with its own engineered sound; one without it falls back
-                // to the plain swish, pitched by its weapon's weight.
-                let (sfx, pitch) = match class.def().figure() {
-                    "revenant" => (Sfx::GlaiveSwing, 1.0),
-                    "warden" => (Sfx::SwordSwing, 1.0),
-                    "breaker" => (Sfx::MaulSwing, 1.0),
-                    "shade" => (Sfx::KnifeSwing, 1.0),
-                    "zombie" => (Sfx::ClawSwing, 1.0),
-                    _ => (Sfx::Swing, weapon_pitch(*class)),
-                };
-                queue.push_pitched(sfx, 0.7 * earshot(pos.0.distance(me.0), 13.0), 0.0, pitch);
+                let (_, strike, pitch) = attack_voice(*class);
+                queue.push_pitched(strike, 0.7 * earshot(pos.0.distance(me.0), 13.0), 0.0, pitch);
             }
             _ => {}
         }
@@ -445,23 +458,76 @@ mod web {
                         self.noise(Highpass, 3500.0, 2800.0, 0.8, now + 0.02, 0.06, &e);
                     }
                 }
-                Sfx::SwordSwing => {
-                    // One crisp cut, and the faintest ring of steel under it (a held tone, not
-                    // a sweep).
-                    if let Some(e) = self.env(now, 0.03, 0.12 * g, 0.11) {
-                        self.noise(Bandpass, 1750.0 * p, 720.0, 1.2, now, 0.11, &e);
+                Sfx::ShieldReady => {
+                    // The shield coming up and the sword cocked back behind its rim: a creak of
+                    // strap and leather, then a short rasp of steel clearing the rim. A gather
+                    // with no air in it: a thrust is coiled, not swung.
+                    if let Some(e) = self.env(now, 0.01, 0.05 * g, 0.07) {
+                        self.noise(Lowpass, 420.0 * p, 300.0, 0.7, now, 0.07, &e);
                     }
-                    if let Some(e) = self.env(now + 0.015, 0.004, 0.03 * g, 0.07) {
-                        self.osc(Triangle, 2050.0 * p, 2050.0 * p, now + 0.015, 0.07, &e);
+                    if let Some(e) = self.env(now + 0.03, 0.005, 0.035 * g, 0.06) {
+                        self.noise(Highpass, 5200.0, 5200.0, 1.0, now + 0.03, 0.06, &e);
+                    }
+                }
+                Sfx::ShieldThrust => {
+                    // In the order the body does it: the shield's face driven in first, a flat,
+                    // broad thud (a low tone with a slap of air on it), then the sword a beat
+                    // behind, a short narrow whisk of steel with the edge's ring held under it.
+                    if let Some(e) = self.env(now, 0.004, 0.3 * g, 0.09) {
+                        self.osc(Sine, 190.0 * p, 115.0, now, 0.09, &e);
+                    }
+                    if let Some(e) = self.env(now, 0.003, 0.14 * g, 0.045) {
+                        self.noise(Lowpass, 900.0 * p, 350.0, 0.8, now, 0.045, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.035, 0.012, 0.11 * g, 0.09) {
+                        self.noise(Bandpass, 1900.0 * p, 800.0, 1.3, now + 0.035, 0.09, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.045, 0.004, 0.03 * g, 0.08) {
+                        self.osc(Triangle, 2050.0 * p, 2050.0 * p, now + 0.045, 0.08, &e);
+                    }
+                }
+                Sfx::Wallop => {
+                    // A body driven into stone: a deep dull thud, the crack of the hit off the
+                    // wall on top of it, and grit sifting down after.
+                    if let Some(e) = self.env(now, 0.005, 0.55 * g, 0.16) {
+                        self.osc(Sine, 130.0 * p, 58.0, now, 0.16, &e);
+                    }
+                    if let Some(e) = self.env(now, 0.002, 0.3 * g, 0.05) {
+                        self.noise(Bandpass, 1100.0 * p, 1100.0 * p, 0.9, now, 0.05, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.04, 0.02, 0.08 * g, 0.18) {
+                        self.noise(Highpass, 3800.0, 3800.0, 0.7, now + 0.04, 0.18, &e);
+                    }
+                }
+                Sfx::MaulReady => {
+                    // The whole body loading behind the haft: a long, low creak of wood under
+                    // strain (a low saw, barely there), and the air beginning to move.
+                    if let Some(e) = self.env(now, 0.12, 0.028 * g, 0.3) {
+                        self.osc(Sawtooth, 96.0 * p, 104.0 * p, now, 0.3, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.05, 0.2, 0.05 * g, 0.3) {
+                        self.noise(Lowpass, 220.0 * p, 420.0 * p, 0.7, now + 0.05, 0.3, &e);
                     }
                 }
                 Sfx::MaulSwing => {
-                    // The maul hauls through: long, low, and all mass.
-                    if let Some(e) = self.env(now, 0.08, 0.16 * g, 0.26) {
-                        self.noise(Lowpass, 520.0 * p, 170.0, 0.8, now, 0.26, &e);
+                    // The maul comes round: a long, low haul of air gathering to the blow; then
+                    // the head lands, a deep thud in the earth with a crack of stone off it, the
+                    // haft groaning, and grit rattling down after. Haul, land, settle: the mass
+                    // is in the length of it.
+                    if let Some(e) = self.env(now, 0.07, 0.14 * g, 0.2) {
+                        self.noise(Lowpass, 560.0 * p, 180.0, 0.8, now, 0.2, &e);
                     }
-                    if let Some(e) = self.env(now, 0.06, 0.09 * g, 0.2) {
-                        self.osc(Sine, 72.0 * p, 44.0, now, 0.2, &e);
+                    if let Some(e) = self.env(now + 0.04, 0.004, 0.5 * g, 0.24) {
+                        self.osc(Sine, 78.0 * p, 36.0, now + 0.04, 0.24, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.04, 0.002, 0.22 * g, 0.05) {
+                        self.noise(Bandpass, 640.0 * p, 640.0 * p, 1.1, now + 0.04, 0.05, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.05, 0.01, 0.03 * g, 0.12) {
+                        self.osc(Sawtooth, 88.0 * p, 80.0 * p, now + 0.05, 0.12, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.09, 0.03, 0.06 * g, 0.22) {
+                        self.noise(Highpass, 3200.0, 3200.0, 0.7, now + 0.09, 0.22, &e);
                     }
                 }
                 Sfx::KnifeSwing => {

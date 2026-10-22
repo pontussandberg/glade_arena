@@ -10,6 +10,10 @@ mod frost_mage;
 use frost_mage::*;
 mod zombie;
 use zombie::*;
+mod warden;
+use warden::*;
+mod breaker;
+use breaker::*;
 
 /// How a rigged class moves. Keyframes are (carrying, fully drawn back, released, dashing),
 /// radians. Limbs: positive swings forward. Twist: negative turns the weapon (right, +Z)
@@ -116,9 +120,10 @@ pub(crate) fn moves(class_key: &str) -> &'static Moves {
         "revenant" => &REVENANT,
         "frost_mage" => &FROST_MAGE,
         "zombie" => &ZOMBIE,
-        // The recruits borrow the archetype that fits their weapon: the heavy overhead blow for
-        // sword and maul, the staff caster's casts, the claw-swipe for the knives.
-        "warden" | "breaker" => &REVENANT,
+        "warden" => &WARDEN,
+        "breaker" => &BREAKER,
+        // The recruits still to get moves of their own borrow the archetype that fits their
+        // weapon: the staff caster's casts, the claw-swipe for the knives.
         "pyre_witch" | "stormweaver" => &FROST_MAGE,
         "shade" => &ZOMBIE,
         // The merchant stands like a mage with a staff (it never fights).
