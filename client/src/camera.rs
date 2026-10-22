@@ -230,13 +230,22 @@ pub(crate) fn wheel_notches(scroll: &AccumulatedMouseScroll) -> f32 {
 }
 
 fn spawn_camera(mut commands: Commands) {
+    use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection};
     commands.spawn((
         Camera3d::default(),
         // HDR with a filmic tonemap and a whisper of bloom: torches, eyes and spell glow bleed
         // light instead of clipping to flat white, and the dusk rolls off instead of banding.
         bevy::camera::Hdr,
         bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
-        bevy::post_process::bloom::Bloom { intensity: 0.12, ..bevy::post_process::bloom::Bloom::NATURAL },
+        bevy::post_process::bloom::Bloom { intensity: 0.16, ..bevy::post_process::bloom::Bloom::NATURAL },
+        // The painted grade: the filmic tonemap alone desaturates, so saturation is bought back
+        // with interest, shadows sink and cool, highlights get a touch of lift.
+        ColorGrading {
+            global: ColorGradingGlobal { post_saturation: 1.22, ..Default::default() },
+            shadows: ColorGradingSection { saturation: 1.05, contrast: 1.08, ..Default::default() },
+            midtones: ColorGradingSection { saturation: 1.12, contrast: 1.05, ..Default::default() },
+            highlights: ColorGradingSection { saturation: 1.05, gain: 1.03, ..Default::default() },
+        },
         Transform::from_translation(OFFSET * ZOOM_RANGE.1).looking_at(Vec3::ZERO, Vec3::Y),
         arena::haze(),
         CameraRig { focus: Vec3::ZERO, zoom: ZOOM_RANGE.1 },

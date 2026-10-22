@@ -35,22 +35,23 @@ pub use scene::*;
 pub mod palette {
     use bevy::color::Color;
 
-    // The world: below ~50% saturation, 25-72% lightness.
-    pub const MOSS: Color = Color::srgb_u8(0x6F, 0x8F, 0x4E);
-    pub const MEADOW: Color = Color::srgb_u8(0x8A, 0xA0, 0x5A);
-    pub const FERN: Color = Color::srgb_u8(0x4E, 0x77, 0x48);
-    pub const PINE: Color = Color::srgb_u8(0x2E, 0x4B, 0x3C);
+    // The world: painted, not plastic — saturated enough to carry through the filmic grade,
+    // 25-72% lightness.
+    pub const MOSS: Color = Color::srgb_u8(0x65, 0x96, 0x44);
+    pub const MEADOW: Color = Color::srgb_u8(0x94, 0xAC, 0x4C);
+    pub const FERN: Color = Color::srgb_u8(0x44, 0x80, 0x3E);
+    pub const PINE: Color = Color::srgb_u8(0x26, 0x50, 0x3A);
     pub const SLATE: Color = Color::srgb_u8(0x6C, 0x76, 0x84);
     pub const STONE: Color = Color::srgb_u8(0x84, 0x8A, 0x93);
     pub const WALL: Color = Color::srgb_u8(0x69, 0x71, 0x7D);
     pub const BARK: Color = Color::srgb_u8(0x5E, 0x48, 0x38);
-    pub const PATH: Color = Color::srgb_u8(0x95, 0x8C, 0x6E);
+    pub const PATH: Color = Color::srgb_u8(0x9E, 0x8E, 0x62);
     pub const BANK: Color = Color::srgb_u8(0x5A, 0x51, 0x41);
     pub const RIVERBED: Color = Color::srgb_u8(0x3D, 0x4A, 0x44);
-    pub const POND: Color = Color::srgb_u8(0x4F, 0x86, 0x82);
-    pub const HEATHER: Color = Color::srgb_u8(0x9A, 0x86, 0xB6);
+    pub const POND: Color = Color::srgb_u8(0x3E, 0x8C, 0x86);
+    pub const HEATHER: Color = Color::srgb_u8(0xA4, 0x7E, 0xC8);
     /// Boggy ground, wetter and browner than moss.
-    pub const MARSH: Color = Color::srgb_u8(0x5E, 0x66, 0x45);
+    pub const MARSH: Color = Color::srgb_u8(0x5E, 0x6C, 0x3C);
     /// The bottom of a chasm, the darkest the world goes.
     pub const ABYSS: Color = Color::srgb_u8(0x3A, 0x42, 0x50);
     /// Hemp rope on the rope bridges.
@@ -108,7 +109,7 @@ pub mod palette {
     pub const WISP: Color = Color::srgb_u8(0xB8, 0xFF, 0xD6);
     /// Eyes burning a cold, spectral white.
     pub const SOUL: Color = Color::srgb_u8(0xF2, 0xFA, 0xFF);
-    pub const HAZE: Color = Color::srgb_u8(0xA9, 0xB8, 0xB6);
+    pub const HAZE: Color = Color::srgb_u8(0xC2, 0xA3, 0x8E);
     /// A zombie's rotting grey-green skin, its darker rot and wounds, and the dirty linen it
     /// died in.
     pub const ROT: Color = Color::srgb_u8(0x7E, 0x8A, 0x66);
@@ -134,9 +135,10 @@ pub mod palette {
     /// What a slowed fighter's colors are multiplied by: a cold blue cast.
     pub const FROSTBITE: Color = Color::srgb_u8(0x8C, 0xB8, 0xFF);
 
-    // Light. Fire is the one warm, saturated thing in the world: small, static and flickering.
-    pub const SUN: Color = Color::srgb_u8(0xFF, 0xE2, 0xC4);
-    pub const SKY: Color = Color::srgb_u8(0x8F, 0xA4, 0xC2);
+    // Light. A hot gold key against a blue sky fill: sunlit faces go warm, shadows go cool, and
+    // the frame splits warm/cool instead of sitting in grey.
+    pub const SUN: Color = Color::srgb_u8(0xFF, 0xC9, 0x8E);
+    pub const SKY: Color = Color::srgb_u8(0x7E, 0x9A, 0xD4);
     pub const TORCH_FLAME: Color = Color::srgb_u8(0xFF, 0xB2, 0x57);
     pub const TORCH_LIGHT: Color = Color::srgb_u8(0xFF, 0x94, 0x43);
 
