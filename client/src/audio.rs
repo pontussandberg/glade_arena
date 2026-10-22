@@ -154,15 +154,25 @@ fn heartbeat(
     queue.push(Sfx::Heart, 0.45 + (0.25 - fraction));
 }
 
-/// Every melee swing nearby cuts the air (`LastSwing` comes from the server, once per strike).
+/// Every melee swing nearby cuts the air, once per strike: by the swing's own tick, never by
+/// the component's change flag — replication marks that changed every update, which played a
+/// roar of swishes from anyone standing near (the merchant at every camp).
 fn swing_sounds(
     me: Query<&arena_shared::protocol::Pos, With<crate::Me>>,
-    swings: Query<&arena_shared::protocol::Pos, (Changed<arena_shared::protocol::LastSwing>, With<arena_shared::protocol::PlayerId>)>,
+    swings: Query<
+        (Entity, &arena_shared::protocol::Pos, &arena_shared::protocol::LastSwing),
+        (Changed<arena_shared::protocol::LastSwing>, With<arena_shared::protocol::PlayerId>),
+    >,
     mut queue: ResMut<SoundQueue>,
+    mut heard: Local<bevy::platform::collections::HashMap<Entity, u32>>,
 ) {
     let Ok(me) = me.single() else { return };
-    for pos in &swings {
-        queue.push(Sfx::Swing, 0.7 * earshot(pos.0.distance(me.0), 13.0));
+    for (swinger, pos, swing) in &swings {
+        // The first sighting only notes the swing: it may be long past.
+        match heard.insert(swinger, swing.tick) {
+            Some(seen) if seen != swing.tick => queue.push(Sfx::Swing, 0.7 * earshot(pos.0.distance(me.0), 13.0)),
+            _ => {}
+        }
     }
 }
 
@@ -351,8 +361,10 @@ mod web {
                     }
                 }
                 Sfx::Loose => {
-                    if let Some(e) = self.env(now, 0.008, 0.12 * g, 0.09) {
-                        self.noise(Highpass, 1100.0 * p, 1600.0 * p, 0.9, now, 0.09, &e);
+                    // A puff of air leaving the hand: a still filter, so it never whistles into
+                    // a pew.
+                    if let Some(e) = self.env(now, 0.006, 0.11 * g, 0.08) {
+                        self.noise(Bandpass, 1250.0 * p, 1250.0 * p, 0.7, now, 0.08, &e);
                     }
                 }
                 Sfx::Hit => {
@@ -364,16 +376,18 @@ mod web {
                     }
                 }
                 Sfx::Crit => {
-                    // A clean zing over a deep body: brighter and a touch longer than a hit, so
-                    // it reads as a reward, not a buzz.
-                    if let Some(e) = self.env(now, 0.002, 0.3 * g, 0.13) {
-                        self.osc(Triangle, 1250.0 * p, 320.0, now, 0.13, &e);
+                    // A bright bell strike over a deep thump: steady pitches, nothing swept —
+                    // a sweep reads as a laser, a struck pair of tones reads as metal.
+                    for (f, peak, dur) in [(1180.0, 0.2, 0.09), (1770.0, 0.1, 0.06)] {
+                        if let Some(e) = self.env(now, 0.001, peak * g, dur) {
+                            self.osc(Triangle, f * p, f * p, now, dur, &e);
+                        }
                     }
-                    if let Some(e) = self.env(now, 0.003, 0.42 * g, 0.1) {
-                        self.osc(Sine, 240.0 * p, 85.0, now, 0.1, &e);
+                    if let Some(e) = self.env(now, 0.003, 0.42 * g, 0.09) {
+                        self.osc(Sine, 230.0 * p, 95.0, now, 0.09, &e);
                     }
-                    if let Some(e) = self.env(now, 0.001, 0.16 * g, 0.045) {
-                        self.noise(Highpass, 3200.0, 2600.0, 0.8, now, 0.045, &e);
+                    if let Some(e) = self.env(now, 0.001, 0.14 * g, 0.035) {
+                        self.noise(Highpass, 3400.0, 3000.0, 0.8, now, 0.035, &e);
                     }
                 }
                 Sfx::Hurt => {
