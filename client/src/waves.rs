@@ -186,8 +186,8 @@ fn show_banner(
         && key != Some(last)
     {
         match run.boss.is_some() {
-            true => sounds.push(crate::audio::Sfx::BossHorn, 1.0),
-            false => sounds.push(crate::audio::Sfx::Horn, 0.9),
+            true => sounds.push(crate::audio::Sfx::BossHorn, 0.75),
+            false => sounds.push(crate::audio::Sfx::Horn, 0.6),
         }
     }
     if let (Some((_, 2)), Some((_, phase))) = (key, last)

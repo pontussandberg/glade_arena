@@ -466,7 +466,7 @@ mod web {
                     }
                 }
                 Sfx::Horn => {
-                    for (detune, peak) in [(1.0, 0.2), (1.006, 0.2), (1.5, 0.08)] {
+                    for (detune, peak) in [(1.0, 0.16), (1.006, 0.16), (1.5, 0.06)] {
                         if let Some(e) = self.env(now, 0.22, peak * g, 1.0) {
                             let f = 98.0 * detune;
                             self.osc(Sawtooth, f, f * 1.02, now, 1.0, &e);

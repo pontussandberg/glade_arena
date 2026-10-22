@@ -499,6 +499,7 @@ fn spawn_damage_numbers(
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     mut players: Query<(Entity, &RecentHits, &Pos, Option<&mut ShownHits>, Has<Me>), Changed<RecentHits>>,
     mut numbers: Query<(&mut DamageNumber, &mut Text)>,
+    mut chimed: Local<f32>,
 ) {
     let now = time.elapsed_secs();
     for (player, recent, pos, shown, is_me) in &mut players {
@@ -539,8 +540,11 @@ fn spawn_damage_numbers(
                     shake.add(0.045 + 0.055 * near);
                 }
             }
-            if hit.kind == HitKind::Heal && is_me {
-                sounds.push(crate::audio::Sfx::Heal, 0.8);
+            // One soft chime, however the healing comes in: a regen or a full between-waves
+            // restore lands as a pulse of heal hits, and a chime per pulse rang like an alarm.
+            if hit.kind == HitKind::Heal && is_me && now - *chimed > 1.2 {
+                *chimed = now;
+                sounds.push(crate::audio::Sfx::Heal, 0.5);
             }
             let (text, size, color) = match (hit.kind, is_me) {
                 (HitKind::Heal, _) => (format!("+{}", hit.amount), NUMBER_SIZE, palette::HEAL),
