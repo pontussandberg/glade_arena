@@ -235,13 +235,12 @@ fn spawn_camera(mut commands: Commands) {
     use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection};
     commands.spawn((
         Camera3d::default(),
-        // HDR with a filmic tonemap and a whisper of bloom: torches, eyes and spell glow bleed
-        // light instead of clipping to flat white, and the dusk rolls off instead of banding.
+        // HDR with a filmic tonemap, and no bloom: the glow of torches, eyes and spells stays on
+        // them. Bloom smeared it over everything around, and the whole picture swam.
         bevy::camera::Hdr,
         bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
-        bevy::post_process::bloom::Bloom { intensity: 0.08, ..bevy::post_process::bloom::Bloom::NATURAL },
         // A light grade: just enough saturation to undo what the filmic tonemap takes, nothing
-        // moody — the toy look wants colors read straight.
+        // moody — colors read straight.
         ColorGrading {
             global: ColorGradingGlobal { post_saturation: 1.08, ..Default::default() },
             shadows: ColorGradingSection::default(),
