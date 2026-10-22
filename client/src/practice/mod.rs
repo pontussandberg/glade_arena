@@ -15,6 +15,7 @@
 
 mod dummies;
 pub mod hitboxes;
+mod picker;
 
 use arena_shared::protocol::{Cooldowns, RoomRequest};
 use bevy::ecs::system::SystemParam;
@@ -35,10 +36,12 @@ pub struct PracticePlugin;
 impl Plugin for PracticePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((dummies::DummiesPlugin, hitboxes::HitboxesPlugin));
+        app.add_systems(Startup, picker::load_faces);
         app.add_systems(
             Update,
             (show_tools, fold_tools, use_switches, step_fake_ping, switch_map).chain().run_if(in_state(Screen::InGame)),
         );
+        app.add_systems(Update, (picker::show_picker, picker::pick_class, picker::mark_current));
         app.add_systems(Update, tools_off.run_if(not(in_state(Screen::InGame)).or_else(not(practicing))));
         app.add_systems(OnExit(Screen::InGame), close_tools);
     }

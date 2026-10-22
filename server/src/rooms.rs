@@ -1212,10 +1212,23 @@ fn handle_class_choices(
             let Some(guest) = lobby.guests.get_mut(&link) else { continue };
             guest.active_at = now;
             guest.class = Some(class);
-            if let Some(key) = guest.room
+            let (id, team, key) = (guest.peer, guest.team, guest.room);
+            if let Some(key) = key
                 && let Some(room) = lobby.rooms.get_mut(&key)
             {
                 room.changed = true;
+                // Practicing, a class is tried on on the spot: the old fighter goes and a fresh
+                // one spawns as the pick (`enter_arena` only dresses the empty-handed).
+                if room.practice && room.started
+                    && let Some(player) = ctx.player_of(link)
+                {
+                    let in_room = room.in_room(key);
+                    lobby.guests.get_mut(&link).expect("there").satchel.refund_unfit(class);
+                    ctx.commands.entity(player).try_despawn();
+                    spawn_player(&mut ctx.commands, link, id, class, in_room, Team(team));
+                    info!(room = key.0, class = class.def().name, "practice re-pick");
+                    continue;
+                }
             }
             enter_arena(&mut lobby, &mut ctx, link);
         }
