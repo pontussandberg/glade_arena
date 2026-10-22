@@ -492,7 +492,8 @@ fn pose_rigs(
         for (slot, ability) in def.abilities() {
             let thrown = seen.and_then(|seen| seen.abilities.get(slot.0 as usize).copied().flatten());
             match (&ability.kind, since_throw(cooldowns.used_at(slot), thrown)) {
-                (AbilityKind::Projectile(_), Some(since)) => flick = flick.max(reach * (1.0 - ease(FLICK.0, FLICK.1, since))),
+                // A strike is called down with the same flick of the arm as a throw.
+                (AbilityKind::Projectile(_) | AbilityKind::Strike(_), Some(since)) => flick = flick.max(reach * (1.0 - ease(FLICK.0, FLICK.1, since))),
                 (AbilityKind::Nova(_), Some(since)) => dashing = f32::max(dashing, 1.0 - ease(SLAM.0, SLAM.1, since)),
                 _ => {}
             }

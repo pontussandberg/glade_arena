@@ -27,5 +27,7 @@
             kind: Nova(radius: 3.2, damage: 14, chill: (slow: 0.5, slow_ticks: 48)),
         ),
     ],
+    // His own figure, a head over the crowd: plate reads as weight.
+    look: Some(figure: "warden", size: 1.06, tint: (1.0, 1.0, 1.0)),
     crit: (chance: 0.05),
 )

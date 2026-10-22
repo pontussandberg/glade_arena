@@ -16,10 +16,10 @@
     ),
     abilities: [
         (
-            name: "Skybolt",
-            description: "Loose a heavy bolt up to {ability_reach} for {ability_damage} damage.",
-            cooldown_ticks: 224,
-            kind: Projectile(speed: 18.0, radius: 0.3, range: 11.0, damage: 22),
+            name: "Stormcall",
+            description: "Call lightning onto a spot up to {ability_reach} away. It falls after {ability_fuse}: enemies within {ability_radius} take {ability_damage} damage and are stunned for {ability_lift}.",
+            cooldown_ticks: 256,
+            kind: Strike(range: 10.5, radius: 1.6, damage: 22, fuse_ticks: 12, shell: Lightning, chill: (lift_ticks: 16)),
         ),
         (
             name: "Gale Step",

@@ -705,6 +705,7 @@ mod tests {
     use crate::abilities::dash::DashDef;
     use crate::abilities::nova::NovaDef;
     use crate::abilities::prime::PrimeDef;
+    use crate::abilities::strike::StrikeDef;
     use crate::abilities::throw::Throw;
 
     #[test]
@@ -782,6 +783,12 @@ mod tests {
                     AbilityKind::Prime(PrimeDef { attack_speed }) => {
                         assert!((0.0..=3.0).contains(&attack_speed), "{what}: prime attack_speed");
                     }
+                    AbilityKind::Strike(StrikeDef { range, radius, damage, fuse_ticks, chill, shell: _ }) => {
+                        assert!(damage > 0 && (1.0..=30.0).contains(&range) && (0.5..=6.0).contains(&radius), "{what}: strike");
+                        // Long enough to be dodged, short enough to ever land.
+                        assert!((8..=3 * TICK_HZ as u32).contains(&fuse_ticks), "{what}: strike fuse");
+                        chill_is_sane(&c.id, chill);
+                    }
                 }
                 let filled = c.describe_ability(ability);
                 assert!(!filled.contains(['{', '}']), "{what}: unknown placeholder in {filled:?}");
@@ -822,6 +829,7 @@ mod tests {
         assert!((0.0..1.0).contains(&chill.slow), "{id}: slow must leave some speed");
         // Long enough to matter, short enough to fight back: at most 5 s slowed, 3 s rooted.
         assert!(chill.slow_ticks <= 5 * TICK_HZ as u32 && chill.root_ticks <= 3 * TICK_HZ as u32, "{id}: chill too long");
+        assert!(chill.lift_ticks <= 3 * TICK_HZ as u32 / 2, "{id}: knocked up too long");
     }
 
     #[test]

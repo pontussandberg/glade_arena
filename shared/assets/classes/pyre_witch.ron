@@ -17,10 +17,10 @@
     ),
     abilities: [
         (
-            name: "Pyre Bolt",
-            description: "Hurl a heavy gout of fire up to {ability_reach} for {ability_damage} damage.",
-            cooldown_ticks: 224,
-            kind: Projectile(speed: 14.0, radius: 0.45, range: 10.0, damage: 26),
+            name: "Firecall",
+            description: "Call a meteor down on a spot up to {ability_reach} away. It lands after {ability_fuse}: enemies within {ability_radius} take {ability_damage} damage.",
+            cooldown_ticks: 288,
+            kind: Strike(range: 9.0, radius: 2.2, damage: 34, fuse_ticks: 24, shell: Meteor),
         ),
         (
             name: "Ring of Cinders",

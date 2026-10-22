@@ -16,9 +16,9 @@
     abilities: [
         (
             name: "Quake",
-            description: "Hammer the earth: enemies within {ability_reach} take {ability_damage} damage and are slowed by {ability_slow} for {ability_slow_time}.",
+            description: "Hammer the earth: enemies within {ability_reach} take {ability_damage} damage and are knocked off their feet for {ability_lift}.",
             cooldown_ticks: 288,
-            kind: Nova(radius: 3.6, damage: 20, chill: (slow: 0.35, slow_ticks: 40)),
+            kind: Nova(radius: 3.6, damage: 20, chill: (lift_ticks: 24)),
         ),
         (
             name: "Bull Rush",
@@ -27,5 +27,7 @@
             kind: Dash(distance: 7.0, min_distance: Some(2.0), ticks: 8, damage: 16),
         ),
     ],
+    // His own figure, bigger than anyone: the silhouette is the warning.
+    look: Some(figure: "breaker", size: 1.14, tint: (1.0, 1.0, 1.0)),
     crit: (chance: 0.05),
 )

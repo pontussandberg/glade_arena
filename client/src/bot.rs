@@ -145,6 +145,9 @@ fn think(
                     AbilityKind::Projectile(throw) => distance < throw.range * 0.9,
                     AbilityKind::Nova(nova) => distance < nova.radius * 0.8,
                     AbilityKind::Prime(_) => distance < attack_within && attack.primed.is_none(),
+                    // A strike takes its fuse to land: worth it on someone close enough to still
+                    // be under it, not on someone at its edge.
+                    AbilityKind::Strike(strike) => distance < strike.range * 0.7,
                 }
         })
         .map(|(slot, _)| slot);

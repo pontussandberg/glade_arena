@@ -3,7 +3,9 @@
 use super::*;
 
 use arena_shared::abilities::{self, AbilityDef, AbilityKind, Cast, CastOrder, dash};
+use arena_shared::classes::Shell;
 
+use crate::items::{By, Delayed, Pending, arm};
 use crate::rooms::{InRoom, Lobby};
 
 /// Server-only: who the current dash (started at `.0`) has already cut, so each target is cut
@@ -26,6 +28,7 @@ pub(super) fn use_abilities(
     >,
     mut targets: Targets,
     mut log: ResMut<HitLog>,
+    mut pending: ResMut<Pending>,
 ) {
     let now = timeline.tick();
     // Read up front: `targets` holds every player's `Chilled` mutably. A root or slow landing
@@ -99,6 +102,21 @@ pub(super) fn use_abilities(
                 Cast::Nova { slot, ability, nova } => {
                     let (blow, with) = blow(ability);
                     hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Ability(slot)), blow, |_, at| nova.hits(map, pos.0, at));
+                }
+                Cast::Strike { slot, strike, at } => {
+                    // The same shells monsters' mortars bring down (`Deed::Mortar`): a warning
+                    // where it will land, then the blast.
+                    let (warning, look) = match strike.shell {
+                        Shell::Bomb => {
+                            spawn_fx(&mut commands, side.0, Fx::between(FxKind::Lob(FxColor::Poison), pos.0, at, strike.radius, now.0, strike.fuse_ticks));
+                            (FxKind::Warn(FxColor::Poison), FxKind::Blast(FxColor::Poison))
+                        }
+                        Shell::Lightning => (FxKind::Warn(FxColor::Storm), FxKind::Blast(FxColor::Storm)),
+                        Shell::Meteor => (FxKind::Meteor, FxKind::Blast(FxColor::Fire)),
+                    };
+                    let by = By { id: id.0, class: *class, side, source: Source::Ability(slot) };
+                    let shell = Delayed { by, at, radius: strike.radius, damage: mighty(strike.damage, might), chill: strike.chill, fire_at: now.0 + strike.fuse_ticks, look };
+                    arm(&mut commands, &mut pending, now.0, shell, warning);
                 }
             }
         }
