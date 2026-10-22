@@ -240,7 +240,8 @@ fn build_arena(
     let flame_mat = materials.add(glow(TORCH_FLAME, 8.0));
     for (i, &p) in m.torches.iter().enumerate() {
         let base = wall_tops.get(&Map::tile_of(p)).copied().unwrap_or(0.0);
-        let post_height = if base > 0.0 { 0.5 } else { 1.5 };
+        // A standing torch is a brazier post, taller than anyone; one on a wall is a short stake.
+        let post_height = if base > 0.0 { 0.6 } else { 2.2 };
         props.block(Vec3::new(0.14, post_height, 0.14), theme.bark, Transform::from_translation(to_world(p, base + post_height / 2.0)));
         commands
             .spawn((
@@ -378,12 +379,13 @@ impl Props {
                 continue;
             }
             let c = Map::center(t);
-            let h = rng.range(0.9, 1.7);
+            // Head height and over: a ruin you can't see across, not a garden wall.
+            let h = rng.range(1.9, 2.8);
             let color = self.theme.wall.mix(&self.theme.stone, rng.range(0.0, 0.25));
             self.block(Vec3::new(1.0, h, 1.0), color, Transform::from_translation(to_world(c, h / 2.0)));
             let mut top = h;
             if rng.next() < 0.45 {
-                let s = rng.range(0.45, 0.7);
+                let s = rng.range(0.5, 0.8);
                 let off = Vec2::new(rng.range(-0.2, 0.2), rng.range(-0.2, 0.2));
                 let turn = Quat::from_rotation_y(rng.range(-0.3, 0.3));
                 self.block(Vec3::splat(s), color, Transform::from_translation(to_world(c + off, h + s / 2.0)).with_rotation(turn));
@@ -394,7 +396,7 @@ impl Props {
             for _ in 0..2 {
                 let p = c + Vec2::new(rng.range(-0.9, 0.9), rng.range(-0.9, 0.9));
                 if matches!(m.get(Map::tile_of(p)), Tile::Grass | Tile::Path | Tile::Marsh) {
-                    self.add(Shape::Rock, self.theme.slate, Transform::from_translation(to_world(p, 0.05)).with_scale(Vec3::splat(rng.range(0.15, 0.3))));
+                    self.add(Shape::Rock, self.theme.slate, Transform::from_translation(to_world(p, 0.08)).with_scale(Vec3::splat(rng.range(0.2, 0.4))));
                 }
             }
         }
@@ -631,9 +633,12 @@ impl Props {
     }
 
     fn boulder(&mut self, rng: &mut Lcg, c: Vec2) {
-        let t = Transform::from_translation(to_world(c, 0.25))
+        // Taller than a fighter, and not much wider than its tile: bulk goes up, not out over
+        // the ground beside it.
+        let size = Vec3::new(rng.range(1.5, 1.9), rng.range(1.6, 2.2), rng.range(1.5, 1.9));
+        let t = Transform::from_translation(to_world(c, 0.3 * size.y))
             .with_rotation(Quat::from_euler(EulerRot::XYZ, rng.range(0.0, 3.0), rng.range(0.0, 3.0), 0.0))
-            .with_scale(Vec3::new(rng.range(1.2, 1.5), rng.range(0.9, 1.3), rng.range(1.2, 1.5)));
+            .with_scale(size);
         self.add(Shape::Rock, self.theme.slate, t);
     }
 
@@ -682,20 +687,21 @@ impl Props {
     fn map_tree(&mut self, rng: &mut Lcg, c: Vec2) {
         match self.theme.wilds {
             Wilds::Forest => {
-                self.tree(rng, c, 0.0, 1.25);
+                self.tree(rng, c, 0.0, 1.7);
                 if rng.next() < 0.5 {
                     self.understory(rng, c, 0.0);
                 }
             }
-            Wilds::Fen => self.willow(rng, c, 0.0, 1.1),
-            Wilds::Highlands => self.round_tree(rng, c, 0.0, 1.0),
+            Wilds::Fen => self.willow(rng, c, 0.0, 1.5),
+            Wilds::Highlands => self.round_tree(rng, c, 0.0, 1.4),
         }
     }
 
     /// Something out in the wilds at `p`, on land `ground` high.
     fn wild(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
         let pick = rng.next();
-        let s = rng.range(0.9, 1.8);
+        // Old growth: the wilds tower over whoever walks the clearing.
+        let s = rng.range(1.3, 2.4);
         match self.theme.wilds {
             Wilds::Forest => {
                 self.tree(rng, p, ground, s);
@@ -860,21 +866,21 @@ impl Props {
         match (rng.next() * 3.0) as usize {
             // Flat-topped, with a smaller one balanced on it.
             0 => {
-                self.add(Shape::Rock, rock_band(self.theme, 0), Transform::from_translation(to_world(c, 0.3)).with_rotation(turn).with_scale(Vec3::new(1.5, 0.9, 1.4)));
-                self.add(Shape::Rock, rock_band(self.theme, 2), Transform::from_translation(to_world(c, 0.9)).with_rotation(turn.inverse()).with_scale(Vec3::new(0.8, 0.7, 0.9)));
+                self.add(Shape::Rock, rock_band(self.theme, 0), Transform::from_translation(to_world(c, 0.45)).with_rotation(turn).with_scale(Vec3::new(1.6, 1.4, 1.5)));
+                self.add(Shape::Rock, rock_band(self.theme, 2), Transform::from_translation(to_world(c, 1.5)).with_rotation(turn.inverse()).with_scale(Vec3::new(1.0, 1.0, 1.1)));
             }
             // Split in two, a crack between them.
             1 => {
-                let side = Vec2::from_angle(rng.range(0.0, 3.0)) * 0.28;
+                let side = Vec2::from_angle(rng.range(0.0, 3.0)) * 0.3;
                 for (k, s) in [(1, 1.0), (3, -1.0)] {
-                    let t = Transform::from_translation(to_world(c + side * s, 0.35)).with_rotation(turn).with_scale(Vec3::new(0.9, 1.3, 1.4));
+                    let t = Transform::from_translation(to_world(c + side * s, 0.55)).with_rotation(turn).with_scale(Vec3::new(1.0, 2.0, 1.5));
                     self.add(Shape::Rock, rock_band(self.theme, k), t);
                 }
             }
             // A stack of two, banded.
             _ => {
-                self.add(Shape::Rock, rock_band(self.theme, 1), Transform::from_translation(to_world(c, 0.3)).with_rotation(turn).with_scale(Vec3::new(1.4, 0.9, 1.4)));
-                self.add(Shape::Rock, rock_band(self.theme, 0), Transform::from_translation(to_world(c, 0.95)).with_rotation(turn).with_scale(Vec3::new(1.1, 0.8, 1.1)));
+                self.add(Shape::Rock, rock_band(self.theme, 1), Transform::from_translation(to_world(c, 0.45)).with_rotation(turn).with_scale(Vec3::new(1.5, 1.4, 1.5)));
+                self.add(Shape::Rock, rock_band(self.theme, 0), Transform::from_translation(to_world(c, 1.55)).with_rotation(turn).with_scale(Vec3::new(1.2, 1.2, 1.2)));
             }
         }
     }

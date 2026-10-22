@@ -32,8 +32,16 @@ pub enum Sfx {
     /// A blade (or claw) cutting the air: the fallback swing for a figure without its own,
     /// pitched by the weapon's weight — and, pitched down, the rush of a dash.
     Swing,
-    /// The revenant's glaive: a broad, heavy cut with a hiss off the edge.
+    /// The revenant's glaive coming over: a broad, heavy cut with a hiss off the edge, a ghost
+    /// of a hum in it, and the blade meeting the ground at the end.
     GlaiveSwing,
+    /// The revenant gathering: the point scraping up off the dirt, the long haul of the blade
+    /// overhead, and the spectral hum rising with it.
+    GlaiveReady,
+    /// The javelinist gathering: the shoulder wound back, leather creaking, a breath drawn.
+    JavReady,
+    /// The frost mage gathering: cold crystallizing round the staff, a glassy shimmer and ticks.
+    FrostReady,
     /// The warden's thrust: the shield's face driven in first, the sword's steel a beat behind.
     ShieldThrust,
     /// The warden gathering: the shield coming up, the sword drawn back behind its rim.
@@ -152,7 +160,9 @@ fn weapon_pitch(class: arena_shared::protocol::ClassId) -> f32 {
 /// figure without its own gets the plain gather and swish, pitched by its weapon's weight.
 fn attack_voice(class: arena_shared::protocol::ClassId) -> (Sfx, Sfx, f32) {
     match class.def().figure() {
-        "revenant" => (Sfx::Windup, Sfx::GlaiveSwing, 1.0),
+        "revenant" => (Sfx::GlaiveReady, Sfx::GlaiveSwing, 1.0),
+        "javelinist" => (Sfx::JavReady, Sfx::Swing, 1.0),
+        "frost_mage" => (Sfx::FrostReady, Sfx::Swing, 1.0),
         "warden" => (Sfx::ShieldReady, Sfx::ShieldThrust, 1.0),
         "breaker" => (Sfx::MaulReady, Sfx::MaulSwing, 1.0),
         // Casters' shots sound as they leave the hand (`loose_sounds`): only the gather is theirs here.
@@ -462,14 +472,68 @@ mod web {
                         self.noise(Bandpass, 1400.0 * p, 550.0 * p, 1.1, now, dur, &e);
                     }
                 }
+                Sfx::GlaiveReady => {
+                    // The glaive heaved up off the ground: its point scraping up out of the
+                    // dirt (a gritty rasp), then the long haul of the heavy blade coming up
+                    // through the air, and under it a spectral hum, two low tones a hair apart
+                    // beating against each other, swelling as the blade rises. Haunted iron.
+                    if let Some(e) = self.env(now, 0.005, 0.05 * g, 0.07) {
+                        self.noise(Highpass, 2800.0, 2800.0, 0.6, now, 0.07, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.04, 0.22, 0.05 * g, 0.3) {
+                        self.noise(Lowpass, 260.0 * p, 520.0 * p, 0.8, now + 0.04, 0.3, &e);
+                    }
+                    for f in [110.0, 113.0] {
+                        if let Some(e) = self.env(now + 0.05, 0.25, 0.022 * g, 0.32) {
+                            self.osc(Sine, f * p, f * p, now + 0.05, 0.32, &e);
+                        }
+                    }
+                }
                 Sfx::GlaiveSwing => {
-                    // A broad, heavy cut: the body of the swish low and wide, a hiss off the
-                    // long edge.
+                    // The glaive coming over: the body of the swish low and wide, a hiss off
+                    // the long edge, the ghost of that hum still in it, and the blade meeting
+                    // the ground at the end of the arc, a dull thud with grit in it. Cut, then
+                    // land: the arc ends in the earth, not the air.
                     if let Some(e) = self.env(now, 0.045, 0.14 * g, 0.17) {
                         self.noise(Bandpass, 1150.0 * p, 460.0, 1.0, now, 0.17, &e);
                     }
                     if let Some(e) = self.env(now + 0.02, 0.01, 0.05 * g, 0.06) {
                         self.noise(Highpass, 3500.0, 2800.0, 0.8, now + 0.02, 0.06, &e);
+                    }
+                    for f in [110.0, 113.0] {
+                        if let Some(e) = self.env(now, 0.02, 0.018 * g, 0.2) {
+                            self.osc(Sine, f * p, f * p, now, 0.2, &e);
+                        }
+                    }
+                    if let Some(e) = self.env(now + 0.1, 0.004, 0.24 * g, 0.14) {
+                        self.osc(Sine, 92.0 * p, 44.0, now + 0.1, 0.14, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.1, 0.002, 0.09 * g, 0.05) {
+                        self.noise(Bandpass, 520.0 * p, 520.0 * p, 0.9, now + 0.1, 0.05, &e);
+                    }
+                }
+                Sfx::JavReady => {
+                    // The shoulder wound back and the spear drawn: leather creaking under the
+                    // strain, and a breath drawn in and held.
+                    if let Some(e) = self.env(now, 0.015, 0.045 * g, 0.09) {
+                        self.noise(Lowpass, 380.0 * p, 300.0, 0.7, now, 0.09, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.03, 0.22, 0.03 * g, 0.26) {
+                        self.noise(Bandpass, 700.0 * p, 700.0 * p, 0.5, now + 0.03, 0.26, &e);
+                    }
+                }
+                Sfx::FrostReady => {
+                    // Cold crystallizing round the staff: a glassy shimmer of two high tones,
+                    // and a few ticks of ice forming.
+                    for f in [3200.0, 4800.0] {
+                        if let Some(e) = self.env(now, 0.12, 0.014 * g, 0.24) {
+                            self.osc(Triangle, f * p, f * p, now, 0.24, &e);
+                        }
+                    }
+                    for at in [0.04, 0.11, 0.17] {
+                        if let Some(e) = self.env(now + at, 0.001, 0.025 * g, 0.015) {
+                            self.noise(Highpass, 6000.0, 6000.0, 1.0, now + at, 0.015, &e);
+                        }
                     }
                 }
                 Sfx::ShieldReady => {
@@ -585,13 +649,21 @@ mod web {
                     }
                 }
                 Sfx::SpearLoose => {
-                    // Wind whistling over the shaft as it takes flight: a narrow band of air
-                    // easing down, longer than any other loose.
-                    if let Some(e) = self.env(now, 0.015, 0.1 * g, 0.22) {
-                        self.noise(Bandpass, 1900.0 * p, 1250.0, 2.6, now, 0.22, &e);
+                    // The throw: the effort of it first, a low grunt of a thump as the body
+                    // comes through, the shaft snapping off the fingers, then wind whistling
+                    // over the shaft as it takes flight, a narrow band of air easing down and
+                    // fading out long after. Heave, snap, whistle.
+                    if let Some(e) = self.env(now, 0.006, 0.12 * g, 0.07) {
+                        self.osc(Sine, 160.0 * p, 90.0, now, 0.07, &e);
                     }
-                    if let Some(e) = self.env(now, 0.008, 0.07 * g, 0.08) {
-                        self.noise(Bandpass, 1100.0 * p, 1100.0 * p, 0.7, now, 0.08, &e);
+                    if let Some(e) = self.env(now, 0.001, 0.06 * g, 0.012) {
+                        self.noise(Highpass, 5000.0, 5000.0, 0.8, now, 0.012, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.01, 0.015, 0.1 * g, 0.24) {
+                        self.noise(Bandpass, 1900.0 * p, 1250.0, 2.6, now + 0.01, 0.24, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.01, 0.008, 0.07 * g, 0.08) {
+                        self.noise(Bandpass, 1100.0 * p, 1100.0 * p, 0.7, now + 0.01, 0.08, &e);
                     }
                 }
                 Sfx::KindleReady => {
@@ -645,12 +717,22 @@ mod web {
                     }
                 }
                 Sfx::FrostLoose => {
-                    // A glassy shiver off the top, over a breath of air.
+                    // A frostbolt let go: a glassy shiver off the top, a struck pair of high
+                    // chimes a hair apart in time (two tones read as glass; a sweep would read
+                    // as a laser), and a breath of cold air going out with it.
                     if let Some(e) = self.env(now, 0.004, 0.08 * g, 0.07) {
                         self.noise(Highpass, 4500.0, 3800.0, 1.2, now, 0.07, &e);
                     }
+                    for (at, f, peak) in [(0.0, 2093.0, 0.05), (0.03, 2637.0, 0.035)] {
+                        if let Some(e) = self.env(now + at, 0.002, peak * g, 0.09) {
+                            self.osc(Triangle, f * p, f * p, now + at, 0.09, &e);
+                        }
+                    }
                     if let Some(e) = self.env(now, 0.006, 0.07 * g, 0.07) {
                         self.noise(Bandpass, 2600.0 * p, 2600.0 * p, 1.8, now, 0.07, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.02, 0.02, 0.05 * g, 0.16) {
+                        self.noise(Lowpass, 900.0 * p, 500.0, 0.7, now + 0.02, 0.16, &e);
                     }
                 }
                 Sfx::StormReady => {
