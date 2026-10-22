@@ -495,6 +495,7 @@ fn spawn_damage_numbers(
     time: Res<Time>,
     world_ui: Single<Entity, With<WorldUi>>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
+    mut shake: ResMut<crate::camera::Shake>,
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     mut players: Query<(Entity, &RecentHits, &Pos, Option<&mut ShownHits>, Has<Me>), Changed<RecentHits>>,
     mut numbers: Query<(&mut DamageNumber, &mut Text)>,
@@ -532,6 +533,11 @@ fn spawn_damage_numbers(
                 commands.entity(player).insert(CritAt(time.elapsed_secs()));
                 let near = me.single().map_or(1.0, |me| crate::audio::earshot(pos.0.distance(me.0), 24.0));
                 sounds.push(crate::audio::Sfx::Crit, 0.4 + 0.5 * near);
+                // A nudge of shake for a crit landing on someone else (ours, nearly always,
+                // when it's this close); a crit on us already shakes through flash_on_hit.
+                if !is_me {
+                    shake.add(0.045 + 0.055 * near);
+                }
             }
             if hit.kind == HitKind::Heal && is_me {
                 sounds.push(crate::audio::Sfx::Heal, 0.8);

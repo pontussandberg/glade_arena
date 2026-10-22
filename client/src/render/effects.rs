@@ -55,11 +55,16 @@ pub(super) fn show_novas(
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut casters: Query<(&PlayerId, &ClassId, &Pos, &Cooldowns, &mut SeenCasts), Changed<Cooldowns>>,
+    me: Query<&Pos, With<crate::Me>>,
+    mut sounds: ResMut<crate::audio::SoundQueue>,
 ) {
     for (id, class, pos, cooldowns, mut seen) in &mut casters {
         for slot in seen.new_casts(cooldowns) {
             let Some(AbilityKind::Nova(def)) = class.def().ability(slot).map(|ability| ability.kind) else { continue };
             let Some(nova) = visuals.novas.get(&(*class, slot)).cloned() else { continue };
+            if let Ok(my) = me.single() {
+                sounds.push(crate::audio::Sfx::Slam, 0.8 * crate::audio::earshot(pos.0.distance(my.0), 18.0));
+            }
             burst_nova(&mut commands, &time, &mut visuals, &mut materials, id.0, pos.0, def.radius, nova);
         }
     }

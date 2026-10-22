@@ -15,7 +15,7 @@ pub struct AudioPlugin;
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SoundQueue>();
-        app.add_systems(Update, (swing_sounds, loose_sounds, heartbeat));
+        app.add_systems(Update, (swing_sounds, loose_sounds, dash_sounds, heartbeat));
         #[cfg(target_family = "wasm")]
         {
             app.init_non_send::<web::AudioLazy>();
@@ -51,6 +51,8 @@ pub enum Sfx {
     Thunder,
     /// A keg, a meteor: a blast.
     Explosion,
+    /// A nova going off: a heavy thump into the ground.
+    Slam,
     /// A wave starting.
     Horn,
     /// A boss wave starting.
@@ -109,6 +111,24 @@ fn loose_sounds(
     let Ok(me) = me.single() else { return };
     for pos in &shots {
         queue.push(Sfx::Loose, 0.6 * earshot(pos.0.distance(me.0), 14.0));
+    }
+}
+
+/// Every dash nearby is a deeper, longer rush of air than a swing: the same swish, pitched down.
+fn dash_sounds(
+    me: Query<&arena_shared::protocol::Pos, With<crate::Me>>,
+    dashes: Query<(Entity, &arena_shared::protocol::Pos, &arena_shared::protocol::Dashing), Changed<arena_shared::protocol::Dashing>>,
+    mut queue: ResMut<SoundQueue>,
+    mut heard: Local<bevy::platform::collections::HashMap<Entity, u32>>,
+) {
+    let Ok(me) = me.single() else { return };
+    for (dasher, pos, dashing) in &dashes {
+        let Some(dash) = dashing.0 else { continue };
+        // Changed fires every tick of the dash: only its first sounds.
+        if heard.insert(dasher, dash.started_at) == Some(dash.started_at) {
+            continue;
+        }
+        queue.push_pitched(Sfx::Swing, 0.55 * earshot(pos.0.distance(me.0), 14.0), 0.0, 0.7);
     }
 }
 
@@ -300,10 +320,12 @@ mod web {
             source.set_buffer(Some(&self.noise));
             source.set_loop(true);
             filter.set_type(BiquadFilterType::Lowpass);
-            filter.frequency().set_value(240.0);
-            gain.gain().set_value(0.022);
-            lfo.frequency().set_value(0.08);
-            depth.gain().set_value(0.013);
+            filter.frequency().set_value(180.0);
+            // Barely there: a floor under the mix, never surf. It read as a loud waterfall at
+            // 0.022 with a 0.013 swell.
+            gain.gain().set_value(0.007);
+            lfo.frequency().set_value(0.06);
+            depth.gain().set_value(0.003);
             let connected = source.connect_with_audio_node(&filter).is_ok()
                 && filter.connect_with_audio_node(&gain).is_ok()
                 && gain.connect_with_audio_node(&self.master).is_ok()
@@ -323,8 +345,9 @@ mod web {
             let p = self.vary(0.12) * pitch;
             match kind {
                 Sfx::Swing => {
-                    if let Some(e) = self.env(now, 0.05, 0.14 * g, 0.16) {
-                        self.noise(Bandpass, 500.0 * p, 1500.0 * p, 1.4, now, 0.16, &e);
+                    // A swish falls in pitch as the blade comes through.
+                    if let Some(e) = self.env(now, 0.04, 0.13 * g, 0.14) {
+                        self.noise(Bandpass, 1400.0 * p, 550.0, 1.1, now, 0.14, &e);
                     }
                 }
                 Sfx::Loose => {
@@ -341,14 +364,16 @@ mod web {
                     }
                 }
                 Sfx::Crit => {
-                    if let Some(e) = self.env(now, 0.003, 0.35 * g, 0.11) {
-                        self.osc(Sawtooth, 900.0 * p, 200.0, now, 0.11, &e);
+                    // A clean zing over a deep body: brighter and a touch longer than a hit, so
+                    // it reads as a reward, not a buzz.
+                    if let Some(e) = self.env(now, 0.002, 0.3 * g, 0.13) {
+                        self.osc(Triangle, 1250.0 * p, 320.0, now, 0.13, &e);
                     }
-                    if let Some(e) = self.env(now, 0.002, 0.4 * g, 0.09) {
-                        self.osc(Sine, 200.0 * p, 80.0, now, 0.09, &e);
+                    if let Some(e) = self.env(now, 0.003, 0.42 * g, 0.1) {
+                        self.osc(Sine, 240.0 * p, 85.0, now, 0.1, &e);
                     }
-                    if let Some(e) = self.env(now, 0.002, 0.2 * g, 0.05) {
-                        self.noise(Highpass, 2500.0, 2000.0, 0.8, now, 0.05, &e);
+                    if let Some(e) = self.env(now, 0.001, 0.16 * g, 0.045) {
+                        self.noise(Highpass, 3200.0, 2600.0, 0.8, now, 0.045, &e);
                     }
                 }
                 Sfx::Hurt => {
@@ -390,10 +415,11 @@ mod web {
                     }
                 }
                 Sfx::Coin => {
-                    if let Some(e) = self.env(now, 0.002, 0.18 * g, 0.07) {
+                    // Quiet enough that a shower of gold charms instead of ringing.
+                    if let Some(e) = self.env(now, 0.002, 0.13 * g, 0.07) {
                         self.osc(Triangle, 1320.0 * p, 1320.0 * p, now, 0.07, &e);
                     }
-                    if let Some(e) = self.env(now + 0.05, 0.002, 0.15 * g, 0.1) {
+                    if let Some(e) = self.env(now + 0.05, 0.002, 0.11 * g, 0.1) {
                         self.osc(Triangle, 1760.0 * p, 1760.0 * p, now + 0.05, 0.1, &e);
                     }
                 }
@@ -411,6 +437,18 @@ mod web {
                     }
                     if let Some(e) = self.env(now, 0.004, 0.5 * g, 0.4) {
                         self.osc(Sine, 100.0 * p, 32.0, now, 0.4, &e);
+                    }
+                    // The crack off the top, so a blast snaps before it rumbles.
+                    if let Some(e) = self.env(now, 0.001, 0.22 * g, 0.07) {
+                        self.noise(Bandpass, 2200.0 * p, 900.0, 1.0, now, 0.07, &e);
+                    }
+                }
+                Sfx::Slam => {
+                    if let Some(e) = self.env(now, 0.004, 0.5 * g, 0.22) {
+                        self.osc(Sine, 95.0 * p, 38.0, now, 0.22, &e);
+                    }
+                    if let Some(e) = self.env(now, 0.003, 0.3 * g, 0.18) {
+                        self.noise(Lowpass, 450.0 * p, 120.0, 0.8, now, 0.18, &e);
                     }
                 }
                 Sfx::Horn => {
