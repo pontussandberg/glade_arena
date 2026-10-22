@@ -238,12 +238,12 @@ fn spawn_camera(mut commands: Commands) {
         bevy::camera::Hdr,
         bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
         bevy::post_process::bloom::Bloom { intensity: 0.12, ..bevy::post_process::bloom::Bloom::NATURAL },
-        // The painted grade: the filmic tonemap alone desaturates, so saturation is bought back —
-        // gently, since post-tonemap saturation clips to white fast. Highlights stay untouched.
+        // A light grade: just enough saturation to undo what the filmic tonemap takes, nothing
+        // moody — the toy look wants colors read straight.
         ColorGrading {
-            global: ColorGradingGlobal { post_saturation: 1.1, ..Default::default() },
-            shadows: ColorGradingSection { contrast: 1.03, ..Default::default() },
-            midtones: ColorGradingSection { saturation: 1.06, contrast: 1.02, ..Default::default() },
+            global: ColorGradingGlobal { post_saturation: 1.08, ..Default::default() },
+            shadows: ColorGradingSection::default(),
+            midtones: ColorGradingSection::default(),
             highlights: ColorGradingSection::default(),
         },
         Transform::from_translation(OFFSET * ZOOM_RANGE.1).looking_at(Vec3::ZERO, Vec3::Y),

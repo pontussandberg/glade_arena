@@ -35,27 +35,27 @@ pub use scene::*;
 pub mod palette {
     use bevy::color::Color;
 
-    // The world: painted, not plastic — saturated enough to carry through the filmic grade,
-    // 25-72% lightness.
-    pub const MOSS: Color = Color::srgb_u8(0x65, 0x96, 0x44);
-    pub const MEADOW: Color = Color::srgb_u8(0x94, 0xAC, 0x4C);
-    pub const FERN: Color = Color::srgb_u8(0x44, 0x80, 0x3E);
-    pub const PINE: Color = Color::srgb_u8(0x26, 0x50, 0x3A);
-    pub const SLATE: Color = Color::srgb_u8(0x6C, 0x76, 0x84);
-    pub const STONE: Color = Color::srgb_u8(0x84, 0x8A, 0x93);
-    pub const WALL: Color = Color::srgb_u8(0x69, 0x71, 0x7D);
-    pub const BARK: Color = Color::srgb_u8(0x5E, 0x48, 0x38);
-    pub const PATH: Color = Color::srgb_u8(0x9E, 0x8E, 0x62);
-    pub const BANK: Color = Color::srgb_u8(0x5A, 0x51, 0x41);
-    pub const RIVERBED: Color = Color::srgb_u8(0x3D, 0x4A, 0x44);
-    pub const POND: Color = Color::srgb_u8(0x3E, 0x8C, 0x86);
+    // The world: a bright toy diorama — clean saturated colors, nothing murky, the low poly
+    // worn proudly (Polytopia, Crossy Road).
+    pub const MOSS: Color = Color::srgb_u8(0x7F, 0xB6, 0x4E);
+    pub const MEADOW: Color = Color::srgb_u8(0x9A, 0xCB, 0x5A);
+    pub const FERN: Color = Color::srgb_u8(0x5A, 0x9E, 0x4A);
+    pub const PINE: Color = Color::srgb_u8(0x3E, 0x7D, 0x4F);
+    pub const SLATE: Color = Color::srgb_u8(0x8E, 0x9A, 0xA8);
+    pub const STONE: Color = Color::srgb_u8(0xB0, 0xB6, 0xBE);
+    pub const WALL: Color = Color::srgb_u8(0x9A, 0xA2, 0xAC);
+    pub const BARK: Color = Color::srgb_u8(0x8A, 0x62, 0x40);
+    pub const PATH: Color = Color::srgb_u8(0xD2, 0xBC, 0x8C);
+    pub const BANK: Color = Color::srgb_u8(0x8C, 0x7A, 0x5A);
+    pub const RIVERBED: Color = Color::srgb_u8(0x6E, 0x8A, 0x80);
+    pub const POND: Color = Color::srgb_u8(0x4F, 0xB6, 0xD8);
     pub const HEATHER: Color = Color::srgb_u8(0xA4, 0x7E, 0xC8);
     /// Boggy ground, wetter and browner than moss.
-    pub const MARSH: Color = Color::srgb_u8(0x5E, 0x6C, 0x3C);
+    pub const MARSH: Color = Color::srgb_u8(0x7F, 0xA0, 0x50);
     /// The bottom of a chasm, the darkest the world goes.
-    pub const ABYSS: Color = Color::srgb_u8(0x3A, 0x42, 0x50);
+    pub const ABYSS: Color = Color::srgb_u8(0x4A, 0x56, 0x68);
     /// Hemp rope on the rope bridges.
-    pub const ROPE: Color = Color::srgb_u8(0x7A, 0x6A, 0x50);
+    pub const ROPE: Color = Color::srgb_u8(0xA8, 0x8C, 0x60);
     /// Near-black leathers: trousers and hoods; boots and eye sockets.
     pub const LEATHER: Color = Color::srgb_u8(0x2E, 0x27, 0x24);
     /// The merchant's: a rich burgundy coat, weathered skin, a grey-brown beard, a forest-green
@@ -109,7 +109,7 @@ pub mod palette {
     pub const WISP: Color = Color::srgb_u8(0xB8, 0xFF, 0xD6);
     /// Eyes burning a cold, spectral white.
     pub const SOUL: Color = Color::srgb_u8(0xF2, 0xFA, 0xFF);
-    pub const HAZE: Color = Color::srgb_u8(0xC2, 0xA3, 0x8E);
+    pub const HAZE: Color = Color::srgb_u8(0xD6, 0xE4, 0xEC);
     /// A zombie's rotting grey-green skin, its darker rot and wounds, and the dirty linen it
     /// died in.
     pub const ROT: Color = Color::srgb_u8(0x7E, 0x8A, 0x66);
@@ -135,10 +135,10 @@ pub mod palette {
     /// What a slowed fighter's colors are multiplied by: a cold blue cast.
     pub const FROSTBITE: Color = Color::srgb_u8(0x8C, 0xB8, 0xFF);
 
-    // Light. A hot gold key against a blue sky fill: sunlit faces go warm, shadows go cool, and
-    // the frame splits warm/cool instead of sitting in grey.
-    pub const SUN: Color = Color::srgb_u8(0xFF, 0xC9, 0x8E);
-    pub const SKY: Color = Color::srgb_u8(0x7E, 0x9A, 0xD4);
+    // Light. A high, near-white sun over a bright blue-white fill: short soft shadows, every
+    // color reading true, like a toy set under a clear sky.
+    pub const SUN: Color = Color::srgb_u8(0xFF, 0xF2, 0xDC);
+    pub const SKY: Color = Color::srgb_u8(0xBC, 0xD2, 0xE8);
     pub const TORCH_FLAME: Color = Color::srgb_u8(0xFF, 0xB2, 0x57);
     pub const TORCH_LIGHT: Color = Color::srgb_u8(0xFF, 0x94, 0x43);
 
