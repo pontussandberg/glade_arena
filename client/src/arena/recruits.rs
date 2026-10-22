@@ -151,17 +151,28 @@ pub(super) fn pyre_witch_body() -> Mesh {
     sculpted(vec![robe, sash, knot])
 }
 
-/// A deep hood swept far back into a witch's point.
+/// A witch's hat, no one else's silhouette: a wide brim and a tall crown kinked back, banded in
+/// red, over a head kept in shadow so the eyes carry the face.
 pub(super) fn pyre_witch_hood() -> Mesh {
     let coat = palette::MERCHANT_COAT;
-    let top = [
-        ring(-0.05, 0.22, (0.19, 0.19), coat),
-        ring(-0.08, 0.36, (0.15, 0.14), coat),
-        ring(-0.14, 0.48, (0.07, 0.06), coat),
-        ring(-0.26, 0.58, (0.022, 0.02), coat),
-        ring(-0.36, 0.6, (0.0, 0.0), coat),
-    ];
-    sculpted(deep_hood(coat, palette::AWNING_RED, palette::DARK_LEATHER, &top))
+    let head = tinted(ball(1.0).scaled_by(Vec3::new(0.085, 0.095, 0.085)).translated_by(Vec3::new(0.02, 0.08, 0.0)), palette::DARK_LEATHER);
+    let brim = faceted(tube(&[ring(0.0, 0.145, (0.24, 0.24), coat), ring(0.0, 0.19, (0.095, 0.095), coat)], 16, (true, true)));
+    let crown = tube(
+        &smoothed(
+            &[
+                ring(0.0, 0.18, (0.1, 0.1), coat),
+                ring(-0.02, 0.3, (0.075, 0.075), coat),
+                ring(-0.07, 0.42, (0.045, 0.045), coat),
+                ring(-0.16, 0.52, (0.02, 0.02), coat),
+                ring(-0.24, 0.56, (0.0, 0.0), coat),
+            ],
+            2,
+        ),
+        14,
+        (true, true),
+    );
+    let hatband = band(0.19, 0.23, 0.095, 12, palette::AWNING_RED);
+    sculpted(vec![head, brim, crown, hatband])
 }
 
 /// The witch's arm: a coat sleeve flaring open and torn at the wrist, a pale hand.
@@ -234,16 +245,20 @@ pub(super) fn shade_body() -> Mesh {
     sculpted(vec![tunic, strap, waist, scarf])
 }
 
-/// A short, tight hood ending in a low point.
+/// No hood at all: a head wrapped skull-tight, a dark half-mask over the face, the wrap's tail
+/// trailing off behind. The small bare head is the shade's silhouette.
 pub(super) fn shade_hood() -> Mesh {
     let cloth = palette::HUNTER;
-    let top = [
-        ring(-0.04, 0.2, (0.17, 0.17), cloth),
-        ring(-0.07, 0.32, (0.13, 0.12), cloth),
-        ring(-0.12, 0.42, (0.06, 0.055), cloth),
-        ring(-0.18, 0.47, (0.0, 0.0), cloth),
-    ];
-    sculpted(deep_hood(cloth, palette::HUNTER_ASH, palette::HUNTER_DARK, &top))
+    let head = tinted(ball(1.0).scaled_by(Vec3::new(0.095, 0.105, 0.095)).translated_by(Vec3::Y * 0.12), cloth);
+    let wrap = band(0.13, 0.17, 0.098, 12, palette::HUNTER_ASH);
+    let mask = tinted(ball(1.0).scaled_by(Vec3::new(0.055, 0.045, 0.085)).translated_by(Vec3::new(0.065, 0.07, 0.0)), palette::HUNTER_DARK);
+    let tail = sweep(
+        &[Vec3::new(-0.07, 0.08, 0.0), Vec3::new(-0.13, -0.08, 0.02), Vec3::new(-0.15, -0.24, 0.03)],
+        &[0.035, 0.025, 0.0],
+        5,
+        palette::HUNTER_ASH,
+    );
+    sculpted(vec![head, wrap, mask, tail])
 }
 
 /// The knife arm, wrapped forearm to shoulder.
@@ -389,7 +404,13 @@ pub(super) fn stormweaver_body() -> Mesh {
     // The legs showing under the coat, down into the boots.
     let legs = tube(&[ring(0.0, 0.1, (0.13, 0.15), STORM_DARK), ring(0.0, 0.46, (0.13, 0.15), STORM_DARK)], 14, (true, false));
     let sash = belt(0.01, (0.82, 0.9), (0.148, 0.178), palette::POND);
-    sculpted(vec![body, legs, sash])
+    // A short layered mantle over the shoulders: the storm's own cut.
+    let mantle = tube(
+        &smoothed(&[ring(0.0, 1.12, (0.2, 0.26), STORM_DARK), ring(0.01, 1.26, (0.17, 0.24), STORM_DARK), ring(0.0, 1.36, (0.12, 0.2), STORM_COAT)], 1),
+        18,
+        (false, false),
+    );
+    sculpted(vec![body, legs, sash, mantle])
 }
 
 /// A tall hood blown back into a long point.
