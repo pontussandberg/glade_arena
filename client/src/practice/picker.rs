@@ -51,8 +51,14 @@ pub(super) fn load_faces(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>
         commands.spawn((Mesh3d(meshes.add(rig.head)), MeshMaterial3d(body.clone()), Transform::IDENTITY, layer.clone()));
         commands.spawn((Mesh3d(meshes.add(rig.eyes)), MeshMaterial3d(eyes_glow.clone()), Transform::IDENTITY, layer.clone()));
         commands.spawn((
-            PointLight { intensity: 40_000.0, range: 5.0, shadow_maps_enabled: false, ..default() },
+            PointLight { intensity: 140_000.0, range: 5.0, shadow_maps_enabled: false, ..default() },
             Transform::from_xyz(0.8, 0.6, 0.5),
+            layer.clone(),
+        ));
+        // A softer fill from the other side, so the shadowed half of the face still reads.
+        commands.spawn((
+            PointLight { intensity: 50_000.0, range: 5.0, shadow_maps_enabled: false, ..default() },
+            Transform::from_xyz(-0.7, 0.2, 0.6),
             layer.clone(),
         ));
         commands.spawn((
