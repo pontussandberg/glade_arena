@@ -217,9 +217,9 @@ fn load_rigs(
     let rigs = ClassId::all()
         .map(|c| {
             let rig = arena::fighter_rig(c.def().figure());
-            // Faceted like the body (`render::setup_scene`): chiseled low-poly, not smooth
-            // plastic. The eyes and glowing parts stay smooth: they're light, not form.
-            let mut add = |mesh| meshes.add(arena::faceted(mesh));
+            // Smooth-shaded like the body (`render::setup_scene`): rounded forms, not chiseled
+            // facets.
+            let mut add = |mesh| meshes.add(mesh);
             let handles = RigHandles {
                 head: add(rig.head),
                 arm: add(rig.arm),

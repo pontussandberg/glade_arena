@@ -35,27 +35,27 @@ pub use scene::*;
 pub mod palette {
     use bevy::color::Color;
 
-    // The world: a bright toy diorama — clean saturated colors, nothing murky, the low poly
-    // worn proudly (Polytopia, Crossy Road).
-    pub const MOSS: Color = Color::srgb_u8(0x6F, 0xA8, 0x4A);
-    pub const MEADOW: Color = Color::srgb_u8(0x8A, 0xBC, 0x52);
-    pub const FERN: Color = Color::srgb_u8(0x52, 0x94, 0x46);
-    pub const PINE: Color = Color::srgb_u8(0x3A, 0x74, 0x4A);
-    pub const SLATE: Color = Color::srgb_u8(0x86, 0x85, 0x7E);
-    pub const STONE: Color = Color::srgb_u8(0xA8, 0xA4, 0x9A);
-    pub const WALL: Color = Color::srgb_u8(0x8E, 0x88, 0x7E);
-    pub const BARK: Color = Color::srgb_u8(0x7E, 0x5A, 0x3C);
-    pub const PATH: Color = Color::srgb_u8(0xB8, 0xA2, 0x75);
-    pub const BANK: Color = Color::srgb_u8(0x8C, 0x7A, 0x5A);
-    pub const RIVERBED: Color = Color::srgb_u8(0x6E, 0x8A, 0x80);
-    pub const POND: Color = Color::srgb_u8(0x4A, 0xA4, 0xC4);
+    // The world: dark medieval — deep, rich colors with the light low and the torches carrying
+    // the scene. Dark means lifted blue shadows and warm accents, never black soup.
+    pub const MOSS: Color = Color::srgb_u8(0x4C, 0x6B, 0x3A);
+    pub const MEADOW: Color = Color::srgb_u8(0x5E, 0x7A, 0x42);
+    pub const FERN: Color = Color::srgb_u8(0x3E, 0x60, 0x36);
+    pub const PINE: Color = Color::srgb_u8(0x2A, 0x44, 0x30);
+    pub const SLATE: Color = Color::srgb_u8(0x60, 0x62, 0x6A);
+    pub const STONE: Color = Color::srgb_u8(0x7A, 0x7C, 0x80);
+    pub const WALL: Color = Color::srgb_u8(0x5E, 0x60, 0x66);
+    pub const BARK: Color = Color::srgb_u8(0x50, 0x3C, 0x2C);
+    pub const PATH: Color = Color::srgb_u8(0x75, 0x6A, 0x52);
+    pub const BANK: Color = Color::srgb_u8(0x4A, 0x42, 0x34);
+    pub const RIVERBED: Color = Color::srgb_u8(0x30, 0x3C, 0x3A);
+    pub const POND: Color = Color::srgb_u8(0x33, 0x60, 0x78);
     pub const HEATHER: Color = Color::srgb_u8(0xA4, 0x7E, 0xC8);
     /// Boggy ground, wetter and browner than moss.
-    pub const MARSH: Color = Color::srgb_u8(0x7F, 0xA0, 0x50);
+    pub const MARSH: Color = Color::srgb_u8(0x4A, 0x58, 0x40);
     /// The bottom of a chasm, the darkest the world goes.
-    pub const ABYSS: Color = Color::srgb_u8(0x4A, 0x56, 0x68);
+    pub const ABYSS: Color = Color::srgb_u8(0x24, 0x29, 0x31);
     /// Hemp rope on the rope bridges.
-    pub const ROPE: Color = Color::srgb_u8(0xA8, 0x8C, 0x60);
+    pub const ROPE: Color = Color::srgb_u8(0x6A, 0x5B, 0x41);
     /// Near-black leathers: trousers and hoods; boots and eye sockets.
     pub const LEATHER: Color = Color::srgb_u8(0x2E, 0x27, 0x24);
     /// The merchant's: a rich burgundy coat, weathered skin, a grey-brown beard, a forest-green
@@ -109,7 +109,7 @@ pub mod palette {
     pub const WISP: Color = Color::srgb_u8(0xB8, 0xFF, 0xD6);
     /// Eyes burning a cold, spectral white.
     pub const SOUL: Color = Color::srgb_u8(0xF2, 0xFA, 0xFF);
-    pub const HAZE: Color = Color::srgb_u8(0xCC, 0xD6, 0xCC);
+    pub const HAZE: Color = Color::srgb_u8(0x43, 0x4C, 0x56);
     /// A zombie's rotting grey-green skin, its darker rot and wounds, and the dirty linen it
     /// died in.
     pub const ROT: Color = Color::srgb_u8(0x7E, 0x8A, 0x66);
@@ -135,10 +135,10 @@ pub mod palette {
     /// What a slowed fighter's colors are multiplied by: a cold blue cast.
     pub const FROSTBITE: Color = Color::srgb_u8(0x8C, 0xB8, 0xFF);
 
-    // Light. A warm gold-white sun over a soft blue fill: short shadows, true colors, but with
-    // an old warmth to it rather than showroom white.
-    pub const SUN: Color = Color::srgb_u8(0xFF, 0xE9, 0xC2);
-    pub const SKY: Color = Color::srgb_u8(0xAE, 0xC4, 0xDC);
+    // Light. A dim, cold daylight over a blue dusk fill — enough to read the field by, while
+    // fire stays the one warm, living light.
+    pub const SUN: Color = Color::srgb_u8(0xDC, 0xE4, 0xF2);
+    pub const SKY: Color = Color::srgb_u8(0x66, 0x78, 0x9A);
     pub const TORCH_FLAME: Color = Color::srgb_u8(0xFF, 0xB2, 0x57);
     pub const TORCH_LIGHT: Color = Color::srgb_u8(0xFF, 0x94, 0x43);
 

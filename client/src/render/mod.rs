@@ -263,9 +263,8 @@ fn setup_scene(
         Visibility::Hidden,
     ));
     commands.insert_resource(Visuals {
-        // Faceted: one normal per face, so figures read as chiseled low-poly forms under the
-        // HDR light, not smooth plastic.
-        fighters: ClassId::all().map(|c| (c, meshes.add(arena::faceted(arena::fighter_mesh(c.def().figure()))))).collect(),
+        // Smooth-shaded: rounded organic figures, their forms read by the light itself.
+        fighters: ClassId::all().map(|c| (c, meshes.add(arena::fighter_mesh(c.def().figure())))).collect(),
         // Where an auto-attack stops reaching: a fighter whose body reaches over the circle can be
         // hit.
         range_circles: ClassId::all()

@@ -237,7 +237,7 @@ fn spawn_camera(mut commands: Commands) {
         // light instead of clipping to flat white, and the dusk rolls off instead of banding.
         bevy::camera::Hdr,
         bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
-        bevy::post_process::bloom::Bloom { intensity: 0.12, ..bevy::post_process::bloom::Bloom::NATURAL },
+        bevy::post_process::bloom::Bloom { intensity: 0.16, ..bevy::post_process::bloom::Bloom::NATURAL },
         // A light grade: just enough saturation to undo what the filmic tonemap takes, nothing
         // moody — the toy look wants colors read straight.
         ColorGrading {

@@ -46,7 +46,7 @@ pub struct ArenaPlugin;
 impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClearColor(HAZE));
-        app.insert_resource(GlobalAmbientLight { color: SKY, brightness: 540.0, ..default() });
+        app.insert_resource(GlobalAmbientLight { color: SKY, brightness: 300.0, ..default() });
         app.add_systems(Startup, spawn_sun);
         // The scene is built from our room's map, and built again when it changes.
         app.add_systems(Update, ((build_arena, light_scene).run_if(resource_exists_and_changed::<CurrentMap>), flicker_torches));
@@ -113,7 +113,7 @@ struct Torch {
     pub(super) phase: f32,
 }
 
-pub(super) const TORCH_INTENSITY: f32 = 170_000.0;
+pub(super) const TORCH_INTENSITY: f32 = 320_000.0;
 
 fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight, &Children)>, mut flames: Query<&mut Transform>) {
     let t = time.elapsed_secs();
@@ -131,10 +131,10 @@ fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight,
 /// The low sun, from the same side over every map (its color and strength are the map's).
 fn spawn_sun(mut commands: Commands) {
     commands.spawn((
-        DirectionalLight { color: SUN, illuminance: 6_800.0, shadow_maps_enabled: true, ..default() },
-        // A high morning sun from the upper left: shadows short and soft underfoot, there to
-        // ground things, never to carpet the arena.
-        Transform::from_xyz(-32.0, 44.0, -18.0).looking_at(Vec3::ZERO, Vec3::Y),
+        DirectionalLight { color: SUN, illuminance: 2_400.0, shadow_maps_enabled: true, ..default() },
+        // A sinking sun from the upper left: low enough for evening light, high enough that
+        // trees don't carpet the arena in shadow.
+        Transform::from_xyz(-32.0, 32.0, -18.0).looking_at(Vec3::ZERO, Vec3::Y),
         sun_shadows(SUN_SHADOWS),
     ));
 }
