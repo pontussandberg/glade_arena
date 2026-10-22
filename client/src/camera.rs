@@ -237,14 +237,14 @@ fn spawn_camera(mut commands: Commands) {
         // light instead of clipping to flat white, and the dusk rolls off instead of banding.
         bevy::camera::Hdr,
         bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
-        bevy::post_process::bloom::Bloom { intensity: 0.16, ..bevy::post_process::bloom::Bloom::NATURAL },
-        // The painted grade: the filmic tonemap alone desaturates, so saturation is bought back
-        // with interest, shadows sink and cool, highlights get a touch of lift.
+        bevy::post_process::bloom::Bloom { intensity: 0.12, ..bevy::post_process::bloom::Bloom::NATURAL },
+        // The painted grade: the filmic tonemap alone desaturates, so saturation is bought back —
+        // gently, since post-tonemap saturation clips to white fast. Highlights stay untouched.
         ColorGrading {
-            global: ColorGradingGlobal { post_saturation: 1.22, ..Default::default() },
-            shadows: ColorGradingSection { saturation: 1.05, contrast: 1.08, ..Default::default() },
-            midtones: ColorGradingSection { saturation: 1.12, contrast: 1.05, ..Default::default() },
-            highlights: ColorGradingSection { saturation: 1.05, gain: 1.03, ..Default::default() },
+            global: ColorGradingGlobal { post_saturation: 1.1, ..Default::default() },
+            shadows: ColorGradingSection { contrast: 1.03, ..Default::default() },
+            midtones: ColorGradingSection { saturation: 1.06, contrast: 1.02, ..Default::default() },
+            highlights: ColorGradingSection::default(),
         },
         Transform::from_translation(OFFSET * ZOOM_RANGE.1).looking_at(Vec3::ZERO, Vec3::Y),
         arena::haze(),

@@ -46,7 +46,7 @@ pub struct ArenaPlugin;
 impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClearColor(HAZE));
-        app.insert_resource(GlobalAmbientLight { color: SKY, brightness: 170.0, ..default() });
+        app.insert_resource(GlobalAmbientLight { color: SKY, brightness: 160.0, ..default() });
         app.add_systems(Startup, spawn_sun);
         // The scene is built from our room's map, and built again when it changes.
         app.add_systems(Update, ((build_arena, light_scene).run_if(resource_exists_and_changed::<CurrentMap>), flicker_torches));
@@ -131,7 +131,7 @@ fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight,
 /// The low sun, from the same side over every map (its color and strength are the map's).
 fn spawn_sun(mut commands: Commands) {
     commands.spawn((
-        DirectionalLight { color: SUN, illuminance: 5_200.0, shadow_maps_enabled: true, ..default() },
+        DirectionalLight { color: SUN, illuminance: 4_000.0, shadow_maps_enabled: true, ..default() },
         // Low dusk sun from the upper left, so shadows are long and fall toward the camera's right.
         Transform::from_xyz(-32.0, 14.0, -18.0).looking_at(Vec3::ZERO, Vec3::Y),
         sun_shadows(SUN_SHADOWS),

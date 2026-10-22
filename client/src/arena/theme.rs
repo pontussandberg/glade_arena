@@ -79,9 +79,9 @@ const GLADE: Theme = Theme {
     rope: ROPE,
     haze: HAZE,
     sky: SKY,
-    sky_brightness: 170.0,
+    sky_brightness: 160.0,
     sun: SUN,
-    sun_illuminance: 5_200.0,
+    sun_illuminance: 4_000.0,
     wilds: Wilds::Forest,
 };
 
@@ -164,7 +164,7 @@ const HOLLOW: Theme = Theme {
     sky: Color::srgb_u8(0x76, 0x70, 0xCC),
     sky_brightness: 210.0,
     sun: Color::srgb_u8(0xF2, 0xC4, 0xE4),
-    sun_illuminance: 4_400.0,
+    sun_illuminance: 3_800.0,
     wilds: Wilds::Forest,
 };
 
@@ -192,6 +192,6 @@ const HIGHLANDS: Theme = Theme {
     sky: Color::srgb_u8(0x88, 0x78, 0xC4),
     sky_brightness: 160.0,
     sun: Color::srgb_u8(0xFF, 0x9E, 0x54),
-    sun_illuminance: 5_600.0,
+    sun_illuminance: 4_200.0,
     wilds: Wilds::Highlands,
 };
