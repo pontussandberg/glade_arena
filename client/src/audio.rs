@@ -15,7 +15,7 @@ pub struct AudioPlugin;
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SoundQueue>();
-        app.add_systems(Update, (swing_sounds, loose_sounds, dash_sounds, heartbeat));
+        app.add_systems(Update, (swing_sounds, windup_sounds, loose_sounds, dash_sounds, heartbeat));
         #[cfg(target_family = "wasm")]
         {
             app.init_non_send::<web::AudioLazy>();
@@ -29,10 +29,31 @@ impl Plugin for AudioPlugin {
 /// The sounds there are.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Sfx {
-    /// A blade (or claw) cutting the air: any melee swing nearby.
+    /// A blade (or claw) cutting the air: the fallback swing for a figure without its own,
+    /// pitched by the weapon's weight — and, pitched down, the rush of a dash.
     Swing,
-    /// A shot loosed: a bolt, a javelin, a gout of fire leaving the hand.
+    /// The revenant's glaive: a broad, heavy cut with a hiss off the edge.
+    GlaiveSwing,
+    /// The warden's arming sword: one crisp cut with a whisper of steel in it.
+    SwordSwing,
+    /// The breaker's maul: a long, deep haul of air with real mass behind it.
+    MaulSwing,
+    /// The shade's knives: two quick snicks, one hand after the other.
+    KnifeSwing,
+    /// A zombie's claws: a ragged, breathy swipe, nothing clean about it.
+    ClawSwing,
+    /// The faint gather of air before any attack goes off.
+    Windup,
+    /// A shot loosed, with nothing more telling to say about it.
     Loose,
+    /// A spear taking flight: wind whistling over the shaft.
+    SpearLoose,
+    /// A gout of fire leaving the hand: a soft whoof.
+    FireLoose,
+    /// A frostbolt leaving the hand: a glassy shiver.
+    FrostLoose,
+    /// A storm bolt leaving the hand: a dry crackle.
+    StormLoose,
     /// A blow landing on someone else.
     Hit,
     /// A crit landing.
@@ -102,15 +123,55 @@ pub fn earshot(away: f32, reach: f32) -> f32 {
     (1.0 - away / reach).clamp(0.0, 1.0)
 }
 
-/// Every shot loosed nearby sounds as it leaves the hand: bolts, javelins, gouts of fire.
+/// How heavy a class's weapon sounds, from how slowly it attacks: a knife rides high and quick,
+/// a maul low and long. A pitch multiplier around 1.
+fn weapon_pitch(class: arena_shared::protocol::ClassId) -> f32 {
+    (40.0 / class.def().attack.attack_ticks as f32).clamp(0.65, 1.35)
+}
+
+/// Every shot loosed nearby sounds as it leaves the hand, as what it is: wind over a spear, a
+/// whoof of fire, a shiver of frost, a crackle of storm.
 fn loose_sounds(
     me: Query<&arena_shared::protocol::Pos, With<crate::Me>>,
-    shots: Query<&arena_shared::protocol::Pos, Added<arena_shared::protocol::Projectile>>,
+    shots: Query<(&arena_shared::protocol::Pos, &arena_shared::protocol::Projectile), Added<arena_shared::protocol::Projectile>>,
     mut queue: ResMut<SoundQueue>,
 ) {
+    use arena_shared::protocol::FxColor;
     let Ok(me) = me.single() else { return };
-    for pos in &shots {
-        queue.push(Sfx::Loose, 0.6 * earshot(pos.0.distance(me.0), 14.0));
+    for (pos, projectile) in &shots {
+        let def = projectile.class.def();
+        let sfx = match def.look.as_ref().and_then(|look| look.bolts) {
+            Some(FxColor::Fire) => Sfx::FireLoose,
+            Some(FxColor::Frost | FxColor::Spirit) => Sfx::FrostLoose,
+            Some(FxColor::Storm) => Sfx::StormLoose,
+            _ if def.figure() == "javelinist" => Sfx::SpearLoose,
+            _ => Sfx::Loose,
+        };
+        queue.push(sfx, 0.6 * earshot(pos.0.distance(me.0), 14.0));
+    }
+}
+
+/// The gather before any attack: as a swing starts winding up, a faint breath of air, pitched
+/// by the weapon's weight like the swing itself.
+fn windup_sounds(
+    me: Query<&arena_shared::protocol::Pos, With<crate::Me>>,
+    attackers: Query<
+        (Entity, &arena_shared::protocol::Pos, &arena_shared::protocol::ClassId, &arena_shared::protocol::AttackState),
+        (Changed<arena_shared::protocol::AttackState>, With<arena_shared::protocol::PlayerId>),
+    >,
+    mut queue: ResMut<SoundQueue>,
+    mut heard: Local<bevy::platform::collections::HashMap<Entity, u32>>,
+) {
+    let Ok(me) = me.single() else { return };
+    for (attacker, pos, class, attack) in &attackers {
+        let Some(swing) = attack.swing else { continue };
+        // The first sighting only notes the swing: it may be long past.
+        match heard.insert(attacker, swing.started_at) {
+            Some(seen) if seen != swing.started_at => {
+                queue.push_pitched(Sfx::Windup, 0.4 * earshot(pos.0.distance(me.0), 10.0), 0.0, weapon_pitch(*class));
+            }
+            _ => {}
+        }
     }
 }
 
@@ -160,17 +221,29 @@ fn heartbeat(
 fn swing_sounds(
     me: Query<&arena_shared::protocol::Pos, With<crate::Me>>,
     swings: Query<
-        (Entity, &arena_shared::protocol::Pos, &arena_shared::protocol::LastSwing),
+        (Entity, &arena_shared::protocol::Pos, &arena_shared::protocol::ClassId, &arena_shared::protocol::LastSwing),
         (Changed<arena_shared::protocol::LastSwing>, With<arena_shared::protocol::PlayerId>),
     >,
     mut queue: ResMut<SoundQueue>,
     mut heard: Local<bevy::platform::collections::HashMap<Entity, u32>>,
 ) {
     let Ok(me) = me.single() else { return };
-    for (swinger, pos, swing) in &swings {
+    for (swinger, pos, class, swing) in &swings {
         // The first sighting only notes the swing: it may be long past.
         match heard.insert(swinger, swing.tick) {
-            Some(seen) if seen != swing.tick => queue.push(Sfx::Swing, 0.7 * earshot(pos.0.distance(me.0), 13.0)),
+            Some(seen) if seen != swing.tick => {
+                // Each figure strikes with its own engineered sound; one without it falls back
+                // to the plain swish, pitched by its weapon's weight.
+                let (sfx, pitch) = match class.def().figure() {
+                    "revenant" => (Sfx::GlaiveSwing, 1.0),
+                    "warden" => (Sfx::SwordSwing, 1.0),
+                    "breaker" => (Sfx::MaulSwing, 1.0),
+                    "shade" => (Sfx::KnifeSwing, 1.0),
+                    "zombie" => (Sfx::ClawSwing, 1.0),
+                    _ => (Sfx::Swing, weapon_pitch(*class)),
+                };
+                queue.push_pitched(sfx, 0.7 * earshot(pos.0.distance(me.0), 13.0), 0.0, pitch);
+            }
             _ => {}
         }
     }
@@ -355,9 +428,97 @@ mod web {
             let p = self.vary(0.12) * pitch;
             match kind {
                 Sfx::Swing => {
-                    // A swish falls in pitch as the blade comes through.
-                    if let Some(e) = self.env(now, 0.04, 0.13 * g, 0.14) {
-                        self.noise(Bandpass, 1400.0 * p, 550.0, 1.1, now, 0.14, &e);
+                    // A swish falls in pitch as the weapon comes through; a heavy one (low
+                    // pitch) takes proportionally longer to pass.
+                    let dur = (0.14 / p as f64).min(0.24);
+                    if let Some(e) = self.env(now, dur * 0.3, 0.13 * g, dur) {
+                        self.noise(Bandpass, 1400.0 * p, 550.0 * p, 1.1, now, dur, &e);
+                    }
+                }
+                Sfx::GlaiveSwing => {
+                    // A broad, heavy cut: the body of the swish low and wide, a hiss off the
+                    // long edge.
+                    if let Some(e) = self.env(now, 0.045, 0.14 * g, 0.17) {
+                        self.noise(Bandpass, 1150.0 * p, 460.0, 1.0, now, 0.17, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.02, 0.01, 0.05 * g, 0.06) {
+                        self.noise(Highpass, 3500.0, 2800.0, 0.8, now + 0.02, 0.06, &e);
+                    }
+                }
+                Sfx::SwordSwing => {
+                    // One crisp cut, and the faintest ring of steel under it (a held tone, not
+                    // a sweep).
+                    if let Some(e) = self.env(now, 0.03, 0.12 * g, 0.11) {
+                        self.noise(Bandpass, 1750.0 * p, 720.0, 1.2, now, 0.11, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.015, 0.004, 0.03 * g, 0.07) {
+                        self.osc(Triangle, 2050.0 * p, 2050.0 * p, now + 0.015, 0.07, &e);
+                    }
+                }
+                Sfx::MaulSwing => {
+                    // The maul hauls through: long, low, and all mass.
+                    if let Some(e) = self.env(now, 0.08, 0.16 * g, 0.26) {
+                        self.noise(Lowpass, 520.0 * p, 170.0, 0.8, now, 0.26, &e);
+                    }
+                    if let Some(e) = self.env(now, 0.06, 0.09 * g, 0.2) {
+                        self.osc(Sine, 72.0 * p, 44.0, now, 0.2, &e);
+                    }
+                }
+                Sfx::KnifeSwing => {
+                    // Two snicks, one hand after the other.
+                    for (at, peak) in [(now, 0.1), (now + 0.045, 0.07)] {
+                        if let Some(e) = self.env(at, 0.004, peak * g, 0.055) {
+                            self.noise(Bandpass, 2400.0 * p, 1500.0, 1.5, at, 0.055, &e);
+                        }
+                    }
+                }
+                Sfx::ClawSwing => {
+                    // A ragged swipe: two rough bands of breath, overlapping and unclean.
+                    if let Some(e) = self.env(now, 0.03, 0.12 * g, 0.15) {
+                        self.noise(Bandpass, 950.0 * p, 420.0, 0.6, now, 0.15, &e);
+                    }
+                    if let Some(e) = self.env(now + 0.025, 0.02, 0.07 * g, 0.1) {
+                        self.noise(Bandpass, 620.0 * p, 300.0, 0.5, now + 0.025, 0.1, &e);
+                    }
+                }
+                Sfx::Windup => {
+                    // A faint gather of air, rising as the weapon is raised.
+                    let dur = (0.13 / p as f64).min(0.2);
+                    if let Some(e) = self.env(now, dur * 0.7, 0.05 * g, dur) {
+                        self.noise(Bandpass, 400.0 * p, 900.0 * p, 1.0, now, dur, &e);
+                    }
+                }
+                Sfx::SpearLoose => {
+                    // Wind whistling over the shaft as it takes flight: a narrow band of air
+                    // easing down, longer than any other loose.
+                    if let Some(e) = self.env(now, 0.015, 0.1 * g, 0.22) {
+                        self.noise(Bandpass, 1900.0 * p, 1250.0, 2.6, now, 0.22, &e);
+                    }
+                    if let Some(e) = self.env(now, 0.008, 0.07 * g, 0.08) {
+                        self.noise(Bandpass, 1100.0 * p, 1100.0 * p, 0.7, now, 0.08, &e);
+                    }
+                }
+                Sfx::FireLoose => {
+                    // A soft whoof, all low air.
+                    if let Some(e) = self.env(now, 0.012, 0.16 * g, 0.16) {
+                        self.noise(Lowpass, 750.0 * p, 320.0, 0.8, now, 0.16, &e);
+                    }
+                }
+                Sfx::FrostLoose => {
+                    // A glassy shiver off the top, over a breath of air.
+                    if let Some(e) = self.env(now, 0.004, 0.08 * g, 0.07) {
+                        self.noise(Highpass, 4500.0, 3800.0, 1.2, now, 0.07, &e);
+                    }
+                    if let Some(e) = self.env(now, 0.006, 0.07 * g, 0.07) {
+                        self.noise(Bandpass, 2600.0 * p, 2600.0 * p, 1.8, now, 0.07, &e);
+                    }
+                }
+                Sfx::StormLoose => {
+                    // A dry double crackle.
+                    for (at, peak) in [(now, 0.12), (now + 0.018, 0.08)] {
+                        if let Some(e) = self.env(at, 0.001, peak * g, 0.025) {
+                            self.noise(Bandpass, 3100.0 * p, 2400.0, 1.4, at, 0.025, &e);
+                        }
                     }
                 }
                 Sfx::Loose => {
