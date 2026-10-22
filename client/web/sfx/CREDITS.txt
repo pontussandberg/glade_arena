@@ -1,0 +1,30 @@
+Sound recordings used by the game, all released under CC0 1.0 (public domain dedication,
+https://creativecommons.org/publicdomain/zero/1.0/). No attribution is required; it is given
+here with thanks. Files were trimmed, mixed to mono and normalized; some were halved in
+sample rate. The game layers and pitches them at play time (client/src/audio.rs).
+
+Kenney (https://kenney.nl), "Impact Sounds" and "RPG Audio" packs:
+  impact*.ogg, cloth1/2.ogg, clothBelt.ogg, creak1/2.ogg, drawKnife1/2.ogg, knifeSlice.ogg,
+  knifeSlice2.ogg, handleCoins.ogg, handleSmallLeather.ogg, metalClick.ogg, chop.ogg
+
+artisticdude (OpenGameArt), "Swishes Sound Pack" and "RPG Sound Pack":
+  swish_light_*.wav, swish_heavy_*.wav, swing_1/2.wav, unsheathe_1/2.wav, ring.wav, coins.wav,
+  chainmail.wav, cloth_heavy.wav, magic.wav
+
+StarNinjas (OpenGameArt), "20 Sword Sound Effects (Attacks and Clashes)":
+  sword_1-3.ogg, clash_1-3.ogg
+
+rubberduck (OpenGameArt), "100 CC0 SFX #2":
+  air_01.ogg, hit_01/02.ogg, metal_hit_01/02.ogg, stones_01/02.ogg, glass_01.ogg, thunder_01.ogg
+
+faxcorp (OpenGameArt), "Electricity Game Sound Pack":
+  zap_hit.wav (hit), zap_bloom.wav (shieldhit), crackle.wav (snaploop), charge.wav
+  (chargestart), boom.wav (deathboom), groundhit.wav
+
+bart (OpenGameArt), "Ice spells" (from a pdsounds recording by Stephan): ice.wav, coldsnap.wav
+IgnasD (OpenGameArt), "Ice breaking/shattering": shatter_1/2.ogg
+themightyglider (OpenGameArt), "Catching fire": flame.ogg
+
+"SSE Library: FIRE" (USC Cinema / Sunset Editorial collection, via the Internet Archive,
+https://archive.org/details/SSE_Library_FIRE):
+  fire_whoosh.wav (flare whoosh), fire_pop.wav and fire_bed.wav (acetylene torch pops)

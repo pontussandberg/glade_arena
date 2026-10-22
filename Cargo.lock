@@ -329,6 +329,7 @@ dependencies = [
  "js-sys",
  "lightyear",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
