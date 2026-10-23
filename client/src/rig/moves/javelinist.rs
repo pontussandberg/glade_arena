@@ -27,6 +27,11 @@ pub(super) const JAVELINIST: Moves = Moves {
     windmill: false,
     // One-armed: the empty sleeve hangs nearly limp.
     lead_arm: [0.0, 0.1, -0.1, 0.0],
+    lead_elbow: [0.0; 4],
+    lead_elbow_turn: [0.0; 4],
+    lead_yaw: [0.0; 4],
+    lead_grip: 0.0,
+    lead_hold: [0.0; 4],
     // Sinking low into the windup, knees bent: the lead thigh well forward over an upright shin,
     // the back leg stretched out behind, a little bent, both feet down; still low through the
     // throw.
@@ -48,6 +53,7 @@ pub(super) const JAVELINIST: Moves = Moves {
     standing_arm: 0.0,
     rests: false,
     stride: 1.0,
+    gait: EVEN,
     head_dip: [0.0, 0.3, -0.15, 0.0],
     // Tipped up a little over the aim carried; cocked, its point dipped toward the target, down
     // to the height it flies at, right over the thrower's middle: it leaves the hand just where

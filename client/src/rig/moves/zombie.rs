@@ -1,5 +1,5 @@
-//! How the zombie moves: a hunched shamble, both arms reaching out ahead, and a clawing swipe
-//! down from overhead.
+//! How the zombie moves: a hunched shamble on bent knees, both arms reaching out ahead, crooked
+//! at the elbows, and a clawing swipe down from overhead.
 
 use super::*;
 
@@ -12,16 +12,23 @@ pub(super) const ZOMBIE: Moves = Moves {
     weapon_arm_untwist: 0.0,
     elbow_at: RIG_ELBOW,
     hand_at: RIG_HAND,
-    elbow: [0.0; 4],
-    elbow_turn: [0.0; 4],
-    arm_yaw: [0.0; 4],
+    // Crooked as it reaches; nearly straight up over the head; crooked again through the swipe.
+    elbow: [0.6, 0.2, 0.5, 0.0],
+    elbow_turn: [0.3, 0.0, 0.2, 0.0],
+    arm_yaw: [0.2, 0.0, 0.3, 0.0],
     windmill: false,
-    // The other arm reaches out too, rising a little with the swipe.
+    // The other arm reaches out too, as crooked, rising a little with the swipe.
     lead_arm: [1.3, 1.6, 1.1, 0.0],
+    lead_elbow: [0.7, 0.9, 0.5, 0.0],
+    lead_elbow_turn: [0.2, 0.2, 0.2, 0.0],
+    lead_yaw: [0.25, 0.3, 0.2, 0.0],
+    lead_grip: 0.0,
+    lead_hold: [0.0; 4],
+    // Never straightening its legs.
     lead_leg: [0.1, 0.2, 0.45, 0.0],
     back_leg: [-0.1, -0.25, -0.4, 0.0],
-    lead_knee: [0.0; 4],
-    back_knee: [0.0; 4],
+    lead_knee: [0.3, 0.35, 0.4, 0.0],
+    back_knee: [0.25, 0.3, 0.3, 0.0],
     hip_turn: 0.0,
     twist: [0.0, -0.35, 0.3, 0.0],
     // Hunched forward always, lurching into the swipe.
@@ -29,8 +36,9 @@ pub(super) const ZOMBIE: Moves = Moves {
     standing_lean: -0.2,
     standing_arm: 0.0,
     rests: false,
-    // A shuffle: short, dragging steps.
+    // A shuffle: short, dragging, lurching steps.
     stride: 0.55,
+    gait: Gait { cadence: 1.3, bob: 0.5, sway: 1.9, arms: 0.2, knees: 0.5 },
     head_dip: [0.25, 0.0, 0.35, 0.0],
     // The claws point at what it goes for.
     held: Held::OnTarget([0.0, 0.3, -0.3, 0.0]),

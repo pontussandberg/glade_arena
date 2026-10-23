@@ -68,6 +68,24 @@ pub(crate) struct Blade {
     pub(crate) embers: (f32, u32),
 }
 
+/// A blade in a fighter's other hand, part of its lead forearm (the shade's reversed knife):
+/// where it runs along the forearm's own axis (meters from the elbow, its base to its point),
+/// for a trail of its own, and the mark of the attack's second cut (`AttackDef::twice`) along
+/// it as that lands: when (seconds) the next one does, while one is coming.
+#[derive(Component)]
+pub(crate) struct OffBlade {
+    pub(crate) held: Entity,
+    pub(crate) span: (f32, f32),
+    pub(crate) cut_at: Option<f32>,
+}
+
+impl OffBlade {
+    /// The point `up` (0 at its base, 1 at its point) along it, in the world.
+    fn at(&self, held: &GlobalTransform, up: f32) -> Vec3 {
+        held.transform_point(Vec3::Y * (self.span.0 + (self.span.1 - self.span.0) * up))
+    }
+}
+
 impl Blade {
     /// How low the end of the blade comes (meters): its point or its edge's corner, whichever.
     fn lowest(&self, held: &GlobalTransform) -> f32 {

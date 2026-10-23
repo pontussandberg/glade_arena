@@ -164,10 +164,11 @@ struct RigAssets {
 struct RigHandles {
     head: Handle<Mesh>,
     arm: Handle<Mesh>,
-    forearm: Option<Handle<Mesh>>,
-    lead_arm: Option<Handle<Mesh>>,
+    forearm: Handle<Mesh>,
+    /// The left arm's own upper arm and forearm (if it has one), if it isn't the right one again.
+    lead_arm: Option<(Handle<Mesh>, Option<Handle<Mesh>>)>,
     leg: Handle<Mesh>,
-    shin: Option<Handle<Mesh>>,
+    shin: Handle<Mesh>,
     held: Handle<Mesh>,
     eyes: Handle<Mesh>,
     glow: Handle<StandardMaterial>,
@@ -246,10 +247,13 @@ fn load_rigs(
             let handles = RigHandles {
                 head: add(rig.head),
                 arm: add(rig.arm),
-                forearm: rig.forearm.map(&mut add),
-                lead_arm: rig.lead_arm.map(&mut add),
+                forearm: add(rig.forearm),
+                lead_arm: rig.lead_arm.map(|(arm, forearm)| {
+                    let arm = add(arm);
+                    (arm, forearm.map(&mut add))
+                }),
                 leg: add(rig.leg),
-                shin: rig.shin.map(&mut add),
+                shin: add(rig.shin),
                 held: add(rig.held),
                 eyes: meshes.add(rig.eyes),
                 glow: materials.add(arena::glow(rig.glow, EYE_GLOW)),
@@ -290,7 +294,7 @@ fn add_rigs(
         let own = &body.0;
         let rig = Rig {
             head: part(&handles.head, own, RIG_NECK),
-            arms: [part(&handles.arm, own, RIG_SHOULDER), part(handles.lead_arm.as_ref().unwrap_or(&handles.arm), own, mirrored(RIG_SHOULDER))],
+            arms: [part(&handles.arm, own, RIG_SHOULDER), part(handles.lead_arm.as_ref().map_or(&handles.arm, |(arm, _)| arm), own, mirrored(RIG_SHOULDER))],
             elbows,
             legs: [part(&handles.leg, own, RIG_HIP), part(&handles.leg, own, mirrored(RIG_HIP))],
             knees,
@@ -312,16 +316,18 @@ fn add_rigs(
         let eyes = part(&handles.eyes, &assets.eye_glow, Vec3::ZERO);
         let held_glow = handles.held_glow.as_ref().map(|mesh| part(mesh, &handles.glow, Vec3::ZERO));
         let body_glow = handles.body_glow.as_ref().map(|mesh| part(mesh, &handles.glow, Vec3::ZERO));
-        // A forearm on each arm, or only the weapon arm if the other is an empty sleeve.
-        let arms_with_forearms = if handles.lead_arm.is_some() { 1 } else { 2 };
-        let shins: Vec<Entity> = handles.shin.iter().flat_map(|mesh| [mesh, mesh]).map(|mesh| part(mesh, own, Vec3::ZERO)).collect();
-        let forearms: Vec<Entity> = handles.forearm.iter().flat_map(|mesh| std::iter::repeat_n(mesh, arms_with_forearms)).map(|mesh| part(mesh, own, Vec3::ZERO)).collect();
+        // A forearm on each arm, unless the lead arm is an empty sleeve.
+        let forearms = [Some(&handles.forearm), handles.lead_arm.as_ref().map_or(Some(&handles.forearm), |(_, forearm)| forearm.as_ref())];
+        let forearms = forearms.map(|mesh| mesh.map(|mesh| part(mesh, own, Vec3::ZERO)));
+        let shins = [(); 2].map(|_| part(&handles.shin, own, Vec3::ZERO));
         commands.entity(rig.head).add_child(eyes);
         for (arm, elbow) in rig.arms.into_iter().zip(rig.elbows) {
             commands.entity(arm).add_child(elbow);
         }
         for (elbow, forearm) in rig.elbows.into_iter().zip(forearms) {
-            commands.entity(elbow).add_child(forearm);
+            if let Some(forearm) = forearm {
+                commands.entity(elbow).add_child(forearm);
+            }
         }
         for (leg, knee) in rig.legs.into_iter().zip(rig.knees) {
             commands.entity(leg).add_child(knee);
@@ -344,13 +350,18 @@ fn add_rigs(
         if let Some(wardrobe) = &handles.wardrobe {
             crate::cloth::dress(&mut commands, player, (rig.legs, rig.knees, rig.arms[0]), own, wardrobe);
         }
-        if matches!(rig.moves.held, Held::Gripped { .. }) {
-            let figure = class.def().figure();
+        let figure = class.def().figure();
+        if matches!(rig.moves.held, Held::Gripped { .. } | Held::Swept { .. }) {
             let (from, length) = arena::blade_span(figure);
             // A glaive's broad edge reaches the ground at its corner before its point; a plain
             // blade's lowest point is its point.
             let corner = if figure == "revenant" { arena::glaive_edge(1.0) } else { Vec3::Y * length };
             commands.entity(player).insert(crate::swish::Blade { held: rig.held, length, from: from / length, shown: 0, quickened: false, striking: false, dragged: None, corner, rasp: 0, embers: (0.0, 0) });
+        }
+        // A blade on the other hand too (the shade's), on its lead forearm, which hangs from
+        // its lead elbow.
+        if let Some(span) = arena::off_blade_span(figure) {
+            commands.entity(player).insert(crate::swish::OffBlade { held: rig.elbows[1], span, cut_at: None });
         }
         commands.entity(player).insert((
             rig,
@@ -453,7 +464,7 @@ fn pose_rigs(
         // A jump (a spawn, a waygate, a correction) is no stride at all.
         if !gliding && facing.moved.length() < arena_shared::config::JUMP {
             let before = rig.stride;
-            rig.stride += facing.moved.length() * STRIDES_PER_METER;
+            rig.stride += facing.moved.length() * STRIDES_PER_METER * rig.moves.gait.cadence;
             // A foot comes down every half stride (the legs pass each other there).
             if (before * 2.0).floor() != (rig.stride * 2.0).floor() {
                 footfalls.0 += 1;
@@ -463,7 +474,7 @@ fn pose_rigs(
         let walking = rig.walking + (is_walking - rig.walking) * ease_walk;
         rig.walking = if (walking - is_walking).abs() < 1e-3 { is_walking } else { walking };
         let stride = rig.stride.fract() * TAU;
-        let step = stride.sin() * rig.walking;
+        let step = Vec2::new(stride.sin(), stride.cos()) * rig.walking;
 
         // Where in the strike we are: drawing (0..1), holding, then striking during the windup,
         // up to its contact pose as the attack goes off; then the rest of the strike, and the
@@ -584,7 +595,7 @@ fn pose_rigs(
         target.lead_arm += STAGGER_ARMS * stagger - DASH_ARMS * lunge;
         target.weapon_arm += 0.6 * STAGGER_ARMS * stagger - DASH_ARMS * lunge * if moves.rests { 0.3 } else { 1.0 };
         let angles = rig.joints.follow(&target, dt, moves);
-        let aimed = targets(moves, phase, 0.0, rig.walking);
+        let aimed = targets(moves, phase, Vec2::ZERO, rig.walking);
         let walk = rig.walking * free;
         let posed = assemble(moves, &angles, &aimed, facing.look, stride, walk, stretch * smear, blade, free);
         // Just hit, the whole figure flinches: squashed wide and short, springing back over
@@ -708,11 +719,11 @@ mod tests {
                         attack.released_at = Some(release);
                         // The frame the hand lets go: posed just as it did.
                         let back = dt - (now - release as f32) / TICK_HZ as f32;
-                        break pose_releasing(class, moves, &attack, &joints, back, release as f32, 0.0, (Vec2::X, 0.0, 0.0, 0.0));
+                        break pose_releasing(class, moves, &attack, &joints, back, release as f32, 0.0, (Vec2::X, Vec2::ZERO, 0.0, 0.0));
                     }
                     let (shown, shown_released, ahead) = ahead_of_springs(class, moves, attack.winding_up(), None, now);
                     let (draw, throw, _, second) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
-                    joints.follow(&targets(moves, Phase { draw, throw, dashing: 0.0, second }, 0.0, 0.0), dt, moves);
+                    joints.follow(&targets(moves, Phase { draw, throw, dashing: 0.0, second }, Vec2::ZERO, 0.0), dt, moves);
                 };
                 let placed = Transform { translation: Vec3::new(3.0, leave.body.translation.y, -2.0), ..leave.body };
                 // The held spear as its parts (fighter, arm, elbow, spear) draw it.

@@ -17,23 +17,20 @@ use super::*;
 
 use crate::sculpt::{Section, bevel_box, smoothed, sweep, tube};
 
-/// A plain hanging arm: a shoulder ring down a sleeve to a fist, each section its own color.
-fn sleeved_arm(shoulder: Color, sleeve: Color, wrist: Color, hand: Color) -> Mesh {
-    let arm = tube(
-        &smoothed(
-            &[
-                ring(0.0, 0.03, (0.068, 0.068), shoulder),
-                ring(0.0, -0.1, (0.058, 0.058), sleeve),
-                ring(0.0, -0.22, (0.052, 0.052), sleeve),
-                ring(0.0, -0.34, (0.047, 0.047), wrist),
-                ring(0.0, -0.4, (0.043, 0.043), wrist),
-            ],
-            2,
-        ),
-        12,
-        (true, false),
+/// A plain hanging arm: a shoulder ring down a sleeve to a fist, each section its own color;
+/// the upper arm, and the forearm from the elbow.
+fn sleeved_arm(shoulder: Color, sleeve: Color, wrist: Color, hand: Color) -> (Mesh, Mesh) {
+    let arm = smoothed(
+        &[
+            ring(0.0, 0.03, (0.068, 0.068), shoulder),
+            ring(0.0, -0.1, (0.058, 0.058), sleeve),
+            ring(0.0, -0.22, (0.052, 0.052), sleeve),
+            ring(0.0, -0.34, (0.047, 0.047), wrist),
+            ring(0.0, -0.4, (0.043, 0.043), wrist),
+        ],
+        2,
     );
-    sculpted(vec![arm, fist(hand, -0.42, 0.044)])
+    jointed(RIG_ELBOW, vec![(arm, 12, (true, false))], vec![fist(hand, -0.42, 0.044)])
 }
 
 // ---------------------------------------------------------------- the warden
@@ -90,20 +87,25 @@ pub(super) fn warden_helm() -> Mesh {
 
 pub(super) const WARDEN_EYES: Vec3 = Vec3::new(0.106, 0.167, 0.038);
 
-/// The sword arm: a pauldron over mail down to a bracer and a gloved fist.
-pub(super) fn warden_arm() -> Mesh {
-    let arm = sleeved_arm(palette::SLATE, palette::SLATE, palette::IRON, palette::LEATHER);
+/// The sword arm: a pauldron over mail down to a bracer and a gloved fist (the upper arm and the
+/// forearm).
+pub(super) fn warden_arm() -> (Mesh, Mesh) {
+    let (arm, forearm) = sleeved_arm(palette::SLATE, palette::SLATE, palette::IRON, palette::LEATHER);
     let pauldron = tinted(ball(1.0).scaled_by(Vec3::new(0.085, 0.07, 0.095)).translated_by(Vec3::new(0.0, 0.0, 0.0)), palette::IRON);
-    sculpted(vec![arm, pauldron])
+    (sculpted(vec![arm, pauldron]), forearm)
 }
 
-/// The shield arm: the same arm with a round shield strapped along the forearm, boss out.
-pub(super) fn warden_shield_arm() -> Mesh {
+/// The shield arm: the same arm with a round shield strapped along the forearm, centered on
+/// it, boss out: held across the chest, it faces whatever the knight faces.
+pub(super) fn warden_shield_arm() -> (Mesh, Mesh) {
+    let (arm, forearm) = warden_arm();
     let out = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
-    let face = faceted(cylinder(0.26, 0.03, 14).rotated_by(out).translated_by(Vec3::new(0.085, -0.3, 0.0)));
-    let rim = faceted(cylinder(0.275, 0.015, 14).rotated_by(out).translated_by(Vec3::new(0.075, -0.3, 0.0)));
-    let boss = tinted(ball(0.05).scaled_by(Vec3::new(0.7, 1.0, 1.0)).translated_by(Vec3::new(0.115, -0.3, 0.0)), palette::GOLD);
-    sculpted(vec![warden_arm(), tinted(face, palette::IRON), tinted(rim, palette::ui::ACCENT), boss])
+    let middle = (RIG_ELBOW.y + RIG_HAND.y) / 2.0;
+    let face = faceted(cylinder(0.26, 0.03, 14).rotated_by(out).translated_by(Vec3::new(0.085, middle, 0.0)));
+    let rim = faceted(cylinder(0.275, 0.015, 14).rotated_by(out).translated_by(Vec3::new(0.075, middle, 0.0)));
+    let boss = tinted(ball(0.05).scaled_by(Vec3::new(0.7, 1.0, 1.0)).translated_by(Vec3::new(0.115, middle, 0.0)), palette::GOLD);
+    let shield = sculpted(vec![tinted(face, palette::IRON), tinted(rim, palette::ui::ACCENT), boss]).translated_by(-RIG_ELBOW);
+    (arm, sculpted(vec![forearm, shield]))
 }
 
 /// An arming sword: a straight pale blade out of an ash crossguard, a leather grip, a gold pommel.
@@ -176,22 +178,18 @@ pub(super) fn pyre_witch_hood() -> Mesh {
 }
 
 /// The witch's arm: a coat sleeve flaring open and torn at the wrist, a pale hand.
-pub(super) fn pyre_witch_arm() -> Mesh {
+pub(super) fn pyre_witch_arm() -> (Mesh, Mesh) {
     let coat = palette::MERCHANT_COAT;
-    let sleeve = tube(
-        &smoothed(
-            &[
-                ring(0.0, 0.03, (0.07, 0.07), coat),
-                ring(0.0, -0.14, (0.06, 0.06), coat),
-                ring(0.0, -0.26, (0.062, 0.062), coat),
-                ring(0.01, -0.36, (0.088, 0.088), coat).torn(0.04),
-            ],
-            2,
-        ),
-        14,
-        (true, false),
+    let sleeve = smoothed(
+        &[
+            ring(0.0, 0.03, (0.07, 0.07), coat),
+            ring(0.0, -0.14, (0.06, 0.06), coat),
+            ring(0.0, -0.26, (0.062, 0.062), coat),
+            ring(0.01, -0.36, (0.088, 0.088), coat).torn(0.04),
+        ],
+        2,
     );
-    sculpted(vec![sleeve, fist(palette::SKIN, -0.44, 0.04)])
+    jointed(RIG_ELBOW, vec![(sleeve, 14, (true, false))], vec![fist(palette::SKIN, -0.44, 0.04)])
 }
 
 /// A gnarled dark staff whose top splits into three prongs cupping the ember (the ember itself
@@ -262,14 +260,15 @@ pub(super) fn shade_hood() -> Mesh {
 }
 
 /// The knife arm, wrapped forearm to shoulder.
-pub(super) fn shade_arm() -> Mesh {
+pub(super) fn shade_arm() -> (Mesh, Mesh) {
     sleeved_arm(palette::HUNTER, palette::HUNTER_ASH, palette::HUNTER, palette::LEATHER)
 }
 
 /// The lead arm holds its knife reversed: the same arm, the blade running down past the fist.
-pub(super) fn shade_offhand() -> Mesh {
+pub(super) fn shade_offhand() -> (Mesh, Mesh) {
+    let (arm, forearm) = shade_arm();
     let blade = sweep(&[Vec3::new(0.02, -0.46, 0.0), Vec3::new(0.04, -0.72, 0.0)], &[0.02, 0.0], 4, palette::SILVER);
-    sculpted(vec![shade_arm(), faceted(blade)])
+    (arm, sculpted(vec![forearm, faceted(blade).translated_by(-RIG_ELBOW)]))
 }
 
 /// A knife: a short bright blade (silver, or it vanishes against the wraps), an ash guard, a
@@ -347,22 +346,18 @@ pub(super) fn breaker_helm() -> Mesh {
 pub(super) const BREAKER_EYES: Vec3 = Vec3::new(0.11, 0.142, 0.042);
 
 /// A bare arm under a fur shoulder, an iron bracer at the wrist.
-pub(super) fn breaker_arm() -> Mesh {
-    let arm = tube(
-        &smoothed(
-            &[
-                ring(0.0, 0.03, (0.08, 0.08), palette::FUR),
-                ring(0.0, -0.1, (0.067, 0.067), palette::SKIN),
-                ring(0.0, -0.22, (0.06, 0.06), palette::SKIN),
-                ring(0.0, -0.3, (0.055, 0.055), palette::SKIN),
-            ],
-            2,
-        ),
-        12,
-        (true, false),
+pub(super) fn breaker_arm() -> (Mesh, Mesh) {
+    let arm = smoothed(
+        &[
+            ring(0.0, 0.03, (0.08, 0.08), palette::FUR),
+            ring(0.0, -0.1, (0.067, 0.067), palette::SKIN),
+            ring(0.0, -0.22, (0.06, 0.06), palette::SKIN),
+            ring(0.0, -0.3, (0.055, 0.055), palette::SKIN),
+        ],
+        2,
     );
     let bracer = band(-0.4, -0.3, 0.057, 10, palette::IRON);
-    sculpted(vec![arm, bracer, fist(palette::SKIN, -0.42, 0.05)])
+    jointed(RIG_ELBOW, vec![(arm, 12, (true, false))], vec![bracer, fist(palette::SKIN, -0.42, 0.05)])
 }
 
 /// The maul: a long dark haft under a great iron head.
@@ -427,20 +422,16 @@ pub(super) fn stormweaver_hood() -> Mesh {
 }
 
 /// A coat sleeve gathered into folds at the wrist.
-pub(super) fn stormweaver_arm() -> Mesh {
-    let sleeve = tube(
-        &smoothed(
-            &[
-                ring(0.0, 0.03, (0.068, 0.068), STORM_COAT),
-                ring(0.0, -0.16, (0.058, 0.058), STORM_COAT),
-                ring(0.01, -0.32, (0.072, 0.072), STORM_COAT).folded(0.018, 5),
-            ],
-            2,
-        ),
-        14,
-        (true, false),
+pub(super) fn stormweaver_arm() -> (Mesh, Mesh) {
+    let sleeve = smoothed(
+        &[
+            ring(0.0, 0.03, (0.068, 0.068), STORM_COAT),
+            ring(0.0, -0.16, (0.058, 0.058), STORM_COAT),
+            ring(0.01, -0.32, (0.072, 0.072), STORM_COAT).folded(0.018, 5),
+        ],
+        2,
     );
-    sculpted(vec![sleeve, fist(palette::SKIN, -0.42, 0.038)])
+    jointed(RIG_ELBOW, vec![(sleeve, 14, (true, false))], vec![fist(palette::SKIN, -0.42, 0.038)])
 }
 
 /// A forked iron staff; the storm gem floating in the fork glows (`storm_staff_glow`).

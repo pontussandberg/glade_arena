@@ -28,11 +28,17 @@ pub(crate) struct Joints {
     pub(super) elbow: Spring,
     pub(super) elbow_turn: Spring,
     pub(super) arm_yaw: Spring,
+    pub(super) lead_elbow: Spring,
+    pub(super) lead_elbow_turn: Spring,
+    pub(super) lead_yaw: Spring,
+    pub(super) hold: Spring,
     /// The held weapon's tip (`Held::Upright`) or wrist (`Held::Gripped`): an
     /// angle, which may come right round, so it takes the nearest way to its target.
     held_tip: Spring,
     /// The forearm's roll (`Held::Gripped`).
     pub(super) roll: Spring,
+    /// A swept weapon's yaw (`Held::Swept`): the nearest way to its target, like the tip.
+    held_yaw: Spring,
 }
 
 impl Joints {
@@ -42,6 +48,7 @@ impl Joints {
     pub(crate) fn follow(&mut self, to: &Angles, dt: f32, moves: &Moves) -> Angles {
         let spring = |joint: &mut Spring, target: f32| joint.follow(target, dt, moves.stiffness, moves.damping, PI);
         self.held_tip.at += TAU * ((to.tip - self.held_tip.at) / TAU).round();
+        self.held_yaw.at += TAU * ((to.yaw - self.held_yaw.at) / TAU).round();
         if moves.windmill {
             self.weapon_arm.at += TAU * ((to.weapon_arm - self.weapon_arm.at) / TAU).round();
         }
@@ -58,8 +65,13 @@ impl Joints {
             elbow: spring(&mut self.elbow, to.elbow),
             elbow_turn: spring(&mut self.elbow_turn, to.elbow_turn),
             arm_yaw: spring(&mut self.arm_yaw, to.arm_yaw),
+            lead_elbow: spring(&mut self.lead_elbow, to.lead_elbow),
+            lead_elbow_turn: spring(&mut self.lead_elbow_turn, to.lead_elbow_turn),
+            lead_yaw: spring(&mut self.lead_yaw, to.lead_yaw),
+            hold: spring(&mut self.hold, to.hold),
             tip: spring(&mut self.held_tip, to.tip),
             roll: spring(&mut self.roll, to.roll),
+            yaw: spring(&mut self.held_yaw, to.yaw),
         }
     }
 }

@@ -94,12 +94,12 @@ pub(crate) fn empty_hands(rigs: Query<(&Rig, &HeldAt)>, mut parts: Query<&mut Vi
 /// stepping, walking and striding as `walk` says: where its hand lets go, wherever between
 /// frames that falls.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn pose_releasing(class: ClassId, moves: &Moves, attack: &AttackState, joints: &Joints, dt: f32, at: f32, flick: f32, walk: (Vec2, f32, f32, f32)) -> Posed {
+pub(crate) fn pose_releasing(class: ClassId, moves: &Moves, attack: &AttackState, joints: &Joints, dt: f32, at: f32, flick: f32, walk: (Vec2, Vec2, f32, f32)) -> Posed {
     let (look, step, walking, stride) = walk;
     let (windup, released, ahead) = ahead_of_springs(class, moves, None, Some(0.0), at);
     let (draw, throw, smear, second) = strike_phase(class, moves, attack, windup, released, ahead);
     let phase = Phase { draw, throw: throw.max(flick), dashing: 0.0, second };
     let angles = joints.clone().follow(&targets(moves, phase, step, walking), dt, moves);
-    let aimed = targets(moves, phase, 0.0, walking);
+    let aimed = targets(moves, phase, Vec2::ZERO, walking);
     assemble(moves, &angles, &aimed, look, stride, walking * (1.0 - phase.braced()), moves.stretch * smear, 1.0, 1.0 - phase.braced())
 }

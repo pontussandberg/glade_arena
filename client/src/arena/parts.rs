@@ -181,23 +181,77 @@ fn hood_brim(cloth: Color, edge: Color, layer: f32) -> Mesh {
 }
 
 
+/// A limb that bends at `joint` (in the limb's space: hanging down from its top at the origin),
+/// in two parts. `tubes` (each its sections, running down from the top, its sides and its caps)
+/// are cut at the joint's height: what's above goes to the upper part, with a rounded knob at the
+/// joint (the first, outermost tube's size and color there) so the bend shows no gap; what's
+/// below goes to the lower part, built in its own space (the joint at its origin), along with
+/// `below` (parts in the limb's space that hang below the joint: a fist, a bracer, a shield).
+/// Returns (upper, lower).
+pub(super) fn jointed(joint: Vec3, tubes: Vec<(Vec<Section>, u32, (bool, bool))>, below: Vec<Mesh>) -> (Mesh, Mesh) {
+    let (mut upper, mut lower) = (Vec::new(), Vec::new());
+    let mut knob = None;
+    for (sections, sides, caps) in tubes {
+        // The span the joint cuts through, and how far down it.
+        let Some(i) = sections.windows(2).position(|s| s[0].at.y >= joint.y && joint.y >= s[1].at.y) else {
+            if sections.iter().all(|s| s.at.y >= joint.y) {
+                upper.push(tube(&sections, sides, caps));
+            } else {
+                lower.push(tube(&sections, sides, caps).translated_by(-joint));
+            }
+            continue;
+        };
+        let (a, b) = (sections[i], sections[i + 1]);
+        let t = ((a.at.y - joint.y) / (a.at.y - b.at.y).max(1e-6)).clamp(0.0, 1.0);
+        let between = Section {
+            at: a.at.lerp(b.at, t),
+            half: a.half.lerp(b.half, t),
+            round: a.round + (b.round - a.round) * t,
+            jag: 0.0,
+            torn: 0.0,
+            trail: a.trail + (b.trail - a.trail) * t,
+            folds: a.folds + (b.folds - a.folds) * t,
+            fold_count: a.fold_count.max(b.fold_count),
+            rough: a.rough + (b.rough - a.rough) * t,
+            color: a.color,
+        };
+        let (mut top, mut bottom) = (sections[..=i].to_vec(), sections[i + 1..].to_vec());
+        if t > 1e-3 {
+            top.push(between);
+        }
+        if t < 1.0 - 1e-3 {
+            bottom.insert(0, between);
+        }
+        if top.len() >= 2 {
+            upper.push(tube(&top, sides, (caps.0, true)));
+        }
+        if bottom.len() >= 2 {
+            lower.push(tube(&bottom, sides, (true, caps.1)).translated_by(-joint));
+        }
+        knob.get_or_insert(between);
+    }
+    // The knob, a touch smaller than the tube it sits in, so their skins don't fight.
+    if let Some(at) = knob {
+        upper.push(tinted(ball((at.half.x + at.half.y) / 2.0 * 0.98).translated_by(at.at), at.color));
+    }
+    lower.extend(below.into_iter().map(|part| part.translated_by(-joint)));
+    (sculpted(upper), sculpted(lower))
+}
+
 /// A leg hanging from the hip in `cloth`, `thigh` and `knee` thick (wide for baggy trousers),
-/// into a soft `boot` with a toe.
-pub(super) fn booted_leg(cloth: Color, boot: Color, thigh: f32, knee: f32) -> Mesh {
-    tube(
-        &[
-            ring(0.0, 0.05, (thigh * 0.95, thigh * 0.95), cloth),
-            ring(0.0, -0.2, (thigh, thigh * 0.95), cloth),
-            ring(0.01, -0.4, (knee, knee * 0.96), cloth),
-            ring(0.0, -0.55, (knee * 0.92, knee * 0.88), cloth),
-            ring(0.0, -0.6, (0.078, 0.076), boot),
-            ring(0.015, -0.7, (0.085, 0.078), boot),
-            ring(0.04, -0.76, (0.11, 0.082), boot).squared(3.0),
-            ring(0.05, -0.8, (0.115, 0.08), boot).squared(3.0),
-        ],
-        16,
-        (true, true),
-    )
+/// into a soft `boot` with a toe: the thigh, and the shin from the knee (`RIG_KNEE`).
+pub(super) fn booted_leg(cloth: Color, boot: Color, thigh: f32, knee: f32) -> (Mesh, Mesh) {
+    let leg = vec![
+        ring(0.0, 0.05, (thigh * 0.95, thigh * 0.95), cloth),
+        ring(0.0, -0.2, (thigh, thigh * 0.95), cloth),
+        ring(0.01, RIG_KNEE.y, (knee, knee * 0.96), cloth),
+        ring(0.0, -0.55, (knee * 0.92, knee * 0.88), cloth),
+        ring(0.0, -0.6, (0.078, 0.076), boot),
+        ring(0.015, -0.7, (0.085, 0.078), boot),
+        ring(0.04, -0.76, (0.11, 0.082), boot).squared(3.0),
+        ring(0.05, -0.8, (0.115, 0.08), boot).squared(3.0),
+    ];
+    jointed(RIG_KNEE, vec![(leg, 16, (true, true))], vec![])
 }
 
 /// A fist closing below a cuff: in `color`, the hand at `RIG_HAND`, from `top` down.

@@ -72,13 +72,11 @@ fn figure(class: &str) -> Vec<Tri> {
     triangles(&rig.eyes, at(RIG_NECK), &mut tris, true);
     let left = Vec3::new(RIG_SHOULDER.x, RIG_SHOULDER.y, -RIG_SHOULDER.z);
     let lead = rig.lead_arm.as_ref();
-    triangles(lead.unwrap_or(&rig.arm), at(left), &mut tris, false);
+    triangles(lead.map_or(&rig.arm, |(arm, _)| arm), at(left), &mut tris, false);
     triangles(&rig.arm, at(RIG_SHOULDER), &mut tris, false);
-    if let Some(forearm) = &rig.forearm {
-        triangles(forearm, at(RIG_SHOULDER + moves.elbow_at), &mut tris, false);
-        if lead.is_none() {
-            triangles(forearm, at(left + moves.elbow_at), &mut tris, false);
-        }
+    triangles(&rig.forearm, at(RIG_SHOULDER + moves.elbow_at), &mut tris, false);
+    if let Some(forearm) = lead.map_or(Some(&rig.forearm), |(_, forearm)| forearm.as_ref()) {
+        triangles(forearm, at(left + moves.elbow_at), &mut tris, false);
     }
     triangles(&rig.held, at(RIG_SHOULDER + moves.hand_at), &mut tris, false);
     if let Some(glow) = &rig.held_glow {
@@ -89,9 +87,7 @@ fn figure(class: &str) -> Vec<Tri> {
     }
     for hip in [RIG_HIP, Vec3::new(RIG_HIP.x, RIG_HIP.y, -RIG_HIP.z)] {
         triangles(&rig.leg, at(hip), &mut tris, false);
-        if let Some(shin) = &rig.shin {
-            triangles(shin, at(hip + RIG_KNEE), &mut tris, false);
-        }
+        triangles(&rig.shin, at(hip + RIG_KNEE), &mut tris, false);
     }
     // Cloth at rest.
     for drape in rig.wardrobe.iter().flat_map(|wardrobe| &wardrobe.drapes) {
@@ -260,7 +256,7 @@ fn preview_cloth_on_arm() {
     let mut image = vec![[200u8, 204, 200]; width * SIZE * 2];
     for (row, draw) in [0.0, 1.0].into_iter().enumerate() {
         let phase = Phase { draw, throw: 0.0, dashing: 0.0, second: 0.0 };
-        let angles = targets(moves, phase, 0.0, 0.0);
+        let angles = targets(moves, phase, Vec2::ZERO, 0.0);
         let posed = assemble(moves, &angles, &angles, Vec2::X, 0.0, 0.0, 0.0, 1.0, 1.0 - phase.braced());
         let cloth = crate::cloth::settled(&wardrobe, &posed, 2.0);
         let (tris, _, _) = posed_figure(key, &posed, 1.0, Some(&cloth));
@@ -293,17 +289,15 @@ fn posed_figure(class: &str, posed: &crate::rig::Posed, length: f32, cloth: Opti
     let elbows = [0, 1].map(|i| arms[i] * Mat4::from_rotation_translation(posed.elbows[i], elbow_at));
     for (i, (arm, elbow)) in arms.into_iter().zip(elbows).enumerate() {
         let lead = rig.lead_arm.as_ref().filter(|_| i == 1);
-        triangles(lead.unwrap_or(&rig.arm), arm, &mut tris, false);
-        if let Some(forearm) = rig.forearm.as_ref().filter(|_| lead.is_none()) {
+        triangles(lead.map_or(&rig.arm, |(arm, _)| arm), arm, &mut tris, false);
+        if let Some(forearm) = lead.map_or(Some(&rig.forearm), |(_, forearm)| forearm.as_ref()) {
             triangles(forearm, elbow, &mut tris, false);
         }
     }
     for (i, hip) in [RIG_HIP, mirrored(RIG_HIP)].into_iter().enumerate() {
         let leg = on(hip, posed.legs[i]);
         triangles(&rig.leg, leg, &mut tris, false);
-        if let Some(shin) = &rig.shin {
-            triangles(shin, leg * Mat4::from_rotation_translation(posed.knees[i], RIG_KNEE), &mut tris, false);
-        }
+        triangles(&rig.shin, leg * Mat4::from_rotation_translation(posed.knees[i], RIG_KNEE), &mut tris, false);
     }
     let held = elbows[0] * place(&posed.held);
     let before = tris.len();
@@ -363,7 +357,7 @@ fn preview_impact() {
     let key = "revenant";
     let class = ClassId::by_key(key).unwrap();
     let moves = moves(key);
-    let landed = targets(moves, Phase { draw: 0.0, throw: 1.0, dashing: 0.0, second: 1.0 }, 0.0, 0.0);
+    let landed = targets(moves, Phase { draw: 0.0, throw: 1.0, dashing: 0.0, second: 1.0 }, Vec2::ZERO, 0.0);
     // Plain, and empowered (`follow_up`): the blade grown, smeared out at its longest.
     for empowered in [false, true] {
     let (smear, blade) = if empowered { (moves.stretch + EMPOWERED_STRETCH, EMPOWERED_BLADE) } else { (0.0, 1.0) };
@@ -481,22 +475,30 @@ fn preview_attacks() {
             let (shown, shown_released, ahead) = ahead_of_springs(class, moves, attack.winding_up(), released, now);
             let (draw, throw, smear, second) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
             let phase = Phase { draw, throw, dashing: 0.0, second };
-            let angles = joints.follow(&targets(moves, phase, 0.0, 0.0), dt, moves);
+            let angles = joints.follow(&targets(moves, phase, Vec2::ZERO, 0.0), dt, moves);
             // The blade's point every frame through the strike, to catch it jumping sideways.
             if std::env::var_os("PREVIEW_TRACE").is_some() && key == "revenant" && now > release - 4.0 && now < release + 3.0 {
-                let posed = assemble(moves, &angles, &targets(moves, phase, 0.0, 0.0), Vec2::X, 0.0, 0.0, moves.stretch * smear, 1.0, 1.0 - phase.braced());
+                let posed = assemble(moves, &angles, &targets(moves, phase, Vec2::ZERO, 0.0), Vec2::X, 0.0, 0.0, moves.stretch * smear, 1.0, 1.0 - phase.braced());
                 let (_, _, point) = posed_figure(key, &posed, length, None);
                 println!("    trace {:6.2}: phase ({draw:.2}, {throw:.3}) point {point:5.2} roll {:.3} wrist {:.3}", now - release, angles.roll, angles.tip);
             }
             if now < moments[next].1 {
                 continue;
             }
-            let posed = assemble(moves, &angles, &targets(moves, phase, 0.0, 0.0), Vec2::X, 0.0, 0.0, moves.stretch * smear, 1.0, 1.0 - phase.braced());
+            let posed = assemble(moves, &angles, &targets(moves, phase, Vec2::ZERO, 0.0), Vec2::X, 0.0, 0.0, moves.stretch * smear, 1.0, 1.0 - phase.braced());
             let (mut tris, grip, point) = posed_figure(key, &posed, length, None);
             let tip = posed.held_on_body.transform_point(Vec3::Y * arena::GRIP_TO_TIP);
             println!("  {:>14}: spear point (where a throw leaves from) {tip:5.2}", moments[next].0);
             let on_body = Mat4::from_scale_rotation_translation(posed.body.scale, posed.body.rotation, posed.body.translation).inverse().transform_point3(grip);
             println!("  {:>14}: phase ({draw:.2}, {throw:.2}) grip {grip:5.2} (on the body {on_body:5.2}) body at {:.3} point {point:5.2} arm {:.2} lean {:.2} twist {:.2} wrist {:.2} roll {:.2}", moments[next].0, posed.body.translation.y, angles.weapon_arm, angles.lean, angles.twist, angles.tip, angles.roll);
+            // The lead hand, and how far it is off its grip on the weapon, if it's meant to be on.
+            if angles.hold > 0.01 {
+                let lead_hand = posed.body.transform_point(RIG_SHOULDER.with_z(-RIG_SHOULDER.z) + posed.arms[1] * (moves.elbow_at + posed.elbows[1] * (moves.hand_at - moves.elbow_at)));
+                let on_weapon = posed.held_on_body.transform_point(Vec3::Y * moves.lead_grip / posed.held.scale.y);
+                let shoulder = posed.body.transform_point(RIG_SHOULDER.with_z(-RIG_SHOULDER.z));
+                let reach = moves.elbow_at.length() + (moves.hand_at - moves.elbow_at).length();
+                println!("  {:>14}: lead hand {lead_hand:5.2}, {:.3} m off its grip at {on_weapon:5.2}, {:.2} m from the shoulder (reach {reach:.2}, held {:.2})", moments[next].0, lead_hand.distance(on_weapon), shoulder.distance(on_weapon), angles.hold);
+            }
             ground(&mut tris);
             for (row, from) in rows[next / PER_SHEET].iter_mut().zip(views) {
                 let mut cell = vec![[200u8, 204, 200]; SIZE * SIZE];
@@ -512,6 +514,48 @@ fn preview_attacks() {
             let image: Vec<[u8; 3]> = sheet.concat();
             std::fs::write(dir.join(format!("attack-{key}-{}.png", i + 1)), png(width, SIZE * views.len(), &image)).unwrap();
         }
+    }
+}
+
+/// Every figure's walk: `walk-<class>.png`, a column per point in one stride (the pose the joints
+/// head for, at full walk, facing +X), a row per view (from the side, from ahead and to the side,
+/// from the game's camera). To see each figure's gait: how its knees lift, how it bobs and sways
+/// and swings its arms.
+#[test]
+#[ignore = "writes images; run by hand when working on animation"]
+fn preview_walk() {
+    use std::f32::consts::TAU;
+
+    use arena_shared::protocol::ClassId;
+
+    use crate::rig::{Phase, assemble, moves, targets};
+
+    let dir = std::env::var("PREVIEW_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    const STEPS: usize = 6;
+    let only = std::env::var("PREVIEW_CLASS").ok();
+    let keys: Vec<&str> = ClassId::all().map(|c| c.def().figure()).filter(|k| only.as_deref().is_none_or(|o| o == *k)).collect::<std::collections::BTreeSet<_>>().into_iter().filter(|k| *k != "merchant").collect();
+    let views = [Vec3::Z, Vec3::new(1.0, 0.3, 0.7), crate::camera::OFFSET];
+    for key in keys {
+        let moves = moves(key);
+        let width = SIZE * STEPS;
+        let mut image = vec![[200u8, 204, 200]; width * SIZE * views.len()];
+        for i in 0..STEPS {
+            let stride = i as f32 / STEPS as f32 * TAU;
+            let step = Vec2::new(stride.sin(), stride.cos());
+            let angles = targets(moves, Phase::default(), step, 1.0);
+            let posed = assemble(moves, &angles, &angles, Vec2::X, stride, 1.0, 0.0, 1.0, 1.0);
+            let (mut tris, _, _) = posed_figure(key, &posed, 1.0, None);
+            ground(&mut tris);
+            for (row, from) in views.into_iter().enumerate() {
+                let mut cell = vec![[200u8, 204, 200]; SIZE * SIZE];
+                render(&tris, from, Vec3::new(0.2, 1.0, 0.0), 3.2, &mut cell, SIZE, 0);
+                for y in 0..SIZE {
+                    let at = (row * SIZE + y) * width + i * SIZE;
+                    image[at..at + SIZE].copy_from_slice(&cell[y * SIZE..(y + 1) * SIZE]);
+                }
+            }
+        }
+        std::fs::write(dir.join(format!("walk-{key}.png")), png(width, SIZE * views.len(), &image)).unwrap();
     }
 }
 
@@ -543,7 +587,7 @@ fn preview_maps() {
             let c = crate::arena::tile_color(theme, tile).to_srgba();
             paint(&mut image, t, [(c.red * 255.0) as u8, (c.green * 255.0) as u8, (c.blue * 255.0) as u8]);
         }
-        let mut dot = |image: &mut Vec<[u8; 3]>, p: bevy::math::Vec2, rgb: [u8; 3]| paint(image, Map::tile_of(p), rgb);
+        let dot = |image: &mut Vec<[u8; 3]>, p: bevy::math::Vec2, rgb: [u8; 3]| paint(image, Map::tile_of(p), rgb);
         for &p in &m.lairs {
             dot(&mut image, p, [220, 40, 40]);
         }

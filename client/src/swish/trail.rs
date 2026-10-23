@@ -28,6 +28,10 @@ pub(crate) struct Trail {
     pub(super) samples: VecDeque<(f32, [Vec3; 3])>,
 }
 
+/// The other hand's blade's trail (`OffBlade`), beside the main one.
+#[derive(Component)]
+pub(crate) struct OffTrail(Trail);
+
 /// Its trail, on the entity that draws it: gone with the fighter.
 #[derive(Component)]
 pub(super) struct TrailOf(pub(super) Entity);
@@ -37,10 +41,11 @@ pub(super) fn add_trails(
     assets: Res<SwishAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     fighters: Query<Entity, (With<Blade>, Without<Trail>)>,
+    offhands: Query<Entity, (With<OffBlade>, Without<OffTrail>)>,
     trails: Query<(Entity, &TrailOf)>,
     owners: Query<(), With<Trail>>,
 ) {
-    for fighter in &fighters {
+    let mut trail = |commands: &mut Commands, fighter: Entity| {
         let mesh = meshes.add(trail_mesh(&[]));
         let entity = commands
             .spawn((
@@ -54,7 +59,15 @@ pub(super) fn add_trails(
                 TrailOf(fighter),
             ))
             .id();
-        commands.entity(fighter).insert(Trail { entity, mesh, samples: VecDeque::new() });
+        Trail { entity, mesh, samples: VecDeque::new() }
+    };
+    for fighter in &fighters {
+        let trail = trail(&mut commands, fighter);
+        commands.entity(fighter).insert(trail);
+    }
+    for fighter in &offhands {
+        let trail = trail(&mut commands, fighter);
+        commands.entity(fighter).insert(OffTrail(trail));
     }
     for (entity, of) in &trails {
         if owners.get(of.0).is_err() {
@@ -86,43 +99,54 @@ pub(super) fn trail_blades(
     time: Res<Time>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut fighters: Query<(&Blade, &mut Trail, &InheritedVisibility)>,
+    mut offhands: Query<(&OffBlade, &mut OffTrail, &InheritedVisibility)>,
     blades: Query<&GlobalTransform>,
     mut drawn: Query<&mut Visibility, With<TrailOf>>,
 ) {
     let now = time.elapsed_secs();
     for (blade, mut trail, visible) in &mut fighters {
         let Ok(held) = blades.get(blade.held) else { continue };
-        let trail = &mut *trail;
         // From where the blade starts, through its middle, to its tip.
         let place = [blade.from, (blade.from + 1.0) / 2.0, 1.0].map(|up| blade.at(held, up));
-        // A jump (through a waygate, or a respawn) leaves no trail across the map behind it.
-        if trail.samples.back().is_some_and(|(_, last)| last[0].distance(place[0]) > arena_shared::config::JUMP) {
-            trail.samples.clear();
-        }
-        trail.samples.push_back((now, place));
-        while trail.samples.front().is_some_and(|(at, _)| now - at > TRAIL_LIFE) {
-            trail.samples.pop_front();
-        }
-        let samples = trail.samples.make_contiguous();
         let brightness = if blade.quickened { 1.0 } else { TRAIL_DIM };
-        // How bright it is at each sample: by how fast the tip was moving there, and how fresh.
-        let alpha = |i: usize| {
-            let (at, place) = samples[i];
-            let speed = match i {
-                0 => 0.0,
-                _ => place[2].distance(samples[i - 1].1[2]) / (at - samples[i - 1].0).max(1e-4),
-            };
-            let fast = ((speed - TRAIL_SPEED.0) / (TRAIL_SPEED.1 - TRAIL_SPEED.0)).clamp(0.0, 1.0);
-            let fresh = 1.0 - (now - at) / TRAIL_LIFE;
-            fast * fresh * fresh * brightness
+        follow(&mut trail, now, place, brightness, visible.get(), &mut meshes, &mut drawn);
+    }
+    for (off, mut trail, visible) in &mut offhands {
+        let Ok(held) = blades.get(off.held) else { continue };
+        let place = [0.0, 0.5, 1.0].map(|up| off.at(held, up));
+        follow(&mut trail.0, now, place, TRAIL_DIM, visible.get(), &mut meshes, &mut drawn);
+    }
+}
+
+/// A trail noting where its blade is now (`place`: its base, middle and tip), dropping what's
+/// older than the trail lasts, and redrawn while it shows, `brightness` at most.
+fn follow(trail: &mut Trail, now: f32, place: [Vec3; 3], brightness: f32, visible: bool, meshes: &mut Assets<Mesh>, drawn: &mut Query<&mut Visibility, With<TrailOf>>) {
+    // A jump (through a waygate, or a respawn) leaves no trail across the map behind it.
+    if trail.samples.back().is_some_and(|(_, last)| last[0].distance(place[0]) > arena_shared::config::JUMP) {
+        trail.samples.clear();
+    }
+    trail.samples.push_back((now, place));
+    while trail.samples.front().is_some_and(|(at, _)| now - at > TRAIL_LIFE) {
+        trail.samples.pop_front();
+    }
+    let samples = trail.samples.make_contiguous();
+    // How bright it is at each sample: by how fast the tip was moving there, and how fresh.
+    let alpha = |i: usize| {
+        let (at, place) = samples[i];
+        let speed = match i {
+            0 => 0.0,
+            _ => place[2].distance(samples[i - 1].1[2]) / (at - samples[i - 1].0).max(1e-4),
         };
-        let showing = visible.get() && (0..samples.len()).any(|i| alpha(i) > 0.01);
-        if let Ok(mut visibility) = drawn.get_mut(trail.entity) {
-            visibility.set_if_neq(shown(showing));
-        }
-        if showing && let Some(mut mesh) = meshes.get_mut(&trail.mesh) {
-            let places: Vec<(f32, [Vec3; 3])> = (0..samples.len()).map(|i| (alpha(i), samples[i].1)).collect();
-            *mesh = trail_mesh(&places);
-        }
+        let fast = ((speed - TRAIL_SPEED.0) / (TRAIL_SPEED.1 - TRAIL_SPEED.0)).clamp(0.0, 1.0);
+        let fresh = 1.0 - (now - at) / TRAIL_LIFE;
+        fast * fresh * fresh * brightness
+    };
+    let showing = visible && (0..samples.len()).any(|i| alpha(i) > 0.01);
+    if let Ok(mut visibility) = drawn.get_mut(trail.entity) {
+        visibility.set_if_neq(shown(showing));
+    }
+    if showing && let Some(mut mesh) = meshes.get_mut(&trail.mesh) {
+        let places: Vec<(f32, [Vec3; 3])> = (0..samples.len()).map(|i| (alpha(i), samples[i].1)).collect();
+        *mesh = trail_mesh(&places);
     }
 }

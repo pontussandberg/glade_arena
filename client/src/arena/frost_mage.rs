@@ -295,22 +295,18 @@ pub(super) fn frost_crowned_hood() -> Mesh {
 }
 
 /// Wide bell sleeves, banded in blue and rimed at the cuff (dark inside), over a slim dark glove.
-pub(super) fn frost_mage_arm() -> Mesh {
-    let sleeve = tube(
-        &[
-            ring(0.0, 0.08, (0.085, 0.085), palette::FROST_ROBE),
-            ring(0.0, -0.1, (0.09, 0.09), palette::FROST_ROBE),
-            ring(0.0, -0.22, (0.1, 0.1), palette::FROST_ROBE),
-            ring(-0.01, -0.36, (0.148, 0.148), palette::FROST_ROBE),
-            ring(-0.01, -0.385, (0.15, 0.15), palette::FROST_BLUE),
-            ring(-0.01, -0.41, (0.152, 0.152), palette::FROST_ROBE),
-            ring(-0.01, -0.43, (0.155, 0.155), palette::RIME),
-            ring(-0.01, -0.47, (0.158, 0.158), palette::FROST_DARK),
-        ],
-        18,
-        (true, true),
-    );
-    sculpted(vec![sleeve, fist(palette::DARK_LEATHER, -0.36, 0.056)])
+pub(super) fn frost_mage_arm() -> (Mesh, Mesh) {
+    let sleeve = vec![
+        ring(0.0, 0.08, (0.085, 0.085), palette::FROST_ROBE),
+        ring(0.0, -0.1, (0.09, 0.09), palette::FROST_ROBE),
+        ring(0.0, -0.22, (0.1, 0.1), palette::FROST_ROBE),
+        ring(-0.01, -0.36, (0.148, 0.148), palette::FROST_ROBE),
+        ring(-0.01, -0.385, (0.15, 0.15), palette::FROST_BLUE),
+        ring(-0.01, -0.41, (0.152, 0.152), palette::FROST_ROBE),
+        ring(-0.01, -0.43, (0.155, 0.155), palette::RIME),
+        ring(-0.01, -0.47, (0.158, 0.158), palette::FROST_DARK),
+    ];
+    jointed(RIG_ELBOW, vec![(sleeve, 18, (true, true))], vec![fist(palette::DARK_LEATHER, -0.36, 0.056)])
 }
 
 /// The frost mage's staff, gripped at the origin, standing up (+Y): a dark shaft swelling a little

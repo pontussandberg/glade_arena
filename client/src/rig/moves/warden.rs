@@ -1,8 +1,10 @@
-//! How the warden moves: shield first, always. It carries the sword low behind the shield in a
-//! side-on guard; the windup brings the shield up ahead and cocks the sword back by the hip, the
-//! blade level and pointed at the target over the shield's rim; the strike is a lunge, the shield
-//! driven in and the sword thrust straight through beside it, the shoulder turned in behind the
-//! blade. No arc, no overhead: a wall stepping forward.
+//! How the warden moves: shield first, always. The shield arm is bent across the chest with the
+//! shield square to the front, a wall the knight stands behind; the sword hangs low beside it.
+//! The windup punches the shield up and forward and cocks the sword back by the hip, the forearm
+//! level, the blade pointed at the target over the shield's rim; the strike is a lunge, the lead
+//! knee bent deep over the foot, the shield driven in and the sword arm straightening into a
+//! thrust beside it, the shoulder turned in behind the blade. No arc, no overhead: a wall
+//! stepping forward.
 
 use super::*;
 
@@ -11,43 +13,54 @@ use std::f32::consts::FRAC_PI_2;
 use crate::arena::{RIG_ELBOW, RIG_HAND};
 
 pub(super) const WARDEN: Moves = Moves {
-    // Hanging a touch forward in the guard; cocked back by the hip; driven straight out, level
-    // in the world (raised past the shoulder by as much as the body leans into the lunge, so the
-    // point goes at the target, not the ground); raised for the slam.
-    weapon_arm: [0.2, -0.75, 1.85, 0.6],
+    // Hanging a touch forward in the guard; the upper arm back by the hip; driven forward and
+    // up (past the shoulder by as much as the body leans into the lunge, so the point goes at
+    // the target, not the ground); back for the slam.
+    weapon_arm: [0.15, -0.5, 1.9, -0.3],
     // The thrust goes along the aim, however the chest is turned.
     weapon_arm_untwist: 0.7,
     elbow_at: RIG_ELBOW,
     hand_at: RIG_HAND,
-    elbow: [0.0; 4],
-    elbow_turn: [0.0; 4],
-    arm_yaw: [0.0; 4],
+    // A little bent in the guard; folded right up as the sword is cocked, so the forearm lies
+    // level and the blade points over the shield; straightened into the thrust.
+    elbow: [0.5, 2.0, 0.15, 0.6],
+    elbow_turn: [0.2, 0.3, 0.0, 0.0],
+    arm_yaw: [0.0, 0.0, 0.1, 0.0],
     windmill: false,
-    // The shield arm: up in front at the chest; thrust ahead to lead the lunge; still ahead as
-    // the sword passes beside it; punched down into the ground for the slam.
-    lead_arm: [0.6, 1.15, 0.85, 0.9],
-    // A half step behind the shield, then a long lunge into the thrust; braced wide for the slam.
-    lead_leg: [0.15, 0.4, 1.15, 0.6],
-    back_leg: [-0.12, -0.3, -0.55, -0.55],
-    lead_knee: [0.0; 4],
-    back_knee: [0.0; 4],
+    // The shield arm: the upper arm hanging a little forward, the forearm bent across the chest
+    // (its plane turned in), so the shield faces square ahead; punched up and forward to lead the
+    // lunge; still up as the sword passes beside it; straight down, slamming the shield's rim
+    // into the ground.
+    lead_arm: [0.45, 0.8, 1.05, 0.25],
+    lead_elbow: [1.7, 1.4, 1.2, 0.15],
+    lead_elbow_turn: [1.25, 1.2, 1.15, 0.0],
+    lead_yaw: [0.15, 0.3, 0.3, 0.0],
+    lead_grip: 0.0,
+    lead_hold: [0.0; 4],
+    // A half step behind the shield, then a long lunge into the thrust, the lead knee bent over
+    // the foot and the back leg straight; crouched on both bent knees for the slam.
+    lead_leg: [0.15, 0.3, 1.1, 0.45],
+    back_leg: [-0.12, -0.35, -0.6, -0.45],
+    lead_knee: [0.1, 0.35, 0.95, 0.9],
+    back_knee: [0.05, 0.15, 0.1, 0.9],
     hip_turn: 0.2,
     // Side on, the shield side forward and the sword shoulder back (a guard); coiled further
     // round behind the shield; the shoulder driven round through the thrust.
-    twist: [-0.5, -0.9, 0.45, 0.0],
+    twist: [-0.55, -0.85, 0.45, 0.0],
     // Upright in the guard, a touch back behind the raised shield, then driving forward into the
     // lunge; crouched into the slam.
-    lean: [-0.05, 0.08, -0.4, -0.5],
+    lean: [-0.05, 0.05, -0.4, -0.5],
     standing_lean: 0.0,
     standing_arm: 0.1,
     rests: false,
-    // Short, heavy, armored steps.
+    // Short, heavy, armored steps: a stomp with each, the free arm kept to the shield.
     stride: 0.85,
-    head_dip: [0.05, 0.12, -0.15, -0.3],
-    // Carried: the point low and forward from the hanging arm. Cocked: the wrist turned right
-    // over so the blade lies level at the hip, pointed at the target over the shield's rim.
-    // Thrust: in line with the straight arm. Slam: the blade angled down with the raised arm.
-    held: Held::Gripped { wrist: [1.0, -0.9, FRAC_PI_2, 0.4], roll: [0.0; 4] },
+    gait: Gait { cadence: 1.1, bob: 1.4, sway: 0.6, arms: 0.4, knees: 0.8 },
+    head_dip: [0.05, 0.1, -0.15, -0.3],
+    // Carried: the blade mostly along the forearm, pointing forward and down. Cocked: nearly in
+    // line with the level forearm, the point raised a little at the target. Thrust: in line
+    // with the straight arm. Slam: square off the lowered arm.
+    held: Held::Gripped { wrist: [0.9, 1.35, FRAC_PI_2, 0.4], roll: [0.0; 4] },
     throws: false,
     scale: 1.08,
     // The thrust smears the blade out to the end of its lane.

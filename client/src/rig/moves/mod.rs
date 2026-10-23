@@ -45,6 +45,17 @@ pub(crate) struct Moves {
     /// down ahead and on round back to the carry), rather than back the way it came.
     pub(crate) windmill: bool,
     pub(super) lead_arm: [f32; 4],
+    /// The lead arm's elbow (how far it bends, and the plane it bends in, turned about the upper
+    /// arm: positive in across the body) and its swing turned in across the body, like the
+    /// weapon arm's. For a figure that cuts twice, these strike with the off hand's cut.
+    pub(super) lead_elbow: [f32; 4],
+    pub(super) lead_elbow_turn: [f32; 4],
+    pub(super) lead_yaw: [f32; 4],
+    /// Both hands on the weapon: where along it (meters up from the grip) the lead hand holds,
+    /// and how firmly it's there at each keyframe (0: the lead arm is posed by its own
+    /// keyframes above; 1: its hand is on the weapon, the arm reaching however gets it there).
+    pub(crate) lead_grip: f32,
+    pub(crate) lead_hold: [f32; 4],
     pub(super) lead_leg: [f32; 4],
     pub(super) back_leg: [f32; 4],
     /// How much of the body's twist its legs turn with (0: they keep along the facing).
@@ -64,6 +75,8 @@ pub(crate) struct Moves {
     pub(super) rests: bool,
     /// How long its strides are (1: `LEG_SWING`): shorter, the body dips less with each.
     pub(super) stride: f32,
+    /// How it walks, beyond its stride: its own cadence, bob, sway and swing.
+    pub(crate) gait: Gait,
     pub(super) head_dip: [f32; 4],
     pub(super) held: Held,
     // (The fourth keyframe of each is the class's Q pose: a nova's slam. A dash has none.)
@@ -103,6 +116,21 @@ pub(crate) struct Moves {
     pub(super) contact: f32,
 }
 
+/// How a figure walks, each as a share of the plain walk (1): how many steps it takes per meter
+/// (`STRIDES_PER_METER`), how much its body bobs with each (`BOB`) and sways side to side
+/// (`SWAY`), how far its free arm swings (`ARM_SWING`), and how high its knees lift as its feet
+/// swing through (`KNEE_LIFT`).
+pub(crate) struct Gait {
+    pub(crate) cadence: f32,
+    pub(crate) bob: f32,
+    pub(crate) sway: f32,
+    pub(crate) arms: f32,
+    pub(crate) knees: f32,
+}
+
+/// The plain walk.
+pub(super) const EVEN: Gait = Gait { cadence: 1.0, bob: 1.0, sway: 1.0, arms: 1.0, knees: 1.0 };
+
 /// How the weapon sits in the hand.
 pub(crate) enum Held {
     /// Kept pointing along the aim, tipped up over it this far (radians, keyframes like the
@@ -111,6 +139,13 @@ pub(crate) enum Held {
     /// Kept standing up, whatever the arm and body do, tipped this far (radians, keyframes like
     /// the joints') toward the facing: a staff.
     Upright([f32; 4]),
+    /// Kept level and swung round the fighter: pointing `yaw` round from the facing (radians,
+    /// keyframes like the joints'; positive toward the weapon side, a half turn straight
+    /// behind), tipped up by `tilt`, whatever the arm and body do: a maul swept round at hip
+    /// height, its hands carrying it wherever the arm goes. The yaw goes the way the keyframes
+    /// say, however far round (through the front from behind one side to ahead of the other),
+    /// and settles back to the carry the nearest way round from where the strike left it.
+    Swept { yaw: [f32; 4], tilt: [f32; 4] },
     /// Gripped in the fist, the blade coming out of its thumb side, square to the forearm, so it
     /// goes wherever the arm takes it: bent at the wrist (`wrist`, keyframes like the joints':
     /// positive bends the blade toward the forearm's line, negative cocks it back toward the

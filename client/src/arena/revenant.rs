@@ -241,32 +241,24 @@ pub(super) const REVENANT_EYES: Vec3 = Vec3::new(0.108, 0.175, 0.04);
 /// A fitted coat sleeve starting under the coat's shoulder and widening a little to a turned-back,
 /// tattered cuff, over a dark leather
 /// gauntlet closing into a fist, an iron manacle round the wrist trailing a broken chain.
-pub(super) fn revenant_arm() -> Mesh {
-    let sleeve = tube(
-        &smoothed(
-            &[
-                ring(0.0, 0.0, (0.058, 0.06), palette::ROBE),
-                ring(0.0, -0.1, (0.064, 0.066), palette::ROBE).folded(0.02, 6),
-                ring(0.0, -0.21, (0.07, 0.07), palette::ROBE).folded(0.035, 6),
-                ring(0.0, -0.27, (0.078, 0.078), palette::ROBE).folded(0.04, 6),
-                ring(-0.004, -0.28, (0.09, 0.09), palette::TATTERS).folded(0.03, 6),
-                ring(-0.008, -0.34, (0.096, 0.096), palette::TATTERS).torn(0.05).trailing(0.04).folded(0.04, 6),
-            ],
-            2,
-        ),
-        22,
-        (true, true),
-    );
-    let gauntlet = tube(
+pub(super) fn revenant_arm() -> (Mesh, Mesh) {
+    let sleeve = smoothed(
         &[
-            ring(0.0, -0.2, (0.062, 0.062), palette::DARK_LEATHER),
-            ring(0.0, -0.36, (0.07, 0.07), palette::DARK_LEATHER),
-            ring(0.0, -0.42, (0.078, 0.074), palette::DARK_LEATHER.darker(0.05)),
-            ring(0.0, -0.44, (0.06, 0.058), palette::DARK_LEATHER),
+            ring(0.0, 0.0, (0.058, 0.06), palette::ROBE),
+            ring(0.0, -0.1, (0.064, 0.066), palette::ROBE).folded(0.02, 6),
+            ring(0.0, -0.21, (0.07, 0.07), palette::ROBE).folded(0.035, 6),
+            ring(0.0, -0.27, (0.078, 0.078), palette::ROBE).folded(0.04, 6),
+            ring(-0.004, -0.28, (0.09, 0.09), palette::TATTERS).folded(0.03, 6),
+            ring(-0.008, -0.34, (0.096, 0.096), palette::TATTERS).torn(0.05).trailing(0.04).folded(0.04, 6),
         ],
-        20,
-        (true, false),
+        2,
     );
+    let gauntlet = vec![
+        ring(0.0, -0.2, (0.062, 0.062), palette::DARK_LEATHER),
+        ring(0.0, -0.36, (0.07, 0.07), palette::DARK_LEATHER),
+        ring(0.0, -0.42, (0.078, 0.074), palette::DARK_LEATHER.darker(0.05)),
+        ring(0.0, -0.44, (0.06, 0.058), palette::DARK_LEATHER),
+    ];
     let manacle = tube(
         &[
             ring(0.0, -0.35, (0.08, 0.08), palette::IRON).exact(),
@@ -277,12 +269,12 @@ pub(super) fn revenant_arm() -> Mesh {
         20,
         (true, true),
     );
-    let mut parts = vec![sleeve, gauntlet, fist(palette::DARK_LEATHER, -0.44, 0.064), manacle];
+    let mut below = vec![fist(palette::DARK_LEATHER, -0.44, 0.064), manacle];
     // The broken chain, hanging from the back of the manacle.
     for (i, y) in [-0.41, -0.445, -0.48].into_iter().enumerate() {
-        parts.push(chain_link(Vec3::new(-0.092, y, 0.0), i % 2 == 1));
+        below.push(chain_link(Vec3::new(-0.092, y, 0.0), i % 2 == 1));
     }
-    sculpted(parts)
+    jointed(RIG_ELBOW, vec![(sleeve, 22, (true, true)), (gauntlet, 20, (true, false))], below)
 }
 
 /// The revenant's glaive, gripped at the origin, blade up (+Y): a long dark shaft, bound where

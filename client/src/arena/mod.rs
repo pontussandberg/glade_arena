@@ -226,18 +226,17 @@ pub const SHOT_LOOKS: [&str; 2] = ["javelinist", "frost_mage"];
 pub struct RigMeshes {
     /// Turns to look where the fighter walks or aims.
     pub head: Mesh,
-    /// An arm, hanging down (-Y) from the shoulder.
+    /// The upper arm, hanging down (-Y) from the shoulder to the elbow (`rig::Moves::elbow_at`).
     pub arm: Mesh,
-    /// A forearm hanging down from the elbow (`rig::Moves::elbow_at`), in its own space, if the arm bends
-    /// there (`arm` is then only the upper arm).
-    pub forearm: Option<Mesh>,
-    /// The left arm, if it isn't `arm` (and `forearm`) again: an empty sleeve.
-    pub lead_arm: Option<Mesh>,
-    /// A leg, hanging down from the hip.
+    /// The forearm hanging down from the elbow, in its own space.
+    pub forearm: Mesh,
+    /// The left arm, if it isn't `arm` and `forearm` again: its own upper arm, and its forearm if
+    /// it has one (an empty sleeve has none).
+    pub lead_arm: Option<(Mesh, Option<Mesh>)>,
+    /// The thigh, hanging down from the hip to the knee (`RIG_KNEE`).
     pub leg: Mesh,
-    /// A shin hanging down from the knee (`RIG_KNEE`), in its own space, if the leg bends there
-    /// (`leg` is then only the thigh).
-    pub shin: Option<Mesh>,
+    /// The shin hanging down from the knee, in its own space.
+    pub shin: Mesh,
     /// The weapon in the right hand, pointing up (+Y) from the grip.
     pub held: Mesh,
     /// Eyes in the head's space, drawn glowing cold white (`palette::SOUL`, everyone's).
@@ -287,167 +286,75 @@ pub fn blade_span(class_key: &str) -> (f32, f32) {
     }
 }
 
+/// Where a figure's other hand's blade runs along its lead forearm (meters along the forearm's
+/// own axis from the elbow, its base to its point), if it holds one: the shade's reversed knife.
+pub fn off_blade_span(class_key: &str) -> Option<(f32, f32)> {
+    match class_key {
+        "shade" => Some((-0.2, -0.46)),
+        _ => None,
+    }
+}
+
 pub fn fighter_rig(class_key: &str) -> RigMeshes {
+    // Every figure's parts: its upper arm and forearm, its thigh and shin, and the rest.
+    let rig = |(arm, forearm): (Mesh, Mesh), lead_arm: Option<(Mesh, Option<Mesh>)>, (leg, shin): (Mesh, Mesh), head: Mesh, held: Mesh, eyes: Mesh, glow: Color| RigMeshes {
+        head,
+        arm,
+        forearm,
+        lead_arm,
+        leg,
+        shin,
+        held,
+        eyes,
+        glow,
+        held_glow: None,
+        body_glow: None,
+        held_aura: None,
+        held_glint: None,
+        wardrobe: None,
+    };
     match class_key {
         "javelinist" => RigMeshes {
-            head: javelinist_hood(),
-            arm: javelinist_arm(),
-            forearm: Some(javelinist_forearm()),
-            shin: Some(javelinist_shin()),
-            lead_arm: Some(javelinist_stump()),
-            leg: javelinist_leg(),
-            held: held_spear(),
-            eyes: slit_eyes(HUNTER_EYES),
-            glow: palette::DEADEYE,
-            held_glow: None,
-            body_glow: None,
             held_aura: Some(spear_aura()),
             held_glint: Some((glint(), spear_edge)),
             wardrobe: Some(javelinist_wardrobe()),
+            ..rig((javelinist_arm(), javelinist_forearm()), Some((javelinist_stump(), None)), (javelinist_leg(), javelinist_shin()), javelinist_hood(), held_spear(), slit_eyes(HUNTER_EYES), palette::DEADEYE)
         },
         "revenant" => RigMeshes {
-            head: revenant_head(),
-            arm: revenant_arm(),
-            forearm: None,
-            shin: None,
-            lead_arm: None,
-            leg: booted_leg(palette::ROBE, palette::DARK_LEATHER, 0.082, 0.07),
-            held: glaive(),
-            eyes: slit_eyes(REVENANT_EYES),
-            glow: palette::WISP,
             held_glow: Some(glaive_glow()),
             body_glow: Some(revenant_glow()),
             held_aura: Some(glaive_cracks()),
             held_glint: Some((glint(), glaive_edge)),
             wardrobe: Some(revenant_wardrobe()),
+            ..rig(revenant_arm(), None, booted_leg(palette::ROBE, palette::DARK_LEATHER, 0.082, 0.07), revenant_head(), glaive(), slit_eyes(REVENANT_EYES), palette::WISP)
         },
         "frost_mage" => RigMeshes {
-            head: frost_crowned_hood(),
-            arm: frost_mage_arm(),
-            forearm: None,
-            shin: None,
-            lead_arm: None,
-            leg: booted_leg(palette::FROST_DARK, palette::DARK_LEATHER, 0.1, 0.08),
-            held: ice_staff(),
-            eyes: spectral_eyes(Vec2::ONE),
-            glow: palette::FROST_GLOW,
             held_glow: Some(staff_crystals()),
             body_glow: Some(frost_mage_glow()),
-            held_aura: None,
-            held_glint: None,
             wardrobe: Some(frost_mage_wardrobe()),
+            ..rig(frost_mage_arm(), None, booted_leg(palette::FROST_DARK, palette::DARK_LEATHER, 0.1, 0.08), frost_crowned_hood(), ice_staff(), spectral_eyes(Vec2::ONE), palette::FROST_GLOW)
         },
-        "zombie" => RigMeshes {
-            head: zombie_head(),
-            arm: zombie_arm(),
-            forearm: None,
-            shin: None,
-            lead_arm: None,
-            leg: booted_leg(palette::RAGS.darker(0.15), palette::ROT_DARK, 0.085, 0.07),
-            held: zombie_claws(),
-            eyes: slit_eyes(ZOMBIE_EYES),
-            glow: palette::WISP,
-            held_glow: None,
-            body_glow: None,
-            held_aura: None,
-            held_glint: None,
-            wardrobe: None,
-        },
+        "zombie" => rig(zombie_arm(), None, booted_leg(palette::RAGS.darker(0.15), palette::ROT_DARK, 0.085, 0.07), zombie_head(), zombie_claws(), slit_eyes(ZOMBIE_EYES), palette::WISP),
         "merchant" => RigMeshes {
-            head: merchant_head(),
-            arm: merchant_arm(),
-            forearm: None,
-            shin: None,
-            lead_arm: None,
-            leg: booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.1, 0.085),
-            held: merchant_staff(),
-            eyes: slit_eyes(MERCHANT_EYES),
-            glow: palette::TORCH_FLAME,
             held_glow: Some(merchant_lantern()),
-            body_glow: None,
-            held_aura: None,
-            held_glint: None,
-            wardrobe: None,
+            ..rig(merchant_arm(), None, booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.1, 0.085), merchant_head(), merchant_staff(), slit_eyes(MERCHANT_EYES), palette::TORCH_FLAME)
         },
-        "warden" => RigMeshes {
-            head: warden_helm(),
-            arm: warden_arm(),
-            forearm: None,
-            shin: None,
-            lead_arm: Some(warden_shield_arm()),
-            leg: booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.085, 0.07),
-            held: arming_sword(),
-            eyes: slit_eyes(WARDEN_EYES),
-            glow: palette::GOLD,
-            held_glow: None,
-            body_glow: None,
-            held_aura: None,
-            held_glint: None,
-            wardrobe: None,
-        },
+        "warden" => {
+            let (shield_arm, shield_forearm) = warden_shield_arm();
+            rig(warden_arm(), Some((shield_arm, Some(shield_forearm))), booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.085, 0.07), warden_helm(), arming_sword(), slit_eyes(WARDEN_EYES), palette::GOLD)
+        }
         "pyre_witch" => RigMeshes {
-            head: pyre_witch_hood(),
-            arm: pyre_witch_arm(),
-            forearm: None,
-            shin: None,
-            lead_arm: None,
-            leg: booted_leg(palette::ASH, palette::DARK_LEATHER, 0.08, 0.065),
-            held: pyre_staff(),
-            eyes: spectral_eyes(Vec2::ONE),
-            glow: palette::TORCH_FLAME,
             held_glow: Some(pyre_staff_glow()),
-            body_glow: None,
-            held_aura: None,
-            held_glint: None,
-            wardrobe: None,
+            ..rig(pyre_witch_arm(), None, booted_leg(palette::ASH, palette::DARK_LEATHER, 0.08, 0.065), pyre_witch_hood(), pyre_staff(), spectral_eyes(Vec2::ONE), palette::TORCH_FLAME)
         },
-        "shade" => RigMeshes {
-            head: shade_hood(),
-            arm: shade_arm(),
-            forearm: None,
-            shin: None,
-            lead_arm: Some(shade_offhand()),
-            leg: booted_leg(palette::HUNTER, palette::DARK_LEATHER, 0.075, 0.062),
-            held: shade_knife(),
-            eyes: spectral_eyes(Vec2::ONE),
-            glow: palette::HEATHER,
-            held_glow: None,
-            body_glow: None,
-            held_aura: None,
-            held_glint: None,
-            wardrobe: None,
-        },
-        "breaker" => RigMeshes {
-            head: breaker_helm(),
-            arm: breaker_arm(),
-            forearm: None,
-            shin: None,
-            lead_arm: None,
-            leg: booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.095, 0.078),
-            held: maul(),
-            eyes: slit_eyes(BREAKER_EYES),
-            glow: palette::TORCH_LIGHT,
-            held_glow: None,
-            body_glow: None,
-            held_aura: None,
-            held_glint: None,
-            wardrobe: None,
-        },
+        "shade" => {
+            let (offhand, offhand_forearm) = shade_offhand();
+            rig(shade_arm(), Some((offhand, Some(offhand_forearm))), booted_leg(palette::HUNTER, palette::DARK_LEATHER, 0.075, 0.062), shade_hood(), shade_knife(), spectral_eyes(Vec2::ONE), palette::HEATHER)
+        }
+        "breaker" => rig(breaker_arm(), None, booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.095, 0.078), breaker_helm(), maul(), slit_eyes(BREAKER_EYES), palette::TORCH_LIGHT),
         "stormweaver" => RigMeshes {
-            head: stormweaver_hood(),
-            arm: stormweaver_arm(),
-            forearm: None,
-            shin: None,
-            lead_arm: None,
-            leg: booted_leg(recruits::STORM_DARK, palette::DARK_LEATHER, 0.08, 0.065),
-            held: storm_staff(),
-            eyes: spectral_eyes(Vec2::ONE),
-            glow: recruits::STORM_GLOW,
             held_glow: Some(storm_staff_glow()),
-            body_glow: None,
-            held_aura: None,
-            held_glint: None,
-            wardrobe: None,
+            ..rig(stormweaver_arm(), None, booted_leg(recruits::STORM_DARK, palette::DARK_LEATHER, 0.08, 0.065), stormweaver_hood(), storm_staff(), spectral_eyes(Vec2::ONE), recruits::STORM_GLOW)
         },
         _ => unreachable!("no rig for class {class_key:?} (add it to FIGHTER_LOOKS)"),
     }

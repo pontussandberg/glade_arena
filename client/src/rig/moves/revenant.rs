@@ -15,19 +15,27 @@ pub(super) const REVENANT: Moves = Moves {
     weapon_arm_untwist: 1.0,
     elbow_at: RIG_ELBOW,
     hand_at: RIG_HAND,
-    elbow: [0.0; 4],
+    // Hanging all but straight into the drag; cocked as the glaive comes up over the head, the
+    // hand back behind it; straightened through the blow.
+    elbow: [0.1, 0.55, 0.0, 0.3],
     elbow_turn: [0.0; 4],
     arm_yaw: [0.0; 4],
     windmill: true,
     // The free arm dangles carelessly toward the ground throughout, whatever the body does:
-    // against its lean (leaning back, it hangs a little back; bowed into the blow, forward).
+    // against its lean (leaning back, it hangs a little back; bowed into the blow, forward), a
+    // little bent, never held.
     lead_arm: [0.3, 0.13, 0.55, -0.9],
-    // Legs hang from the leaning body: bowed into the blow, the lead leg reaches far forward
-    // and the back one, straight under the hips, braces back.
+    lead_elbow: [0.35, 0.5, 0.25, 0.3],
+    lead_elbow_turn: [0.3, 0.3, 0.3, 0.0],
+    lead_yaw: [0.15, 0.1, 0.2, 0.0],
+    lead_grip: 0.0,
+    lead_hold: [0.0; 4],
+    // Legs hang from the leaning body: bowed into the blow, the lead leg reaches far forward,
+    // its knee bent over the foot, and the back one, straight under the hips, braces back.
     lead_leg: [0.25, 0.25, 1.85, 0.7],
     back_leg: [-0.2, -0.6, -0.45, -0.75],
-    lead_knee: [0.0; 4],
-    back_knee: [0.0; 4],
+    lead_knee: [0.05, 0.15, 0.7, 0.3],
+    back_knee: [0.05, 0.25, 0.1, 0.2],
     hip_turn: 0.0,
     // Side on, the weapon shoulder back; wound further round, then turning into the blow.
     twist: [-0.8, -0.5, 0.8, 0.5],
@@ -39,8 +47,10 @@ pub(super) const REVENANT: Moves = Moves {
     // The weapon arm hanging all but straight down, the wrist bent to keep the point down.
     standing_arm: 0.45,
     rests: true,
-    // Short, heavy steps: the body (and the hand dragging the glaive) hardly dips with each.
+    // Short, heavy steps: the body (and the hand dragging the glaive) hardly dips with each; a
+    // dragging shamble, the feet hardly lifted.
     stride: 0.6,
+    gait: Gait { cadence: 1.0, bob: 0.8, sway: 1.1, arms: 1.0, knees: 0.6 },
     head_dip: [0.25, 0.15, -0.45, -0.15],
     // Dragged: the thumb (and blade) back, the blade trailing low behind. Drawn: straight up
     // over the head, in line with the arm (so the grip turns over on the way up without the

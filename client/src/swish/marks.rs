@@ -3,6 +3,7 @@
 
 use super::*;
 
+use arena_shared::config::TICK_HZ;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 
 use crate::arena::{FlatMesh, palette, to_world};
@@ -68,33 +69,19 @@ impl Mark {
 /// A mark for each new swing, lying on the ground where the blade comes down: along the middle
 /// of the strike's lane (`AttackDef::lane`, longer empowered), wherever the blade itself happens
 /// to be as the hit arrives. Without a lane, along the blade where it is (after it's posed and
-/// placed). `LastSwing` comes from the server; each is drawn once.
+/// placed). `LastSwing` comes from the server; each is drawn once. An attack that cuts twice
+/// (`AttackDef::twice`) marks its second cut too, along the other hand's blade (`OffBlade`) as
+/// the server lands it.
 pub(super) fn show_marks(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<SwishAssets>,
-    mut swings: Query<(&LastSwing, &mut Blade, &Pos, &ClassId), Changed<LastSwing>>,
+    mut swings: Query<(Entity, &LastSwing, &mut Blade, &Pos, &ClassId), Changed<LastSwing>>,
+    mut offhands: Query<&mut OffBlade>,
     blades: Query<&GlobalTransform>,
 ) {
     let now = time.elapsed_secs();
-    for (swing, mut blade, pos, class) in &mut swings {
-        if swing.tick <= blade.shown {
-            continue;
-        }
-        blade.shown = swing.tick;
-        // The ground breaks over its hitbox at once, as the hit is dealt (`strike_ground`): it
-        // shows where the strike hit, cut short or not.
-        blade.striking = true;
-        let mark = match class.def().attack.lane_grown(swing.empowered, swing.grown) {
-            Some((near, far, _)) => {
-                let dir = swing.dir.normalize_or(Vec2::X);
-                Mark { started: now, from: to_world(pos.0 + dir * near, MARK_HEIGHT), to: to_world(pos.0 + dir * far, MARK_HEIGHT) }
-            }
-            None => {
-                let Ok(held) = blades.get(blade.held) else { continue };
-                Mark { started: now, from: blade.at(held, blade.from), to: blade.at(held, 1.0) }
-            }
-        };
+    let mut draw = |mark: Mark| {
         let transform = mark.transform(0.0);
         commands.spawn((
             Mesh3d(assets.mark.clone()),
@@ -105,6 +92,38 @@ pub(super) fn show_marks(
             NotShadowCaster,
             NotShadowReceiver,
         ));
+    };
+    for (entity, swing, mut blade, pos, class) in &mut swings {
+        if swing.tick <= blade.shown {
+            continue;
+        }
+        blade.shown = swing.tick;
+        // The ground breaks over its hitbox at once, as the hit is dealt (`strike_ground`): it
+        // shows where the strike hit, cut short or not.
+        blade.striking = true;
+        if let Some(gap) = class.def().attack.twice
+            && let Ok(mut off) = offhands.get_mut(entity)
+        {
+            off.cut_at = Some(now + gap as f32 / TICK_HZ as f32);
+        }
+        let mark = match class.def().attack.lane_grown(swing.empowered, swing.grown) {
+            Some((near, far, _)) => {
+                let dir = swing.dir.normalize_or(Vec2::X);
+                Mark { started: now, from: to_world(pos.0 + dir * near, MARK_HEIGHT), to: to_world(pos.0 + dir * far, MARK_HEIGHT) }
+            }
+            None => {
+                let Ok(held) = blades.get(blade.held) else { continue };
+                Mark { started: now, from: blade.at(held, blade.from), to: blade.at(held, 1.0) }
+            }
+        };
+        draw(mark);
+    }
+    for mut off in &mut offhands {
+        if off.cut_at.is_some_and(|at| now >= at) {
+            off.cut_at = None;
+            let Ok(held) = blades.get(off.held) else { continue };
+            draw(Mark { started: now, from: off.at(held, 0.0), to: off.at(held, 1.0) });
+        }
     }
 }
 
