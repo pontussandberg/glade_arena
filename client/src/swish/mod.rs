@@ -66,17 +66,24 @@ pub(crate) struct Blade {
     /// While it's quickened: when (seconds) it sheds its next ember, and how many it has shed
     /// (`shed_embers`).
     pub(crate) embers: (f32, u32),
+    /// How bright its trail is and how long it lingers, as shares of the usual (1): a knife's
+    /// cut is all trail, so its trail is the brightest and lasts longest.
+    pub(crate) vivid: f32,
+    pub(crate) linger: f32,
 }
 
 /// A blade in a fighter's other hand, part of its lead forearm (the shade's reversed knife):
 /// where it runs along the forearm's own axis (meters from the elbow, its base to its point),
-/// for a trail of its own, and the mark of the attack's second cut (`AttackDef::twice`) along
-/// it as that lands: when (seconds) the next one does, while one is coming.
+/// for a trail of its own (as vivid and lingering as the main blade's), and the mark of the
+/// attack's second cut (`AttackDef::twice`): when (seconds) the next one lands, and where its
+/// mark goes (beside the first cut's), while one is coming.
 #[derive(Component)]
 pub(crate) struct OffBlade {
     pub(crate) held: Entity,
     pub(crate) span: (f32, f32),
-    pub(crate) cut_at: Option<f32>,
+    pub(crate) vivid: f32,
+    pub(crate) linger: f32,
+    pub(crate) cut: Option<(f32, Vec3, Vec3)>,
 }
 
 impl OffBlade {

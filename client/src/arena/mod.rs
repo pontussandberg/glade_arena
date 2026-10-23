@@ -295,6 +295,16 @@ pub fn off_blade_span(class_key: &str) -> Option<(f32, f32)> {
     }
 }
 
+/// How bright a figure's blades' trails are and how long they linger, as shares of the usual
+/// (`swish::trail`): a knife's cut is nothing but its flash, so the shade's are the brightest,
+/// and the shortest-lived, so the flash is where the knife ends up, not where it came from.
+pub fn blade_flash(class_key: &str) -> (f32, f32) {
+    match class_key {
+        "shade" => (2.0, 0.6),
+        _ => (1.0, 1.0),
+    }
+}
+
 pub fn fighter_rig(class_key: &str) -> RigMeshes {
     // Every figure's parts: its upper arm and forearm, its thigh and shin, and the rest.
     let rig = |(arm, forearm): (Mesh, Mesh), lead_arm: Option<(Mesh, Option<Mesh>)>, (leg, shin): (Mesh, Mesh), head: Mesh, held: Mesh, eyes: Mesh, glow: Color| RigMeshes {

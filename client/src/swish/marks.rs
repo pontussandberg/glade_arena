@@ -101,31 +101,45 @@ pub(super) fn show_marks(
         // The ground breaks over its hitbox at once, as the hit is dealt (`strike_ground`): it
         // shows where the strike hit, cut short or not.
         blade.striking = true;
-        if let Some(gap) = class.def().attack.twice
-            && let Ok(mut off) = offhands.get_mut(entity)
-        {
-            off.cut_at = Some(now + gap as f32 / TICK_HZ as f32);
-        }
-        let mark = match class.def().attack.lane_grown(swing.empowered, swing.grown) {
-            Some((near, far, _)) => {
-                let dir = swing.dir.normalize_or(Vec2::X);
-                Mark { started: now, from: to_world(pos.0 + dir * near, MARK_HEIGHT), to: to_world(pos.0 + dir * far, MARK_HEIGHT) }
-            }
+        let lane = class.def().attack.lane_grown(swing.empowered, swing.grown);
+        let dir = swing.dir.normalize_or(Vec2::X);
+        let mark = match lane {
+            Some((near, far, _)) => Mark { started: now, from: to_world(pos.0 + dir * near, MARK_HEIGHT), to: to_world(pos.0 + dir * far, MARK_HEIGHT) },
             None => {
                 let Ok(held) = blades.get(blade.held) else { continue };
                 Mark { started: now, from: blade.at(held, blade.from), to: blade.at(held, 1.0) }
             }
         };
+        // The second cut's mark, a beat later, beside the first's along the same lane (the
+        // other hand cuts the other way across it), or along that blade where it is then.
+        if let Some(gap) = class.def().attack.twice
+            && let Ok(mut off) = offhands.get_mut(entity)
+        {
+            let at = now + gap as f32 / TICK_HZ as f32;
+            off.cut = Some(match lane {
+                Some((near, far, width)) => {
+                    let beside = Vec2::new(-dir.y, dir.x) * width * SECOND_CUT_BESIDE;
+                    (at, to_world(pos.0 + dir * near + beside, MARK_HEIGHT), to_world(pos.0 + dir * far + beside, MARK_HEIGHT))
+                }
+                None => (at, Vec3::NAN, Vec3::NAN),
+            });
+        }
         draw(mark);
     }
     for mut off in &mut offhands {
-        if off.cut_at.is_some_and(|at| now >= at) {
-            off.cut_at = None;
+        if let Some((at, from, to)) = off.cut
+            && now >= at
+        {
+            off.cut = None;
             let Ok(held) = blades.get(off.held) else { continue };
-            draw(Mark { started: now, from: off.at(held, 0.0), to: off.at(held, 1.0) });
+            let (from, to) = if from.is_nan() { (off.at(held, 0.0), off.at(held, 1.0)) } else { (from, to) };
+            draw(Mark { started: now, from, to });
         }
     }
 }
+
+/// How far to the side of the lane's middle (a share of its width) a second cut's mark lies.
+const SECOND_CUT_BESIDE: f32 = 0.3;
 
 /// Marks draw on, linger, thin and fade, and are gone.
 pub(super) fn drive_marks(

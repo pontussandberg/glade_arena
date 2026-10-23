@@ -108,25 +108,26 @@ pub(super) fn trail_blades(
         let Ok(held) = blades.get(blade.held) else { continue };
         // From where the blade starts, through its middle, to its tip.
         let place = [blade.from, (blade.from + 1.0) / 2.0, 1.0].map(|up| blade.at(held, up));
-        let brightness = if blade.quickened { 1.0 } else { TRAIL_DIM };
-        follow(&mut trail, now, place, brightness, visible.get(), &mut meshes, &mut drawn);
+        let brightness = if blade.quickened { 1.0 } else { TRAIL_DIM * blade.vivid };
+        follow(&mut trail, now, place, brightness, TRAIL_LIFE * blade.linger, visible.get(), &mut meshes, &mut drawn);
     }
     for (off, mut trail, visible) in &mut offhands {
         let Ok(held) = blades.get(off.held) else { continue };
         let place = [0.0, 0.5, 1.0].map(|up| off.at(held, up));
-        follow(&mut trail.0, now, place, TRAIL_DIM, visible.get(), &mut meshes, &mut drawn);
+        follow(&mut trail.0, now, place, TRAIL_DIM * off.vivid, TRAIL_LIFE * off.linger, visible.get(), &mut meshes, &mut drawn);
     }
 }
 
 /// A trail noting where its blade is now (`place`: its base, middle and tip), dropping what's
-/// older than the trail lasts, and redrawn while it shows, `brightness` at most.
-fn follow(trail: &mut Trail, now: f32, place: [Vec3; 3], brightness: f32, visible: bool, meshes: &mut Assets<Mesh>, drawn: &mut Query<&mut Visibility, With<TrailOf>>) {
+/// older than `life` (seconds), and redrawn while it shows, `brightness` at most.
+#[allow(clippy::too_many_arguments)]
+fn follow(trail: &mut Trail, now: f32, place: [Vec3; 3], brightness: f32, life: f32, visible: bool, meshes: &mut Assets<Mesh>, drawn: &mut Query<&mut Visibility, With<TrailOf>>) {
     // A jump (through a waygate, or a respawn) leaves no trail across the map behind it.
     if trail.samples.back().is_some_and(|(_, last)| last[0].distance(place[0]) > arena_shared::config::JUMP) {
         trail.samples.clear();
     }
     trail.samples.push_back((now, place));
-    while trail.samples.front().is_some_and(|(at, _)| now - at > TRAIL_LIFE) {
+    while trail.samples.front().is_some_and(|(at, _)| now - at > life) {
         trail.samples.pop_front();
     }
     let samples = trail.samples.make_contiguous();
@@ -138,8 +139,8 @@ fn follow(trail: &mut Trail, now: f32, place: [Vec3; 3], brightness: f32, visibl
             _ => place[2].distance(samples[i - 1].1[2]) / (at - samples[i - 1].0).max(1e-4),
         };
         let fast = ((speed - TRAIL_SPEED.0) / (TRAIL_SPEED.1 - TRAIL_SPEED.0)).clamp(0.0, 1.0);
-        let fresh = 1.0 - (now - at) / TRAIL_LIFE;
-        fast * fresh * fresh * brightness
+        let fresh = 1.0 - (now - at) / life;
+        (fast * fresh * fresh * brightness).min(1.0)
     };
     let showing = visible && (0..samples.len()).any(|i| alpha(i) > 0.01);
     if let Ok(mut visibility) = drawn.get_mut(trail.entity) {

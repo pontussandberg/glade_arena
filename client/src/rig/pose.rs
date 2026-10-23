@@ -116,12 +116,15 @@ const LEAD_POLE: Vec3 = Vec3::new(-0.25, -1.0, -0.75);
 /// the way into its walk (0 to 1: carrying, it stands as `Moves::standing_lean` says when still).
 pub(crate) fn targets(moves: &Moves, phase: Phase, step: Vec2, walking: f32) -> Angles {
     let pose = |keys| phase.pose(keys);
-    // A thrower's arm folds in only once the throw has gone off (over the last of the strike:
-    // the joints' springs lag their targets, so it starts a little after the contact pose, or
-    // they'd already be on their way as it goes off); anyone else's elbow moves with the strike.
+    // What only moves once the strike has gone off, over the last of it (the joints' springs
+    // lag their targets, so it starts a little after the contact pose, or they'd already be on
+    // their way as it goes off): the arm's swing carrying on in across the body, the
+    // follow-through of a cross-cut; and a thrower's arm folding in after the throw. Anyone
+    // else's elbow moves with the strike (a thrust straightens into its contact).
     let from = moves.contact + (1.0 - moves.contact) * AFTER_CONTACT;
     let gone = (phase.throw - from) / (1.0 - from).max(1e-3);
-    let after = if moves.throws { Phase { throw: smooth(gone), ..phase } } else { phase };
+    let after = Phase { throw: smooth(gone), ..phase };
+    let bend = if moves.throws { after } else { phase };
     // The lead arm strikes with the off hand's cut, if the figure cuts twice.
     let lead = Phase { throw: phase.second, ..phase };
     // Standing still while carrying: leaning as it stands rather than as it walks, the arms
@@ -166,8 +169,8 @@ pub(crate) fn targets(moves: &Moves, phase: Phase, step: Vec2, walking: f32) -> 
         back_knee: pose(moves.back_knee) + lift * (-step.y).max(0.0),
         lead_knee: pose(moves.lead_knee) + lift * step.y.max(0.0),
         head_dip: pose(moves.head_dip),
-        elbow: after.pose(moves.elbow),
-        elbow_turn: after.pose(moves.elbow_turn),
+        elbow: bend.pose(moves.elbow),
+        elbow_turn: bend.pose(moves.elbow_turn),
         arm_yaw: after.pose(moves.arm_yaw),
         lead_elbow: lead.pose(moves.lead_elbow),
         lead_elbow_turn: lead.pose(moves.lead_elbow_turn),

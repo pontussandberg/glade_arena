@@ -22,7 +22,7 @@ pub(super) const STORMWEAVER: Moves = Moves {
     elbow_turn: [0.2, 0.0, 0.0, 0.0],
     // The staff held in before the body's middle, where the other hand can reach it, and over
     // the head's middle at the top.
-    arm_yaw: [0.75, 0.55, 0.2, 0.3],
+    arm_yaw: [0.75, 0.3, 0.2, 0.3],
     windmill: false,
     // The free hand on the staff above the other, up with it overhead, then let go and flung
     // down and back as it snaps; back on it, planted for the call.

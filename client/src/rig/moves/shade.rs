@@ -21,8 +21,8 @@ pub(super) const SHADE: Moves = Moves {
     elbow: [1.5, 1.2, 0.35, 0.0],
     elbow_turn: [0.3, 0.0, 0.0, 0.0],
     // Held in across the front; out to the side as it coils; carried on in across the body
-    // through the cross-cut.
-    arm_yaw: [0.3, -0.2, 1.0, 0.0],
+    // after the cut lands: the cross-cut's follow-through.
+    arm_yaw: [0.3, -0.2, 0.7, 0.0],
     windmill: false,
     // The off knife: up in guard across the front, bent; forward and up as the other coils;
     // slashing forward across, straightening, a beat behind (the second cut).
@@ -39,7 +39,7 @@ pub(super) const SHADE: Moves = Moves {
     back_knee: [0.6, 0.7, 0.1, 0.0],
     hip_turn: 0.3,
     // Coiled to the weapon side, then whipped through past the facing.
-    twist: [-0.3, -0.75, 0.85, 0.0],
+    twist: [-0.3, -0.75, 0.6, 0.0],
     // A low crouch always, lower into the cut.
     lean: [-0.3, -0.25, -0.45, 0.0],
     standing_lean: -0.25,
@@ -56,10 +56,11 @@ pub(super) const SHADE: Moves = Moves {
     scale: 0.95,
     // A knife is short: it smears well out as the cut lands, so the cut is seen at all.
     stretch: 0.3,
-    // No windup to speak of: a short coil and a flick.
+    // No windup to speak of: a short coil and a flick that gathers speed all the way to where
+    // it stops dead, so the knife's flash is at the target, not where the cut began.
     draw_end: 0.3,
     strike_ticks: 1.5,
-    heavy: false,
+    heavy: true,
     // Held through the off hand's second cut (`AttackDef::twice`), so the pair of cuts can be
     // seen at all, then back into the crouch.
     follow_through: (2.0, 9.0),
@@ -68,6 +69,6 @@ pub(super) const SHADE: Moves = Moves {
     damping: 0.8,
     head_follow: 0.3,
     // The cut starts out to the weapon side and crosses the lane's middle at contact.
-    swing_yaw: 0.35,
+    swing_yaw: 0.1,
     contact: 0.85,
 };

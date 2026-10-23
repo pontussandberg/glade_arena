@@ -143,10 +143,13 @@ const GLIDE_RATE: f32 = 14.0;
 const DASH_LEAN: f32 = 0.35;
 const DASH_STRIDE: f32 = 0.45;
 const DASH_ARMS: f32 = 0.5;
-/// Knocked off its feet, a fighter staggers: how far back it's thrown (radians) and how far its
-/// arms fly up, at the top of the knock-up.
+/// How far (radians) the lead knee bends over the foot in the lunge.
+const DASH_KNEE: f32 = 0.55;
+/// Knocked off its feet, a fighter staggers: how far back it's thrown (radians), how far its
+/// arms fly up and how far its knees buckle, at the top of the knock-up.
 const STAGGER_LEAN: f32 = 0.5;
 const STAGGER_ARMS: f32 = 0.7;
+const STAGGER_KNEES: f32 = 0.6;
 
 /// How brightly a weapon's aura glows (its cracks of light).
 const AURA_GLOW: f32 = 9.0;
@@ -351,17 +354,18 @@ fn add_rigs(
             crate::cloth::dress(&mut commands, player, (rig.legs, rig.knees, rig.arms[0]), own, wardrobe);
         }
         let figure = class.def().figure();
+        let (vivid, linger) = arena::blade_flash(figure);
         if matches!(rig.moves.held, Held::Gripped { .. } | Held::Swept { .. }) {
             let (from, length) = arena::blade_span(figure);
             // A glaive's broad edge reaches the ground at its corner before its point; a plain
             // blade's lowest point is its point.
             let corner = if figure == "revenant" { arena::glaive_edge(1.0) } else { Vec3::Y * length };
-            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length, from: from / length, shown: 0, quickened: false, striking: false, dragged: None, corner, rasp: 0, embers: (0.0, 0) });
+            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length, from: from / length, shown: 0, quickened: false, striking: false, dragged: None, corner, rasp: 0, embers: (0.0, 0), vivid, linger });
         }
         // A blade on the other hand too (the shade's), on its lead forearm, which hangs from
         // its lead elbow.
         if let Some(span) = arena::off_blade_span(figure) {
-            commands.entity(player).insert(crate::swish::OffBlade { held: rig.elbows[1], span, cut_at: None });
+            commands.entity(player).insert(crate::swish::OffBlade { held: rig.elbows[1], span, vivid, linger, cut: None });
         }
         commands.entity(player).insert((
             rig,
@@ -592,6 +596,8 @@ fn pose_rigs(
         target.head_dip += 0.4 * BREATH_LEAN * breath - 0.12 * lunge - 0.3 * stagger;
         target.lead_leg += DASH_STRIDE * lunge;
         target.back_leg -= DASH_STRIDE * lunge;
+        target.lead_knee += DASH_KNEE * lunge + STAGGER_KNEES * stagger;
+        target.back_knee += STAGGER_KNEES * stagger;
         target.lead_arm += STAGGER_ARMS * stagger - DASH_ARMS * lunge;
         target.weapon_arm += 0.6 * STAGGER_ARMS * stagger - DASH_ARMS * lunge * if moves.rests { 0.3 } else { 1.0 };
         let angles = rig.joints.follow(&target, dt, moves);
