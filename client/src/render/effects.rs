@@ -44,16 +44,18 @@ pub(super) struct Frost {
     pub(super) shown: (bool, bool),
 }
 
-/// A burst of ice around each new nova: a bright shockwave races out from the caster to the
-/// nova's edge, a spray of ice erupts where the staff struck, frost spreads over the ground, and
-/// shards burst up in two rings as the wave passes them. `Cooldowns` comes from the server
-/// (others' on the same delayed timeline as their positions); each nova is drawn once, and one
-/// cast before we saw its caster isn't (`SeenCasts`).
+/// Each new nova's burst: the caster's own (fire, or the ground heaving: `fx::cast_nova`), or
+/// else a burst of ice: a bright shockwave races out from the caster to the nova's edge, a spray
+/// of ice erupts where the staff struck, frost spreads over the ground, and shards burst up in
+/// two rings as the wave passes them. `Cooldowns` comes from the server (others' on the same
+/// delayed timeline as their positions); each nova is drawn once, and one cast before we saw its
+/// caster isn't (`SeenCasts`).
 pub(super) fn show_novas(
     mut commands: Commands,
     time: Res<Time>,
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    art: Res<crate::fx::FxArt>,
     mut casters: Query<(&PlayerId, &ClassId, &Pos, &Cooldowns, &mut SeenCasts), Changed<Cooldowns>>,
     me: Query<&Pos, With<crate::Me>>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
@@ -70,6 +72,10 @@ pub(super) fn show_novas(
                     _ => crate::audio::Sfx::Slam,
                 };
                 sounds.push(sfx, 0.8 * crate::audio::earshot(pos.0.distance(my.0), 18.0));
+            }
+            let seed = cooldowns.used_at(slot).unwrap_or(0).wrapping_mul(2_654_435_761) ^ pos.0.x.to_bits();
+            if crate::fx::cast_nova(&mut commands, &art, time.elapsed_secs(), class.def().figure(), pos.0, def.radius, seed) {
+                continue;
             }
             burst_nova(&mut commands, &time, &mut visuals, &mut materials, id.0, pos.0, def.radius, nova);
         }

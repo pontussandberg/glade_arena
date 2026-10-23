@@ -157,6 +157,85 @@ pub(super) fn tremor(c: &mut Commands, art: &FxArt, now: f32, at: Vec2, dir: Vec
     }
 }
 
+/// The pyre witch's ring of cinders: the ground igniting all round her. A flash of flame races
+/// out to the edge, where a ring of tongues leaps up as it arrives and burns, leaning out, with a
+/// few more licking up over the ground inside; the ground is scorched, its cracks glowing and
+/// cooling; embers fly up off it, and smoke wells up round the edge after.
+pub(super) fn cinder_ring(c: &mut Commands, art: &FxArt, now: f32, at: Vec2, radius: f32, seed: u32) {
+    let s = Scene { start: now, seed, at: to_world(at, 0.0), to: to_world(at, 0.0), radius, lasts: 0.8 };
+    let r = s.radius;
+    put(c, art, s.pick(1, &art.splotch), Part::new(s.start, [0.1, 1.4, 2.6], Ink::Scorch, ground(s.at, 0.02)).sized(Vec3::new(r * 0.95, 1.0, r * 0.95)).facing(s.r(2) * TAU).grow(0.25));
+    put(c, art, s.pick(3, &art.cracks), Part::new(s.start, [0.08, 0.45, 1.6], Ink::Ember, ground(s.at, 0.03)).sized(Vec3::new(r * 0.9, 1.0, r * 0.9)).facing(s.r(4) * TAU).grow(0.2).shrink(0.85));
+    // The flash racing out to the edge.
+    let flash = 0.14;
+    put(c, art, &art.band, Part::new(s.start, [flash, flash, 0.42], Ink::Flame, ground(s.at, 0.06)).sized(Vec3::new(r, 1.0, r)).grow(0.1).shrink(1.1));
+    // The tongue lies along +X: stood up, leaning out, turned to its spot on the ring.
+    for (count, out, tall) in [(14u32, 0.88f32, 0.8f32), (6, 0.45, 0.55)] {
+        for i in 0..count {
+            let k = 20 + i * 5 + (out * 100.0) as u32;
+            let angle = (i as f32 + 0.5 * s.r(k)) / count as f32 * TAU;
+            let at = s.at + Vec3::new(angle.cos(), 0.0, -angle.sin()) * r * out + Vec3::Y * 0.05;
+            let lick = Quat::from_rotation_y(angle) * Quat::from_rotation_z(FRAC_PI_2 - 0.35 - 0.3 * s.r(k + 1));
+            let length = tall * (0.7 + 0.5 * s.r(k + 2));
+            let born = s.start + flash * out + 0.04 * s.r(k + 3);
+            let part = Part::new(born, [0.06, 0.25 + 0.2 * s.r(k + 4), 0.6 + 0.25 * s.r(k + 4)], Ink::Flame, at).sized(Vec3::new(length, 1.0, length * 0.6));
+            put(c, art, &art.tongue, part.turn(lick).grow(0.2).shrink(0.3).flicker(0.3));
+        }
+    }
+    // Embers flying up off the burning ground and drifting down.
+    for i in 0..16 {
+        let k = 300 + i * 6;
+        let velocity = s.out(k) * (0.5 + 1.5 * s.r(k + 1)) + Vec3::Y * (2.0 + 2.5 * s.r(k + 2));
+        let part = Part::new(s.start + flash * 0.5 * s.r(k + 5), [0.02, 0.6, 1.0 + 0.6 * s.r(k + 3)], Ink::Spark, s.spot(k + 6, 0.9) + Vec3::Y * 0.2).size(0.04 + 0.04 * s.r(k + 4));
+        put(c, art, &art.mote, part.motion(Motion::Thrown { velocity, gravity: 4.0, tumble: Vec3::ZERO }).flicker(0.5).shrink(0.3));
+    }
+    // Smoke welling up round the edge after.
+    for i in 0..5 {
+        let k = 400 + i * 6;
+        let angle = (i as f32 + s.r(k)) / 5.0 * TAU;
+        let at = s.at + Vec3::new(angle.cos(), 0.0, -angle.sin()) * r * 0.8 + Vec3::Y * 0.3;
+        let velocity = s.out(k + 1) * 0.3 + Vec3::Y * (0.5 + 0.4 * s.r(k + 2));
+        let part = Part::new(s.start + 0.25 + 0.15 * s.r(k + 3), [0.3, 0.6, 1.5], Ink::Smoke, at).size(r * 0.3);
+        put(c, art, s.pick(k + 4, &art.splotch), part.motion(Motion::Thrown { velocity, gravity: -0.2, tumble: Vec3::ZERO }).grow(0.4).shrink(1.6).spin(0.6));
+    }
+}
+
+/// A quake (the breaker's, and the warden's ground slam): the ground heaving under a blow at the
+/// caster's feet. Dust bursts up from under it and a shockwave of it races out through the
+/// ground, slabs of earth heaving up and dropping back as it passes them, cracks spreading out
+/// from the middle, earth thrown up and tumbling back, and a low pall of dust rolling out after.
+pub(super) fn quake(c: &mut Commands, art: &FxArt, now: f32, at: Vec2, radius: f32, seed: u32) {
+    let s = Scene { start: now, seed, at: to_world(at, 0.0), to: to_world(at, 0.0), radius, lasts: 0.7 };
+    let r = s.radius;
+    put(c, art, s.pick(1, &art.cracks), Part::new(s.start, [0.1, 1.2, 2.2], Ink::Scorch, ground(s.at, 0.025)).sized(Vec3::new(r * 1.05, 1.0, r * 1.05)).facing(s.r(2) * TAU).grow(0.15));
+    put(c, art, s.pick(3, &art.streaks), Part::new(s.start, [0.12, 0.9, 1.8], Ink::Scorch, ground(s.at, 0.022)).sized(Vec3::new(r * 0.9, 1.0, r * 0.9)).facing(s.r(4) * TAU).grow(0.2));
+    // Dust bursting up from under the blow: thin enough to see the ground break through it.
+    put(c, art, s.pick(5, &art.splotch), Part::new(s.start, [0.08, 0.15, 0.55], Ink::Dust, ground(s.at, 0.05)).size(r * 0.28).facing(s.r(6) * TAU).grow(0.2).shrink(1.9));
+    // The shockwave racing out through the ground.
+    let wave = 0.18;
+    put(c, art, &art.band, Part::new(s.start, [wave, wave, 0.5], Ink::Dust, ground(s.at, 0.06)).sized(Vec3::new(r, 1.0, r)).grow(0.1).shrink(1.15));
+    // Slabs of earth heaved up as the wave passes, dropping back where they lay.
+    for (count, out) in [(8u32, 0.5f32), (14, 0.9)] {
+        for i in 0..count {
+            let k = 200 + i * 8 + (out * 50.0) as u32;
+            let angle = (i as f32 + 0.6 * s.r(k)) / count as f32 * TAU;
+            let size = Vec3::new(0.3 + 0.25 * s.r(k + 1), 0.12 + 0.1 * s.r(k + 2), 0.25 + 0.2 * s.r(k + 3));
+            let at = s.at + Vec3::new(angle.cos(), 0.0, -angle.sin()) * r * out + Vec3::Y * (size.y / 2.0 + 0.01);
+            let heave = Motion::Thrown { velocity: Vec3::Y * (1.2 + 0.8 * s.r(k + 4)), gravity: 9.0, tumble: Vec3::new(s.r(k + 5) - 0.5, 0.0, s.r(k + 6) - 0.5) * 3.0 };
+            let born = s.start + wave * out * 0.9 + 0.03 * s.r(k + 7);
+            put(c, art, &art.chunk, Part::new(born, [0.03, 0.45, 0.8], Ink::Earth, at).sized(size).facing(angle).motion(heave).shrink(0.0));
+        }
+    }
+    clods(c, art, &s, 12, 2.4, Ink::Earth);
+    // A few puffs of dust rolling out low after the wave, between the slabs, not over them.
+    for i in 0..4u32 {
+        let k = 80 + i * 5;
+        let roll = Motion::Thrown { velocity: s.out(k) * 1.1 + Vec3::Y * 0.25, gravity: -0.12, tumble: Vec3::ZERO };
+        let part = Part::new(s.start + 0.08 + 0.06 * i as f32, [0.12, 0.3, 0.85], Ink::Dust, s.spot(k + 1, 0.75) + Vec3::Y * 0.12).size(r * 0.22);
+        put(c, art, s.pick(k + 2, &art.splotch), part.grow(0.3).shrink(1.6).spin(0.5).motion(roll));
+    }
+}
+
 /// The sound an effect makes, if any: loud up close, faint far off; what lands later (a meteor,
 /// a lob, a bolt gathering) sounds as it lands, not as the warning shows.
 fn sound_of(fx: &Fx, sounds: &mut crate::audio::SoundQueue, me: &Query<&Pos, With<crate::Me>>, now: f32) {

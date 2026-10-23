@@ -101,6 +101,18 @@ fn strike_fx(
     }
 }
 
+/// A nova going off at `at` (`radius` round) now, cast by a figure of `figure`, drawn as its own
+/// burst, if it has one: the pyre witch's ring of cinders, the breaker's and the warden's quake.
+/// Whether it did (the frost mage's, and anyone else's, is a burst of ice: `render::show_novas`).
+pub(crate) fn cast_nova(commands: &mut Commands, art: &FxArt, now: f32, figure: &str, at: Vec2, radius: f32, seed: u32) -> bool {
+    match figure {
+        "pyre_witch" => recipes::cinder_ring(commands, art, now, at, radius, seed),
+        "breaker" | "warden" => recipes::quake(commands, art, now, at, radius, seed),
+        _ => return false,
+    }
+    true
+}
+
 /// How many steps a fading material goes through, from its full opacity to clear.
 const FADE_STEPS: usize = 12;
 
