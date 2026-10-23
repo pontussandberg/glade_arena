@@ -102,6 +102,60 @@ pub(crate) struct Angles {
     pub(crate) roll: f32,
     /// How far round from the facing a swept weapon points (`Held::Swept`).
     pub(crate) yaw: f32,
+    /// The body rocked sideways about the facing (positive: toward the weapon side), on top of
+    /// the walk's sway: standing still, the hips settling over one foot (`Idle`).
+    pub(crate) sway: f32,
+}
+
+/// No angles at all: what to start from when adding some up.
+pub(crate) const STILL: Angles = Angles {
+    twist: 0.0,
+    lean: 0.0,
+    weapon_arm: 0.0,
+    lead_arm: 0.0,
+    back_leg: 0.0,
+    lead_leg: 0.0,
+    back_knee: 0.0,
+    lead_knee: 0.0,
+    head_dip: 0.0,
+    elbow: 0.0,
+    elbow_turn: 0.0,
+    arm_yaw: 0.0,
+    lead_elbow: 0.0,
+    lead_elbow_turn: 0.0,
+    lead_yaw: 0.0,
+    hold: 0.0,
+    tip: 0.0,
+    roll: 0.0,
+    yaw: 0.0,
+    sway: 0.0,
+};
+
+impl Angles {
+    /// Adds `by` times every angle of `other` to these: layering a fidget or a flinch on a pose.
+    pub(crate) fn add(&mut self, other: &Angles, by: f32) {
+        let Angles { twist, lean, weapon_arm, lead_arm, back_leg, lead_leg, back_knee, lead_knee, head_dip, elbow, elbow_turn, arm_yaw, lead_elbow, lead_elbow_turn, lead_yaw, hold, tip, roll, yaw, sway } = other;
+        self.twist += twist * by;
+        self.lean += lean * by;
+        self.weapon_arm += weapon_arm * by;
+        self.lead_arm += lead_arm * by;
+        self.back_leg += back_leg * by;
+        self.lead_leg += lead_leg * by;
+        self.back_knee += back_knee * by;
+        self.lead_knee += lead_knee * by;
+        self.head_dip += head_dip * by;
+        self.elbow += elbow * by;
+        self.elbow_turn += elbow_turn * by;
+        self.arm_yaw += arm_yaw * by;
+        self.lead_elbow += lead_elbow * by;
+        self.lead_elbow_turn += lead_elbow_turn * by;
+        self.lead_yaw += lead_yaw * by;
+        self.hold += hold * by;
+        self.tip += tip * by;
+        self.roll += roll * by;
+        self.yaw += yaw * by;
+        self.sway += sway * by;
+    }
 }
 
 /// Walking, how far (radians) a knee bends as its leg swings through, lifting the foot.
@@ -179,6 +233,7 @@ pub(crate) fn targets(moves: &Moves, phase: Phase, step: Vec2, walking: f32) -> 
         tip,
         roll,
         yaw,
+        sway: 0.0,
     }
 }
 
@@ -206,7 +261,7 @@ pub(crate) struct Posed {
     pub(crate) head: Quat,
     /// Weapon arm, lead arm.
     pub(crate) arms: [Quat; 2],
-    /// Their elbows (the lead arm's stays straight).
+    /// Their elbows.
     pub(crate) elbows: [Quat; 2],
     /// Back leg, lead leg; and their knees.
     pub(crate) legs: [Quat; 2],
@@ -222,7 +277,7 @@ pub(crate) struct Posed {
 /// its size, `rest` of the way to resting its point on the ground (`Moves::rests`; 1: carrying).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec2, stride: f32, walk: f32, smear: f32, blade: f32, rest: f32) -> Posed {
-    let sway = stride.sin() * SWAY * moves.gait.sway * walk;
+    let sway = stride.sin() * SWAY * moves.gait.sway * walk + angles.sway;
     // Leaning along the facing, then twisting: leaning back about the twisted body's own axis
     // would tip it sideways, across the line of the strike.
     let leaning = |twist: f32, lean: f32, sway: f32| Quat::from_rotation_z(lean) * Quat::from_rotation_y(twist) * Quat::from_rotation_x(sway);

@@ -559,6 +559,46 @@ fn preview_walk() {
     }
 }
 
+/// Every figure's fidgets standing still (`rig::Idle`): `idle-<class>.png`, a column each for
+/// standing as it carries, its gesture made, and its weight settled onto the back foot and onto
+/// the lead one; a row per view (from the side, from ahead and to the side, from the game's
+/// camera).
+#[test]
+#[ignore = "writes images; run by hand when working on animation"]
+fn preview_idle() {
+    use arena_shared::protocol::ClassId;
+
+    use crate::rig::{Phase, assemble, moves, targets};
+
+    let dir = std::env::var("PREVIEW_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    let only = std::env::var("PREVIEW_CLASS").ok();
+    let keys: Vec<&str> = ClassId::all().map(|c| c.def().figure()).filter(|k| only.as_deref().is_none_or(|o| o == *k)).collect::<std::collections::BTreeSet<_>>().into_iter().filter(|k| *k != "merchant").collect();
+    let views = [Vec3::Z, Vec3::new(1.0, 0.3, 0.7), crate::camera::OFFSET];
+    // How far into its gesture, and which way its weight is rocked, in each column.
+    const COLUMNS: [(f32, f32); 4] = [(0.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)];
+    for key in keys {
+        let moves = moves(key);
+        let width = SIZE * COLUMNS.len();
+        let mut image = vec![[200u8, 204, 200]; width * SIZE * views.len()];
+        for (i, (making, rocking)) in COLUMNS.into_iter().enumerate() {
+            let mut angles = targets(moves, Phase::default(), Vec2::ZERO, 0.0);
+            angles.add(&moves.idle.posed(making, rocking, 1.0), 1.0);
+            let posed = assemble(moves, &angles, &angles, Vec2::X, 0.0, 0.0, 0.0, 1.0, 1.0);
+            let (mut tris, _, _) = posed_figure(key, &posed, 1.0, None);
+            ground(&mut tris);
+            for (row, from) in views.into_iter().enumerate() {
+                let mut cell = vec![[200u8, 204, 200]; SIZE * SIZE];
+                render(&tris, from, Vec3::new(0.2, 1.0, 0.0), 3.2, &mut cell, SIZE, 0);
+                for y in 0..SIZE {
+                    let at = (row * SIZE + y) * width + i * SIZE;
+                    image[at..at + SIZE].copy_from_slice(&cell[y * SIZE..(y + 1) * SIZE]);
+                }
+            }
+        }
+        std::fs::write(dir.join(format!("idle-{key}.png")), png(width, SIZE * views.len(), &image)).unwrap();
+    }
+}
+
 /// Every map from above, one pixel image per map (`map-<id>.png`): tiles in the theme's colors,
 /// lairs red, chests gold, pickups green, spawns blue, the shop white. The bastion's staged
 /// variants too: the layout and its unlocks, seen without running the game.

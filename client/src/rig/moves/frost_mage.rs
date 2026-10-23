@@ -44,6 +44,15 @@ pub(super) const FROST_MAGE: Moves = Moves {
     // A stately, even walk, hardly bobbing.
     stride: 0.95,
     gait: Gait { cadence: 0.95, bob: 0.5, sway: 0.6, arms: 0.6, knees: 0.6 },
+    // Composed: barely a shift. Now and then the free hand comes across to take the staff in
+    // both hands, and it's lifted and set down again, a tap of its butt on the ground, with a
+    // small formal nod.
+    idle: Idle {
+        shift: 0.08,
+        every: 7.0,
+        hold: 0.4,
+        gesture: Angles { hold: 1.0, weapon_arm: 0.15, elbow: 0.15, head_dip: 0.12, ..STILL },
+    },
     head_dip: [0.0, 0.1, -0.15, -0.2],
     // Upright at the side; level, pointed at the target, as it's drawn back and thrust; planted
     // for the nova.

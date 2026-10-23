@@ -581,12 +581,15 @@ fn pose_rigs(
 
         // Every angle chases its pose on a spring, and the rig is put together from them. On
         // top of its moves: standing still it breathes (rocking and rising a little, each
-        // fighter on its own beat); dashing it lunges, leaning into it with its arms trailing
-        // and its legs split; knocked off its feet it staggers back, arms flung up.
+        // fighter on its own beat) and fidgets as its class does (`Idle`); dashing it lunges,
+        // leaning into it with its arms trailing and its legs split; knocked off its feet it
+        // staggers back, arms flung up.
         let mut target = targets(moves, phase, step, rig.walking);
         let free = 1.0 - phase.braced();
         let breathing = (1.0 - rig.walking) * free * (1.0 - rig.glide);
         let breath = (wall_clock * BREATH_RATE + (rig.gleaming.seed as f32 * 0.37).fract() * TAU).sin() * breathing;
+        let fidget = moves.idle.at(wall_clock, rig.gleaming.seed, breathing);
+        target.add(&fidget, 1.0);
         let lunge = rig.glide * free;
         let stagger = chilled.map_or(0.0, |chilled| {
             let span = chilled.lifted;
@@ -601,7 +604,8 @@ fn pose_rigs(
         target.lead_arm += STAGGER_ARMS * stagger - DASH_ARMS * lunge;
         target.weapon_arm += 0.6 * STAGGER_ARMS * stagger - DASH_ARMS * lunge * if moves.rests { 0.3 } else { 1.0 };
         let angles = rig.joints.follow(&target, dt, moves);
-        let aimed = targets(moves, phase, Vec2::ZERO, rig.walking);
+        let mut aimed = targets(moves, phase, Vec2::ZERO, rig.walking);
+        aimed.add(&fidget, 1.0);
         let walk = rig.walking * free;
         let posed = assemble(moves, &angles, &aimed, facing.look, stride, walk, stretch * smear, blade, free);
         // Just hit, the whole figure flinches: squashed wide and short, springing back over

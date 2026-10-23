@@ -32,28 +32,39 @@ pub(super) const SHADE: Moves = Moves {
     lead_yaw: [0.5, 0.6, 1.1, 0.0],
     lead_grip: 0.0,
     lead_hold: [0.0; 4],
-    // A wide, low stance on bent knees, lower into the coil, then a lunge into the cut.
-    lead_leg: [0.3, 0.35, 0.95, 0.0],
-    back_leg: [-0.25, -0.4, -0.5, 0.0],
-    lead_knee: [0.65, 0.7, 0.6, 0.0],
-    back_knee: [0.6, 0.7, 0.1, 0.0],
+    // A low stance on bent knees (not so wide it sprawls, seen from above), lower into the coil,
+    // then a lunge into the cut.
+    lead_leg: [0.22, 0.3, 0.95, 0.0],
+    back_leg: [-0.18, -0.35, -0.5, 0.0],
+    lead_knee: [0.5, 0.65, 0.6, 0.0],
+    back_knee: [0.45, 0.65, 0.1, 0.0],
     hip_turn: 0.3,
     // Coiled to the weapon side, then whipped through past the facing.
     twist: [-0.3, -0.75, 0.6, 0.0],
     // A low crouch always, lower into the cut.
-    lean: [-0.3, -0.25, -0.45, 0.0],
-    standing_lean: -0.25,
+    lean: [-0.22, -0.25, -0.45, 0.0],
+    standing_lean: -0.18,
     standing_arm: 0.0,
     rests: false,
-    // Light, quick, high steps, the knives kept up: a prowl.
+    // Light, quick steps on the bent knees, the feet kept low, the knives kept up: a prowl.
     stride: 1.0,
-    gait: Gait { cadence: 1.4, bob: 0.4, sway: 0.5, arms: 0.3, knees: 1.1 },
+    gait: Gait { cadence: 1.4, bob: 0.4, sway: 0.5, arms: 0.3, knees: 0.75 },
+    // Never still: shifting its weight from foot to foot on the bent knees, and every few
+    // seconds a glance over the weapon shoulder, the knives rolling over in the hands, the
+    // crouch dipping lower.
+    idle: Idle {
+        shift: 0.14,
+        every: 3.5,
+        hold: 0.35,
+        gesture: Angles { twist: -0.35, roll: 0.9, lead_knee: 0.12, back_knee: 0.12, lean: -0.05, head_dip: -0.1, weapon_arm: 0.1, ..STILL },
+    },
     head_dip: [0.2, 0.1, 0.1, 0.0],
     // Gripped reversed (the blade cocked back along the forearm) in the crouch and the coil, and
     // swung through level with the cut.
     held: Held::Gripped { wrist: [-1.15, -1.0, -0.6, 0.0], roll: [0.0; 4] },
     throws: false,
-    scale: 0.95,
+    // Slight, but not a speck: the class's own size keeps it the smallest.
+    scale: 1.0,
     // A knife is short: it smears well out as the cut lands, so the cut is seen at all.
     stretch: 0.3,
     // No windup to speak of: a short coil and a flick that gathers speed all the way to where

@@ -56,6 +56,15 @@ pub(super) const WARDEN: Moves = Moves {
     // Short, heavy, armored steps: a stomp with each, the free arm kept to the shield.
     stride: 0.85,
     gait: Gait { cadence: 1.1, bob: 1.4, sway: 0.6, arms: 0.4, knees: 0.8 },
+    // Planted: hardly a shift of its weight. Now and then it sets the shield square, lifting it
+    // and pushing it out a touch, and flicks the sword's point up beside it, the head turning
+    // to look over the rim.
+    idle: Idle {
+        shift: 0.12,
+        every: 6.0,
+        hold: 0.6,
+        gesture: Angles { lead_arm: 0.2, lead_elbow: -0.25, weapon_arm: 0.15, tip: -0.35, twist: 0.12, head_dip: 0.05, ..STILL },
+    },
     head_dip: [0.05, 0.1, -0.15, -0.3],
     // Carried: the blade mostly along the forearm, pointing forward and down. Cocked: nearly in
     // line with the level forearm, the point raised a little at the target. Thrust: in line

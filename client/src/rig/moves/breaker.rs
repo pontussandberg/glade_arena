@@ -57,6 +57,15 @@ pub(super) const BREAKER: Moves = Moves {
     // Long, heavy, rolling strides: a lumber.
     stride: 0.8,
     gait: Gait { cadence: 0.8, bob: 1.8, sway: 1.7, arms: 0.9, knees: 0.9 },
+    // Standing, it rocks its bulk from foot to foot, and now and then hitches the maul up on
+    // its shoulder: the hand shoving up, the head of it riding up and back, the shoulders
+    // rolling back under it, the chin coming up.
+    idle: Idle {
+        shift: 0.15,
+        every: 5.5,
+        hold: 0.5,
+        gesture: Angles { weapon_arm: 0.3, elbow: 0.1, tip: 0.15, twist: -0.2, lean: 0.05, head_dip: -0.12, ..STILL },
+    },
     head_dip: [0.1, 0.15, -0.2, -0.3],
     // Kept level and swung round: carried pointing up and back over the shoulder; wound up
     // pointing out behind the weapon side, the head out behind the turned body, a batter's;

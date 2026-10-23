@@ -39,6 +39,7 @@ pub(crate) struct Joints {
     pub(super) roll: Spring,
     /// A swept weapon's yaw (`Held::Swept`): the nearest way to its target, like the tip.
     held_yaw: Spring,
+    pub(super) sway: Spring,
 }
 
 impl Joints {
@@ -72,6 +73,7 @@ impl Joints {
             tip: spring(&mut self.held_tip, to.tip),
             roll: spring(&mut self.roll, to.roll),
             yaw: spring(&mut self.held_yaw, to.yaw),
+            sway: spring(&mut self.sway, to.sway),
         }
     }
 }

@@ -39,6 +39,14 @@ pub(super) const ZOMBIE: Moves = Moves {
     // A shuffle: short, dragging, lurching steps.
     stride: 0.55,
     gait: Gait { cadence: 1.3, bob: 0.5, sway: 1.9, arms: 0.2, knees: 0.5 },
+    // Swaying heavily from foot to foot, and every few seconds a lurch: the body pitching
+    // forward and twisting, the head rolling over, the arms sagging and crooking further.
+    idle: Idle {
+        shift: 0.2,
+        every: 4.0,
+        hold: 0.5,
+        gesture: Angles { lean: -0.12, twist: 0.35, head_dip: 0.3, weapon_arm: -0.35, lead_arm: -0.3, elbow: 0.2, lead_elbow: 0.2, ..STILL },
+    },
     head_dip: [0.25, 0.0, 0.35, 0.0],
     // The claws point at what it goes for.
     held: Held::OnTarget([0.0, 0.3, -0.3, 0.0]),

@@ -51,6 +51,15 @@ pub(super) const REVENANT: Moves = Moves {
     // dragging shamble, the feet hardly lifted.
     stride: 0.6,
     gait: Gait { cadence: 1.0, bob: 0.8, sway: 1.1, arms: 1.0, knees: 0.6 },
+    // Slouching from one foot to the other, and every long while the head lolls forward and the
+    // shoulders slump further, the free arm swinging a little with it: a thing that forgets to
+    // hold itself up.
+    idle: Idle {
+        shift: 0.12,
+        every: 8.0,
+        hold: 1.0,
+        gesture: Angles { head_dip: 0.3, twist: -0.12, lean: -0.08, lead_arm: 0.15, lead_elbow: 0.1, ..STILL },
+    },
     head_dip: [0.25, 0.15, -0.45, -0.15],
     // Dragged: the thumb (and blade) back, the blade trailing low behind. Drawn: straight up
     // over the head, in line with the arm (so the grip turns over on the way up without the

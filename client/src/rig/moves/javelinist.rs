@@ -54,6 +54,14 @@ pub(super) const JAVELINIST: Moves = Moves {
     rests: false,
     stride: 1.0,
     gait: EVEN,
+    // Shifting easily from foot to foot, and now and then hitching the javelin higher on the
+    // shoulder, the elbow working, with a roll of the neck.
+    idle: Idle {
+        shift: 0.14,
+        every: 5.0,
+        hold: 0.35,
+        gesture: Angles { weapon_arm: -0.4, elbow: 0.3, twist: 0.2, head_dip: 0.2, lean: 0.04, ..STILL },
+    },
     head_dip: [0.0, 0.3, -0.15, 0.0],
     // Tipped up a little over the aim carried; cocked, its point dipped toward the target, down
     // to the height it flies at, right over the thrower's middle: it leaves the hand just where

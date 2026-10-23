@@ -221,7 +221,7 @@ pub(super) fn pyre_staff_glow() -> Mesh {
 
 /// Wrapped in near-black: a slim torn tunic, a chest strap of old blood, a shrouded scarf.
 pub(super) fn shade_body() -> Mesh {
-    let cloth = palette::HUNTER;
+    let cloth = palette::SHADE_CLOTH;
     let tunic = tube(
         &smoothed(
             &[
@@ -237,31 +237,32 @@ pub(super) fn shade_body() -> Mesh {
         22,
         (true, true),
     );
-    let strap = belt(0.01, (1.0, 1.06), (0.125, 0.165), palette::OXBLOOD);
+    let strap = belt(0.01, (1.0, 1.06), (0.125, 0.165), palette::SHADE_STRAP);
     let waist = belt(0.01, (0.76, 0.81), (0.13, 0.16), palette::DARK_LEATHER);
-    let scarf = band(1.32, 1.42, 0.1, 10, palette::SHROUD);
+    let scarf = band(1.32, 1.42, 0.1, 10, palette::SHADE_SCARF);
     sculpted(vec![tunic, strap, waist, scarf])
 }
 
-/// No hood at all: a head wrapped skull-tight, a dark half-mask over the face, the wrap's tail
-/// trailing off behind. The small bare head is the shade's silhouette.
+/// No hood at all: a head wrapped skull-tight in ash-grey, a paler band round the brow, a dark
+/// half-mask over the face, the wrap's tail trailing off behind. The small wrapped head is the
+/// shade's silhouette, and the one pale thing on it seen from above.
 pub(super) fn shade_hood() -> Mesh {
-    let cloth = palette::HUNTER;
+    let cloth = palette::SHADE_WRAP;
     let head = tinted(ball(1.0).scaled_by(Vec3::new(0.095, 0.105, 0.095)).translated_by(Vec3::Y * 0.12), cloth);
-    let wrap = band(0.13, 0.17, 0.098, 12, palette::HUNTER_ASH);
+    let wrap = band(0.13, 0.17, 0.098, 12, palette::SHADE_PALE);
     let mask = tinted(ball(1.0).scaled_by(Vec3::new(0.055, 0.045, 0.085)).translated_by(Vec3::new(0.065, 0.07, 0.0)), palette::HUNTER_DARK);
     let tail = sweep(
         &[Vec3::new(-0.07, 0.08, 0.0), Vec3::new(-0.13, -0.08, 0.02), Vec3::new(-0.15, -0.24, 0.03)],
         &[0.035, 0.025, 0.0],
         5,
-        palette::HUNTER_ASH,
+        cloth,
     );
     sculpted(vec![head, wrap, mask, tail])
 }
 
-/// The knife arm, wrapped forearm to shoulder.
+/// The knife arm, wrapped forearm to shoulder, the wraps paler toward the wrist.
 pub(super) fn shade_arm() -> (Mesh, Mesh) {
-    sleeved_arm(palette::HUNTER, palette::HUNTER_ASH, palette::HUNTER, palette::LEATHER)
+    sleeved_arm(palette::SHADE_CLOTH, palette::SHADE_WRAP, palette::SHADE_PALE, palette::LEATHER)
 }
 
 /// The lead arm holds its knife reversed: the same arm, the blade running down past the fist.

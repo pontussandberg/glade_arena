@@ -80,6 +80,15 @@ pub mod palette {
     pub const HUNTER: Color = Color::srgb_u8(0x1A, 0x1E, 0x1C);
     pub const HUNTER_DARK: Color = Color::srgb_u8(0x0D, 0x10, 0x0F);
     pub const HUNTER_ASH: Color = Color::srgb_u8(0x3A, 0x3E, 0x3C);
+    /// The shade's: a tunic of cold near-black with a breath of green in it, the ash grey of
+    /// the wraps on its arms and head, the paler band round its brow (what's seen of it from
+    /// above), a dusk-purple scarf, and a chest strap of old blood not yet gone black. Dark, but
+    /// lit: a figure, not a hole in the ground.
+    pub const SHADE_CLOTH: Color = Color::srgb_u8(0x2C, 0x34, 0x30);
+    pub const SHADE_WRAP: Color = Color::srgb_u8(0x58, 0x5E, 0x58);
+    pub const SHADE_PALE: Color = Color::srgb_u8(0x84, 0x8A, 0x84);
+    pub const SHADE_SCARF: Color = Color::srgb_u8(0x5E, 0x52, 0x74);
+    pub const SHADE_STRAP: Color = Color::srgb_u8(0x62, 0x22, 0x26);
     /// Old blood gone black-brown: the executioner's leather apron and the rag on its spear.
     pub const OXBLOOD: Color = Color::srgb_u8(0x33, 0x1D, 0x1B);
     /// Pale, cold bone: the death hunter's bandana, faded.
@@ -359,7 +368,7 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
         },
         "shade" => {
             let (offhand, offhand_forearm) = shade_offhand();
-            rig(shade_arm(), Some((offhand, Some(offhand_forearm))), booted_leg(palette::HUNTER, palette::DARK_LEATHER, 0.075, 0.062), shade_hood(), shade_knife(), spectral_eyes(Vec2::ONE), palette::HEATHER)
+            rig(shade_arm(), Some((offhand, Some(offhand_forearm))), booted_leg(palette::SHADE_CLOTH, palette::DARK_LEATHER, 0.075, 0.062), shade_hood(), shade_knife(), spectral_eyes(Vec2::ONE), palette::HEATHER)
         }
         "breaker" => rig(breaker_arm(), None, booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.095, 0.078), breaker_helm(), maul(), slit_eyes(BREAKER_EYES), palette::TORCH_LIGHT),
         "stormweaver" => RigMeshes {

@@ -47,6 +47,14 @@ pub(super) const PYRE_WITCH: Moves = Moves {
     // A swaying glide, both hands on the staff.
     stride: 1.0,
     gait: Gait { cadence: 1.0, bob: 0.6, sway: 1.4, arms: 0.0, knees: 0.7 },
+    // Swaying gently from foot to foot, and now and then lifting the staff up before her, the
+    // ember held high and tipped back over her, her face raised to look into it.
+    idle: Idle {
+        shift: 0.12,
+        every: 5.0,
+        hold: 0.7,
+        gesture: Angles { weapon_arm: 0.4, elbow: 0.35, tip: -0.35, head_dip: -0.25, lean: 0.05, ..STILL },
+    },
     // Looking down into the bow, up after the fire.
     head_dip: [0.0, 0.35, -0.3, -0.2],
     // Tipped a little forward in the cradle; laid nearly flat back as it swings behind, the

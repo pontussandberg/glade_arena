@@ -50,6 +50,14 @@ pub(super) const STORMWEAVER: Moves = Moves {
     // A light, quick walk, both hands on the staff.
     stride: 1.0,
     gait: Gait { cadence: 1.1, bob: 0.7, sway: 0.8, arms: 0.0, knees: 1.0 },
+    // Standing nearly still, and every so often lifting her face to the sky, the staff raised
+    // a little with it, the body arching back a touch.
+    idle: Idle {
+        shift: 0.1,
+        every: 6.5,
+        hold: 0.8,
+        gesture: Angles { head_dip: -0.4, lean: 0.1, weapon_arm: 0.2, tip: 0.08, ..STILL },
+    },
     // Face to the sky, then down at the target.
     head_dip: [0.0, -0.35, 0.3, -0.2],
     // Upright; tipped a little back over the head; whipped far forward, pointing down the aim;

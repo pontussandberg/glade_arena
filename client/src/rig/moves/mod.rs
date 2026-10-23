@@ -39,7 +39,8 @@ pub(crate) struct Moves {
     pub(super) elbow: [f32; 4],
     pub(super) elbow_turn: [f32; 4],
     /// The weapon arm's swing turned in across the body (keyframes, on top of `swing_yaw`).
-    /// These three only move once the strike has gone off (`contact`).
+    /// This only moves once the strike has gone off (`contact`): a cross-cut's follow-through
+    /// (and a thrower's elbow folds in only then too).
     pub(super) arm_yaw: [f32; 4],
     /// The weapon arm goes right round with each strike (a windmill: up behind, over the top,
     /// down ahead and on round back to the carry), rather than back the way it came.
@@ -77,6 +78,8 @@ pub(crate) struct Moves {
     pub(super) stride: f32,
     /// How it walks, beyond its stride: its own cadence, bob, sway and swing.
     pub(crate) gait: Gait,
+    /// How it fidgets standing still.
+    pub(crate) idle: Idle,
     pub(super) head_dip: [f32; 4],
     pub(super) held: Held,
     // (The fourth keyframe of each is the class's Q pose: a nova's slam. A dash has none.)
@@ -130,6 +133,53 @@ pub(crate) struct Gait {
 
 /// The plain walk.
 pub(super) const EVEN: Gait = Gait { cadence: 1.0, bob: 1.0, sway: 1.0, arms: 1.0, knees: 1.0 };
+
+/// Standing still, how a figure fidgets on top of its breathing (`pose_rigs`), so no one stands
+/// like a statue, and each stands like itself. All the while its weight shifts slowly from foot
+/// to foot: each knee gives in turn by `shift` (radians: small, or the foot visibly lifts) as the
+/// body settles over the other foot (`SHIFT_SWAY`). And every `every` seconds (each figure on
+/// its own beat) it makes `gesture` of itself, the angles added to its carry (a hitch of the maul
+/// up on the shoulder, a glance over the shoulder, a tap of the staff), held `hold` seconds
+/// before it's let go of.
+pub(crate) struct Idle {
+    pub(crate) shift: f32,
+    pub(crate) every: f32,
+    pub(crate) hold: f32,
+    pub(crate) gesture: Angles,
+}
+
+/// How long (seconds) a gesture takes to make, and to let go of.
+const GESTURE_RISE: f32 = 0.4;
+const GESTURE_FALL: f32 = 0.7;
+/// How fast the weight shifts from foot to foot (radians per second: a slow rocking), and how
+/// far the body sways over the standing foot with it (radians per radian of the knees' give).
+const SHIFT_RATE: f32 = 0.9;
+const SHIFT_SWAY: f32 = 0.35;
+
+impl Idle {
+    /// The fidget at `now` (seconds), for the figure with `seed` (which sets its own beat),
+    /// `amount` (0 to 1) of the way into standing still: what to add to its angles.
+    pub(crate) fn at(&self, now: f32, seed: u32, amount: f32) -> Angles {
+        let beat = (seed as f32 * 0.37).fract();
+        let t = now + beat * self.every;
+        let rocking = (t * SHIFT_RATE + beat * std::f32::consts::TAU).sin();
+        let since = t.rem_euclid(self.every);
+        let making = ease(0.0, GESTURE_RISE, since) * (1.0 - ease(GESTURE_RISE + self.hold, GESTURE_RISE + self.hold + GESTURE_FALL, since));
+        self.posed(making, rocking, amount)
+    }
+
+    /// The fidget `making` (0 to 1) of the way into its gesture, its weight `rocking` (-1 to 1,
+    /// the lead knee giving at 1) from foot to foot, `amount` of the way into standing still.
+    pub(crate) fn posed(&self, making: f32, rocking: f32, amount: f32) -> Angles {
+        let mut fidget = STILL;
+        fidget.add(&self.gesture, making * amount);
+        // One knee giving as the other straightens, the hips over the straight one.
+        fidget.lead_knee += self.shift * (0.5 + 0.5 * rocking) * amount;
+        fidget.back_knee += self.shift * (0.5 - 0.5 * rocking) * amount;
+        fidget.sway += SHIFT_SWAY * self.shift * rocking * amount;
+        fidget
+    }
+}
 
 /// How the weapon sits in the hand.
 pub(crate) enum Held {
