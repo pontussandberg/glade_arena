@@ -167,6 +167,7 @@ fn sound_of(fx: &Fx, sounds: &mut crate::audio::SoundQueue, me: &Query<&Pos, Wit
         FxKind::Blast(FxColor::Fire) => (Sfx::Explosion, 34.0, 0.0),
         FxKind::Meteor => (Sfx::Explosion, 44.0, lands),
         FxKind::Blast(FxColor::Storm) => (Sfx::Thunder, 44.0, 0.0),
+        FxKind::Blast(FxColor::Frost) => (Sfx::Shatter, 24.0, 0.0),
         FxKind::Bolt => (Sfx::Thunder, 44.0, lands),
         FxKind::Coins => (Sfx::Coin, 16.0, 0.0),
         FxKind::Wallop => (Sfx::Wallop, 22.0, 0.0),

@@ -63,7 +63,13 @@ pub(super) fn show_novas(
             let Some(AbilityKind::Nova(def)) = class.def().ability(slot).map(|ability| ability.kind) else { continue };
             let Some(nova) = visuals.novas.get(&(*class, slot)).cloned() else { continue };
             if let Ok(my) = me.single() {
-                sounds.push(crate::audio::Sfx::Slam, 0.8 * crate::audio::earshot(pos.0.distance(my.0), 18.0));
+                // A nova sounds like what the caster brings up out of the ground.
+                let sfx = match class.def().figure() {
+                    "frost_mage" => crate::audio::Sfx::FrostNova,
+                    "pyre_witch" => crate::audio::Sfx::FireNova,
+                    _ => crate::audio::Sfx::Slam,
+                };
+                sounds.push(sfx, 0.8 * crate::audio::earshot(pos.0.distance(my.0), 18.0));
             }
             burst_nova(&mut commands, &time, &mut visuals, &mut materials, id.0, pos.0, def.radius, nova);
         }

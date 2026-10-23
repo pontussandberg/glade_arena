@@ -9,9 +9,9 @@ use super::*;
 use crate::arena::{RIG_ELBOW, RIG_HAND};
 
 pub(super) const PYRE_WITCH: Moves = Moves {
-    // At her side; swung back and low behind her; scooped up and forward, high at the end;
-    // brought down for the ring.
-    weapon_arm: [0.3, -1.1, 1.7, 0.75],
+    // At her side; swung back and low behind her; scooped up and forward, the hand high at the
+    // end; brought down for the ring.
+    weapon_arm: [0.3, -1.0, 1.75, 0.75],
     weapon_arm_untwist: 0.3,
     elbow_at: RIG_ELBOW,
     hand_at: RIG_HAND,
@@ -32,16 +32,17 @@ pub(super) const PYRE_WITCH: Moves = Moves {
     twist: [0.0, -0.55, 0.5, 0.15],
     // Bowed down over the staff behind her, then rising up and a touch back as the fire goes;
     // crouched for the ring.
-    lean: [0.0, -0.3, 0.1, -0.35],
+    lean: [0.0, -0.35, 0.15, -0.35],
     standing_lean: 0.0,
     standing_arm: 0.0,
     rests: false,
     stride: 1.0,
     // Looking down into the bow, up after the fire.
-    head_dip: [0.0, 0.3, -0.2, -0.2],
-    // Upright at her side; tipped back as it swings behind; tipped far forward over the toss,
-    // the crystal leading the fire out; planted for the ring.
-    held: Held::Upright([0.08, -0.5, 1.1, -0.05]),
+    head_dip: [0.0, 0.35, -0.3, -0.2],
+    // Upright at her side; laid nearly flat back as it swings behind, the ember down by the
+    // ground (the scoop); swung up through the toss to lean forward over it, the ember high,
+    // the fire thrown up and out; planted for the ring.
+    held: Held::Upright([0.08, -1.25, 0.95, -0.05]),
     throws: false,
     scale: 1.05,
     stretch: 0.0,

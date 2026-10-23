@@ -41,13 +41,24 @@ const BIG_BLADE_LIFT: f32 = 0.09;
 const CHAIN_HOLD: f32 = 0.15;
 
 /// How far into each of its poses a rig is (0 to 1 each, layered in this order): drawn back,
-/// struck (released), and its Q pose.
+/// struck (released), and its Q pose. `second` is the lead arm's own strike: the same as
+/// `throw`, except for a figure that cuts twice (`AttackDef::twice`), whose off hand strikes a
+/// beat behind the other.
 #[derive(Clone, Copy, Default, Debug)]
 pub(crate) struct Phase {
     pub(crate) draw: f32,
     pub(crate) throw: f32,
     pub(crate) dashing: f32,
+    pub(crate) second: f32,
 }
+
+/// How much of the draw (0 to 1) is done by `Moves::draw_end`: the rest creeps on through the
+/// hold, so a fighter at full draw keeps coiling instead of freezing until the strike.
+const COIL: f32 = 0.84;
+/// How many ticks before the second cut lands its arm whips through, and how long after it's
+/// held and then let go.
+const SECOND_CUT_TICKS: f32 = 1.6;
+const SECOND_CUT_HOLD: (f32, f32) = (0.6, 3.6);
 
 impl Phase {
     /// A joint's angle from its keyframes (carrying, drawn back, released, Q).
@@ -122,7 +133,7 @@ pub(crate) fn targets(moves: &Moves, phase: Phase, step: f32, walking: f32) -> A
         lean: pose(moves.lean) + stand,
         // A weapon resting on the ground keeps its arm still as it walks: only the bob moves it.
         weapon_arm: pose([carry, drawn, released, dash]) - step * ARM_SWING * if moves.rests { 0.0 } else { 0.3 } - stand + moves.standing_arm * still,
-        lead_arm: pose(moves.lead_arm) + step * ARM_SWING - stand,
+        lead_arm: Phase { throw: phase.second, ..phase }.pose(moves.lead_arm) + step * ARM_SWING - stand,
         back_leg: pose(moves.back_leg) + (middle - moves.back_leg[0]) * gait - legs,
         lead_leg: pose(moves.lead_leg) + (middle - moves.lead_leg[0]) * gait + legs,
         back_knee: pose(moves.back_knee),
@@ -292,14 +303,34 @@ pub(crate) fn ahead_of_springs(class: ClassId, moves: &Moves, windup: Option<Swi
 }
 
 /// Where in its attack a fighter of `class` posed by `moves` is at `now` (a fractional tick):
-/// (draw, throw, smear) for its `windup` in progress (if any), or the attack that went off
-/// `released` ticks ago (at normal attack speed). Draw: drawing back (0..1), held there, then
-/// striking during the windup, up to the contact pose as the attack goes off; then the rest of
-/// the strike, and the follow-through easing back to carrying. Smear: how far the weapon is
-/// stretched out (0..1), longest as the strike is done.
-pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, windup: Option<Swing>, released: Option<f32>, now: f32) -> (f32, f32, f32) {
+/// (draw, throw, smear, second) for its `windup` in progress (if any), or the attack that went
+/// off `released` ticks ago (at normal attack speed). Draw: drawing back (0..1), most of it by
+/// `Moves::draw_end` and the rest creeping on through the hold (`COIL`), then striking during
+/// the windup, up to the contact pose as the attack goes off; then the rest of the strike, and
+/// the follow-through easing back to carrying. Smear: how far the weapon is stretched out
+/// (0..1), longest as the strike is done. Second: the off hand's cut, for a figure that cuts
+/// twice, whipping through as the server's second cut lands (`Phase::second`).
+pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, windup: Option<Swing>, released: Option<f32>, now: f32) -> (f32, f32, f32, f32) {
     let def = class.def();
     let strike_ticks = |swing: &Swing| (moves.strike_ticks / swing.speed(&def.attack)).min(swing.windup_ticks(&def.attack) as f32 * (1.0 - moves.draw_end));
+    // The draw: quick to `COIL` of it by `draw_end`, the rest through the hold until the strike
+    // begins (a short windup with no hold just draws).
+    let drawing = |windup: &Swing, progress: f32| {
+        let strike_from = 1.0 - strike_ticks(windup) / windup.windup_ticks(&def.attack) as f32;
+        if strike_from > moves.draw_end + 0.05 {
+            COIL * ease(0.0, moves.draw_end, progress) + (1.0 - COIL) * ease(moves.draw_end, strike_from, progress)
+        } else {
+            ease(0.0, moves.draw_end, progress)
+        }
+    };
+    // The off hand's cut, `twice` ticks after the first (in the attack's own time).
+    let second_cut = |since: f32| match def.attack.twice {
+        Some(gap) => {
+            let at = gap as f32 * attack.swing.map_or(1.0, |swing| swing.backswing_speed(&def.attack));
+            ease_out(at - SECOND_CUT_TICKS, at, since) * (1.0 - ease(at + SECOND_CUT_HOLD.0, at + SECOND_CUT_HOLD.1, since))
+        }
+        None => f32::NAN,
+    };
     // A melee windup picks up from how much of the last strike's follow-through was left when
     // it started (1: still fully held; 0: settled back to carrying): the blade comes from
     // there straight into the draw, never sinking further toward carrying.
@@ -319,9 +350,11 @@ pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, 
             // carries only ever shrinks, from what it was when the windup began.
             let follow = follow_left(&windup);
             let held = follow * (1.0 - ease(CHAIN_HOLD, moves.draw_end, progress));
-            let carrying = (1.0 - follow) * (1.0 - ease(0.0, moves.draw_end, progress));
+            let carrying = (1.0 - follow) * (1.0 - drawing(&windup, progress));
             let draw = if held < 1.0 { 1.0 - carrying / (1.0 - held) } else { 1.0 };
-            (draw, strike.max(held), strike.powi(3))
+            let throw = strike.max(held);
+            let second = if def.attack.twice.is_some() { 0.0 } else { throw };
+            (draw, throw, strike.powi(3), second)
         }
         (None, Some(since)) => {
             let striking = attack.swing.map_or(moves.strike_ticks, |swing| strike_ticks(&swing));
@@ -339,9 +372,11 @@ pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, 
             // A throw goes off early in the strike: on from the draw as it goes, the draw only
             // easing out with the rest as it settles back to carrying.
             let draw = if moves.throws { follow } else { 0.0 };
-            (draw, strike.min(follow), smear)
+            let throw = strike.min(follow);
+            let second = second_cut(since);
+            (draw, throw, smear, if second.is_nan() { throw } else { second })
         }
-        (None, None) => (0.0, 0.0, 0.0),
+        (None, None) => (0.0, 0.0, 0.0, 0.0),
     }
 }
 

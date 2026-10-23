@@ -86,6 +86,11 @@ impl Plugin for RigPlugin {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Posing;
 
+/// How many feet a fighter has put down (one every half stride, as it walks): the footsteps
+/// sound off it (`audio::footstep_sounds`).
+#[derive(Component, Default, PartialEq, Eq)]
+pub(crate) struct Footfalls(pub(crate) u32);
+
 /// A fighter flinching from a blow (`feedback` sets it on each confirmed hit): squashed, then
 /// springing back over `SQUASH_SECONDS`.
 #[derive(Component)]
@@ -126,6 +131,22 @@ const TURN_RATE: f32 = 40.0;
 const WALK_RATE: f32 = 10.0;
 /// How brightly the eyes (and other glowing parts) glow.
 const EYE_GLOW: f32 = 6.0;
+/// Standing still, a fighter breathes: how fast (radians per second), how far it rocks (radians)
+/// and rises (meters, at size 1) with each breath.
+const BREATH_RATE: f32 = 1.5;
+const BREATH_LEAN: f32 = 0.014;
+const BREATH_RISE: f32 = 0.005;
+/// Dashing, a fighter throws itself into a lunge: how quickly it goes into it and comes out (per
+/// second, exponential), how far it leans into it (radians), how far its legs split, and how far
+/// its arms trail back.
+const GLIDE_RATE: f32 = 14.0;
+const DASH_LEAN: f32 = 0.35;
+const DASH_STRIDE: f32 = 0.45;
+const DASH_ARMS: f32 = 0.5;
+/// Knocked off its feet, a fighter staggers: how far back it's thrown (radians) and how far its
+/// arms fly up, at the top of the knock-up.
+const STAGGER_LEAN: f32 = 0.5;
+const STAGGER_ARMS: f32 = 0.7;
 
 /// How brightly a weapon's aura glows (its cracks of light).
 const AURA_GLOW: f32 = 9.0;
@@ -205,6 +226,8 @@ pub(crate) struct Rig {
     drips: (f32, u32),
     /// How far its weapon is grown, empowered by its attack's `follow_up` (0..1, eased).
     empowered: f32,
+    /// How far into its dashing lunge it is (0..1, eased).
+    glide: f32,
     joints: Joints,
 }
 
@@ -283,6 +306,7 @@ fn add_rigs(
             backswing: None,
             drips: (0.0, 0),
             empowered: 0.0,
+            glide: 0.0,
             joints: Joints::default(),
         };
         let eyes = part(&handles.eyes, &assets.eye_glow, Vec3::ZERO);
@@ -334,6 +358,7 @@ fn add_rigs(
             Facing { look: if shopkeeper { map.map().shop_faces } else { Vec2::X }, last_pos: pos.0, moved: Vec2::ZERO, turned: 0.0, dash_seen: None, steady: None },
             HeldAt::default(),
             SeenThrows::default(),
+            Footfalls::default(),
         ));
     }
 }
@@ -412,18 +437,27 @@ fn pose_rigs(
         Option<&SeenThrows>,
         Has<Me>,
         Option<&HitSquash>,
+        &mut Footfalls,
+        Option<&Chilled>,
     )>,
     mut parts: Query<(&mut Transform, &mut Visibility), Without<Rig>>,
 ) {
     let ease_walk = rate(&time, WALK_RATE);
     let dt = time.delta_secs().min(0.1);
     let wall_clock = time.elapsed_secs();
-    for (mut rig, facing, mut body, mut held_at, class, attack, (cooldowns, dashing), seen, is_me, squash) in &mut rigs {
+    for (mut rig, facing, mut body, mut held_at, class, attack, (cooldowns, dashing), seen, is_me, squash, mut footfalls, chilled) in &mut rigs {
         let rig = &mut *rig;
-        // Dashing, it glides along in its pose without a stride.
+        // Dashing, it glides along in its pose without a stride, thrown into a lunge.
         let gliding = dashing.0.is_some();
-        if !gliding {
+        rig.glide += (if gliding { 1.0 } else { 0.0 } - rig.glide) * rate(&time, GLIDE_RATE);
+        // A jump (a spawn, a waygate, a correction) is no stride at all.
+        if !gliding && facing.moved.length() < arena_shared::config::JUMP {
+            let before = rig.stride;
             rig.stride += facing.moved.length() * STRIDES_PER_METER;
+            // A foot comes down every half stride (the legs pass each other there).
+            if (before * 2.0).floor() != (rig.stride * 2.0).floor() {
+                footfalls.0 += 1;
+            }
         }
         let is_walking = if facing.moved.length() > 0.001 && !gliding { 1.0 } else { 0.0 };
         let walking = rig.walking + (is_walking - rig.walking) * ease_walk;
@@ -470,7 +504,7 @@ fn pose_rigs(
         let blade = 1.0 + (EMPOWERED_BLADE - 1.0) * rig.empowered;
         let stretch = moves.stretch + if empowering { EMPOWERED_STRETCH } else { 0.0 };
         let (posed_windup, posed_released, ahead) = ahead_of_springs(*class, moves, windup, released, now);
-        let (mut draw, mut throw, mut smear) = strike_phase(*class, moves, attack, posed_windup, posed_released, ahead);
+        let (mut draw, mut throw, mut smear, mut second) = strike_phase(*class, moves, attack, posed_windup, posed_released, ahead);
         // Walking off (or dashing off, after it went off) once the attack has gone off cuts its
         // backswing short, for good: the follow-through blends out quickly into the walk.
         let cut = match (windup, attack.released_at) {
@@ -489,6 +523,7 @@ fn pose_rigs(
         draw *= 1.0 - cut;
         throw *= 1.0 - cut;
         smear *= 1.0 - cut;
+        second *= 1.0 - cut;
         // A dash has no pose of its own; a nova's slam is the ability pose. A thrower's flick
         // goes only so far through the throw (`FLICK_REACH`), short of its spent follow-through.
         let mut dashing = 0.0;
@@ -504,7 +539,7 @@ fn pose_rigs(
             }
         }
         let throw = throw.max(flick);
-        let phase = Phase { draw, throw, dashing };
+        let phase = Phase { draw, throw, dashing, second };
         // A thrown weapon: the hand is empty from a throw until the next attack is ready (its
         // backswing at normal speed, as `released` counts), when a new one is drawn.
         let rearm = (def.attack.period_ticks(1.0) - def.attack.windup_ticks(1.0)) as f32;
@@ -529,17 +564,35 @@ fn pose_rigs(
             _ => None,
         };
 
-        // Every angle chases its pose on a spring, and the rig is put together from them.
-        let angles = rig.joints.follow(&targets(moves, phase, step, rig.walking), dt, moves);
+        // Every angle chases its pose on a spring, and the rig is put together from them. On
+        // top of its moves: standing still it breathes (rocking and rising a little, each
+        // fighter on its own beat); dashing it lunges, leaning into it with its arms trailing
+        // and its legs split; knocked off its feet it staggers back, arms flung up.
+        let mut target = targets(moves, phase, step, rig.walking);
+        let free = 1.0 - phase.braced();
+        let breathing = (1.0 - rig.walking) * free * (1.0 - rig.glide);
+        let breath = (wall_clock * BREATH_RATE + (rig.gleaming.seed as f32 * 0.37).fract() * TAU).sin() * breathing;
+        let lunge = rig.glide * free;
+        let stagger = chilled.map_or(0.0, |chilled| {
+            let span = chilled.lifted;
+            if span.covers(now) { ((now - span.from as f32) / (span.until - span.from).max(1) as f32 * std::f32::consts::PI).sin() } else { 0.0 }
+        });
+        target.lean += BREATH_LEAN * breath - DASH_LEAN * lunge + STAGGER_LEAN * stagger;
+        target.head_dip += 0.4 * BREATH_LEAN * breath - 0.12 * lunge - 0.3 * stagger;
+        target.lead_leg += DASH_STRIDE * lunge;
+        target.back_leg -= DASH_STRIDE * lunge;
+        target.lead_arm += STAGGER_ARMS * stagger - DASH_ARMS * lunge;
+        target.weapon_arm += 0.6 * STAGGER_ARMS * stagger - DASH_ARMS * lunge * if moves.rests { 0.3 } else { 1.0 };
+        let angles = rig.joints.follow(&target, dt, moves);
         let aimed = targets(moves, phase, 0.0, rig.walking);
-        let walk = rig.walking * (1.0 - phase.braced());
-        let posed = assemble(moves, &angles, &aimed, facing.look, stride, walk, stretch * smear, blade, 1.0 - phase.braced());
+        let walk = rig.walking * free;
+        let posed = assemble(moves, &angles, &aimed, facing.look, stride, walk, stretch * smear, blade, free);
         // Just hit, the whole figure flinches: squashed wide and short, springing back over
         // `SQUASH_SECONDS`, so a blow visibly lands in the body and not just on the health bar.
         let flinch = squash.map_or(0.0, |s| (1.0 - (wall_clock - s.at) / SQUASH_SECONDS).clamp(0.0, 1.0).powi(2));
         let squashed = Vec3::new(1.0 + 0.12 * flinch, 1.0 - 0.16 * flinch, 1.0 + 0.12 * flinch);
         let placed = Transform {
-            translation: body.translation.with_y(posed.body.translation.y * rig.size),
+            translation: body.translation.with_y((posed.body.translation.y + BREATH_RISE * (0.5 + 0.5 * breath) * breathing) * rig.size),
             scale: posed.body.scale * rig.size * squashed,
             ..posed.body
         };
@@ -658,8 +711,8 @@ mod tests {
                         break pose_releasing(class, moves, &attack, &joints, back, release as f32, 0.0, (Vec2::X, 0.0, 0.0, 0.0));
                     }
                     let (shown, shown_released, ahead) = ahead_of_springs(class, moves, attack.winding_up(), None, now);
-                    let (draw, throw, _) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
-                    joints.follow(&targets(moves, Phase { draw, throw, dashing: 0.0 }, 0.0, 0.0), dt, moves);
+                    let (draw, throw, _, second) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
+                    joints.follow(&targets(moves, Phase { draw, throw, dashing: 0.0, second }, 0.0, 0.0), dt, moves);
                 };
                 let placed = Transform { translation: Vec3::new(3.0, leave.body.translation.y, -2.0), ..leave.body };
                 // The held spear as its parts (fighter, arm, elbow, spear) draw it.

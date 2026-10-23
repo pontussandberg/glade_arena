@@ -42,13 +42,15 @@ pub(super) const SHADE: Moves = Moves {
     held: Held::Gripped { wrist: [-0.9, -0.6, 0.3, 0.0], roll: [0.0; 4] },
     throws: false,
     scale: 0.95,
-    stretch: 0.08,
+    // A knife is short: it smears well out as the cut lands, so the cut is seen at all.
+    stretch: 0.18,
     // No windup to speak of: a short coil and a flick.
     draw_end: 0.3,
     strike_ticks: 1.5,
     heavy: false,
-    // The follow-through quick too: the knives come straight back to the crouch.
-    follow_through: (1.0, 4.5),
+    // The body turns back out of the first cut as the off hand makes the second
+    // (`AttackDef::twice`), and is back in the crouch just after it.
+    follow_through: (1.0, 5.5),
     // Loose, quick joints with a little snap in them.
     stiffness: 44.0,
     damping: 0.8,

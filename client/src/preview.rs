@@ -259,7 +259,7 @@ fn preview_cloth_on_arm() {
     let width = SIZE * views.len();
     let mut image = vec![[200u8, 204, 200]; width * SIZE * 2];
     for (row, draw) in [0.0, 1.0].into_iter().enumerate() {
-        let phase = Phase { draw, throw: 0.0, dashing: 0.0 };
+        let phase = Phase { draw, throw: 0.0, dashing: 0.0, second: 0.0 };
         let angles = targets(moves, phase, 0.0, 0.0);
         let posed = assemble(moves, &angles, &angles, Vec2::X, 0.0, 0.0, 0.0, 1.0, 1.0 - phase.braced());
         let cloth = crate::cloth::settled(&wardrobe, &posed, 2.0);
@@ -363,7 +363,7 @@ fn preview_impact() {
     let key = "revenant";
     let class = ClassId::by_key(key).unwrap();
     let moves = moves(key);
-    let landed = targets(moves, Phase { draw: 0.0, throw: 1.0, dashing: 0.0 }, 0.0, 0.0);
+    let landed = targets(moves, Phase { draw: 0.0, throw: 1.0, dashing: 0.0, second: 1.0 }, 0.0, 0.0);
     // Plain, and empowered (`follow_up`): the blade grown, smeared out at its longest.
     for empowered in [false, true] {
     let (smear, blade) = if empowered { (moves.stretch + EMPOWERED_STRETCH, EMPOWERED_BLADE) } else { (0.0, 1.0) };
@@ -441,10 +441,13 @@ fn preview_attacks() {
 
     let dir = std::env::var("PREVIEW_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
     const PER_SHEET: usize = 6;
-    for key in ["revenant", "javelinist", "frost_mage"] {
+    // One class, or every playable one and the zombie.
+    let only = std::env::var("PREVIEW_CLASS").ok();
+    let keys: Vec<&str> = ClassId::all().map(|c| c.def().figure()).filter(|k| only.as_deref().is_none_or(|o| o == *k)).collect::<std::collections::BTreeSet<_>>().into_iter().filter(|k| *k != "merchant").collect();
+    for key in keys {
         let class = ClassId::by_key(key).unwrap();
         let moves = moves(key);
-        let length = if key == "revenant" { arena::BLADE_LENGTH } else { 1.0 };
+        let length = arena::blade_span(key).1;
         let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false };
         let (windup, period) = (swing.windup_ticks(&class.def().attack) as f32, swing.ticks(&class.def().attack) as f32);
         let release = 10.0 + windup;
@@ -453,7 +456,7 @@ fn preview_attacks() {
             .into_iter()
             .map(|(n, t)| (n.to_string(), t))
             .chain([0.25, 0.5, 0.65, 0.8, 0.92].map(|f| (format!("windup {:.0}%", f * 100.0), 10.0 + windup * f)))
-            .chain([0.0, 1.0, 2.0, 3.0, 5.0, 9.0].map(|t| (format!("release +{t}"), release + t)))
+            .chain([0.0, 1.0, 2.5, 4.0, 5.5, 9.0].map(|t| (format!("release +{t}"), release + t)))
             .collect();
         let views = [Vec3::Z, Vec3::new(1.0, 0.3, 0.7), Vec3::new(-0.4, 0.5, 1.0), crate::camera::OFFSET];
         let width = SIZE * PER_SHEET;
@@ -476,8 +479,8 @@ fn preview_attacks() {
             }
             let released = attack.released_at.map(|at| now - at as f32);
             let (shown, shown_released, ahead) = ahead_of_springs(class, moves, attack.winding_up(), released, now);
-            let (draw, throw, smear) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
-            let phase = Phase { draw, throw, dashing: 0.0 };
+            let (draw, throw, smear, second) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
+            let phase = Phase { draw, throw, dashing: 0.0, second };
             let angles = joints.follow(&targets(moves, phase, 0.0, 0.0), dt, moves);
             // The blade's point every frame through the strike, to catch it jumping sideways.
             if std::env::var_os("PREVIEW_TRACE").is_some() && key == "revenant" && now > release - 4.0 && now < release + 3.0 {

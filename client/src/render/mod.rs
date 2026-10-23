@@ -337,13 +337,13 @@ fn add_visuals(
     mut commands: Commands,
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    players: Query<(Entity, &PlayerId, &ClassId, &Pos, Option<&Elite>), Without<Mesh3d>>,
+    players: Query<(Entity, &PlayerId, &ClassId, &Pos, Option<&Elite>, Option<&Cooldowns>), Without<Mesh3d>>,
     projectiles: Query<(Entity, &Projectile, &Pos), Without<Mesh3d>>,
     me: Query<&PlayerId, With<Me>>,
 ) {
     // Wait until we know which player is ours, so colors are right from the first frame.
     let Ok(me) = me.single() else { return };
-    for (entity, id, class, pos, elite) in &players {
+    for (entity, id, class, pos, elite, cooldowns) in &players {
         let is_me = id.0 == me.0;
         let material = visuals.material(&mut materials, id.0, Look::Body);
         // A borrowed figure in its own colors.
@@ -383,7 +383,7 @@ fn add_visuals(
                 Mesh3d(visuals.fighters[class].clone()),
                 MeshMaterial3d(material),
                 Transform::from_translation(to_world(pos.0, 0.0)),
-                SeenCasts::default(),
+                SeenCasts::seen(cooldowns),
                 Frost { prison, rune, shown: (false, false) },
                 tint,
             ))

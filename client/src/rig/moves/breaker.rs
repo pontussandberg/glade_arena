@@ -7,14 +7,13 @@
 
 use super::*;
 
-use std::f32::consts::FRAC_PI_2;
-
 use crate::arena::{RIG_ELBOW, RIG_HAND};
 
 pub(super) const BREAKER: Moves = Moves {
-    // Hanging a little forward with the maul low; out level behind as the body winds up; held
-    // level through the sweep; brought down for the quake.
-    weapon_arm: [0.4, 1.25, 1.35, 0.7],
+    // Hanging forward with the maul's head low in front of him; swung out to hip height as the
+    // body winds up, and held there through the sweep (the twist does the sweeping, at the
+    // hip, where a maul goes through a man); brought down for the quake.
+    weapon_arm: [0.45, 0.95, 1.05, 0.7],
     // The arm turns with the chest: the twist is the sweep.
     weapon_arm_untwist: 0.0,
     elbow_at: RIG_ELBOW,
@@ -44,10 +43,10 @@ pub(super) const BREAKER: Moves = Moves {
     // Heavy, short steps.
     stride: 0.65,
     head_dip: [0.1, 0.1, -0.2, -0.3],
-    // Carried: the head down and forward off the hanging arm. Wound up and swept: the haft in
-    // line with the level arm, the head out at the end of it. Quake: angled down off the lowered
-    // arm.
-    held: Held::Gripped { wrist: [0.6, FRAC_PI_2, FRAC_PI_2, 0.3], roll: [0.0; 4] },
+    // Carried: the head down and forward off the hanging arm, just off the ground. Wound up and
+    // swept: the wrist cocked so the haft lies level out from the hip, the head out at the end
+    // of it. Quake: angled down off the lowered arm.
+    held: Held::Gripped { wrist: [0.8, 0.95, 1.0, 0.3], roll: [0.0; 4] },
     throws: false,
     scale: 1.15,
     // The head smears out a little along the sweep as it lands.

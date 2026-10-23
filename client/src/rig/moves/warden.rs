@@ -44,16 +44,16 @@ pub(super) const WARDEN: Moves = Moves {
     // Short, heavy, armored steps.
     stride: 0.85,
     head_dip: [0.05, 0.12, -0.15, -0.3],
-    // Carried: the point low and forward from the hanging arm. Cocked: the blade bent up level,
-    // pointed at the target past the hip. Thrust: in line with the straight arm. Slam: the blade
-    // angled down with the raised arm.
-    held: Held::Gripped { wrist: [1.0, 0.75, FRAC_PI_2, 0.4], roll: [0.0; 4] },
+    // Carried: the point low and forward from the hanging arm. Cocked: the wrist turned right
+    // over so the blade lies level at the hip, pointed at the target over the shield's rim.
+    // Thrust: in line with the straight arm. Slam: the blade angled down with the raised arm.
+    held: Held::Gripped { wrist: [1.0, -0.9, FRAC_PI_2, 0.4], roll: [0.0; 4] },
     throws: false,
     scale: 1.08,
     // The thrust smears the blade out to the end of its lane.
     stretch: 0.2,
-    // Cocked quickly, a short hold behind the shield, then a snap of a lunge.
-    draw_end: 0.45,
+    // Cocked through most of the windup, a short hold behind the shield, then a snap of a lunge.
+    draw_end: 0.55,
     strike_ticks: 2.0,
     heavy: false,
     // The thrust held an instant at full reach, then back to the guard.

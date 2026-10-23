@@ -74,8 +74,10 @@ pub(super) fn glide_me(mut commands: Commands, clock: AttackClock, mut me: Query
     }
 }
 
-/// How high (meters) a knock-up throws a fighter at the top.
+/// How high (meters) a knock-up this long (ticks) or longer throws a fighter at the top; a
+/// shorter one is a lower hop (a stagger, not a launch).
 const LIFT_HEIGHT: f32 = 0.45;
+const FULL_LIFT_TICKS: f32 = 24.0;
 
 /// Knocked up (`Chilled::lifted`): off the ground, up and back down over the knock-up, on the
 /// timeline it's shown on; set down again once it's over.
@@ -84,8 +86,9 @@ pub(super) fn lift_fighters(clock: crate::feedback::AttackClock, mut q: Query<(&
         let now = clock.now(me);
         let span = chilled.lifted;
         let y = if span.covers(now) {
-            let t = (now - span.from as f32) / (span.until - span.from).max(1) as f32;
-            LIFT_HEIGHT * 4.0 * t * (1.0 - t)
+            let ticks = (span.until - span.from).max(1) as f32;
+            let t = (now - span.from as f32) / ticks;
+            LIFT_HEIGHT * (ticks / FULL_LIFT_TICKS).min(1.0) * 4.0 * t * (1.0 - t)
         } else {
             0.0
         };

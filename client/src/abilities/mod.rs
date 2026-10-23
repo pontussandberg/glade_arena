@@ -57,8 +57,16 @@ pub(crate) fn icon(commands: &mut Commands, kind: &AbilityKind) -> Entity {
 pub(crate) struct SeenCasts(Option<[Option<u32>; MAX_ABILITIES]>);
 
 impl SeenCasts {
-    /// The abilities used since this was last asked, going by `cooldowns`. None the first time:
-    /// those were used before we saw the fighter.
+    /// Starting from what `cooldowns` show as the fighter is first seen: those casts are old
+    /// news, and the next one counts, even if it's the fighter's first (a fighter that casts
+    /// before anything else changes its cooldowns would otherwise have that cast swallowed as
+    /// the baseline).
+    pub(crate) fn seen(cooldowns: Option<&Cooldowns>) -> SeenCasts {
+        SeenCasts(cooldowns.map(|cooldowns| std::array::from_fn(|i| cooldowns.used_at(AbilitySlot(i as u8)))))
+    }
+
+    /// The abilities used since this was last asked, going by `cooldowns`. None the first time,
+    /// if it started from nothing: those were used before we saw the fighter.
     pub(crate) fn new_casts(&mut self, cooldowns: &Cooldowns) -> impl Iterator<Item = AbilitySlot> + use<> {
         let now: [Option<u32>; MAX_ABILITIES] = std::array::from_fn(|i| cooldowns.used_at(AbilitySlot(i as u8)));
         let before = self.0.replace(now);
