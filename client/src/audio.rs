@@ -202,7 +202,7 @@ fn weapon_pitch(class: arena_shared::protocol::ClassId) -> f32 {
 /// figure without its own gets the plain gather and swish, pitched by its weapon's weight.
 fn attack_voice(class: arena_shared::protocol::ClassId) -> (Sfx, Sfx, f32) {
     match class.def().figure() {
-        "revenant" => (Sfx::GlaiveReady, Sfx::GlaiveSwing, 1.08),
+        "revenant" => (Sfx::GlaiveReady, Sfx::GlaiveSwing, 1.17),
         "javelinist" => (Sfx::JavReady, Sfx::SpearThrow, 1.0),
         "frost_mage" => (Sfx::FrostReady, Sfx::Swing, 1.0),
         "warden" => (Sfx::ShieldReady, Sfx::ShieldThrust, 1.0),
@@ -775,7 +775,9 @@ mod web {
             use OscillatorType::{Sine, Triangle};
             let now = self.ctx.current_time() + 0.01 + delay;
             let g = gain;
-            let p = self.vary(0.08) * pitch;
+            // A small random spread keeps a flurry from repeating; the revenant's voice is
+            // pinned instead, tuned by ear to one speed.
+            let p = if matches!(kind, Sfx::GlaiveReady | Sfx::GlaiveSwing) { pitch } else { self.vary(0.08) * pitch };
             const SWISH_LIGHT: [&str; 3] = ["swish_light_1", "swish_light_2", "swish_light_3"];
             const SWISH_HEAVY: [&str; 3] = ["swish_heavy_1", "swish_heavy_2", "swish_heavy_3"];
             const SPEAR_SWINGS: [&str; 3] = ["spear_swing_1", "spear_swing_2", "spear_swing_3"];
