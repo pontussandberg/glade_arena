@@ -64,14 +64,17 @@ pub enum Sfx {
     Step(Surface),
     /// A dash, as the figure dashes.
     Dash(DashVoice),
-    /// The revenant's glaive coming over: a broad, heavy cut with a hiss off the edge, a ghost
-    /// of a hum in it, and the blade meeting the ground at the end.
+    /// The revenant's glaive coming over: a heavy swing of air, the blade biting into the
+    /// ground, and the ground tearing open under it with a cold ring.
     GlaiveSwing,
-    /// The revenant gathering: the point scraping up off the dirt, the long haul of the blade
-    /// overhead, and the spectral hum rising with it.
+    /// The revenant gathering: air drawn back behind the blade, and a cold breath from the
+    /// other side.
     GlaiveReady,
-    /// The javelinist gathering: the shoulder wound back, leather creaking, a breath drawn.
+    /// The javelinist gathering: the spear drawn back over the shoulder, the shaft and the arm
+    /// creaking under the strain.
     JavReady,
+    /// The javelinist's throw: the arm lashing through, and the snap as the spear leaves the hand.
+    SpearThrow,
     /// The frost mage gathering: cold crystallizing round the staff, a glassy shimmer and ticks.
     FrostReady,
     /// The warden's thrust: the shield's face driven in first, the sword's steel a beat behind.
@@ -96,7 +99,7 @@ pub enum Sfx {
     Windup,
     /// A shot loosed, with nothing more telling to say about it.
     Loose,
-    /// A spear taking flight: wind whistling over the shaft.
+    /// A spear in flight: the shaft fluttering as it goes.
     SpearLoose,
     /// A gout of fire tossed: it catches with a snap, whoomps away, and crackles after.
     FireLoose,
@@ -199,7 +202,7 @@ fn weapon_pitch(class: arena_shared::protocol::ClassId) -> f32 {
 fn attack_voice(class: arena_shared::protocol::ClassId) -> (Sfx, Sfx, f32) {
     match class.def().figure() {
         "revenant" => (Sfx::GlaiveReady, Sfx::GlaiveSwing, 1.0),
-        "javelinist" => (Sfx::JavReady, Sfx::Swing, 1.0),
+        "javelinist" => (Sfx::JavReady, Sfx::SpearThrow, 1.0),
         "frost_mage" => (Sfx::FrostReady, Sfx::Swing, 1.0),
         "warden" => (Sfx::ShieldReady, Sfx::ShieldThrust, 1.0),
         "breaker" => (Sfx::MaulReady, Sfx::MaulSwing, 1.0),
@@ -387,6 +390,14 @@ mod web {
         // Air: swishes and swings (artisticdude), a rush of air (rubberduck).
         "swish_light_1.wav", "swish_light_2.wav", "swish_light_3.wav", "swish_heavy_1.wav", "swish_heavy_2.wav", "swish_heavy_3.wav",
         "swing_1.wav", "swing_2.wav", "air_01.ogg",
+        // Weapons in the air (Still North Media): spear and axe swings, a bow drawn and shot, a
+        // heavy arrow going by.
+        "spear_swing_1.wav", "spear_swing_2.wav", "spear_swing_3.wav", "axe_swing_1.wav", "axe_swing_2.wav", "axe_swing_3.wav",
+        "bow_draw_1.wav", "bow_draw_2.wav", "bow_draw_3.wav", "bow_shoot_1.wav", "bow_shoot_2.wav",
+        "arrow_flutter_1.wav", "arrow_flutter_2.wav", "arrow_flutter_3.wav",
+        // Breath and the other side (qubodup; made from the above): a slowed breath, air drawn
+        // back, a tear between worlds.
+        "ghost_breath.wav", "draw_air.wav", "rift_tear.wav",
         // Steel: swords drawn, knives, clashes, rings (artisticdude, StarNinjas, Kenney, rubberduck).
         "unsheathe_1.wav", "unsheathe_2.wav", "ring.wav", "drawKnife1.ogg", "drawKnife2.ogg", "knifeSlice.ogg", "knifeSlice2.ogg",
         "sword_1.ogg", "sword_2.ogg", "sword_3.ogg", "clash_1.ogg", "clash_2.ogg", "clash_3.ogg", "metalClick.ogg", "chop.ogg",
@@ -767,6 +778,10 @@ mod web {
             let p = self.vary(0.08) * pitch;
             const SWISH_LIGHT: [&str; 3] = ["swish_light_1", "swish_light_2", "swish_light_3"];
             const SWISH_HEAVY: [&str; 3] = ["swish_heavy_1", "swish_heavy_2", "swish_heavy_3"];
+            const SPEAR_SWINGS: [&str; 3] = ["spear_swing_1", "spear_swing_2", "spear_swing_3"];
+            const AXE_SWINGS: [&str; 3] = ["axe_swing_1", "axe_swing_2", "axe_swing_3"];
+            const BOW_DRAWS: [&str; 3] = ["bow_draw_1", "bow_draw_2", "bow_draw_3"];
+            const ARROW_FLUTTERS: [&str; 3] = ["arrow_flutter_1", "arrow_flutter_2", "arrow_flutter_3"];
             const FLESH: [&str; 5] = ["impactPunch_medium_000", "impactPunch_medium_001", "impactPunch_medium_002", "impactSoft_medium_000", "impactSoft_medium_001"];
             const FLESH_HEAVY: [&str; 4] = ["impactPunch_heavy_000", "impactPunch_heavy_001", "impactSoft_heavy_000", "impactSoft_heavy_001"];
             const METAL_HEAVY: [&str; 2] = ["impactMetal_heavy_000", "impactMetal_heavy_001"];
@@ -855,33 +870,24 @@ mod web {
                     self.sample("swing_2", now, 0.34 * g, p * 1.05, 0.1, 0.1);
                 }
                 Sfx::GlaiveReady => {
-                    // The glaive heaved up off the ground: steel scraping out of the dirt (a
-                    // sword drawn, slow and low), the haul of air as the heavy blade comes up,
-                    // and under it a spectral hum, two low tones a hair apart, swelling.
-                    self.sample("unsheathe_1", now, 0.26 * g, 0.72 * p, 0.3, 0.12);
-                    let haul = self.pick(&SWISH_HEAVY);
-                    self.sample(haul, now + 0.08, 0.2 * g, 0.42 * p, 0.25, 0.15);
-                    for f in [110.0, 113.0] {
-                        if let Some(e) = self.env(now + 0.05, 0.25, 0.02 * g, 0.32) {
-                            self.osc(Sine, f * p, f * p, now + 0.05, 0.32, &e);
-                        }
+                    // The glaive drawn back and up: air pulled in behind the blade, and a cold
+                    // breath drawn from the other side, swelling.
+                    self.sample("draw_air", now, 0.3 * g, 0.9 * p, 0.1, 0.1);
+                    if let Some(e) = self.held(now, 0.3 * g, 0.3, 0.15) {
+                        self.clip("ghost_breath", now, 0.3, Some(0.5), p, &e);
                     }
                 }
                 Sfx::GlaiveSwing => {
-                    // The glaive coming over: a heavy swish, then the blade meeting the ground
-                    // at the end of the arc, a dull body of a thud with grit under it, the ghost
-                    // of the hum still in it.
-                    let swish = self.pick(&SWISH_HEAVY);
-                    self.sample(swish, now, 0.5 * g, 0.8 * p, 0.12, 0.1);
-                    let land = self.pick(&["impactSoft_heavy_000", "impactSoft_heavy_001"]);
-                    self.sample(land, now + 0.1, 0.5 * g, 0.72 * p, 0.2, 0.3);
+                    // The glaive coming over and biting into the ground: a heavy swing of air,
+                    // the edge cracking into earth and stone, and the ground tearing open under
+                    // it with a cold ring that hangs on.
+                    let swing = self.pick(&AXE_SWINGS);
+                    self.sample(swing, now, 0.55 * g, 0.95 * p, 0.15, 0.1);
+                    let bite = self.pick(&["impactMining_000", "impactMining_001"]);
+                    self.sample(bite, now + 0.1, 0.4 * g, 0.8 * p, 0.1, 0.25);
                     let grit = self.pick(&STONES);
-                    self.sample(grit, now + 0.11, 0.18 * g, 0.9 * p, 0.15, 0.3);
-                    for f in [110.0, 113.0] {
-                        if let Some(e) = self.env(now, 0.02, 0.016 * g, 0.2) {
-                            self.osc(Sine, f * p, f * p, now, 0.2, &e);
-                        }
-                    }
+                    self.sample(grit, now + 0.11, 0.12 * g, p, 0.1, 0.25);
+                    self.sample("rift_tear", now + 0.1, 0.22 * g, p, 0.3, 0.3);
                 }
                 Sfx::ShieldReady => {
                     // The shield coming up and the sword cocked back: leather and strap, and a
@@ -951,21 +957,23 @@ mod web {
                     self.sample("cloth_heavy", now + 0.02, 0.28 * g, 0.9 * p, 0.15, 0.1);
                 }
                 Sfx::JavReady => {
-                    // The shoulder wound back and the spear drawn: mail and leather shifting
-                    // under the strain.
-                    self.sample("chainmail", now, 0.28 * g, p, 0.2, 0.1);
-                    self.sample("handleSmallLeather", now + 0.05, 0.12 * g, 0.9 * p, 0.15, 0.1);
+                    // The spear drawn back over the shoulder: the shaft and the arm creaking
+                    // under the strain, and the air drawn back with them.
+                    let draw = self.pick(&BOW_DRAWS);
+                    self.sample(draw, now, 0.3 * g, 1.1 * p, 0.3, 0.1);
+                    self.sample("draw_air", now + 0.05, 0.12 * g, 1.3 * p, 0.1, 0.08);
+                }
+                Sfx::SpearThrow => {
+                    // The arm lashing through, and the snap as the spear leaves the hand.
+                    let lash = self.pick(&SPEAR_SWINGS);
+                    self.sample(lash, now, 0.5 * g, 1.1 * p, 0.1, 0.1);
+                    let snap = self.pick(&["bow_shoot_1", "bow_shoot_2"]);
+                    self.sample(snap, now + 0.03, 0.3 * g, 0.9 * p, 0.05, 0.1);
                 }
                 Sfx::SpearLoose => {
-                    // The throw: the effort of it, a low thump as the body comes through; the
-                    // swing of the arm; then wind whistling over the shaft as it takes flight.
-                    if let Some(e) = self.env(now, 0.006, 0.12 * g, 0.07) {
-                        self.osc(Sine, 160.0 * p, 90.0, now, 0.07, &e);
-                    }
-                    self.sample("swing_1", now, 0.42 * g, 1.15 * p, 0.15, 0.1);
-                    if let Some(e) = self.held(now + 0.05, 0.24 * g, 0.3, 0.25) {
-                        self.clip("air_01", now + 0.05, 0.0, Some(0.6), 1.25 * p, &e);
-                    }
+                    // The shaft fluttering away through the air.
+                    let flight = self.pick(&ARROW_FLUTTERS);
+                    self.sample(flight, now + 0.04, 0.4 * g, 0.85 * p, 0.15, 0.2);
                 }
                 Sfx::FrostReady => {
                     // Cold crystallizing round the staff: glass ticking as ice forms, and a

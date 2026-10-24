@@ -28,3 +28,14 @@ themightyglider (OpenGameArt), "Catching fire": flame.ogg
 "SSE Library: FIRE" (USC Cinema / Sunset Editorial collection, via the Internet Archive,
 https://archive.org/details/SSE_Library_FIRE):
   fire_whoosh.wav (flare whoosh), fire_pop.wav and fire_bed.wav (acetylene torch pops)
+
+Still North Media (Ben Jaszczak and Brian Nelson; OpenGameArt, "Medieval sound effects - Weapon
+Textures"), single takes cut from the texture files:
+  spear_swing_1-3.wav (Spear Swing), axe_swing_1-3.wav (Axe Swing), bow_draw_1-3.wav (Scythian
+  Recurve Draw), bow_shoot_1/2.wav (Scythian Recurve Shoot), arrow_flutter_1-3.wav (Scythian
+  Recurve Heavy Arrow Passby)
+
+qubodup (OpenGameArt), "Ghost breath": ghost_breath.wav (the swell of it)
+
+Made from the above: draw_air.wav (swish_heavy_1 reversed and slowed), rift_tear.wav (magic.wav
+slowed to half speed under a lowpass)
