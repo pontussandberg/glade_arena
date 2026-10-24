@@ -64,11 +64,12 @@ pub enum Sfx {
     Step(Surface),
     /// A dash, as the figure dashes.
     Dash(DashVoice),
-    /// The revenant's glaive coming over: a heavy swing of air, the blade biting into the
-    /// ground, and the ground tearing open under it with a cold ring.
+    /// The revenant's glaive coming over and down flat: a long blade's slice of air with a low
+    /// rush of wind under it, the flat of the blade meeting earth, and the ground tearing open
+    /// with a cold ring.
     GlaiveSwing,
-    /// The revenant gathering: air drawn back behind the blade, and a cold breath from the
-    /// other side.
+    /// The revenant gathering: a cold wind rising behind the blade, and under it a breath drawn
+    /// from the other side.
     GlaiveReady,
     /// The javelinist gathering: the spear drawn back over the shoulder, cloth shifting and the
     /// shaft groaning in the grip.
@@ -390,9 +391,9 @@ mod web {
         // Air: swishes and swings (artisticdude), a rush of air (rubberduck).
         "swish_light_1.wav", "swish_light_2.wav", "swish_light_3.wav", "swish_heavy_1.wav", "swish_heavy_2.wav", "swish_heavy_3.wav",
         "swing_1.wav", "swing_2.wav", "air_01.ogg",
-        // Weapons in the air (Still North Media): spear and axe swings, a bow drawn, a heavy
-        // arrow going by, slowed to a spear.
-        "spear_swing_1.wav", "spear_swing_2.wav", "spear_swing_3.wav", "axe_swing_1.wav", "axe_swing_2.wav", "axe_swing_3.wav",
+        // Weapons in the air (Still North Media): spear swings, a long blade's slice slowed to a
+        // glaive, a bow drawn, a heavy arrow going by slowed to a spear.
+        "spear_swing_1.wav", "spear_swing_2.wav", "spear_swing_3.wav", "blade_swing_1.wav", "blade_swing_2.wav", "blade_swing_3.wav",
         "bow_draw_1.wav", "bow_draw_2.wav", "bow_draw_3.wav", "spear_flight_1.wav", "spear_flight_2.wav", "spear_flight_3.wav",
         // Breath and the other side (qubodup; made from the above): a slowed breath, air drawn
         // back, a tear between worlds.
@@ -778,7 +779,7 @@ mod web {
             const SWISH_LIGHT: [&str; 3] = ["swish_light_1", "swish_light_2", "swish_light_3"];
             const SWISH_HEAVY: [&str; 3] = ["swish_heavy_1", "swish_heavy_2", "swish_heavy_3"];
             const SPEAR_SWINGS: [&str; 3] = ["spear_swing_1", "spear_swing_2", "spear_swing_3"];
-            const AXE_SWINGS: [&str; 3] = ["axe_swing_1", "axe_swing_2", "axe_swing_3"];
+            const BLADE_SWINGS: [&str; 3] = ["blade_swing_1", "blade_swing_2", "blade_swing_3"];
             const BOW_DRAWS: [&str; 3] = ["bow_draw_1", "bow_draw_2", "bow_draw_3"];
             const SPEAR_FLIGHTS: [&str; 3] = ["spear_flight_1", "spear_flight_2", "spear_flight_3"];
             const FLESH: [&str; 5] = ["impactPunch_medium_000", "impactPunch_medium_001", "impactPunch_medium_002", "impactSoft_medium_000", "impactSoft_medium_001"];
@@ -869,24 +870,28 @@ mod web {
                     self.sample("swing_2", now, 0.34 * g, p * 1.05, 0.1, 0.1);
                 }
                 Sfx::GlaiveReady => {
-                    // The glaive drawn back and up: air pulled in behind the blade, and under it
-                    // a cold breath drawn from the other side, soft and swelling.
-                    self.sample("draw_air", now, 0.3 * g, 0.9 * p, 0.1, 0.1);
-                    if let Some(e) = self.held(now, 0.11 * g, 0.3, 0.15) {
+                    // The glaive drawn back and up: a cold wind rising behind the blade, and under
+                    // it a breath drawn from the other side, soft and swelling.
+                    if let Some(e) = self.env(now, 0.22, 0.18 * g, 0.34) {
+                        self.noise(Bandpass, 300.0 * p, 1400.0 * p, 1.2, now, 0.34, &e);
+                    }
+                    if let Some(e) = self.held(now, 0.09 * g, 0.3, 0.15) {
                         self.clip_through("ghost_breath", now, 0.3, Some(0.5), p, Lowpass, 1800.0, &e);
                     }
                 }
                 Sfx::GlaiveSwing => {
-                    // The glaive coming over and biting into the ground: a heavy swing of air,
-                    // the edge cracking into earth and stone, and the ground tearing open under
-                    // it with a cold ring that hangs on.
-                    let swing = self.pick(&AXE_SWINGS);
-                    self.sample(swing, now, 0.55 * g, 0.95 * p, 0.15, 0.1);
-                    let bite = self.pick(&["impactMining_000", "impactMining_001"]);
-                    self.sample(bite, now + 0.1, 0.4 * g, 0.8 * p, 0.1, 0.25);
+                    // The glaive coming over and down flat: a long blade's slice of air with a
+                    // low rush of wind under it, the flat of the blade meeting earth with a
+                    // little grit, and the ground tearing open with a cold ring that hangs on.
+                    let slice = self.pick(&BLADE_SWINGS);
+                    self.sample(slice, now, 0.5 * g, p, 0.15, 0.1);
+                    if let Some(e) = self.env(now, 0.03, 0.2 * g, 0.22) {
+                        self.noise(Lowpass, 700.0 * p, 180.0, 0.8, now, 0.22, &e);
+                    }
+                    self.sample("groundhit", now + 0.1, 0.3 * g, 0.85 * p, 0.1, 0.25);
                     let grit = self.pick(&STONES);
-                    self.sample(grit, now + 0.11, 0.12 * g, p, 0.1, 0.25);
-                    self.sample("rift_tear", now + 0.1, 0.22 * g, p, 0.3, 0.3);
+                    self.sample(grit, now + 0.11, 0.1 * g, p, 0.1, 0.25);
+                    self.sample("rift_tear", now + 0.1, 0.28 * g, p, 0.3, 0.3);
                 }
                 Sfx::ShieldReady => {
                     // The shield coming up and the sword cocked back: leather and strap, and a

@@ -31,7 +31,7 @@ https://archive.org/details/SSE_Library_FIRE):
 
 Still North Media (Ben Jaszczak and Brian Nelson; OpenGameArt, "Medieval sound effects - Weapon
 Textures"), single takes cut from the texture files:
-  spear_swing_1-3.wav (Spear Swing), axe_swing_1-3.wav (Axe Swing), bow_draw_1-3.wav (Scythian
+  spear_swing_1-3.wav (Spear Swing), blade_swing_1-3.wav (Katana Swing, slowed to 0.75x), bow_draw_1-3.wav (Scythian
   Recurve Draw), spear_flight_1-3.wav (Scythian Recurve Heavy Arrow Passby, slowed to 0.6x under
   a lowpass)
 
