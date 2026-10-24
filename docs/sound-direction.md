@@ -22,6 +22,9 @@ in a field, not like a fantasy trailer. Rules of thumb:
   the Revenant has breath and a cold ring, the Jav wood and sinew and fletching, the Warden
   plate and strap, the Breaker haft and earth, the Shade cloth and knives, the casters their
   elements.
+- **A recording keeps its instrument.** A bowstring's snap and an arrow's fletching say "bow"
+  however they are used; the Jav's first cut sounded like an archer. Slow and darken a borrowed
+  recording until it stops naming its source, or find another.
 - **Nothing dull, nothing scarring.** Soft "flesh" impacts (`impactSoft_*`) under a weapon
   landing read as a tomato. Compressed-air recordings read as a piston. If a layer could be
   described as a kitchen or a workshop sound, it is the wrong layer.
@@ -31,7 +34,7 @@ in a field, not like a fantasy trailer. Rules of thumb:
 | Hero | Gather (windup) | Release | Flight / landing |
 | --- | --- | --- | --- |
 | Revenant | `draw_air` (a swish reversed), `ghost_breath` swelling | `axe_swing` | pick into stone (`impactMining`), a little grit, `rift_tear` (a slowed, lowpassed shimmer) |
-| Javelinist | `bow_draw` (a recurve creaking), a touch of `draw_air` | `spear_swing`, `bow_shoot` snap | `arrow_flutter` as the shaft flies |
+| Javelinist | cloth, `bow_draw` slowed and lowpassed into a wooden groan, a touch of `draw_air` | `cloth_heavy`, `spear_swing` | `spear_flight` (a heavy arrow passby slowed) |
 | Frost mage | ice ticking, glassy shimmer | plain swing | frost on the bolt leaving |
 | Warden | leather, steel clearing the rim | shield face, flat clap | |
 | Breaker | haft creak, heavy haul | heavy sweep, earth | |

@@ -70,10 +70,10 @@ pub enum Sfx {
     /// The revenant gathering: air drawn back behind the blade, and a cold breath from the
     /// other side.
     GlaiveReady,
-    /// The javelinist gathering: the spear drawn back over the shoulder, the shaft and the arm
-    /// creaking under the strain.
+    /// The javelinist gathering: the spear drawn back over the shoulder, cloth shifting and the
+    /// shaft groaning in the grip.
     JavReady,
-    /// The javelinist's throw: the arm lashing through, and the snap as the spear leaves the hand.
+    /// The javelinist's throw: the body coming through and the arm lashing the spear away.
     SpearThrow,
     /// The frost mage gathering: cold crystallizing round the staff, a glassy shimmer and ticks.
     FrostReady,
@@ -99,7 +99,7 @@ pub enum Sfx {
     Windup,
     /// A shot loosed, with nothing more telling to say about it.
     Loose,
-    /// A spear in flight: the shaft fluttering as it goes.
+    /// A spear in flight: the heavy shaft droning away through the air.
     SpearLoose,
     /// A gout of fire tossed: it catches with a snap, whoomps away, and crackles after.
     FireLoose,
@@ -390,11 +390,10 @@ mod web {
         // Air: swishes and swings (artisticdude), a rush of air (rubberduck).
         "swish_light_1.wav", "swish_light_2.wav", "swish_light_3.wav", "swish_heavy_1.wav", "swish_heavy_2.wav", "swish_heavy_3.wav",
         "swing_1.wav", "swing_2.wav", "air_01.ogg",
-        // Weapons in the air (Still North Media): spear and axe swings, a bow drawn and shot, a
-        // heavy arrow going by.
+        // Weapons in the air (Still North Media): spear and axe swings, a bow drawn, a heavy
+        // arrow going by, slowed to a spear.
         "spear_swing_1.wav", "spear_swing_2.wav", "spear_swing_3.wav", "axe_swing_1.wav", "axe_swing_2.wav", "axe_swing_3.wav",
-        "bow_draw_1.wav", "bow_draw_2.wav", "bow_draw_3.wav", "bow_shoot_1.wav", "bow_shoot_2.wav",
-        "arrow_flutter_1.wav", "arrow_flutter_2.wav", "arrow_flutter_3.wav",
+        "bow_draw_1.wav", "bow_draw_2.wav", "bow_draw_3.wav", "spear_flight_1.wav", "spear_flight_2.wav", "spear_flight_3.wav",
         // Breath and the other side (qubodup; made from the above): a slowed breath, air drawn
         // back, a tear between worlds.
         "ghost_breath.wav", "draw_air.wav", "rift_tear.wav",
@@ -781,7 +780,7 @@ mod web {
             const SPEAR_SWINGS: [&str; 3] = ["spear_swing_1", "spear_swing_2", "spear_swing_3"];
             const AXE_SWINGS: [&str; 3] = ["axe_swing_1", "axe_swing_2", "axe_swing_3"];
             const BOW_DRAWS: [&str; 3] = ["bow_draw_1", "bow_draw_2", "bow_draw_3"];
-            const ARROW_FLUTTERS: [&str; 3] = ["arrow_flutter_1", "arrow_flutter_2", "arrow_flutter_3"];
+            const SPEAR_FLIGHTS: [&str; 3] = ["spear_flight_1", "spear_flight_2", "spear_flight_3"];
             const FLESH: [&str; 5] = ["impactPunch_medium_000", "impactPunch_medium_001", "impactPunch_medium_002", "impactSoft_medium_000", "impactSoft_medium_001"];
             const FLESH_HEAVY: [&str; 4] = ["impactPunch_heavy_000", "impactPunch_heavy_001", "impactSoft_heavy_000", "impactSoft_heavy_001"];
             const METAL_HEAVY: [&str; 2] = ["impactMetal_heavy_000", "impactMetal_heavy_001"];
@@ -870,11 +869,11 @@ mod web {
                     self.sample("swing_2", now, 0.34 * g, p * 1.05, 0.1, 0.1);
                 }
                 Sfx::GlaiveReady => {
-                    // The glaive drawn back and up: air pulled in behind the blade, and a cold
-                    // breath drawn from the other side, swelling.
+                    // The glaive drawn back and up: air pulled in behind the blade, and under it
+                    // a cold breath drawn from the other side, soft and swelling.
                     self.sample("draw_air", now, 0.3 * g, 0.9 * p, 0.1, 0.1);
-                    if let Some(e) = self.held(now, 0.3 * g, 0.3, 0.15) {
-                        self.clip("ghost_breath", now, 0.3, Some(0.5), p, &e);
+                    if let Some(e) = self.held(now, 0.11 * g, 0.3, 0.15) {
+                        self.clip_through("ghost_breath", now, 0.3, Some(0.5), p, Lowpass, 1800.0, &e);
                     }
                 }
                 Sfx::GlaiveSwing => {
@@ -957,23 +956,27 @@ mod web {
                     self.sample("cloth_heavy", now + 0.02, 0.28 * g, 0.9 * p, 0.15, 0.1);
                 }
                 Sfx::JavReady => {
-                    // The spear drawn back over the shoulder: the shaft and the arm creaking
-                    // under the strain, and the air drawn back with them.
+                    // The spear drawn back over the shoulder: cloth shifting, the wooden shaft
+                    // groaning in the grip (a bow's creak slowed and darkened), and the air
+                    // drawn back with the arm.
+                    let cloth = self.pick(&["cloth1", "cloth2"]);
+                    self.sample(cloth, now, 0.14 * g, 0.9 * p, 0.15, 0.1);
                     let draw = self.pick(&BOW_DRAWS);
-                    self.sample(draw, now, 0.3 * g, 1.1 * p, 0.3, 0.1);
-                    self.sample("draw_air", now + 0.05, 0.12 * g, 1.3 * p, 0.1, 0.08);
+                    if let Some(e) = self.held(now + 0.02, 0.14 * g, 0.3, 0.1) {
+                        self.clip_through(draw, now + 0.02, 0.0, Some(0.5), 0.7 * p, Lowpass, 1100.0, &e);
+                    }
+                    self.sample("draw_air", now + 0.08, 0.12 * g, 1.3 * p, 0.1, 0.08);
                 }
                 Sfx::SpearThrow => {
-                    // The arm lashing through, and the snap as the spear leaves the hand.
+                    // The body coming through, cloth with it, and the arm lashing the spear away.
+                    self.sample("cloth_heavy", now, 0.12 * g, p, 0.1, 0.1);
                     let lash = self.pick(&SPEAR_SWINGS);
                     self.sample(lash, now, 0.5 * g, 1.1 * p, 0.1, 0.1);
-                    let snap = self.pick(&["bow_shoot_1", "bow_shoot_2"]);
-                    self.sample(snap, now + 0.03, 0.3 * g, 0.9 * p, 0.05, 0.1);
                 }
                 Sfx::SpearLoose => {
-                    // The shaft fluttering away through the air.
-                    let flight = self.pick(&ARROW_FLUTTERS);
-                    self.sample(flight, now + 0.04, 0.4 * g, 0.85 * p, 0.15, 0.2);
+                    // The heavy shaft droning away through the air.
+                    let flight = self.pick(&SPEAR_FLIGHTS);
+                    self.sample(flight, now + 0.04, 0.45 * g, p, 0.25, 0.25);
                 }
                 Sfx::FrostReady => {
                     // Cold crystallizing round the staff: glass ticking as ice forms, and a
