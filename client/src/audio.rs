@@ -202,7 +202,7 @@ fn weapon_pitch(class: arena_shared::protocol::ClassId) -> f32 {
 /// figure without its own gets the plain gather and swish, pitched by its weapon's weight.
 fn attack_voice(class: arena_shared::protocol::ClassId) -> (Sfx, Sfx, f32) {
     match class.def().figure() {
-        "revenant" => (Sfx::GlaiveReady, Sfx::GlaiveSwing, 1.0),
+        "revenant" => (Sfx::GlaiveReady, Sfx::GlaiveSwing, 1.08),
         "javelinist" => (Sfx::JavReady, Sfx::SpearThrow, 1.0),
         "frost_mage" => (Sfx::FrostReady, Sfx::Swing, 1.0),
         "warden" => (Sfx::ShieldReady, Sfx::ShieldThrust, 1.0),
@@ -240,7 +240,7 @@ fn loose_sounds(
                 _ => Sfx::Loose,
             },
         };
-        queue.push(sfx, 0.6 * earshot(pos.0.distance(me.0), 14.0));
+        queue.push(sfx, 0.36 * earshot(pos.0.distance(me.0), 14.0));
     }
 }
 
@@ -275,7 +275,7 @@ fn windup_sounds(
         let Some(swing) = attack.swing else { continue };
         if unheard(&mut heard, attacker, swing.started_at, clock.as_ref().map(|clock| clock.now(is_me))) {
             let (gather, _, pitch) = attack_voice(*class);
-            queue.push_pitched(gather, 0.65 * earshot(pos.0.distance(me.0), 10.0), 0.0, pitch);
+            queue.push_pitched(gather, 0.4 * earshot(pos.0.distance(me.0), 10.0), 0.0, pitch);
         }
     }
 }
@@ -368,7 +368,7 @@ fn swing_sounds(
     for (swinger, pos, class, swing, is_me) in &swings {
         if unheard(&mut heard, swinger, swing.tick, clock.as_ref().map(|clock| clock.now(is_me))) {
             let (_, strike, pitch) = attack_voice(*class);
-            queue.push_pitched(strike, 0.7 * earshot(pos.0.distance(me.0), 13.0), 0.0, pitch);
+            queue.push_pitched(strike, 0.42 * earshot(pos.0.distance(me.0), 13.0), 0.0, pitch);
         }
     }
 }
