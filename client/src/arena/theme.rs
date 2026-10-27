@@ -79,9 +79,9 @@ const GLADE: Theme = Theme {
     rope: ROPE,
     haze: HAZE,
     sky: SKY,
-    sky_brightness: 300.0,
+    sky_brightness: 450.0,
     sun: SUN,
-    sun_illuminance: 2_400.0,
+    sun_illuminance: 2_050.0,
     wilds: Wilds::Forest,
 };
 
@@ -106,9 +106,9 @@ const FEN: Theme = Theme {
     rope: Color::srgb_u8(0x5E, 0x55, 0x45),
     haze: Color::srgb_u8(0x3C, 0x48, 0x54),
     sky: Color::srgb_u8(0x5A, 0x70, 0x98),
-    sky_brightness: 280.0,
+    sky_brightness: 420.0,
     sun: Color::srgb_u8(0xC6, 0xD6, 0xF4),
-    sun_illuminance: 2_000.0,
+    sun_illuminance: 1_700.0,
     wilds: Wilds::Fen,
 };
 
@@ -133,9 +133,9 @@ const BASTION: Theme = Theme {
     rope: Color::srgb_u8(0x5C, 0x54, 0x44),
     haze: Color::srgb_u8(0x39, 0x43, 0x4F),
     sky: Color::srgb_u8(0x56, 0x70, 0x9C),
-    sky_brightness: 280.0,
+    sky_brightness: 420.0,
     sun: Color::srgb_u8(0xCA, 0xD8, 0xF6),
-    sun_illuminance: 2_100.0,
+    sun_illuminance: 1_800.0,
     wilds: Wilds::Fen,
 };
 
@@ -160,9 +160,9 @@ const HOLLOW: Theme = Theme {
     rope: Color::srgb_u8(0x64, 0x58, 0x43),
     haze: Color::srgb_u8(0x47, 0x43, 0x5A),
     sky: Color::srgb_u8(0x6A, 0x6C, 0x96),
-    sky_brightness: 300.0,
+    sky_brightness: 450.0,
     sun: Color::srgb_u8(0xE2, 0xD8, 0xEE),
-    sun_illuminance: 2_600.0,
+    sun_illuminance: 2_200.0,
     wilds: Wilds::Forest,
 };
 
@@ -187,8 +187,8 @@ const HIGHLANDS: Theme = Theme {
     rope: Color::srgb_u8(0x6E, 0x5F, 0x45),
     haze: Color::srgb_u8(0x4E, 0x46, 0x44),
     sky: Color::srgb_u8(0x6E, 0x64, 0x88),
-    sky_brightness: 280.0,
+    sky_brightness: 420.0,
     sun: Color::srgb_u8(0xF0, 0xD0, 0xA8),
-    sun_illuminance: 2_800.0,
+    sun_illuminance: 2_400.0,
     wilds: Wilds::Highlands,
 };
