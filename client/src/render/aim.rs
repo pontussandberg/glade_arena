@@ -1,10 +1,11 @@
 //! Action mode's aim: toward the cursor, from your fighter. Where the auto-attack will land is
-//! drawn on the ground at your feet (`show_attack_indicator`), turned toward the cursor, the
-//! way an ability's indicator is while a normal cast waits for its click: a blow's lane, as wide
-//! as it is and as far as it reaches (longer and wider while the `follow_up` empowers it), or a
-//! shot's lane out to the edge of its range. It is the aim itself, so it runs through anything
-//! in the way, as the aim never bends for a wall; the attack stops where the sim stops it.
-//! While a normal cast is being aimed the ability's own indicator takes its place
+//! drawn (`show_attack_aim`), turned toward the cursor. A blow lands on the ground, so its lane
+//! lies there at your feet, as wide as it is and as far as it reaches (longer and wider while
+//! the `follow_up` empowers it), the way an ability's indicator does while a normal cast waits
+//! for its click. A shot flies at chest height, so its path is a faint line up there, from where
+//! it leaves you out to its range, with a mark at the end. Either is the aim itself, so it runs
+//! through anything in the way, as the aim never bends for a wall; the attack stops where the
+//! sim stops it. While a normal cast is being aimed the ability's own indicator takes its place
 //! (`casting::show_indicator`).
 
 use super::*;
@@ -15,49 +16,63 @@ use crate::Me;
 use crate::camera::CameraMode;
 use crate::feedback::AttackClock;
 
-/// How high above the ground the indicator lies.
-const INDICATOR_HEIGHT: f32 = 0.05;
+/// How high above the ground a blow's lane lies.
+const LANE_HEIGHT: f32 = 0.05;
+/// How wide (px) the mark at the end of a shot's line is.
+pub(super) const AIM_END_SIZE: f32 = 10.0;
 
-/// Where our auto-attack lands: its shape plain, and empowered by its `follow_up`.
+/// The mark at the end of a shot's line.
 #[derive(Component)]
-pub(super) struct AttackIndicator {
+pub(super) struct AimEnd;
+
+/// Where our blow lands: its lane plain, and empowered by its `follow_up`. Only a melee class
+/// has one; a shot's path is a line (`shot_line`).
+#[derive(Component)]
+pub(super) struct AttackLane {
     plain: Handle<Mesh>,
     empowered: Handle<Mesh>,
 }
 
-/// The lane an auto-attack of `class` covers, `empowered` or not, along +X from the attacker's
-/// center: a blow's own, a shot's from the edge of the attacker to the edge of its range, as
-/// wide as the shot (no thinner than a needle to see).
-fn attack_lane(class: ClassId, empowered: bool) -> Mesh {
-    let attack = &class.def().attack;
-    match attack.kind {
-        AttackKind::Melee { .. } => {
-            let (from, range, width) = attack.lane(empowered).expect("a melee attack has a lane");
-            arena::lane_mesh(from, range, width)
-        }
-        AttackKind::Projectile { radius, .. } => {
-            let shot = attack.kind.shot().expect("a projectile attack is a shot");
-            arena::lane_mesh(PLAYER_RADIUS, shot.edge_reach(), (2.0 * radius).max(0.4))
-        }
-    }
+/// The lane a blow of `class` covers, `empowered` or not, along +X from the attacker's center,
+/// if it's a melee class.
+fn blow_lane(class: ClassId, empowered: bool) -> Option<Mesh> {
+    let (from, range, width) = class.def().attack.lane(empowered)?;
+    Some(arena::lane_mesh(from, range, width))
 }
 
-/// Builds the indicator once our own player exists, for its class's auto-attack.
-pub(super) fn spawn_attack_indicator(
+/// How high the shot of `class` flies.
+fn shot_height_of(class: ClassId) -> f32 {
+    let def = class.def();
+    let thrown = def.attack.kind.shot().is_some_and(|shot| arena::shot_look(def, shot, false).thrown);
+    shot_height(thrown)
+}
+
+/// Where a shot of `class`, sent from `me` toward `dir`, starts and ends: from the edge of you
+/// out to its range. `None` for a melee class.
+fn shot_line(class: ClassId, me: Vec2, dir: Vec2) -> Option<(Vec2, Vec2)> {
+    let dir = dir.try_normalize()?;
+    let AttackKind::Projectile { radius, range, .. } = class.def().attack.kind else { return None };
+    let (from, to) = (PLAYER_RADIUS + radius, PLAYER_RADIUS + radius + range);
+    Some((me + dir * from, me + dir * to))
+}
+
+/// Builds the blow's lane once our own player exists, if its class swings one.
+pub(super) fn spawn_attack_lane(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     me: Query<&ClassId, Added<Me>>,
-    indicators: Query<Entity, With<AttackIndicator>>,
+    lanes: Query<Entity, With<AttackLane>>,
 ) {
     let Ok(class) = me.single() else { return };
     // A new fighter (back from the lobby, or another class): its own attack's.
-    for old in &indicators {
+    for old in &lanes {
         commands.entity(old).despawn();
     }
-    let plain = meshes.add(attack_lane(*class, false));
+    let (Some(plain), Some(empowered)) = (blow_lane(*class, false), blow_lane(*class, true)) else { return };
+    let plain = meshes.add(plain);
     commands.spawn((
-        AttackIndicator { plain: plain.clone(), empowered: meshes.add(attack_lane(*class, true)) },
+        AttackLane { plain: plain.clone(), empowered: meshes.add(empowered) },
         Mesh3d(plain),
         MeshMaterial3d(materials.add(arena::translucent(palette::SILVER, 0.22, 1.5))),
         Transform::default(),
@@ -65,24 +80,44 @@ pub(super) fn spawn_attack_indicator(
     ));
 }
 
-/// Shows where our auto-attack will land, at our feet, turned toward the cursor: in action
-/// mode, while no ability is being aimed and we're alive.
-pub(super) fn show_attack_indicator(
+/// Shows where our auto-attack will land, toward the cursor: in action mode, while no ability
+/// is being aimed and we're alive. A blow's lane at our feet, or a shot's line and the mark at
+/// its end.
+#[allow(clippy::type_complexity)]
+pub(super) fn show_attack_aim(
     mode: Res<CameraMode>,
     aiming: Res<crate::casting::Aiming>,
     desired: Res<crate::DesiredInput>,
     clock: AttackClock,
-    me: Query<(&Transform, &Health, &AttackState), (With<Me>, With<PlayerId>, Without<AttackIndicator>)>,
-    indicator: Single<(&AttackIndicator, &mut Mesh3d, &mut Transform, &mut Visibility)>,
+    camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
+    me: Query<(&Pos, &Transform, &ClassId, &Health, &AttackState), (With<Me>, With<PlayerId>, Without<AttackLane>)>,
+    lane: Option<Single<(&AttackLane, &mut Mesh3d, &mut Transform, &mut Visibility), Without<AimEnd>>>,
+    end: Single<(&mut UiTransform, &mut Visibility), With<AimEnd>>,
+    mut gizmos: Gizmos,
 ) {
-    let (indicator, mut mesh, mut transform, mut visibility) = indicator.into_inner();
-    let me = me.single().ok().filter(|(_, health, _)| health.alive() && mode.free && aiming.0.is_none());
-    visibility.set_if_neq(shown(me.is_some()));
-    let Some((at, _, attack)) = me else { return };
-    let wanted = if attack.empowered_at(clock.now(true)) { &indicator.empowered } else { &indicator.plain };
+    let (camera, camera_transform) = *camera;
+    let (mut place, mut end_visibility) = end.into_inner();
+    let me = me.single().ok().filter(|(.., health, _)| health.alive() && mode.free && aiming.0.is_none());
+    let line = me.and_then(|(pos, _, class, ..)| shot_line(*class, pos.0, desired.0.aim).map(|line| (line, shot_height_of(*class))));
+    // A shot's line, and its end mark where the line's end is on the screen.
+    let end_at = line.and_then(|((_, to), height)| camera.world_to_viewport(camera_transform, to_world(to, height)).ok());
+    end_visibility.set_if_neq(shown(end_at.is_some()));
+    if let Some(((from, to), height)) = line {
+        gizmos.line(to_world(from, height), to_world(to, height), palette::ui::TEXT.with_alpha(0.35));
+    }
+    if let Some(at) = end_at {
+        place.set_if_neq(UiTransform { translation: Val2::px(at.x, at.y), ..default() });
+    }
+    // A blow's lane at our feet.
+    let Some(lane) = lane else { return };
+    let (lane, mut mesh, mut transform, mut visibility) = lane.into_inner();
+    let blow = me.filter(|_| line.is_none());
+    visibility.set_if_neq(shown(blow.is_some()));
+    let Some((_, at, _, _, attack)) = blow else { return };
+    let wanted = if attack.empowered_at(clock.now(true)) { &lane.empowered } else { &lane.plain };
     if mesh.0 != *wanted {
         mesh.0 = wanted.clone();
     }
     let turn = desired.0.aim.try_normalize().map_or(0.0, |aim| aim.to_angle());
-    transform.set_if_neq(Transform::from_xyz(at.translation.x, INDICATOR_HEIGHT, at.translation.z).with_rotation(Quat::from_rotation_y(turn)));
+    transform.set_if_neq(Transform::from_xyz(at.translation.x, LANE_HEIGHT, at.translation.z).with_rotation(Quat::from_rotation_y(turn)));
 }

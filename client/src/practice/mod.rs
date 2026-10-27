@@ -6,7 +6,7 @@
 //! - Switches (`Switch`), lit while on: "No cooldowns" (our Q's cooldown off: what the server
 //!   says, via our `Cooldowns`), "Hitboxes" (`hitboxes`: what hits are judged by, drawn on the
 //!   ground), "3D hitboxes" (the same standing up, colored by height) and "Action mode"
-//!   (`camera::CameraMode::free`: WASD walks, the mouse aims, the attack's lane is drawn).
+//!   (`camera::CameraMode::free`: WASD walks, the mouse aims, the attack's reach is drawn).
 //! - "Fake ping" steps through extra latency on what we receive (`FakeLatency`), and back off, to
 //!   feel how the game plays at a higher ping.
 //! - "Target dummy" and "Moving dummy" place one (`dummies`).

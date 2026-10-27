@@ -7,8 +7,8 @@
 //! - Action mode, practice's other game mode (`practice`, which switches `CameraMode::free`;
 //!   the server plays along: `RoomRequest::ActionMode`), keeps that same camera: it's the
 //!   controls that change (`render::read_local_input`). WASD walks (relative to the screen),
-//!   the mouse aims, and where the auto-attack lands is drawn at your fighter's feet
-//!   (`render::show_attack_indicator`) until a normal cast's own indicator takes its place.
+//!   the mouse aims, and where the auto-attack lands is drawn from your fighter
+//!   (`render::show_attack_aim`) until a normal cast's own indicator takes its place.
 //!   Walking doesn't stop or cancel an attack, and holding the left button keeps attacking.
 
 use arena_shared::protocol::{PlayerId, Pos};
