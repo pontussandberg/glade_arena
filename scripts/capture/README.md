@@ -2,7 +2,9 @@
 
 Drive a muted headless Chrome over the DevTools protocol to see and hear the game as an agent:
 `shoot.mjs` (navigate, size the viewport, click, press or hold keys and the mouse button, scroll,
-screenshot, eval, preload), `sheet.mjs` (lay burst frames out as one labelled contact sheet),
+screenshot, eval, preload, throttle the tab's CPU, take a CPU profile), `profsum.mjs` (sum a
+profile up by crate and by function), `sheet.mjs` (lay burst frames out as one labelled contact
+sheet),
 `cap.sh CLASS TAG` (attack + idle + walk bursts of a hero from the game camera),
 `abil.sh CLASS TAG KEY [aimed]` (an ability burst), `action.sh CLASS OUTDIR [TAG]` (the action
 camera: at rest, turned, looking down, against a wall, out in the open, and bursts walking while
