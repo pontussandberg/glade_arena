@@ -67,7 +67,7 @@ pub(super) fn resolve_projectile_hits(
                 || through.contains(&target_id.0)
                 || health.0 == 0
                 || !foes((*room, *team), (*target_room, *target_team))
-                || !sim::projectile_hits(projectile_pos.0, projectile, target_pos.0) {
+                || !sim::projectile_hits(projectile_pos.0, projectile, now.0, target_pos.0) {
                 continue;
             }
             let goes_on = pierces && target_team.0 == arena_shared::rooms::ZOMBIES;

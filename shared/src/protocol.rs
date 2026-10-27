@@ -591,6 +591,10 @@ pub struct Projectile {
     /// Thrown by an item (a barrage's javelin, a bounce), not from the hand: drawn straight from
     /// where it starts, and nothing an auto-attack's throw sets off goes off again for it.
     pub extra: bool,
+    /// How much it rises per meter flown (the tangent of its pitch), aimed up or down with the
+    /// action camera; 0 flies level, as the MOBA's do. It falls into the ground or flies over
+    /// bodies accordingly (`sim::projectile_height`).
+    pub climb: f32,
 }
 
 impl Projectile {
@@ -613,6 +617,9 @@ pub struct PlayerInput {
     pub walk: Vec2,
     /// Aim direction on the gameplay plane; the sim normalizes it.
     pub aim: Vec2,
+    /// How much the aim rises per meter ahead (the tangent of its pitch), with the action camera
+    /// (`PlayerCommand::Aim`): what a shot's `climb` is. 0 is level, the MOBA's.
+    pub climb: f32,
     /// Left click: auto-attack toward `aim`, if the last attack is done (else the click is
     /// dropped). Set by `PlayerCommand::Attack`, used up by the next tick.
     pub fire: bool,
@@ -659,9 +666,10 @@ pub enum PlayerCommand {
     Attack(Vec2),
     /// An ability's key (Q, W, E, R): use the ability in this slot toward this aim.
     Cast(AbilitySlot, Vec2),
-    /// Action mode only: the aim as the camera turns (at most once a tick), so an attack winding
-    /// up goes off the way the player looks then, not the way they looked when it started.
-    Aim(Vec2),
+    /// Action mode only: the aim as the camera turns (at most once a tick), its direction and
+    /// its pitch (`PlayerInput::climb`), so an attack winding up goes off the way the player
+    /// looks then, not the way they looked when it started.
+    Aim(Vec2, f32),
 }
 
 impl PlayerCommand {
@@ -671,7 +679,7 @@ impl PlayerCommand {
         match *self {
             PlayerCommand::MoveTo(_) | PlayerCommand::Stop => true,
             PlayerCommand::Walk(dir, _) => dir != Vec2::ZERO,
-            PlayerCommand::Attack(_) | PlayerCommand::Cast(..) | PlayerCommand::Aim(_) => false,
+            PlayerCommand::Attack(_) | PlayerCommand::Cast(..) | PlayerCommand::Aim(..) => false,
         }
     }
 
@@ -697,7 +705,10 @@ impl PlayerCommand {
                 input.fire = true;
             }
             PlayerCommand::Cast(slot, aim) => input.order_cast(slot, aim),
-            PlayerCommand::Aim(aim) => input.aim = aim,
+            PlayerCommand::Aim(aim, climb) => {
+                input.aim = aim;
+                input.climb = climb;
+            }
         }
     }
 }

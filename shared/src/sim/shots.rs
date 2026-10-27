@@ -1,9 +1,10 @@
-//! Shots in flight: where one starts and is at a tick, when it's spent, whom it hits, and for
-//! how much.
+//! Shots in flight: where one starts and is at a tick (and how high: aimed up or down, it
+//! climbs or falls as it flies), when it's spent, whom it hits, and for how much.
 
 use super::*;
 
 use crate::classes::{Chill, Shot};
+use crate::config::{BODY_HEIGHT, SHOT_HEIGHT};
 use crate::map::Map;
 use crate::protocol::Projectile;
 
@@ -17,22 +18,38 @@ pub(super) fn shot(projectile: &Projectile) -> Shot {
     projectile.class.def().shot(projectile.ability).unwrap_or_default()
 }
 
-/// Where a projectile is at `tick` (after that tick's step; fractional ticks for drawing in
-/// between). It flies straight at a constant speed, so this is all there is to it: whoever learns
-/// of a shot late (everyone but its shooter) can still put it where it really is.
-pub fn projectile_pos(projectile: &Projectile, tick: f32) -> Vec2 {
+/// How far a projectile has flown at `tick` (after that tick's step; fractional ticks for
+/// drawing in between). It flies straight at a constant speed, so this is all there is to it:
+/// whoever learns of a shot late (everyone but its shooter) can still put it where it really is.
+pub fn projectile_flown(projectile: &Projectile, tick: f32) -> f32 {
     let steps = tick - projectile.spawn_tick as f32 + 1.0;
-    projectile.origin + projectile.dir * (shot(projectile).speed * TICK_DT * steps)
+    shot(projectile).speed * TICK_DT * steps
 }
 
-/// Out of range, or into a wall, rock or tree (water and chasms don't stop shots).
+/// Where a projectile is at `tick`, on the gameplay plane.
+pub fn projectile_pos(projectile: &Projectile, tick: f32) -> Vec2 {
+    projectile.origin + projectile.dir * projectile_flown(projectile, tick)
+}
+
+/// How high a projectile flies at `tick`: from the hand, up or down as it was aimed (`climb`).
+pub fn projectile_height(projectile: &Projectile, tick: f32) -> f32 {
+    SHOT_HEIGHT + projectile.climb * projectile_flown(projectile, tick)
+}
+
+/// Out of range, into a wall, rock or tree (water and chasms don't stop shots), or into the
+/// ground (aimed down).
 pub fn projectile_expired(map: &Map, pos: Vec2, projectile: &Projectile, tick: u32) -> bool {
     tick.saturating_sub(projectile.spawn_tick) >= shot(projectile).lifetime_ticks()
         || map.get(Map::tile_of(pos)).blocks_shots()
+        || projectile_height(projectile, tick as f32) < 0.0
 }
 
-pub fn projectile_hits(projectile_pos: Vec2, projectile: &Projectile, player_pos: Vec2) -> bool {
-    projectile_pos.distance(player_pos) <= PLAYER_RADIUS + shot(projectile).radius
+/// Whether a projectile at `projectile_pos` (at `tick`) hits a body standing at `player_pos`:
+/// touching it across the ground, and no higher than its top (`BODY_HEIGHT`); aimed up, it
+/// flies over.
+pub fn projectile_hits(projectile_pos: Vec2, projectile: &Projectile, tick: u32, player_pos: Vec2) -> bool {
+    let radius = shot(projectile).radius;
+    projectile_pos.distance(player_pos) <= PLAYER_RADIUS + radius && projectile_height(projectile, tick as f32) - radius <= BODY_HEIGHT
 }
 
 /// Damage of a projectile hitting at `tick`: the ability's, or the auto-attack's by how far it

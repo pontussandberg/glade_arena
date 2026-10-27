@@ -259,7 +259,8 @@ pub fn step(
         casts.push(match (ability.kind, dir) {
             (AbilityKind::Prime(prime), _) => Cast::Prime { slot, prime },
             (_, None) => continue,
-            (AbilityKind::Projectile(throw), Some(dir)) => Cast::Throw(throw.projectile(owner, class, slot, pos, dir, tick)),
+            // Pitched as the aim is now (action mode's): the cast order's is its direction only.
+            (AbilityKind::Projectile(throw), Some(dir)) => Cast::Throw(Projectile { climb: input.climb, ..throw.projectile(owner, class, slot, pos, dir, tick) }),
             // Mid-windup too: the windup goes on, and the attack still goes off when it's over,
             // from wherever the dash took you (still aimed where it was locked).
             (AbilityKind::Dash(def), Some(dir)) if !rooted => {

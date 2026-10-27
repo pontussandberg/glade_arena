@@ -11,7 +11,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use arena_shared::abilities::AbilityKind;
-use arena_shared::config::PLAYER_RADIUS;
+use arena_shared::config::{BODY_HEIGHT, PLAYER_RADIUS};
 use arena_shared::protocol::*;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -45,9 +45,8 @@ pub struct ShowHitboxes(pub bool);
 #[derive(Resource, Default, PartialEq)]
 pub struct ShowHitboxes3d(pub bool);
 
-/// How tall a fighter's body is drawn in the 3D view (meters; about as tall as they're drawn),
-/// and how far apart its rings are.
-const BODY_HEIGHT: f32 = 2.1;
+/// How far apart a body's rings are in the 3D view (up to `BODY_HEIGHT`, what a shot takes it
+/// to be).
 const RING_EVERY: f32 = 0.15;
 
 /// A hitbox's color in the 3D view at `height` (meters) off the floor: blue at the floor, through

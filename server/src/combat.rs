@@ -320,7 +320,8 @@ pub(super) fn attack(
         match released {
             None => {}
             Some(sim::Attack::Projectile(projectile)) => {
-                spawn_projectile(&mut commands, Projectile { crit: primed, ..projectile }, side, might);
+                // Pitched as the aim is now (action mode's; level in the MOBA).
+                spawn_projectile(&mut commands, Projectile { crit: primed, climb: input.climb, ..projectile }, side, might);
             }
             Some(sim::Attack::Melee(mut swing)) => {
                 // An empowered strike grows with a Gravecaller Rift.

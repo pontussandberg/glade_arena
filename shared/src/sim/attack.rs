@@ -51,7 +51,7 @@ pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, mut s
         released = Some(match class.def().attack.kind {
             AttackKind::Projectile { radius, .. } => {
                 let origin = shot_spawn(pos, dir, radius);
-                Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: None, crit: false, extra: false })
+                Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: None, crit: false, extra: false, climb: 0.0 })
             }
             AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir, empowered: quick, grown: 0.0 }),
         });

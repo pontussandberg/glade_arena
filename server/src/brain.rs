@@ -284,7 +284,7 @@ pub(super) fn think(
                     let shots = (0..*count)
                         .map(|n| {
                             let dir = Vec2::from_angle(from + step * n as f32);
-                            Projectile { owner: id.0, class: *class, origin: pos.0 + dir * (PLAYER_RADIUS + shot.radius), dir, spawn_tick: now, ability: None, crit: false, extra: false }
+                            Projectile { owner: id.0, class: *class, origin: pos.0 + dir * (PLAYER_RADIUS + shot.radius), dir, spawn_tick: now, ability: None, crit: false, extra: false, climb: 0.0 }
                         })
                         .collect();
                     deeds.0.push(Deed::Shots { side, shots, might });

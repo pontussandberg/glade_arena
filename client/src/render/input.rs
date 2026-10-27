@@ -109,12 +109,14 @@ pub(super) fn read_local_input(
         move_to = None;
     }
 
-    // The action camera aims straight ahead, where it looks.
+    // The action camera aims straight ahead, where it looks, and up or down at what its
+    // crosshair is on.
     let aim = match (cursor, me) {
         _ if mode.free => mode.forward(),
         (Some(cursor), Some(me)) => cursor - me,
         _ => desired.0.aim,
     };
+    let climb = if mode.free { mode.climb } else { 0.0 };
     // Casts not sent yet, and new ones after them, each toward the cursor as its key went down.
     let mut casts = PlayerInput { casts: desired.0.casts, ..default() };
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
@@ -175,7 +177,7 @@ pub(super) fn read_local_input(
     }
     // `casts` and `fire` are kept until they've been sent (`send_commands` clears them), so a
     // short tap isn't missed.
-    desired.0 = PlayerInput { move_to, walk, aim, fire, casts: casts.casts };
+    desired.0 = PlayerInput { move_to, walk, aim, climb, fire, casts: casts.casts };
 }
 
 /// The range circle shows how far our attack reaches as it is now: further while our `follow_up`

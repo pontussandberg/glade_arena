@@ -117,8 +117,9 @@ pub(super) fn fly_shots(
     let tick = clock.now(true);
     for (projectile, mut transform, mut visibility, thrown, spin) in &mut shots {
         let speed = projectile.class.def().shot(projectile.ability).map_or(0.0, |s| s.speed);
-        let height = shot_height(thrown.is_some());
         let at_tick = tick.max(projectile.spawn_tick as f32 - 1.0);
+        // Aimed up or down (the action camera's), it rises or falls as it flies.
+        let height = shot_height(thrown.is_some()) + projectile.climb * sim::projectile_flown(projectile, at_tick);
         let on_path = to_world(sim::projectile_pos(projectile, at_tick), height);
         let along = Quat::from_rotation_y(projectile.dir.to_angle());
         let forward_dir = along * Vec3::X;

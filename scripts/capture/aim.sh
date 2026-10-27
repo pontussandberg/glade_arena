@@ -1,10 +1,10 @@
 #!/bin/bash
 # aim.sh OUTDIR [TAG]: the action camera's aim, as the javelinist in practice with a target dummy
 # ahead and the cursor captured (headless Chrome on :9222, driven by shoot.mjs), into OUTDIR:
-# TAG_idle.png (the shot's line and its end mark), TAG_down.png and TAG_up.png (pitched),
-# TAG_body.png (a dummy placed right under the middle of the view: the line over it), TAG_wall.png
-# (turned left toward the spawn's wall: the line through it), TAG_throw.png (a contact sheet
-# of frames from the click on: the spear along the line) and TAG_lag.png (a sheet of frames
+# TAG_idle.png (the crosshair over your fighter's head), TAG_down.png and TAG_up.png (pitched:
+# the aim goes to the ground or into the sky), TAG_body.png (a dummy placed right under the
+# crosshair), TAG_wall.png (turned left toward the spawn's wall), TAG_throw.png (a contact sheet
+# of frames from the click on: the spear toward the crosshair) and TAG_lag.png (a sheet of frames
 # every 50 ms from W going down with "Fake ping" at +100 ms, then from it going up: the predicted
 # walk starting and stopping at once). TAG defaults to "aim".
 # The game must be up on http://localhost:8080 (`./scripts/dev.sh dev`).

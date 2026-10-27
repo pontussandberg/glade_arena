@@ -28,6 +28,10 @@ pub const DEV_PRIVATE_KEY: [u8; 32] = [0; 32];
 pub const JUMP: f32 = 2.5;
 /// Body radius used for hits (projectiles and melee reach).
 pub const PLAYER_RADIUS: f32 = 0.5;
+/// How tall a body is to a shot (meters): one flying higher passes over it.
+pub const BODY_HEIGHT: f32 = 2.1;
+/// How high a shot leaves the hand (meters): where its climb or fall starts from.
+pub const SHOT_HEIGHT: f32 = 1.0;
 /// How long a killed player is out of the fight before respawning (3 s).
 pub const RESPAWN_TICKS: u32 = 3 * TICK_HZ as u32;
 

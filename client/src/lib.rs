@@ -246,6 +246,7 @@ struct Sent {
     move_to: Option<Vec2>,
     walk: Vec2,
     aim: Vec2,
+    climb: f32,
     /// When the attack, walk or aim was last sent (`Time<Real>`), to send changes at most once a
     /// tick.
     attack_at: Duration,
@@ -301,15 +302,21 @@ fn send_commands(
             sent_walks.0.pop_front();
         }
     }
-    // In action mode the aim is the camera's, sent as it turns while our attack winds up (the
-    // only time the server has a use for it), so the attack follows it until it goes off
-    // (`PlayerCommand::Aim`); the click that starts one carries the aim itself.
+    // In action mode the aim is the camera's: its direction and its pitch (`climb`). It's sent
+    // as the camera turns while our attack winds up (the only time the server has a use for it),
+    // so the attack follows it until it goes off (`PlayerCommand::Aim`); the click that starts
+    // one carries the direction itself, and the pitch goes ahead of it if it changed. Out of
+    // action mode the pitch is sent level once, so no shot keeps the last one.
+    let action = mode.as_ref().is_some_and(|mode| mode.free);
     let winding_up = attack.is_some_and(|attack| attack.winding_up().is_some());
-    if mode.as_ref().is_some_and(|mode| mode.free) && winding_up && input.aim != sent.aim && due(sent.aim_at) {
-        send(PlayerCommand::Aim(input.aim));
-        (sent.aim, sent.aim_at) = (input.aim, now);
+    let turned = input.aim != sent.aim || input.climb != sent.climb;
+    let pitched = input.climb != sent.climb;
+    let firing = input.fire && due(sent.attack_at);
+    if (action && winding_up && turned && due(sent.aim_at)) || (pitched && (firing || !action)) {
+        send(PlayerCommand::Aim(input.aim, input.climb));
+        (sent.aim, sent.climb, sent.aim_at) = (input.aim, input.climb, now);
     }
-    if input.fire && due(sent.attack_at) {
+    if firing {
         send(PlayerCommand::Attack(input.aim));
         (sent.aim, sent.attack_at) = (input.aim, now);
         desired.0.fire = false;

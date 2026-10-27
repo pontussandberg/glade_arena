@@ -8,12 +8,13 @@
 //!   `CameraMode::free`; the server plays along: `RoomRequest::ActionMode`): straight behind
 //!   your fighter, turned by the mouse once a click has captured the cursor (ESC frees it again;
 //!   until then, a right drag or the arrow keys turn it). You aim where the camera looks: attacks
-//!   and abilities go straight ahead, up the line drawn from your fighter
-//!   (`render::show_aim_line`). WASD walks relative to it
+//!   and abilities go straight ahead, up or down at what the crosshair in the middle of the
+//!   screen is on (`aim_climb`, `render::show_crosshair`). WASD walks relative to it
 //!   (`render::read_local_input`), and walking doesn't stop or cancel an attack; holding the left
 //!   button keeps attacking. Wheel (or + / -) zooms, down to arm's length to look at fighters up
 //!   close. Tab moves it on to the next fighter (and back to you), to watch them play.
 
+use arena_shared::config::{BODY_HEIGHT, PLAYER_RADIUS, SHOT_HEIGHT};
 use arena_shared::protocol::{PlayerId, Pos};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
@@ -34,12 +35,11 @@ const ZOOM_UNCAPPED: f32 = 1.6;
 const EDGE_PX: f32 = 18.0;
 const PAN_SPEED: f32 = 26.0;
 
-/// The free camera: how far it stays (meters), the height it looks at on a fighter, the pitch it
+/// The free camera: how far it stays (meters), the pitch it
 /// can turn between (radians above the horizon), how fast dragging turns it (radians per pixel)
 /// and the arrow keys (radians per second), how fast + / - zoom (wheel notches per second), and
 /// how far the mouse must move (pixels) before holding the right button hides the cursor.
 const FREE_DISTANCE: (f32, f32) = (1.2, 24.0);
-const FREE_AIM_HEIGHT: f32 = 1.6;
 const FREE_PITCH: (f32, f32) = (-0.35, 1.1);
 const FREE_TURN_SPEED: f32 = 0.005;
 const FREE_KEY_TURN: f32 = 2.0;
@@ -49,9 +49,15 @@ const DRAG_PX: f32 = 6.0;
 /// field of view (vertical, radians: wider than the MOBA camera's, as a shooter's); and how far
 /// short of a wall it stops when one is in the way.
 const ACTION_DISTANCE: f32 = 6.0;
-const ACTION_PITCH: f32 = 0.28;
+const ACTION_PITCH: f32 = 0.1;
+/// How high over your fighter's feet the action camera looks (meters): over their head, so
+/// they stand in the lower middle of the view and the crosshair floats clear above them.
+const ACTION_LOOK_HEIGHT: f32 = 2.6;
 const ACTION_FOV: f32 = 1.05;
 const WALL_MARGIN: f32 = 0.45;
+/// How far ahead the crosshair aims at most (meters): looking into the sky, the aim goes out
+/// this far along the camera's look.
+const AIM_REACH: f32 = 60.0;
 /// How fast the camera eases back out once a wall no longer holds it in (per second,
 /// exponential); coming in it snaps, so it's never inside the wall.
 const WALL_EASE_OUT: f32 = 5.0;
@@ -116,6 +122,9 @@ pub struct CameraMode {
     /// How far back the action camera is this frame: its orbit's distance, or less while a wall
     /// holds it in (`follow_camera`).
     held_at: f32,
+    /// How much the action camera's aim rises per meter ahead: the pitch from your hand to what
+    /// the crosshair is on (`aim_climb`), as a tangent.
+    pub climb: f32,
     /// Whom the free camera follows instead of you (Tab), if anyone.
     watching: Option<Entity>,
     /// How far the mouse has moved (pixels) since the right button went down.
@@ -126,7 +135,7 @@ pub struct CameraMode {
 
 impl Default for CameraMode {
     fn default() -> Self {
-        CameraMode { free: false, locked: false, just_locked: false, just_unlocked: false, uncapped: false, unlocked: false, orbit: Orbit { yaw: 0.0, pitch: ACTION_PITCH, distance: ACTION_DISTANCE }, held_at: ACTION_DISTANCE, watching: None, dragged: 0.0, grabbed_at: None }
+        CameraMode { free: false, locked: false, just_locked: false, just_unlocked: false, uncapped: false, unlocked: false, orbit: Orbit { yaw: 0.0, pitch: ACTION_PITCH, distance: ACTION_DISTANCE }, held_at: ACTION_DISTANCE, climb: 0.0, watching: None, dragged: 0.0, grabbed_at: None }
     }
 }
 
@@ -429,7 +438,45 @@ fn follow_camera(
     let ease = 1.0 - (-WALL_EASE_OUT * time.delta_secs()).exp();
     mode.held_at = if distance < mode.held_at { distance } else { mode.held_at + (distance - mode.held_at) * ease };
     let orbit = Orbit { distance: mode.held_at, ..mode.orbit };
-    camera.set_if_neq(orbit.transform(arena::to_world(pivot, FREE_AIM_HEIGHT)));
+    camera.set_if_neq(orbit.transform(arena::to_world(pivot, ACTION_LOOK_HEIGHT)));
+    let bodies: Vec<Vec2> = fighters.iter().map(|t| arena::to_gameplay(t.translation)).collect();
+    mode.climb = aim_climb(&camera, pivot, &bodies);
+}
+
+/// How much the aim rises per meter ahead, as a tangent: from the hand of the fighter at `pivot`
+/// (at `SHOT_HEIGHT`) to what the crosshair is on, the first of `bodies` the camera's line of
+/// sight meets past the fighter (a column `BODY_HEIGHT` tall), else the ground where the line
+/// meets that, else a point `AIM_REACH` out along it. The line passes through the fighter, so
+/// the aim's direction along the ground is the camera's; only its pitch comes from here.
+fn aim_climb(camera: &Transform, pivot: Vec2, bodies: &[Vec2]) -> f32 {
+    let (from, look) = (camera.translation, *camera.forward());
+    let (start, along) = (arena::to_gameplay(from), arena::to_gameplay(look));
+    // Along the line (meters) to the point nearest the fighter: what's on it before that is
+    // behind them.
+    let past = (pivot - start).dot(along) / along.length_squared().max(1e-6) + PLAYER_RADIUS;
+    let mut reach = AIM_REACH;
+    if look.y < 0.0 {
+        reach = reach.min(-from.y / look.y);
+    }
+    for &body in bodies {
+        // Where the line crosses the body's column across the ground...
+        let to = start - body;
+        let (a, b, c) = (along.length_squared(), 2.0 * along.dot(to), to.length_squared() - PLAYER_RADIUS * PLAYER_RADIUS);
+        let disc = b * b - 4.0 * a * c;
+        if a <= 1e-6 || disc < 0.0 {
+            continue;
+        }
+        let near = (-b - disc.sqrt()) / (2.0 * a);
+        // ...and whether it's the column's side it meets, or its top, looking down on it.
+        let side = (near > past && (0.0..=BODY_HEIGHT).contains(&(from.y + look.y * near))).then_some(near);
+        let top = (look.y < 0.0).then(|| (BODY_HEIGHT - from.y) / look.y).filter(|&t| t > past && (start + along * t).distance(body) <= PLAYER_RADIUS);
+        if let Some(t) = side.or(top) {
+            reach = reach.min(t);
+        }
+    }
+    let on = from + look * reach;
+    let ahead = (arena::to_gameplay(on) - pivot).length().max(PLAYER_RADIUS);
+    (on.y - SHOT_HEIGHT) / ahead
 }
 
 /// Y in the arena locks or unlocks the MOBA camera (the lock by the minimap does too).
