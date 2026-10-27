@@ -32,6 +32,12 @@ impl Team {
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect, Deref, DerefMut)]
 pub struct Pos(pub Vec2);
 
+/// Which way a fighter's keys walked it on the server's last step (zero: none held). The
+/// client's prediction of its own fighter (`render::glide`) measures by it how long its keys
+/// take to be stepped, since each change is its own order (`PlayerCommand::Walk`).
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
+pub struct Walking(pub Vec2);
+
 impl Ease for Pos {
     fn interpolating_curve_unbounded(start: Self, end: Self) -> impl Curve<Self> {
         FunctionCurve::new(Interval::UNIT, move |t| Pos(start.0.lerp(end.0, t)))
@@ -814,6 +820,7 @@ impl Plugin for ProtocolPlugin {
         // Others' fighters are interpolated (smooth, a little in the past); our own isn't: it's
         // shown as the server last said it was, for the least delay after a command.
         app.component::<Pos>().replicate().add_interpolation_with(lerp_or_jump);
+        app.component::<Walking>().replicate();
         app.component::<AttackState>().replicate().add_interpolation_with(hold);
         app.component::<LastSwing>().replicate().add_interpolation_with(hold);
         app.component::<Cooldowns>().replicate().add_interpolation_with(hold);
