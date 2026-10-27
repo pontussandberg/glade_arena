@@ -1,10 +1,15 @@
-//! Our own fighter drawn smoothly between the server's positions, on our clock (`Glide`), and
-//! every fighter's transform kept on its position.
+//! Our own fighter drawn smoothly between the server's positions, on our clock (`Glide`), or,
+//! with the action camera, where our keys will have taken it by the time the server says so
+//! (`Predicted`); and every fighter's transform kept on its position.
 
 use super::*;
 
+use std::collections::VecDeque;
+
+use arena_shared::sim;
+
 use crate::Me;
-use crate::feedback::AttackClock;
+use crate::feedback::{AttackClock, ME_BEHIND_TICKS};
 use crate::arena::to_world;
 
 /// Our own fighter, drawn smoothly: each position from the server is noted with the server tick
@@ -68,6 +73,117 @@ pub(super) fn glide_me(mut commands: Commands, clock: AttackClock, mut me: Query
         }
         let drawn = glide.at(now).unwrap_or(pos.0);
         glide.drawn = drawn;
+        if pos.0 != drawn {
+            pos.0 = drawn;
+        }
+    }
+}
+
+/// How much of what the server put the prediction off by is shown away each second.
+const CORRECTION_RATE: f32 = 8.0;
+/// Ticks between a key going out and the server's state with it coming back, over the round
+/// trip itself: the server's own step and the packets' framing.
+const PREDICT_SLACK_TICKS: f32 = 2.0;
+/// How long (seconds) what we walked is remembered, to replay.
+const WALKS_KEPT: f32 = 2.0;
+/// How many ticks ahead of the server's latest position the prediction will walk at most (a
+/// stalled connection doesn't run off).
+const PREDICT_MOST_TICKS: u32 = 64;
+
+/// Our own fighter with the action camera, drawn where it will be once the server has our keys
+/// rather than where it was: its latest position walked on by the keys we've held since, a
+/// round trip's worth (`predict_me`), by the same sim the server walks it with. Where the server
+/// turns out to disagree, the difference is shown away smoothly rather than snapped.
+#[derive(Component, Default)]
+pub(super) struct Predicted {
+    /// The latest position from the server, and the tick it's from.
+    base: Option<(u32, Vec2)>,
+    /// What it last drew, to tell a new position from the server (anything else) from its own.
+    drawn: Vec2,
+    /// How far what's drawn still is from the prediction the server's latest position gives.
+    error: Vec2,
+    /// Which way our keys walked, each frame: (seconds, way), oldest first.
+    walks: VecDeque<(f32, Vec2)>,
+}
+
+impl Predicted {
+    /// Which way we walked at `at` seconds (the last noted before it).
+    fn walk_at(&self, at: f32) -> Vec2 {
+        self.walks.iter().rev().find(|(t, _)| *t <= at).or(self.walks.front()).map_or(Vec2::ZERO, |(_, way)| *way)
+    }
+
+    /// Where we are at tick `at` (fractional, between two ticks' steps), walked on from `base`
+    /// tick by tick by `step`, each tick by the keys held when its input went out, taken to be
+    /// `at + 1 - tick` ticks before `now` (seconds).
+    fn predict(&self, base: (u32, Vec2), at: f32, now: f32, mut step: impl FnMut(Vec2, Vec2, u32) -> Vec2) -> Vec2 {
+        let (base_tick, mut pos) = base;
+        let last = (at.floor() as u32).max(base_tick).min(base_tick + PREDICT_MOST_TICKS);
+        let mut before = pos;
+        for tick in base_tick + 1..=last + 1 {
+            before = pos;
+            pos = step(pos, self.walk_at(now - (at + 1.0 - tick as f32) * TICK_DT), tick);
+        }
+        before.lerp(pos, at.fract())
+    }
+}
+
+/// Our fighter's position with the action camera: predicted from the server's latest position
+/// (see `Predicted`). A new position from the server replaces the base; what that changes in the
+/// prediction goes into the error shown away. A position that hasn't changed since is still news
+/// each tick (the server only sends one when it changes).
+pub(super) fn predict_me(
+    mut commands: Commands,
+    time: Res<Time<Real>>,
+    clock: AttackClock,
+    map: Res<crate::rooms::CurrentMap>,
+    desired: Res<crate::DesiredInput>,
+    link: Query<&Link, With<Client>>,
+    mut me: Query<(Entity, &mut Pos, &ClassId, Option<&Dashing>, Option<&Chilled>, Option<&Hasted>, Option<&mut Predicted>), With<Me>>,
+) {
+    let Some(latest) = clock.latest_tick() else { return };
+    let rtt = link.single().map_or(0.0, |link| link.stats.rtt.as_secs_f32());
+    let now = time.elapsed_secs();
+    let at = clock.now(true) + ME_BEHIND_TICKS + rtt * TICK_HZ as f32 + PREDICT_SLACK_TICKS;
+    let map = map.map();
+    for (entity, mut pos, class, dashing, chilled, hasted, predicted) in &mut me {
+        let Some(mut predicted) = predicted else {
+            commands.entity(entity).insert(Predicted { drawn: pos.0, ..default() });
+            continue;
+        };
+        predicted.walks.push_back((now, desired.0.walk));
+        while predicted.walks.front().is_some_and(|(t, _)| *t < now - WALKS_KEPT) {
+            predicted.walks.pop_front();
+        }
+        // The server's step for one tick of ours: walking (never rooted by a windup, in action
+        // mode), or a dash running on.
+        let (chilled, hasted) = (chilled.copied().unwrap_or_default(), hasted.copied().unwrap_or_default());
+        let step = |mut dashing: Dashing| {
+            move |from: Vec2, walk: Vec2, tick: u32| {
+                let input = PlayerInput { walk, aim: Vec2::X, ..default() };
+                sim::move_player_boosted(map, from, &input, *class, &AttackState::default(), &mut dashing, &chilled, &hasted, tick, 1.0)
+            }
+        };
+        let dashing = dashing.copied().unwrap_or_default();
+        let fresh = pos.0 != predicted.drawn;
+        let newer = predicted.base.is_none_or(|(tick, _)| tick < latest);
+        if fresh || newer {
+            let base = (latest, if fresh { pos.0 } else { predicted.base.map_or(pos.0, |(_, p)| p) });
+            if let Some(old) = predicted.base {
+                let was = predicted.predict(old, at, now, step(dashing));
+                let is = predicted.predict(base, at, now, step(dashing));
+                predicted.error += was - is;
+            }
+            predicted.base = Some(base);
+        }
+        let Some(base) = predicted.base else { continue };
+        let prediction = predicted.predict(base, at, now, step(dashing));
+        // A jump (a respawn) isn't eased.
+        if predicted.error.length() > JUMP {
+            predicted.error = Vec2::ZERO;
+        }
+        predicted.error *= (-CORRECTION_RATE * time.delta_secs()).exp();
+        let drawn = prediction + predicted.error;
+        predicted.drawn = drawn;
         if pos.0 != drawn {
             pos.0 = drawn;
         }

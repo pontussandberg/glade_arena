@@ -60,8 +60,14 @@ fn toggle_menu(
     room: Res<CurrentRoom>,
     mut desired: ResMut<crate::DesiredInput>,
     mut aiming: ResMut<crate::casting::Aiming>,
+    mode: Res<crate::camera::CameraMode>,
 ) {
     let esc = keys.just_pressed(KeyCode::Escape);
+    // While the action camera has the cursor, ESC only lets it go (`camera::follow_camera`,
+    // before or after this); the next one opens the menu.
+    if esc && mode.free && (mode.locked || mode.just_unlocked) {
+        return;
+    }
     // ESC first drops a normal cast's aim; the next one opens the menu.
     if esc && aiming.0.is_some() {
         aiming.0 = None;

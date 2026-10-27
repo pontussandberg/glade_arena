@@ -28,6 +28,8 @@ mod input;
 pub(crate) use input::*;
 mod glide;
 use glide::*;
+mod aim;
+use aim::*;
 
 pub struct RenderPlugin;
 
@@ -58,7 +60,9 @@ impl Plugin for RenderPlugin {
         app.init_resource::<crate::feedback::LatestClock>();
         app.add_systems(
             RunFixedMainLoop,
-            (crate::feedback::advance_latest_clock, glide_me).chain().in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
+            (crate::feedback::advance_latest_clock, glide_me.run_if(|mode: Res<crate::camera::CameraMode>| !mode.free), predict_me.run_if(|mode: Res<crate::camera::CameraMode>| mode.free))
+                .chain()
+                .in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
         );
         app.add_systems(
             Update,
@@ -70,7 +74,7 @@ impl Plugin for RenderPlugin {
                 align_to_world.after(crate::rig::Posing).after(fly_shots),
                 toggle_range_circle,
                 fit_range_circle,
-                (update_status, update_key_hints, fold_controls, show_crosshair),
+                (update_status, update_key_hints, fold_controls, show_crosshair, show_aim_line.after(read_local_input)),
                 (mark_relations, light_buttons),
             ),
         );
@@ -328,6 +332,25 @@ fn setup_scene(
     };
     commands.spawn(ring(24.0, Color::NONE, palette::ui::TEXT.with_alpha(0.75)));
     commands.spawn(ring(7.0, palette::ui::TEXT, palette::ui::BACKDROP.with_alpha(0.7)));
+    // The mark at the end of the shot's line, moved about by its transform (no layout).
+    commands.spawn((
+        AimEnd,
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(-AIM_END_SIZE / 2.0),
+            top: px(-AIM_END_SIZE / 2.0),
+            width: px(AIM_END_SIZE),
+            height: px(AIM_END_SIZE),
+            border: UiRect::all(px(1.5)),
+            border_radius: BorderRadius::MAX,
+            ..default()
+        },
+        BackgroundColor(palette::ui::BACKDROP.with_alpha(0.35)),
+        BorderColor::all(palette::ui::TEXT.with_alpha(0.7)),
+        UiTransform::default(),
+        Visibility::Hidden,
+        GlobalZIndex(5),
+    ));
     commands
         .spawn(corner_panel(false, 8.0))
         .with_children(|corner| {

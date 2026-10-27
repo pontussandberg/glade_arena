@@ -108,6 +108,8 @@ pub struct CameraMode {
     pub(crate) locked: bool,
     /// A click took the cursor this frame (so it's no attack: `render::read_local_input`).
     pub(crate) just_locked: bool,
+    /// ESC let the cursor go this frame (so it doesn't open the menu too: `esc_menu`).
+    pub(crate) just_unlocked: bool,
     /// The MOBA camera zooms out past `ZOOM_RANGE`, to `ZOOM_UNCAPPED` (practice only).
     pub uncapped: bool,
     /// The MOBA camera is off your fighter: it stays put, panned by the cursor at the screen's
@@ -127,7 +129,7 @@ pub struct CameraMode {
 
 impl Default for CameraMode {
     fn default() -> Self {
-        CameraMode { free: false, locked: false, just_locked: false, uncapped: false, unlocked: false, orbit: Orbit { yaw: 0.0, pitch: ACTION_PITCH, distance: ACTION_DISTANCE }, held_at: ACTION_DISTANCE, watching: None, dragged: 0.0, grabbed_at: None }
+        CameraMode { free: false, locked: false, just_locked: false, just_unlocked: false, uncapped: false, unlocked: false, orbit: Orbit { yaw: 0.0, pitch: ACTION_PITCH, distance: ACTION_DISTANCE }, held_at: ACTION_DISTANCE, watching: None, dragged: 0.0, grabbed_at: None }
     }
 }
 
@@ -155,9 +157,9 @@ impl CameraMode {
         self.ground_axes().0
     }
 
-    /// Where the fighter aims: at the crosshair's line, which runs past its shoulder, where that
-    /// line is `AIM_CONVERGE` ahead. Nearer the shot passes a little inside the crosshair, further
-    /// a little outside, by less than the shoulder's width.
+    /// Where the fighter aims with nothing ahead for the crosshair to be on (`render::aim_through`
+    /// has it otherwise): at the crosshair's line, which runs past its shoulder, where that line is
+    /// `AIM_CONVERGE` ahead.
     pub fn aim(&self) -> Vec2 {
         let (forward, right) = self.ground_axes();
         (forward * AIM_CONVERGE + right * SHOULDER).normalize()
@@ -305,6 +307,7 @@ fn switch_camera(
     mode.dragged = 0.0;
     mode.locked = false;
     mode.just_locked = false;
+    mode.just_unlocked = false;
     mode.orbit.pitch = ACTION_PITCH;
     mode.orbit.distance = ACTION_DISTANCE;
     mode.held_at = ACTION_DISTANCE;
@@ -359,8 +362,10 @@ fn follow_camera(
     let (mut window, mut cursor) = window.into_inner();
     let on_hud = window.physical_cursor_position().is_some_and(|at| hud.iter().any(|(node, place, visible)| visible.get() && node.contains_point(*place, at)));
     mode.just_locked = false;
+    mode.just_unlocked = false;
     if mode.locked && keys.just_pressed(KeyCode::Escape) {
         mode.locked = false;
+        mode.just_unlocked = true;
         release_cursor(&mut cursor);
     } else if !mode.locked && mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]) && !mode.turning() && !on_hud {
         mode.locked = true;
