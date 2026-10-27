@@ -41,7 +41,7 @@ impl Plugin for PracticePlugin {
             Update,
             (show_tools, fold_tools, use_switches, sync_action_mode, step_fake_ping, switch_map).chain().run_if(in_state(Screen::InGame)),
         );
-        app.add_systems(Update, (picker::show_picker, picker::pick_class, picker::mark_current));
+        app.add_systems(Update, (picker::show_picker, picker::pick_class, picker::mark_current, picker::rest_faces));
         app.add_systems(Update, tools_off.run_if(not(in_state(Screen::InGame)).or_else(not(practicing))));
         app.add_systems(OnExit(Screen::InGame), close_tools);
     }
