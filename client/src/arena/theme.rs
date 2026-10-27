@@ -45,6 +45,9 @@ pub enum Wilds {
     /// Bare highland: dry grass rising in terraces of banded rock, with rock pillars, scrub,
     /// boulders and a few round autumn trees.
     Highlands,
+    /// Open meadow, rising gently and bare out to the haze: nothing grows on it, nothing in the
+    /// way of the view.
+    Field,
 }
 
 impl Theme {
@@ -54,7 +57,7 @@ impl Theme {
             MapId::Keep => &FEN,
             MapId::Gorge => &HIGHLANDS,
             MapId::Wilds => &HOLLOW,
-            MapId::Yard => &GLADE,
+            MapId::Yard => &YARD,
             _ => &BASTION,
         }
     }
@@ -85,6 +88,9 @@ const GLADE: Theme = Theme {
     sun_illuminance: 2_050.0,
     wilds: Wilds::Forest,
 };
+
+/// Practice Yard: the glade's dusk, but open meadow all around instead of its forest.
+const YARD: Theme = Theme { wilds: Wilds::Field, ..GLADE };
 
 /// Sunken Keep: a drowned fen in the last grey light. Sea-green tussocks in dark water, dead
 /// snags, blue mist; the keep's torches carry the warmth. Bog cotton for flowers.

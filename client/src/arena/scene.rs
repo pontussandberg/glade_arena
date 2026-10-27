@@ -31,6 +31,7 @@ pub fn tile_color(theme: &Theme, tile: Tile) -> Color {
             Wilds::Forest => theme.pine.mix(&INK, 0.4),
             Wilds::Fen => theme.pond.mix(&INK, 0.45),
             Wilds::Highlands => theme.wall.mix(&INK, 0.35),
+            Wilds::Field => theme.meadow.mix(&INK, 0.2),
         },
     }
 }
@@ -226,6 +227,7 @@ fn build_arena(
         Wilds::Forest => 0.055,
         Wilds::Fen => 0.04,
         Wilds::Highlands => 0.02,
+        Wilds::Field => 0.0,
     };
     for _ in 0..(extent.x * extent.y * 4.0 * density) as usize {
         let p = Vec2::new(rng.range(-extent.x, extent.x), rng.range(-extent.y, extent.y));
@@ -694,6 +696,7 @@ impl Props {
             }
             Wilds::Fen => self.willow(rng, c, 0.0, 1.5),
             Wilds::Highlands => self.round_tree(rng, c, 0.0, 1.4),
+            Wilds::Field => self.tree(rng, c, 0.0, 1.7),
         }
     }
 
@@ -725,6 +728,8 @@ impl Props {
                 self.add(Shape::Rock, self.theme.slate.mix(&self.theme.wall, rng.next()), t);
             }
             Wilds::Highlands => self.shrub(rng, p, ground),
+            // Nothing grows on the field (none are asked for: its density is zero).
+            Wilds::Field => {}
         }
     }
 
@@ -1019,7 +1024,7 @@ impl Props {
 
 /// Height of the land outside the clearing (0 at its edge), before roughness: the forest rolls
 /// up into low hills, a fen sinks under the water with tussocks breaking it, highlands climb in
-/// terraces.
+/// terraces, a field rises gently.
 fn wild_height(theme: &Theme, m: &Map, p: Vec2) -> f32 {
     let out = -m.edge_margin(p);
     match theme.wilds {
@@ -1035,6 +1040,7 @@ fn wild_height(theme: &Theme, m: &Map, p: Vec2) -> f32 {
             let f = (rise / TERRACE).fract();
             (rise / TERRACE).floor() * TERRACE + TERRACE * ((f - 0.6) / 0.25).clamp(0.0, 1.0)
         }
+        Wilds::Field => (out * 0.12).clamp(0.0, 1.5),
     }
 }
 
@@ -1064,6 +1070,8 @@ fn wild_color(theme: &Theme, height: f32, flat: f32, pick: f32) -> Color {
         Wilds::Highlands if pick < 0.5 => theme.grass,
         Wilds::Highlands if pick < 0.8 => theme.meadow,
         Wilds::Highlands => theme.path,
+        Wilds::Field if pick < 0.7 => theme.grass,
+        Wilds::Field => theme.meadow,
     }
 }
 
@@ -1099,6 +1107,7 @@ fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut Lcg) -> Me
                     Wilds::Forest => (0.5, (-0.3, 0.6)),
                     Wilds::Fen => (0.3, (-0.05, 0.05)),
                     Wilds::Highlands => (0.3, (-0.15, 0.15)),
+                    Wilds::Field => (0.3, (-0.04, 0.04)),
                 };
                 p += Vec2::new(rng.range(-shift, shift), rng.range(-shift, shift));
                 wild_height(theme, m, p) + rng.range(rough.0, rough.1)
