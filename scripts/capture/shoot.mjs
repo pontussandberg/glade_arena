@@ -2,11 +2,14 @@
 // Usage: node shoot.mjs out.png [steps...]
 //   steps: wait:SECONDS | click:X,Y | type:TEXT | key:KEYNAME | size:W,H (the viewport, in CSS px)
 //          down:KEY / up:KEY (hold a key) | mdown:X,Y / mup:X,Y (hold the left button)
+//          throttle:N (the tab's CPU N times slower, as on a loaded machine; 1 lifts it)
+// CDP_PORT=9223 drives a Chrome started on that port instead (a second player).
 // Chrome must already be running with --remote-debugging-port=9222.
 import { writeFileSync } from "node:fs";
 
 const [, , out, ...steps] = process.argv;
-const list = await (await fetch("http://127.0.0.1:9222/json")).json();
+const port = process.env.CDP_PORT ?? 9222; // another Chrome, for a second player
+const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
 const page = list.find((t) => t.type === "page");
 if (!page) throw new Error("no page target");
 const ws = new WebSocket(page.webSocketDebuggerUrl);
@@ -36,6 +39,7 @@ ws.addEventListener("message", (e) => {
 for (const step of steps) {
   const [cmd, rest] = [step.slice(0, step.indexOf(":")), step.slice(step.indexOf(":") + 1)];
   if (cmd === "wait") await sleep(Number(rest));
+  else if (cmd === "throttle") await send("Emulation.setCPUThrottlingRate", { rate: Number(rest) }); // N times slower, like a loaded machine
   else if (cmd === "size") {
     const [width, height] = rest.split(",").map(Number);
     await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });

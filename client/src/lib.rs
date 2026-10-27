@@ -262,14 +262,14 @@ fn send_commands(
     mut desired: ResMut<DesiredInput>,
     mut walk_when_ordered: ResMut<WalkWhenOrdered>,
     mut stop: ResMut<StopWalking>,
-    me: Query<(), With<Me>>,
+    me: Query<Option<&AttackState>, With<Me>>,
     mut client: Query<&mut MessageSender<PlayerCommand>, (With<Client>, With<Connected>)>,
     mut sent: Local<Sent>,
     mode: Option<Res<crate::camera::CameraMode>>,
     mut sent_walks: ResMut<SentWalks>,
     schedule: Res<WalkSchedule>,
 ) {
-    let (Ok(mut sender), false) = (client.single_mut(), me.is_empty()) else {
+    let (Ok(mut sender), Ok(attack)) = (client.single_mut(), me.single()) else {
         *sent = Sent::default();
         sent_walks.0.clear();
         // Nothing carries over to our next fighter: not a destination, not a click.
@@ -301,9 +301,11 @@ fn send_commands(
             sent_walks.0.pop_front();
         }
     }
-    // In action mode the aim is the camera's, sent as it turns, so an attack winding up follows
-    // it until it goes off (`PlayerCommand::Aim`).
-    if mode.as_ref().is_some_and(|mode| mode.free) && input.aim != sent.aim && due(sent.aim_at) {
+    // In action mode the aim is the camera's, sent as it turns while our attack winds up (the
+    // only time the server has a use for it), so the attack follows it until it goes off
+    // (`PlayerCommand::Aim`); the click that starts one carries the aim itself.
+    let winding_up = attack.is_some_and(|attack| attack.winding_up().is_some());
+    if mode.as_ref().is_some_and(|mode| mode.free) && winding_up && input.aim != sent.aim && due(sent.aim_at) {
         send(PlayerCommand::Aim(input.aim));
         (sent.aim, sent.aim_at) = (input.aim, now);
     }

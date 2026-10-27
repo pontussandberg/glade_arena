@@ -298,9 +298,10 @@ pub(super) fn attack(
         // In action mode an attack winding up follows the aim until it goes off
         // (`PlayerCommand::Aim`); the MOBA's locks it on the click.
         if action
-            && state.winding_up().is_some()
+            && let Some(swing) = state.winding_up()
             && let Some(dir) = input.aim.try_normalize()
-            && let Some(swing) = state.swing.as_mut().filter(|swing| swing.dir != dir)
+            && swing.dir != dir
+            && let Some(swing) = state.swing.as_mut()
         {
             swing.dir = dir;
         }
