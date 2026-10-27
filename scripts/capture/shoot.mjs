@@ -3,6 +3,7 @@
 //   steps: wait:SECONDS | click:X,Y | type:TEXT | key:KEYNAME | size:W,H (the viewport, in CSS px)
 //          down:KEY / up:KEY (hold a key) | mdown:X,Y / mup:X,Y (hold the left button)
 //          throttle:N (the tab's CPU N times slower, as on a loaded machine; 1 lifts it)
+//          profile:SECONDS,PATH (a CPU profile of the page for SECONDS, as a .cpuprofile)
 // CDP_PORT=9223 drives a Chrome started on that port instead (a second player).
 // Chrome must already be running with --remote-debugging-port=9222.
 import { writeFileSync } from "node:fs";
@@ -84,6 +85,13 @@ for (const step of steps) {
     // An extra screenshot mid-sequence, to PATH.
     const s = await send("Page.captureScreenshot", clip ? { format: "jpeg", quality: 75, clip } : { format: "png" });
     writeFileSync(rest, Buffer.from(s.result.data, "base64"));
+  } else if (cmd === "profile") {
+    const [seconds, path] = [Number(rest.slice(0, rest.indexOf(","))), rest.slice(rest.indexOf(",") + 1)];
+    await send("Profiler.enable");
+    await send("Profiler.start");
+    await sleep(seconds);
+    const r = await send("Profiler.stop");
+    writeFileSync(path, JSON.stringify(r.result.profile));
   } else if (cmd === "type") await send("Input.insertText", { text: rest });
   else if (cmd === "key") {
     const codes = { Enter: 13, Escape: 27, Tab: 9 };

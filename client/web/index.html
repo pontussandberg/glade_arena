@@ -86,6 +86,24 @@
     // How long after the game starts the loader goes even if the game never says it's ready.
     const READY_FALLBACK_MS = 20000;
 
+    // How many datagrams the browser queues each way: written ones not yet sent, and received
+    // ones not yet read.
+    const DATAGRAMS_QUEUED = 64;
+    // The browser resolves a datagram write only once its network process has sent it, on the
+    // main thread, which the game keeps busy for most of every frame. Queuing one datagram at a
+    // time (the browser's default), the game could write about one a frame, and its packets
+    // queued up behind that whenever it had more to say, so the ping climbed by seconds under
+    // load. With a deeper queue writes return at once and the network process sends as they
+    // come. Received datagrams get the same depth: beyond it the browser drops the oldest
+    // unread one, and more than one can arrive during a frame.
+    window.WebTransport = class extends WebTransport {
+      constructor(...args) {
+        super(...args);
+        this.datagrams.outgoingHighWaterMark = DATAGRAMS_QUEUED;
+        this.datagrams.incomingHighWaterMark = DATAGRAMS_QUEUED;
+      }
+    };
+
     // How big the module is (0: no telling): written next to it by build-web.sh, since a
     // compressed response doesn't say.
     async function sizeOf(url) {
