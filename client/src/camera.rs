@@ -14,7 +14,7 @@
 //!   button keeps attacking. Wheel (or + / -) zooms, down to arm's length to look at fighters up
 //!   close. Tab moves it on to the next fighter (and back to you), to watch them play.
 
-use arena_shared::config::{PLAYER_RADIUS, SHOT_HEIGHT};
+use arena_shared::config::{BODY_HEIGHT, PLAYER_RADIUS, SHOT_HEIGHT};
 use arena_shared::protocol::{PlayerId, Pos};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
@@ -57,10 +57,15 @@ const ACTION_LOOK_HEIGHT: f32 = 1.9;
 const ACTION_SHOULDER: f32 = 1.1;
 const ACTION_FOV: f32 = 1.05;
 const WALL_MARGIN: f32 = 0.45;
-/// How far ahead of your fighter (meters) a shot's path crosses the camera's line of sight:
-/// there the crosshair is exact; nearer, the shot passes a little under it, farther a little
-/// over, by as much as the camera stands above the hand.
+/// How far ahead of your fighter (meters) a shot's path crosses the camera's line of sight
+/// with no fighter near the crosshair: there the crosshair is exact; nearer, the shot passes a
+/// little under and beside it, farther a little over, by as much as the camera stands off the
+/// hand.
 const AIM_CONVERGE: f32 = 12.0;
+/// How near the camera's line of sight (meters) a fighter's body draws the crossing to its own
+/// distance fully, and how far off it the pull is gone, so the crosshair is exact on anyone
+/// it's at or just beside, with no jump between the two (`aim_of`).
+const AIM_PULL: (f32, f32) = (0.6, 1.8);
 /// How fast the camera eases back out once a wall no longer holds it in (per second,
 /// exponential); coming in it snaps, so it's never inside the wall.
 const WALL_EASE_OUT: f32 = 5.0;
@@ -127,7 +132,8 @@ pub struct CameraMode {
     held_at: f32,
     /// Where the action camera aims along the ground, from your fighter, and how much the aim
     /// rises per meter ahead, as a tangent (`aim_of`). Not quite the camera's forward: it stands
-    /// off your shoulder, and the aim converges on its line of sight.
+    /// off your shoulder, and the aim converges on its line of sight, at whoever is near the
+    /// crosshair.
     pub aim: Vec2,
     pub climb: f32,
     /// Whom the free camera follows instead of you (Tab), if anyone.
@@ -357,8 +363,8 @@ fn follow_camera(
     >,
     mut mode: ResMut<CameraMode>,
     // Its own transform, set this frame (`GlobalTransform` lags a frame and would jitter).
-    me: Query<&Transform, (With<Me>, With<PlayerId>, Without<CameraRig>)>,
-    fighters: Query<&Transform, (With<PlayerId>, Without<CameraRig>)>,
+    me: Query<(Entity, &Transform), (With<Me>, With<PlayerId>, Without<CameraRig>)>,
+    fighters: Query<(Entity, &Transform), (With<PlayerId>, Without<CameraRig>)>,
     mut camera: Single<&mut Transform, With<CameraRig>>,
     window: Single<(&mut Window, &mut CursorOptions)>,
 ) {
@@ -423,10 +429,10 @@ fn follow_camera(
     if watched.is_none() && mode.watching.is_some() {
         mode.watching = None;
     }
-    let Some(target) = watched.or(me.single().ok()) else { return };
+    let Some((target, at)) = watched.or(me.single().ok()) else { return };
     // Follow its feet (not its posed, leaning body).
     let (forward, right) = mode.ground_axes();
-    let pivot = arena::to_gameplay(target.translation);
+    let pivot = arena::to_gameplay(at.translation);
     let shoulder = pivot + right * ACTION_SHOULDER;
     // The first wall on the way back from the pivot to the camera stops it short: at once, and
     // it eases back out when the wall is past.
@@ -445,22 +451,41 @@ fn follow_camera(
     mode.held_at = if distance < mode.held_at { distance } else { mode.held_at + (distance - mode.held_at) * ease };
     let orbit = Orbit { distance: mode.held_at, ..mode.orbit };
     camera.set_if_neq(orbit.transform(arena::to_world(shoulder, ACTION_LOOK_HEIGHT)));
-    (mode.aim, mode.climb) = aim_of(&camera, pivot, forward);
+    // The others' bodies, at the middle of their height, pull the aim's crossing to them.
+    let bodies = fighters.iter().filter(|(who, _)| *who != target).map(|(_, at)| at.translation.with_y(BODY_HEIGHT / 2.0));
+    (mode.aim, mode.climb) = aim_of(&camera, pivot, forward, bodies);
 }
 
 /// The aim: its direction along the ground from the fighter at `pivot`, and how much it rises
-/// per meter ahead, as a tangent, from their hand (at `SHOT_HEIGHT`) to the point `AIM_CONVERGE`
-/// ahead on the camera's line of sight. The camera's angle alone, whatever is in the way: the
-/// crosshair moved sideways at one height keeps the shot at that height. `forward` is the
-/// camera's, along the ground, for when the point is right over the fighter.
-fn aim_of(camera: &Transform, pivot: Vec2, forward: Vec2) -> (Vec2, f32) {
+/// per meter ahead, as a tangent, from their hand (at `SHOT_HEIGHT`) to a point ahead on the
+/// camera's line of sight: `AIM_CONVERGE` ahead, drawn to the distance of the `bodies` near
+/// the line (`AIM_PULL`), the nearer to it the more. The camera's angle alone, whatever is in
+/// the way: the crosshair moved sideways at one height keeps the shot at that height, and
+/// beside a body as at it. `forward` is the camera's, along the ground, for when the point is
+/// right over the fighter.
+fn aim_of(camera: &Transform, pivot: Vec2, forward: Vec2, bodies: impl Iterator<Item = Vec3>) -> (Vec2, f32) {
     let (from, look) = (camera.translation, *camera.forward());
     let along = arena::to_gameplay(look);
     let flat = along.length().max(1e-6);
     // Along the line (meters) to the point beside the fighter, and on to the one `AIM_CONVERGE`
     // past it.
     let past = (pivot - arena::to_gameplay(from)).dot(along) / flat;
-    let on = from + look * ((past + AIM_CONVERGE) / flat);
+    let (mut pull, mut drawn) = (0.0, 0.0);
+    for body in bodies {
+        let to = body - from;
+        let at = to.dot(look);
+        // Only bodies ahead of the fighter pull, by how near the line they are.
+        if at * flat <= past + PLAYER_RADIUS {
+            continue;
+        }
+        let off = (to - look * at).length();
+        let weight = 1.0 - ((off - AIM_PULL.0) / (AIM_PULL.1 - AIM_PULL.0)).clamp(0.0, 1.0);
+        pull += weight;
+        drawn += weight * at;
+    }
+    let converge = (past + AIM_CONVERGE) / flat;
+    let converge = if pull > 0.0 { converge.lerp(drawn / pull, pull.min(1.0)) } else { converge };
+    let on = from + look * converge;
     let ahead = arena::to_gameplay(on) - pivot;
     (ahead.try_normalize().unwrap_or(forward), (on.y - SHOT_HEIGHT) / ahead.length().max(PLAYER_RADIUS))
 }
