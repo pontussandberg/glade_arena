@@ -51,10 +51,10 @@ const DRAG_PX: f32 = 6.0;
 const ACTION_DISTANCE: f32 = 6.0;
 const ACTION_PITCH: f32 = 0.1;
 /// How high over your fighter's feet the action camera looks (meters), and how far to their
-/// right (meters, over the shoulder): they stand left of the middle of the view, the
-/// crosshair clear of them.
-const ACTION_LOOK_HEIGHT: f32 = 1.9;
-const ACTION_SHOULDER: f32 = 1.1;
+/// right (meters, over the shoulder): they stand under the middle of the view, the crosshair
+/// clear over their head.
+const ACTION_LOOK_HEIGHT: f32 = 3.0;
+const ACTION_SHOULDER: f32 = 0.0;
 const ACTION_FOV: f32 = 1.05;
 const WALL_MARGIN: f32 = 0.45;
 /// How far ahead of your fighter (meters) a shot's path crosses the camera's line of sight
