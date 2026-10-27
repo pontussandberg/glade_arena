@@ -2,8 +2,8 @@
 # aim.sh OUTDIR [TAG]: the action camera's aim, as the javelinist in practice with a target dummy
 # ahead and the cursor captured (headless Chrome on :9222, driven by shoot.mjs), into OUTDIR:
 # TAG_idle.png (the shot's line and its end mark), TAG_down.png and TAG_up.png (pitched),
-# TAG_body.png (a dummy placed right under the crosshair: the line through it), TAG_wall.png
-# (turned left toward the spawn's wall: the line stopped at it), TAG_throw.png (a contact sheet
+# TAG_body.png (a dummy placed right under the middle of the view: the line over it), TAG_wall.png
+# (turned left toward the spawn's wall: the line through it), TAG_throw.png (a contact sheet
 # of frames from the click on: the spear along the line) and TAG_lag.png (a sheet of frames
 # every 50 ms from W going down with "Fake ping" at +100 ms, then from it going up: the predicted
 # walk starting and stopping at once). TAG defaults to "aim".
@@ -22,7 +22,7 @@ shoot "$out/${tag}_idle.png" size:1600,900 nav:http://localhost:8080 wait:15 cli
   click:1492,333 wait:0.3 click:900,350 wait:0.8 click:1492,213 wait:0.5 move:800,450 wait:0.1 click:800,450 wait:1.5
 shoot "$out/${tag}_down.png" size:1600,900 move:800,560 wait:0.8
 shoot "$out/${tag}_up.png" size:1600,900 move:800,450 wait:0.1 move:800,380 wait:0.8
-# A dummy placed under the crosshair: ESC frees the cursor, the field click places it and takes
+# A dummy placed under the middle of the view: ESC frees the cursor, the field click places it and takes
 # the cursor again.
 shoot "$out/${tag}_body.png" size:1600,900 move:800,450 wait:0.3 key:Escape wait:0.3 click:1492,333 wait:0.3 click:800,470 wait:1.5
 # Turned left toward the wall.

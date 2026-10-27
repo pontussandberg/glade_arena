@@ -5,10 +5,11 @@
 //!   Y (or the lock by the minimap) unlocks it: it stays where it is, and the cursor against an
 //!   edge of the screen pans it; locked again, it's back on your fighter.
 //! - Action (Smite-style), practice's other game mode (`practice`, which switches
-//!   `CameraMode::free`; the server plays along: `RoomRequest::ActionMode`): over your fighter's
-//!   shoulder, turned by the mouse once a click has captured the cursor (ESC frees it again; until
-//!   then, a right drag or the arrow keys turn it). You aim where the camera looks: attacks and
-//!   abilities go straight ahead, at the crosshair. WASD walks relative to it
+//!   `CameraMode::free`; the server plays along: `RoomRequest::ActionMode`): straight behind
+//!   your fighter, turned by the mouse once a click has captured the cursor (ESC frees it again;
+//!   until then, a right drag or the arrow keys turn it). You aim where the camera looks: attacks
+//!   and abilities go straight ahead, up the line drawn from your fighter
+//!   (`render::show_aim_line`). WASD walks relative to it
 //!   (`render::read_local_input`), and walking doesn't stop or cancel an attack; holding the left
 //!   button keeps attacking. Wheel (or + / -) zooms, down to arm's length to look at fighters up
 //!   close. Tab moves it on to the next fighter (and back to you), to watch them play.
@@ -44,15 +45,11 @@ const FREE_TURN_SPEED: f32 = 0.005;
 const FREE_KEY_TURN: f32 = 2.0;
 const FREE_KEY_ZOOM: f32 = 4.0;
 const DRAG_PX: f32 = 6.0;
-/// The action camera: how far behind it starts when switched on and how far above level; how
-/// far to the side of the fighter it looks past (over the right shoulder, so the fighter stands
-/// left of the crosshair and never under it); how far ahead the aim meets the crosshair's line;
-/// its field of view (vertical, radians: wider than the MOBA camera's, as a shooter's); and how
-/// far short of a wall it stops when one is in the way.
+/// The action camera: how far behind it starts when switched on and how far above level; its
+/// field of view (vertical, radians: wider than the MOBA camera's, as a shooter's); and how far
+/// short of a wall it stops when one is in the way.
 const ACTION_DISTANCE: f32 = 6.0;
 const ACTION_PITCH: f32 = 0.28;
-const SHOULDER: f32 = 0.9;
-const AIM_CONVERGE: f32 = 7.0;
 const ACTION_FOV: f32 = 1.05;
 const WALL_MARGIN: f32 = 0.45;
 /// How fast the camera eases back out once a wall no longer holds it in (per second,
@@ -152,17 +149,9 @@ impl CameraMode {
         (arena::to_gameplay(turn * Vec3::NEG_Z), arena::to_gameplay(turn * Vec3::X))
     }
 
-    /// Where the action camera looks along the ground: the way the fighter faces.
+    /// Where the action camera looks along the ground: the way the fighter faces, and aims.
     pub fn forward(&self) -> Vec2 {
         self.ground_axes().0
-    }
-
-    /// Where the fighter aims with nothing ahead for the crosshair to be on (`render::aim_through`
-    /// has it otherwise): at the crosshair's line, which runs past its shoulder, where that line is
-    /// `AIM_CONVERGE` ahead.
-    pub fn aim(&self) -> Vec2 {
-        let (forward, right) = self.ground_axes();
-        (forward * AIM_CONVERGE + right * SHOULDER).normalize()
     }
 }
 
@@ -289,7 +278,7 @@ fn spawn_camera(mut commands: Commands) {
     ));
 }
 
-/// Whichever way `free` was switched, the action camera starts over: on you, over your shoulder,
+/// Whichever way `free` was switched, the action camera starts over: on you, straight behind,
 /// without the cursor; and the lens is the mode's.
 fn switch_camera(
     mut mode: ResMut<CameraMode>,
@@ -335,8 +324,8 @@ fn next_fighter(
     mode.watching = all.get(next).filter(|(.., me)| !me).map(|(e, ..)| *e);
 }
 
-/// The action camera: behind and above your fighter (or whom it's watching), looking past its
-/// shoulder. With the cursor captured (`locked`: any click on the field takes it, not one on a
+/// The action camera: behind and above your fighter (or whom it's watching), looking over it.
+/// With the cursor captured (`locked`: any click on the field takes it, not one on a
 /// HUD control; ESC frees it) the mouse turns it; without it, dragging with the right button
 /// does (the cursor hides and stays put meanwhile). The wheel zooms. A wall between it and the
 /// fighter brings it in, just short of the wall, so it never looks from inside one.
@@ -421,9 +410,9 @@ fn follow_camera(
         mode.watching = None;
     }
     let Some(target) = watched.or(me.single().ok()) else { return };
-    // Follow its feet (not its posed, leaning body), looking past its shoulder.
-    let (forward, right) = mode.ground_axes();
-    let pivot = arena::to_gameplay(target.translation) + right * SHOULDER;
+    // Follow its feet (not its posed, leaning body).
+    let forward = mode.forward();
+    let pivot = arena::to_gameplay(target.translation);
     // The first wall on the way back from the pivot to the camera stops it short: at once, and
     // it eases back out when the wall is past.
     let map = map.map();

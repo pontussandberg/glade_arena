@@ -650,6 +650,9 @@ pub enum PlayerCommand {
     Attack(Vec2),
     /// An ability's key (Q, W, E, R): use the ability in this slot toward this aim.
     Cast(AbilitySlot, Vec2),
+    /// Action mode only: the aim as the camera turns (at most once a tick), so an attack winding
+    /// up goes off the way the player looks then, not the way they looked when it started.
+    Aim(Vec2),
 }
 
 impl PlayerCommand {
@@ -659,7 +662,7 @@ impl PlayerCommand {
         match *self {
             PlayerCommand::MoveTo(_) | PlayerCommand::Stop => true,
             PlayerCommand::Walk(dir) => dir != Vec2::ZERO,
-            PlayerCommand::Attack(_) | PlayerCommand::Cast(..) => false,
+            PlayerCommand::Attack(_) | PlayerCommand::Cast(..) | PlayerCommand::Aim(_) => false,
         }
     }
 
@@ -685,6 +688,7 @@ impl PlayerCommand {
                 input.fire = true;
             }
             PlayerCommand::Cast(slot, aim) => input.order_cast(slot, aim),
+            PlayerCommand::Aim(aim) => input.aim = aim,
         }
     }
 }

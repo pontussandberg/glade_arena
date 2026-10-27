@@ -273,7 +273,7 @@ pub(super) fn attack(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut attackers: Query<
-        (Entity, &PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), (&Frenzy, Option<&Fury>), (&mut Cooldowns, Option<&Might>, Option<&arena_shared::items::Satchel>)),
+        (Entity, &PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), (&Frenzy, Option<&Fury>), (&mut Cooldowns, Option<&Might>, Option<&arena_shared::items::Satchel>), Has<crate::ActionMode>),
         InPlay,
     >,
     mut targets: Targets,
@@ -286,7 +286,7 @@ pub(super) fn attack(
         let longest = ClassId::all().map(|c| c.def().crit.ambush_ticks).max().unwrap_or(0);
         ambushes.0.retain(|_, last| now.0.saturating_sub(*last) <= longest);
     }
-    for (entity, id, class, pos, mut input, mut state, mut last_swing, (room, team), (frenzy, fury), (mut cooldowns, might, satchel)) in &mut attackers {
+    for (entity, id, class, pos, mut input, mut state, mut last_swing, (room, team), (frenzy, fury), (mut cooldowns, might, satchel), action) in &mut attackers {
         let might = might_of(might);
         let side = (*room, *team);
         // Knocked up: no attacking; one winding up is lost.
@@ -294,6 +294,15 @@ pub(super) fn attack(
             input.fire = false;
             state.set_if_neq(sim::cancel_attack(*state));
             continue;
+        }
+        // In action mode an attack winding up follows the aim until it goes off
+        // (`PlayerCommand::Aim`); the MOBA's locks it on the click.
+        if action
+            && state.winding_up().is_some()
+            && let Some(dir) = input.aim.try_normalize()
+            && let Some(swing) = state.swing.as_mut().filter(|swing| swing.dir != dir)
+        {
+            swing.dir = dir;
         }
         // A primed attack going off this tick is a sure crit (`primer`: the ability that readied it).
         let primer = state.primed.filter(|_| state.winding_up().is_some_and(|swing| swing.primed)).map(|(slot, _)| slot);

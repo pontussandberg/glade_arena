@@ -228,9 +228,12 @@ fn mark_controlled_player(trigger: On<Add, Controlled>, players: Query<(), With<
 struct Sent {
     move_to: Option<Vec2>,
     walk: Vec2,
-    /// When the attack or walk was last sent (`Time<Real>`), to send changes at most once a tick.
+    aim: Vec2,
+    /// When the attack, walk or aim was last sent (`Time<Real>`), to send changes at most once a
+    /// tick.
     attack_at: Duration,
     walk_at: Duration,
+    aim_at: Duration,
 }
 
 /// Sends the server what changed in `DesiredInput`: a new destination, a stop, walking keys, an
@@ -245,6 +248,7 @@ fn send_commands(
     me: Query<(), With<Me>>,
     mut client: Query<&mut MessageSender<PlayerCommand>, (With<Client>, With<Connected>)>,
     mut sent: Local<Sent>,
+    mode: Option<Res<crate::camera::CameraMode>>,
 ) {
     let (Ok(mut sender), false) = (client.single_mut(), me.is_empty()) else {
         *sent = Sent::default();
@@ -273,9 +277,15 @@ fn send_commands(
         send(PlayerCommand::Walk(input.walk));
         (sent.walk, sent.walk_at) = (input.walk, now);
     }
+    // In action mode the aim is the camera's, sent as it turns, so an attack winding up follows
+    // it until it goes off (`PlayerCommand::Aim`).
+    if mode.as_ref().is_some_and(|mode| mode.free) && input.aim != sent.aim && due(sent.aim_at) {
+        send(PlayerCommand::Aim(input.aim));
+        (sent.aim, sent.aim_at) = (input.aim, now);
+    }
     if input.fire && due(sent.attack_at) {
         send(PlayerCommand::Attack(input.aim));
-        sent.attack_at = now;
+        (sent.aim, sent.attack_at) = (input.aim, now);
         desired.0.fire = false;
         walk_when_ordered.0 = input.move_to;
     }

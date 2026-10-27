@@ -218,17 +218,6 @@ pub(super) struct FrameRate {
     pub(super) shown: u32,
 }
 
-/// The crosshair in the middle of the screen: where the action camera aims, shown while it has
-/// the cursor.
-#[derive(Component)]
-pub(super) struct Crosshair;
-
-pub(super) fn show_crosshair(mode: Res<CameraMode>, mut crosshair: Query<&mut Visibility, With<Crosshair>>) {
-    for mut part in &mut crosshair {
-        part.set_if_neq(shown(mode.free && mode.locked));
-    }
-}
-
 /// The ping and frame rate (with the action camera, for watching the netcode, also the jitter), or
 /// that we're connecting or cut off.
 pub(super) fn update_status(

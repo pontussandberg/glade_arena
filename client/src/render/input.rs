@@ -42,7 +42,6 @@ pub(super) fn read_local_input(
     window: Option<Single<&Window>>,
     camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
     me: Query<(&Pos, &ClassId, &Cooldowns, &AttackState), (With<Me>, With<PlayerId>)>,
-    fighters: Query<&Pos, (With<AttackState>, Without<Me>)>,
     (mode, cast_mode, clock, map): (Res<CameraMode>, Res<CastMode>, AttackClock, Res<crate::rooms::CurrentMap>),
     hud: Query<
         (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&AbilityIcon>),
@@ -110,14 +109,9 @@ pub(super) fn read_local_input(
         move_to = None;
     }
 
-    // The action camera aims through what the crosshair is on (`aim_through`), or straight ahead
-    // with nothing there to aim at.
+    // The action camera aims straight ahead, where it looks.
     let aim = match (cursor, me) {
-        (_, Some(me)) if mode.free => {
-            let bodies: Vec<Vec2> = fighters.iter().map(|pos| pos.0).collect();
-            aim_through(camera, camera_transform, map.map(), me, mode.forward(), &bodies).unwrap_or(mode.aim())
-        }
-        _ if mode.free => mode.aim(),
+        _ if mode.free => mode.forward(),
         (Some(cursor), Some(me)) => cursor - me,
         _ => desired.0.aim,
     };
