@@ -305,14 +305,12 @@ pub(super) fn update_key_hints(
     let abilities = (abilities.join(" "), if abilities.len() == 1 { "ability" } else { "abilities" });
     let keys: Vec<(&str, &str)> = if mode.free {
         vec![
-            ("Click", "capture the mouse"),
-            ("Mouse", "look / aim"),
             ("WASD", "move"),
+            ("Mouse", "aim"),
             ("Hold left click", "attack"),
             (&abilities.0, abilities.1),
-            ("Wheel, + -", "zoom"),
-            ("Tab", "watch next fighter"),
-            ("Esc", "free the mouse"),
+            ("Wheel", "zoom"),
+            ("Y", "lock / unlock camera"),
         ]
     } else {
         vec![

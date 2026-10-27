@@ -384,14 +384,19 @@ fn rate(time: &Time, per_second: f32) -> f32 {
 }
 
 /// Turns every fighter toward where it wants to face: its locked aim while winding up, its dash,
-/// or the way it walks (if it moved this frame). Snaps once there, so it settles. Our own, with
-/// the action camera, faces where the camera looks instead of the way it walks: it strafes.
+/// or the way it walks (if it moved this frame). Snaps once there, so it settles. Our own, in
+/// action mode, faces our aim (the mouse) instead of the way it walks: it strafes.
 ///
 /// A dash taken mid-windup doesn't turn it at all: it holds its look through the dash and after,
 /// until its next attack, or until it walks off once the dash is over (`STEADY_SETTLE` after, so
 /// the dash's own last steps don't count). A dash in the backswing cuts it short and turns it
 /// to the dash, like walking off.
-fn turn_fighters(time: Res<Time>, mode: Res<crate::camera::CameraMode>, mut fighters: Query<(&mut Facing, &Pos, &AttackState, &Dashing, Has<Me>)>) {
+fn turn_fighters(
+    time: Res<Time>,
+    mode: Res<crate::camera::CameraMode>,
+    desired: Res<crate::DesiredInput>,
+    mut fighters: Query<(&mut Facing, &Pos, &AttackState, &Dashing, Has<Me>)>,
+) {
     let turn = rate(&time, TURN_RATE);
     let now = time.elapsed_secs();
     for (mut facing, pos, attack, dashing, me) in &mut fighters {
@@ -415,7 +420,7 @@ fn turn_fighters(time: Res<Time>, mode: Res<crate::camera::CameraMode>, mut figh
         }
         let wants = match (attack.winding_up(), dashing.0) {
             (Some(windup), _) => windup.dir,
-            _ if me && mode.free && mode.watching().is_none() => mode.forward(),
+            _ if me && mode.free && desired.0.aim != Vec2::ZERO => desired.0.aim.normalize(),
             _ if steady.is_some() => facing.look,
             (None, Some(dash)) => dash.dir,
             (None, None) if moved.length() > 0.01 => moved.normalize(),

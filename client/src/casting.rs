@@ -65,9 +65,9 @@ pub(crate) fn key_label(slot: AbilitySlot) -> &'static str {
     ABILITY_KEYS[slot.0 as usize].1
 }
 
-/// Whether the ability in `slot` can be cast with its key: with the free camera, W walks.
-pub(crate) fn key_casts(slot: AbilitySlot, free_camera: bool) -> bool {
-    !(free_camera && ability_key(slot) == KeyCode::KeyW)
+/// Whether the ability in `slot` can be cast with its key: in action mode, W walks.
+pub(crate) fn key_casts(slot: AbilitySlot, action_mode: bool) -> bool {
+    !(action_mode && ability_key(slot) == KeyCode::KeyW)
 }
 
 /// The quick cast switch and its label, the last row of the key hints

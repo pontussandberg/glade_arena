@@ -1,8 +1,8 @@
-//! The action camera's aim: straight ahead, where the camera looks, from your fighter in the
-//! middle of the view. The shot's path is drawn (`show_aim_line`): a faint line from where the
-//! shot leaves you out to its range, with a mark at the end. It is the aim itself, so it runs
-//! through anything in the way, as the aim never bends for a wall; the shot stops where the sim
-//! stops it.
+//! Action mode's aim: toward the cursor, from your fighter. The shot's path is drawn
+//! (`show_aim_line`): a faint line from where the shot leaves you out to its range, with a mark
+//! at the end. It is the aim itself, so it runs through anything in the way, as the aim never
+//! bends for a wall; the shot stops where the sim stops it. While a normal cast is being aimed
+//! the ability's own indicator takes its place (`casting::show_indicator`).
 
 use super::*;
 
@@ -41,9 +41,10 @@ pub(super) fn attack_line(class: ClassId, me: Vec2, dir: Vec2, empowered: bool) 
     Some((me + dir * from, me + dir * to))
 }
 
-/// The shot's line and the mark at its end, while the action camera has the cursor.
+/// The shot's line and the mark at its end, in action mode, while no ability is being aimed.
 pub(super) fn show_aim_line(
     mode: Res<CameraMode>,
+    aiming: Res<crate::casting::Aiming>,
     desired: Res<crate::DesiredInput>,
     clock: AttackClock,
     camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
@@ -53,7 +54,7 @@ pub(super) fn show_aim_line(
 ) {
     let (camera, camera_transform) = *camera;
     let (mut place, mut visibility) = end.into_inner();
-    let line = me.single().ok().filter(|_| mode.free && mode.locked).and_then(|(pos, class, attack)| {
+    let line = me.single().ok().filter(|_| mode.free && aiming.0.is_none()).and_then(|(pos, class, attack)| {
         let line = attack_line(*class, pos.0, desired.0.aim, attack.empowered_at(clock.now(true)))?;
         Some((line, attack_height(*class)))
     });
