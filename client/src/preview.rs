@@ -608,7 +608,7 @@ fn preview_maps() {
     use arena_shared::map::{Map, MapId};
 
     let dir = std::env::var("PREVIEW_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
-    for id in [MapId::Crossing, MapId::Keep, MapId::Gorge, MapId::Wilds, MapId::Bastion, MapId::Bastion2, MapId::Bastion3, MapId::Bastion4] {
+    for id in [MapId::Crossing, MapId::Keep, MapId::Gorge, MapId::Wilds, MapId::Bastion, MapId::Bastion2, MapId::Bastion3, MapId::Bastion4, MapId::Yard] {
         let m = id.map();
         let theme = crate::arena::Theme::of(id);
         const S: usize = 4;
