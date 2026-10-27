@@ -226,6 +226,7 @@ pub(super) fn update_status(
     mut status: Single<&mut Text, With<Status>>,
     client: Query<(&Link, Has<Connected>, Option<&Disconnected>), With<Client>>,
     mode: Res<CameraMode>,
+    predicted: Query<&PredictedWalk, With<crate::Me>>,
 ) {
     frame_rate.seconds += time.delta_secs();
     frame_rate.frames += 1;
@@ -243,6 +244,12 @@ pub(super) fn update_status(
         let _ = write!(text, "ping {:.0} ms   {} fps", ms(link.stats.rtt), frame_rate.shown);
         if mode.free {
             let _ = write!(text, "   jitter {:.0} ms", ms(link.stats.jitter));
+            // The prediction's numbers: how far ahead of the server it steps our keys, the glide
+            // it still has to show away, and the last correction worth noticing.
+            if let Ok(predicted) = predicted.single() {
+                let lead = predicted.lead().map_or("?".to_string(), |lead| format!("{lead:.1}"));
+                let _ = write!(text, "   lead {lead} t   glide {:.2} m   fix {:.2} m", predicted.error(), predicted.last_fix());
+            }
         }
     }
     // Only touch the component when the text changed, so Bevy doesn't re-layout it every frame.

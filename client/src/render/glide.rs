@@ -1,6 +1,6 @@
 //! Our own fighter drawn smoothly between the server's positions, on our clock (`Glide`), or,
 //! with the action camera, where our keys will have taken it by the time the server says so
-//! (`Predicted`); and every fighter's transform kept on its position.
+//! (`PredictedWalk`); and every fighter's transform kept on its position.
 
 use super::*;
 
@@ -83,7 +83,7 @@ pub(super) fn glide_me(mut commands: Commands, clock: AttackClock, mut me: Query
 const CORRECTION_RATE: f32 = 8.0;
 /// Ticks between a key going out and the server's state with it coming back, over the round
 /// trip itself (the server's own step and the packets' framing): the first guess, until it's
-/// been measured (`Predicted::lead`).
+/// been measured (`PredictedWalk::lead`).
 const PREDICT_SLACK_TICKS: f32 = 2.0;
 /// How much of each measurement of that delay the learned one takes on.
 const LEAD_PULL: f32 = 0.3;
@@ -98,7 +98,7 @@ const PREDICT_MOST_TICKS: u32 = 64;
 /// round trip's worth (`predict_me`), by the same sim the server walks it with. Where the server
 /// turns out to disagree, the difference is shown away smoothly rather than snapped.
 #[derive(Component, Default)]
-pub(super) struct Predicted {
+pub(super) struct PredictedWalk {
     /// The latest position from the server, and the tick it's from.
     base: Option<(u32, Vec2)>,
     /// What it last drew, to tell a new position from the server (anything else) from its own.
@@ -112,9 +112,27 @@ pub(super) struct Predicted {
     lead: Option<f32>,
     /// Which way the server last said it stepped us (`Walking`), to catch each change.
     server_walk: Vec2,
+    /// How far (meters) the last correction worth noticing moved the prediction (shown in the
+    /// status line, to see what a glide was).
+    last_fix: f32,
 }
 
-impl Predicted {
+impl PredictedWalk {
+    /// The lead learned so far (ticks), if any change of our keys has been measured.
+    pub(super) fn lead(&self) -> Option<f32> {
+        self.lead
+    }
+
+    /// How far the last correction worth noticing moved the prediction (meters).
+    pub(super) fn last_fix(&self) -> f32 {
+        self.last_fix
+    }
+
+    /// How far what's drawn still is from the prediction (meters): the glide left to show away.
+    pub(super) fn error(&self) -> f32 {
+        self.error.length()
+    }
+
     /// Which way we walked at `at` seconds (the last noted before it).
     fn walk_at(&self, at: f32) -> Vec2 {
         self.walks.iter().rev().find(|(t, _)| *t <= at).or(self.walks.front()).map_or(Vec2::ZERO, |(_, way)| *way)
@@ -136,7 +154,7 @@ impl Predicted {
 }
 
 /// Our fighter's position with the action camera: predicted from the server's latest position
-/// (see `Predicted`). A new position from the server replaces the base; what that changes in the
+/// (see `PredictedWalk`). A new position from the server replaces the base; what that changes in the
 /// prediction goes into the error shown away. A position that hasn't changed since is still news
 /// each tick (the server only sends one when it changes). How far ahead of the server's latest
 /// position our keys are stepped is guessed from the ping, then measured: each change of our
@@ -149,16 +167,16 @@ pub(super) fn predict_me(
     map: Res<crate::rooms::CurrentMap>,
     desired: Res<crate::DesiredInput>,
     link: Query<&Link, With<Client>>,
-    mut me: Query<(Entity, &mut Pos, &ClassId, Option<&Dashing>, Option<&Chilled>, Option<&Hasted>, Option<&Walking>, Option<&mut Predicted>), With<Me>>,
+    mut me: Query<(Entity, &mut Pos, &ClassId, Option<&Dashing>, Option<&Chilled>, Option<&Hasted>, Option<&Frenzy>, Option<&Walking>, Option<&mut PredictedWalk>), With<Me>>,
 ) {
     let Some(latest) = clock.latest_tick() else { return };
     let rtt = link.single().map_or(0.0, |link| link.stats.rtt.as_secs_f32());
     let now = time.elapsed_secs();
     let guessed_lead = rtt * TICK_HZ as f32 + PREDICT_SLACK_TICKS;
     let map = map.map();
-    for (entity, mut pos, class, dashing, chilled, hasted, walking, predicted) in &mut me {
+    for (entity, mut pos, class, dashing, chilled, hasted, frenzy, walking, predicted) in &mut me {
         let Some(mut predicted) = predicted else {
-            commands.entity(entity).insert(Predicted { drawn: pos.0, server_walk: walking.map_or(Vec2::ZERO, |w| w.0), ..default() });
+            commands.entity(entity).insert(PredictedWalk { drawn: pos.0, server_walk: walking.map_or(Vec2::ZERO, |w| w.0), ..default() });
             continue;
         };
         predicted.walks.push_back((now, desired.0.walk));
@@ -184,12 +202,13 @@ pub(super) fn predict_me(
         }
         let at = clock.now(true) + ME_BEHIND_TICKS + lead;
         // The server's step for one tick of ours: walking (never rooted by a windup, in action
-        // mode), or a dash running on.
-        let (chilled, hasted) = (chilled.copied().unwrap_or_default(), hasted.copied().unwrap_or_default());
+        // mode; faster in a frenzy, as the server walks it), or a dash running on.
+        let (chilled, hasted, frenzy) = (chilled.copied().unwrap_or_default(), hasted.copied().unwrap_or_default(), frenzy.copied().unwrap_or_default());
         let step = |mut dashing: Dashing| {
             move |from: Vec2, walk: Vec2, tick: u32| {
                 let input = PlayerInput { walk, aim: Vec2::X, ..default() };
-                sim::move_player_boosted(map, from, &input, *class, &AttackState::default(), &mut dashing, &chilled, &hasted, tick, 1.0)
+                let boost = 1.0 + frenzy.at(tick as f32);
+                sim::move_player_boosted(map, from, &input, *class, &AttackState::default(), &mut dashing, &chilled, &hasted, tick, boost)
             }
         };
         let dashing = dashing.copied().unwrap_or_default();
@@ -201,6 +220,9 @@ pub(super) fn predict_me(
                 let was = predicted.predict(old, at, now, step(dashing));
                 let is = predicted.predict(base, at, now, step(dashing));
                 predicted.error += was - is;
+                if (was - is).length() >= 0.02 {
+                    predicted.last_fix = (was - is).length();
+                }
             }
             predicted.base = Some(base);
         }
