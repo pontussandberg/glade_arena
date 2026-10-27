@@ -4,12 +4,14 @@
 //!   wheel zooms (in a narrow range, so you never see much farther than the fight around you).
 //!   Y (or the lock by the minimap) unlocks it: it stays where it is, and the cursor against an
 //!   edge of the screen pans it; locked again, it's back on your fighter.
-//! - Free (WoW-style), a practice tool for looking at fighters (`practice`, which switches
-//!   `CameraMode::free`): follows behind your fighter; hold the right mouse button and drag (or the
-//!   arrow keys) to turn it, wheel (or + / -) to zoom, down to arm's length to look at fighters up
-//!   close. WASD walks relative to it (`render::read_local_input`); the right button only turns
-//!   it, it doesn't walk. Tab moves it on to the next fighter (and back to you), to watch them
-//!   play.
+//! - Action (Smite-style), practice's other game mode (`practice`, which switches
+//!   `CameraMode::free`; the server plays along: `RoomRequest::ActionMode`): over your fighter's
+//!   shoulder, turned by the mouse once a click has captured the cursor (ESC frees it again; until
+//!   then, a right drag or the arrow keys turn it). You aim where the camera looks: attacks and
+//!   abilities go straight ahead, at the crosshair. WASD walks relative to it
+//!   (`render::read_local_input`), and walking doesn't stop or cancel an attack; holding the left
+//!   button keeps attacking. Wheel (or + / -) zooms, down to arm's length to look at fighters up
+//!   close. Tab moves it on to the next fighter (and back to you), to watch them play.
 
 use arena_shared::protocol::{PlayerId, Pos};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
@@ -37,11 +39,25 @@ const PAN_SPEED: f32 = 26.0;
 /// how far the mouse must move (pixels) before holding the right button hides the cursor.
 const FREE_DISTANCE: (f32, f32) = (1.2, 24.0);
 const FREE_AIM_HEIGHT: f32 = 1.6;
-const FREE_PITCH: (f32, f32) = (-0.15, 1.45);
+const FREE_PITCH: (f32, f32) = (-0.35, 1.1);
 const FREE_TURN_SPEED: f32 = 0.005;
 const FREE_KEY_TURN: f32 = 2.0;
 const FREE_KEY_ZOOM: f32 = 4.0;
 const DRAG_PX: f32 = 6.0;
+/// The action camera: how far behind it starts when switched on and how far above level; how
+/// far to the side of the fighter it looks past (over the right shoulder, so the fighter stands
+/// left of the crosshair and never under it); how far ahead the aim meets the crosshair's line;
+/// its field of view (vertical, radians: wider than the MOBA camera's, as a shooter's); and how
+/// far short of a wall it stops when one is in the way.
+const ACTION_DISTANCE: f32 = 6.0;
+const ACTION_PITCH: f32 = 0.28;
+const SHOULDER: f32 = 0.9;
+const AIM_CONVERGE: f32 = 7.0;
+const ACTION_FOV: f32 = 1.05;
+const WALL_MARGIN: f32 = 0.45;
+/// How fast the camera eases back out once a wall no longer holds it in (per second,
+/// exponential); coming in it snaps, so it's never inside the wall.
+const WALL_EASE_OUT: f32 = 5.0;
 
 /// The camera showing the world — the one queries mean by "the camera". Not the only one:
 /// every face in the practice picker has a little camera of its own (`picker::load_faces`).
@@ -82,16 +98,25 @@ impl Orbit {
     }
 }
 
-/// Which camera is in use, and the free camera.
+/// Which camera is in use, and the action camera.
 #[derive(Resource)]
 pub struct CameraMode {
+    /// The action camera (and action mode with it).
     pub free: bool,
+    /// The action camera has the cursor (hidden, locked in place): the mouse turns it. A click
+    /// on the field takes it, ESC lets it go.
+    pub(crate) locked: bool,
+    /// A click took the cursor this frame (so it's no attack: `render::read_local_input`).
+    pub(crate) just_locked: bool,
     /// The MOBA camera zooms out past `ZOOM_RANGE`, to `ZOOM_UNCAPPED` (practice only).
     pub uncapped: bool,
     /// The MOBA camera is off your fighter: it stays put, panned by the cursor at the screen's
     /// edges. Locked (following you) to begin with.
     pub unlocked: bool,
     orbit: Orbit,
+    /// How far back the action camera is this frame: its orbit's distance, or less while a wall
+    /// holds it in (`follow_camera`).
+    held_at: f32,
     /// Whom the free camera follows instead of you (Tab), if anyone.
     watching: Option<Entity>,
     /// How far the mouse has moved (pixels) since the right button went down.
@@ -102,7 +127,7 @@ pub struct CameraMode {
 
 impl Default for CameraMode {
     fn default() -> Self {
-        CameraMode { free: false, uncapped: false, unlocked: false, orbit: Orbit { yaw: 0.0, pitch: 0.45, distance: 9.0 }, watching: None, dragged: 0.0, grabbed_at: None }
+        CameraMode { free: false, locked: false, just_locked: false, uncapped: false, unlocked: false, orbit: Orbit { yaw: 0.0, pitch: ACTION_PITCH, distance: ACTION_DISTANCE }, held_at: ACTION_DISTANCE, watching: None, dragged: 0.0, grabbed_at: None }
     }
 }
 
@@ -118,11 +143,24 @@ impl CameraMode {
         self.watching.filter(|_| self.free)
     }
 
-    /// The free camera's forward and right along the ground, on the gameplay plane: where W and
-    /// D walk.
+    /// The action camera's forward and right along the ground, on the gameplay plane: where W
+    /// and D walk, and (forward) where you aim.
     pub fn ground_axes(&self) -> (Vec2, Vec2) {
         let turn = Quat::from_rotation_y(self.orbit.yaw);
         (arena::to_gameplay(turn * Vec3::NEG_Z), arena::to_gameplay(turn * Vec3::X))
+    }
+
+    /// Where the action camera looks along the ground: the way the fighter faces.
+    pub fn forward(&self) -> Vec2 {
+        self.ground_axes().0
+    }
+
+    /// Where the fighter aims: at the crosshair's line, which runs past its shoulder, where that
+    /// line is `AIM_CONVERGE` ahead. Nearer the shot passes a little inside the crosshair, further
+    /// a little outside, by less than the shoulder's width.
+    pub fn aim(&self) -> Vec2 {
+        let (forward, right) = self.ground_axes();
+        (forward * AIM_CONVERGE + right * SHOULDER).normalize()
     }
 }
 
@@ -146,16 +184,12 @@ const SHAKE_TILT: f32 = 0.03;
 const SHAKE_ROLL: f32 = 0.022;
 
 /// Tips the camera off what the controls set this frame, between them and `place_camera` (the
-/// controls write the whole transform each frame, so nothing accumulates). Only the MOBA
-/// camera: the free one is a viewing tool.
-fn shake_camera(time: Res<Time>, mode: Res<CameraMode>, mut shake: ResMut<Shake>, mut camera: Single<&mut Transform, With<CameraRig>>) {
+/// controls write the whole transform each frame, so nothing accumulates).
+fn shake_camera(time: Res<Time>, mut shake: ResMut<Shake>, mut camera: Single<&mut Transform, With<CameraRig>>) {
     if shake.trauma <= 0.0 {
         return;
     }
     shake.trauma = (shake.trauma - SHAKE_DECAY * time.delta_secs()).max(0.0);
-    if mode.free {
-        return;
-    }
     // Eased, not squared: a lone kill barely stirs it, a chain or a heavy blow clearly kicks.
     let s = shake.trauma.powf(1.5);
     let t = time.elapsed_secs();
@@ -253,14 +287,27 @@ fn spawn_camera(mut commands: Commands) {
     ));
 }
 
-/// Whichever way `free` was switched, the free camera starts over: on you, not dragging.
-fn switch_camera(mut mode: ResMut<CameraMode>, mut cursor: Single<&mut CursorOptions>, mut was_free: Local<bool>) {
+/// Whichever way `free` was switched, the action camera starts over: on you, over your shoulder,
+/// without the cursor; and the lens is the mode's.
+fn switch_camera(
+    mut mode: ResMut<CameraMode>,
+    mut cursor: Single<&mut CursorOptions>,
+    mut projection: Single<&mut Projection, With<CameraRig>>,
+    mut was_free: Local<bool>,
+) {
     if mode.free == *was_free {
         return;
     }
     *was_free = mode.free;
+    let fov = if mode.free { ACTION_FOV } else { PerspectiveProjection::default().fov };
+    **projection = Projection::Perspective(PerspectiveProjection { fov, ..default() });
     mode.watching = None;
     mode.dragged = 0.0;
+    mode.locked = false;
+    mode.just_locked = false;
+    mode.orbit.pitch = ACTION_PITCH;
+    mode.orbit.distance = ACTION_DISTANCE;
+    mode.held_at = ACTION_DISTANCE;
     release_cursor(&mut cursor);
 }
 
@@ -269,7 +316,7 @@ fn release_cursor(cursor: &mut CursorOptions) {
     cursor.grab_mode = CursorGrabMode::None;
 }
 
-/// Tab moves the free camera on to the next fighter, and after the last back to you.
+/// Tab moves the action camera on to the next fighter, and after the last back to you.
 fn next_fighter(
     keys: Res<ButtonInput<KeyCode>>,
     mut mode: ResMut<CameraMode>,
@@ -285,14 +332,23 @@ fn next_fighter(
     mode.watching = all.get(next).filter(|(.., me)| !me).map(|(e, ..)| *e);
 }
 
-/// The free camera: behind and above your fighter (or whom it's watching), turned by dragging with the right button
-/// (the cursor hides and stays put meanwhile), zoomed by the wheel.
+/// The action camera: behind and above your fighter (or whom it's watching), looking past its
+/// shoulder. With the cursor captured (`locked`: any click on the field takes it, not one on a
+/// HUD control; ESC frees it) the mouse turns it; without it, dragging with the right button
+/// does (the cursor hides and stays put meanwhile). The wheel zooms. A wall between it and the
+/// fighter brings it in, just short of the wall, so it never looks from inside one.
+#[allow(clippy::too_many_arguments)]
 fn follow_camera(
     time: Res<Time>,
+    map: Res<crate::rooms::CurrentMap>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
+    hud: Query<
+        (&ComputedNode, &UiGlobalTransform, &InheritedVisibility),
+        Or<(With<crate::render::HudButton>, With<crate::minimap::Minimap>, With<crate::action_bar::AbilityIcon>)>,
+    >,
     mut mode: ResMut<CameraMode>,
     // Its own transform, set this frame (`GlobalTransform` lags a frame and would jitter).
     me: Query<&Transform, (With<Me>, With<PlayerId>, Without<CameraRig>)>,
@@ -301,11 +357,27 @@ fn follow_camera(
     window: Single<(&mut Window, &mut CursorOptions)>,
 ) {
     let (mut window, mut cursor) = window.into_inner();
-    if mouse.just_pressed(MouseButton::Right) {
+    let on_hud = window.physical_cursor_position().is_some_and(|at| hud.iter().any(|(node, place, visible)| visible.get() && node.contains_point(*place, at)));
+    mode.just_locked = false;
+    if mode.locked && keys.just_pressed(KeyCode::Escape) {
+        mode.locked = false;
+        release_cursor(&mut cursor);
+    } else if !mode.locked && mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]) && !mode.turning() && !on_hud {
+        mode.locked = true;
+        mode.just_locked = true;
+        mode.dragged = 0.0;
+        cursor.visible = false;
+        cursor.grab_mode = CursorGrabMode::Locked;
+    }
+    if mode.locked {
+        if motion.delta != Vec2::ZERO {
+            mode.orbit.turn(motion.delta * FREE_TURN_SPEED, FREE_PITCH);
+        }
+    } else if mouse.just_pressed(MouseButton::Right) {
         mode.dragged = 0.0;
         mode.grabbed_at = window.cursor_position();
     }
-    if mouse.pressed(MouseButton::Right) {
+    if !mode.locked && mouse.pressed(MouseButton::Right) {
         let was_turning = mode.turning();
         mode.dragged += motion.delta.length();
         if mode.turning() {
@@ -316,7 +388,7 @@ fn follow_camera(
             mode.orbit.turn(motion.delta * FREE_TURN_SPEED, FREE_PITCH);
         }
     }
-    if mouse.just_released(MouseButton::Right) && mode.turning() {
+    if !mode.locked && mouse.just_released(MouseButton::Right) && mode.turning() {
         release_cursor(&mut cursor);
         if let Some(at) = mode.grabbed_at {
             window.set_cursor_position(Some(at));
@@ -344,8 +416,26 @@ fn follow_camera(
         mode.watching = None;
     }
     let Some(target) = watched.or(me.single().ok()) else { return };
-    // Follow its feet (not its posed, leaning body).
-    camera.set_if_neq(mode.orbit.transform(target.translation.with_y(FREE_AIM_HEIGHT)));
+    // Follow its feet (not its posed, leaning body), looking past its shoulder.
+    let (forward, right) = mode.ground_axes();
+    let pivot = arena::to_gameplay(target.translation) + right * SHOULDER;
+    // The first wall on the way back from the pivot to the camera stops it short: at once, and
+    // it eases back out when the wall is past.
+    let map = map.map();
+    let step = 0.25;
+    let mut distance = mode.orbit.distance;
+    let mut back = step;
+    while back < distance {
+        if map.get(arena_shared::map::Map::tile_of(pivot - forward * back)).blocks_shots() {
+            distance = (back - WALL_MARGIN).max(FREE_DISTANCE.0);
+            break;
+        }
+        back += step;
+    }
+    let ease = 1.0 - (-WALL_EASE_OUT * time.delta_secs()).exp();
+    mode.held_at = if distance < mode.held_at { distance } else { mode.held_at + (distance - mode.held_at) * ease };
+    let orbit = Orbit { distance: mode.held_at, ..mode.orbit };
+    camera.set_if_neq(orbit.transform(arena::to_world(pivot, FREE_AIM_HEIGHT)));
 }
 
 /// Y in the arena locks or unlocks the MOBA camera (the lock by the minimap does too).

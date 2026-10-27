@@ -1,6 +1,7 @@
 // Drive headless Chrome over CDP: load the game, optionally click/type, screenshot.
 // Usage: node shoot.mjs out.png [steps...]
-//   steps: wait:SECONDS | click:X,Y | type:TEXT | key:KEYNAME
+//   steps: wait:SECONDS | click:X,Y | type:TEXT | key:KEYNAME | size:W,H (the viewport, in CSS px)
+//          down:KEY / up:KEY (hold a key) | mdown:X,Y / mup:X,Y (hold the left button)
 // Chrome must already be running with --remote-debugging-port=9222.
 import { writeFileSync } from "node:fs";
 
@@ -35,6 +36,10 @@ ws.addEventListener("message", (e) => {
 for (const step of steps) {
   const [cmd, rest] = [step.slice(0, step.indexOf(":")), step.slice(step.indexOf(":") + 1)];
   if (cmd === "wait") await sleep(Number(rest));
+  else if (cmd === "size") {
+    const [width, height] = rest.split(",").map(Number);
+    await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+  }
   else if (cmd === "nav") await send("Page.navigate", { url: rest });
   else if (cmd === "move") {
     const [x, y] = rest.split(",").map(Number);
@@ -44,7 +49,13 @@ for (const step of steps) {
     await send("Input.dispatchKeyEvent", { type: "keyDown", key: rest, code, text: rest });
     await send("Input.dispatchKeyEvent", { type: "keyUp", key: rest, code });
   }
-  else if (cmd === "click") {
+  else if (cmd === "down" || cmd === "up") {
+    const code = /^[a-z]$/.test(rest) ? "Key" + rest.toUpperCase() : rest;
+    await send("Input.dispatchKeyEvent", { type: cmd === "down" ? "keyDown" : "keyUp", key: rest, code, text: cmd === "down" ? rest : undefined });
+  } else if (cmd === "mdown" || cmd === "mup") {
+    const [x, y] = rest.split(",").map(Number);
+    await send("Input.dispatchMouseEvent", { type: cmd === "mdown" ? "mousePressed" : "mouseReleased", x, y, button: "left", buttons: cmd === "mdown" ? 1 : 0, clickCount: 1 });
+  } else if (cmd === "click") {
     const [x, y] = rest.split(",").map(Number);
     for (const type of ["mousePressed", "mouseReleased"])
       await send("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });

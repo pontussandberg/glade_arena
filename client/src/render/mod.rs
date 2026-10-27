@@ -70,7 +70,7 @@ impl Plugin for RenderPlugin {
                 align_to_world.after(crate::rig::Posing).after(fly_shots),
                 toggle_range_circle,
                 fit_range_circle,
-                (update_status, update_key_hints, fold_controls),
+                (update_status, update_key_hints, fold_controls, show_crosshair),
                 (mark_relations, light_buttons),
             ),
         );
@@ -304,6 +304,30 @@ fn setup_scene(
         impact: meshes.add(Sphere::new(1.0).mesh().ico(1).unwrap()),
         materials: HashMap::default(),
     });
+    // The action camera's crosshair, dead center: a thin ring around a dot (two nodes, each
+    // placed from the screen's middle; a dark rim on each so they read on anything).
+    let ring = |size: f32, fill: Color, line: Color| {
+        (
+            Crosshair,
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(50.0),
+                top: percent(50.0),
+                width: px(size),
+                height: px(size),
+                margin: UiRect { left: px(-size / 2.0), top: px(-size / 2.0), ..default() },
+                border: UiRect::all(px(1.5)),
+                border_radius: BorderRadius::MAX,
+                ..default()
+            },
+            BackgroundColor(fill),
+            BorderColor::all(line),
+            Visibility::Hidden,
+            GlobalZIndex(5),
+        )
+    };
+    commands.spawn(ring(24.0, Color::NONE, palette::ui::TEXT.with_alpha(0.75)));
+    commands.spawn(ring(7.0, palette::ui::TEXT, palette::ui::BACKDROP.with_alpha(0.7)));
     commands
         .spawn(corner_panel(false, 8.0))
         .with_children(|corner| {

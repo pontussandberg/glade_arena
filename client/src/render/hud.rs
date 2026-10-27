@@ -218,7 +218,18 @@ pub(super) struct FrameRate {
     pub(super) shown: u32,
 }
 
-/// The ping and frame rate (with the free camera, for watching the netcode, also the jitter), or
+/// The crosshair in the middle of the screen: where the action camera aims, shown while it has
+/// the cursor.
+#[derive(Component)]
+pub(super) struct Crosshair;
+
+pub(super) fn show_crosshair(mode: Res<CameraMode>, mut crosshair: Query<&mut Visibility, With<Crosshair>>) {
+    for mut part in &mut crosshair {
+        part.set_if_neq(shown(mode.free && mode.locked));
+    }
+}
+
+/// The ping and frame rate (with the action camera, for watching the netcode, also the jitter), or
 /// that we're connecting or cut off.
 pub(super) fn update_status(
     time: Res<Time<Real>>,
@@ -295,12 +306,14 @@ pub(super) fn update_key_hints(
     let abilities = (abilities.join(" "), if abilities.len() == 1 { "ability" } else { "abilities" });
     let keys: Vec<(&str, &str)> = if mode.free {
         vec![
+            ("Click", "capture the mouse"),
+            ("Mouse", "look / aim"),
             ("WASD", "move"),
-            ("Left click", "attack"),
+            ("Hold left click", "attack"),
             (&abilities.0, abilities.1),
-            ("Right drag, arrows", "turn camera"),
             ("Wheel, + -", "zoom"),
             ("Tab", "watch next fighter"),
+            ("Esc", "free the mouse"),
         ]
     } else {
         vec![

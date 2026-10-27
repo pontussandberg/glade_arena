@@ -30,13 +30,18 @@ pub(super) struct RangeCircle;
 /// first shows where it will go, cast by the next left click and dropped by a right click
 /// (normal cast); with Shift it's the other one (see `casting.rs`). Clicking an ability's icon is
 /// always a normal cast.
+///
+/// With the action camera (`CameraMode::free`) you aim where it looks, WASD walks, and holding
+/// the left button attacks again each time the last attack is done (the server drops a click
+/// before then, so it's asked each tick until it takes). A click that only captures the cursor
+/// doesn't attack.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn read_local_input(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     window: Option<Single<&Window>>,
     camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
-    me: Query<(&Pos, &ClassId, &Cooldowns), (With<Me>, With<PlayerId>)>,
+    me: Query<(&Pos, &ClassId, &Cooldowns, &AttackState), (With<Me>, With<PlayerId>)>,
     (mode, cast_mode, clock, map): (Res<CameraMode>, Res<CastMode>, AttackClock, Res<crate::rooms::CurrentMap>),
     hud: Query<
         (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&AbilityIcon>),
@@ -51,12 +56,14 @@ pub(super) fn read_local_input(
     let me = me.single().ok();
     // Our abilities. A normal cast only aims while its ability is ready (the global cooldown over
     // too), as in LoL.
-    let my_class = me.map(|(_, class, _)| class.def());
+    let my_class = me.map(|(_, class, ..)| class.def());
     let ready = |slot: AbilitySlot| {
-        me.is_some_and(|(_, class, cooldowns)| {
+        me.is_some_and(|(_, class, cooldowns, _)| {
             class.def().ability(slot).is_some_and(|ability| cooldowns.usable_at(slot, ability) as f32 <= clock.now(true))
         })
     };
+    // Whether our next attack may start now: none in progress, or the last one's timer run out.
+    let attack_ready = me.is_some_and(|(_, class, _, attack)| attack.swing.is_none_or(|swing| swing.ready_at(&class.def().attack) as f32 <= clock.now(true)));
     let me = me.map(|(p, ..)| p.0);
     let (camera, camera_transform) = *camera;
     // Whether the cursor is on a HUD control, or on an ability's icon (and which). Tested on the
@@ -103,6 +110,7 @@ pub(super) fn read_local_input(
     }
 
     let aim = match (cursor, me) {
+        _ if mode.free => mode.aim(),
         (Some(cursor), Some(me)) => cursor - me,
         _ => desired.0.aim,
     };
@@ -126,7 +134,7 @@ pub(super) fn read_local_input(
     // attack. Any other one does: once per click (holding it doesn't attack again). A right
     // click drops the aim (`drops_aim`); ESC does too (`esc_menu`).
     if mouse.just_pressed(MouseButton::Left) {
-        if on_control {
+        if on_control || mode.just_locked {
             *held_click = true;
         } else if let Some(slot) = on_icon
             && my_class.and_then(|def| def.ability(slot)).is_some_and(|ability| !ability.kind.aimed())
@@ -147,8 +155,9 @@ pub(super) fn read_local_input(
     if !mouse.pressed(MouseButton::Left) {
         *held_click = false;
     }
-    let fire = desired.0.fire || (mouse.just_pressed(MouseButton::Left) && aiming.0.is_none() && !*held_click);
-    // With the free camera, WASD walks relative to it, dropping any destination; otherwise S
+    let attacking = if mode.free { mouse.pressed(MouseButton::Left) && attack_ready } else { mouse.just_pressed(MouseButton::Left) };
+    let fire = desired.0.fire || (attacking && aiming.0.is_none() && !*held_click);
+    // With the action camera, WASD walks relative to it, dropping any destination; otherwise S
     // stops: drops the destination (as in LoL).
     let walk = if mode.free {
         let (forward, right) = mode.ground_axes();
@@ -184,7 +193,7 @@ pub(super) fn fit_range_circle(
     }
 }
 
-/// A shows the range circle (MOBA camera only: the free camera walks with A); any key or click
+/// A shows the range circle (MOBA camera only: the action camera walks with A); any key or click
 /// after that, A included, hides it.
 pub(super) fn toggle_range_circle(
     keys: Res<ButtonInput<KeyCode>>,

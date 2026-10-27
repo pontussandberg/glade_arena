@@ -384,16 +384,17 @@ fn rate(time: &Time, per_second: f32) -> f32 {
 }
 
 /// Turns every fighter toward where it wants to face: its locked aim while winding up, its dash,
-/// or the way it walks (if it moved this frame). Snaps once there, so it settles.
+/// or the way it walks (if it moved this frame). Snaps once there, so it settles. Our own, with
+/// the action camera, faces where the camera looks instead of the way it walks: it strafes.
 ///
 /// A dash taken mid-windup doesn't turn it at all: it holds its look through the dash and after,
 /// until its next attack, or until it walks off once the dash is over (`STEADY_SETTLE` after, so
 /// the dash's own last steps don't count). A dash in the backswing cuts it short and turns it
 /// to the dash, like walking off.
-fn turn_fighters(time: Res<Time>, mut fighters: Query<(&mut Facing, &Pos, &AttackState, &Dashing)>) {
+fn turn_fighters(time: Res<Time>, mode: Res<crate::camera::CameraMode>, mut fighters: Query<(&mut Facing, &Pos, &AttackState, &Dashing, Has<Me>)>) {
     let turn = rate(&time, TURN_RATE);
     let now = time.elapsed_secs();
-    for (mut facing, pos, attack, dashing) in &mut fighters {
+    for (mut facing, pos, attack, dashing, me) in &mut fighters {
         let moved = pos.0 - facing.last_pos;
         let mut steady = facing.steady;
         let mut dash_seen = facing.dash_seen;
@@ -414,6 +415,7 @@ fn turn_fighters(time: Res<Time>, mut fighters: Query<(&mut Facing, &Pos, &Attac
         }
         let wants = match (attack.winding_up(), dashing.0) {
             (Some(windup), _) => windup.dir,
+            _ if me && mode.free && mode.watching().is_none() => mode.forward(),
             _ if steady.is_some() => facing.look,
             (None, Some(dash)) => dash.dir,
             (None, None) if moved.length() > 0.01 => moved.normalize(),
@@ -465,10 +467,13 @@ fn pose_rigs(
         // Dashing, it glides along in its pose without a stride, thrown into a lunge.
         let gliding = dashing.0.is_some();
         rig.glide += (if gliding { 1.0 } else { 0.0 } - rig.glide) * rate(&time, GLIDE_RATE);
-        // A jump (a spawn, a waygate, a correction) is no stride at all.
+        // A jump (a spawn, a waygate, a correction) is no stride at all. Backing away (walking
+        // against its look: the action camera's S) runs the stride backward, so the legs
+        // retreat rather than moonwalk.
         if !gliding && facing.moved.length() < arena_shared::config::JUMP {
             let before = rig.stride;
-            rig.stride += facing.moved.length() * STRIDES_PER_METER * rig.moves.gait.cadence;
+            let way = if facing.moved.dot(facing.look) < 0.0 { -1.0 } else { 1.0 };
+            rig.stride += way * facing.moved.length() * STRIDES_PER_METER * rig.moves.gait.cadence;
             // A foot comes down every half stride (the legs pass each other there).
             if (before * 2.0).floor() != (rig.stride * 2.0).floor() {
                 footfalls.0 += 1;
@@ -477,7 +482,7 @@ fn pose_rigs(
         let is_walking = if facing.moved.length() > 0.001 && !gliding { 1.0 } else { 0.0 };
         let walking = rig.walking + (is_walking - rig.walking) * ease_walk;
         rig.walking = if (walking - is_walking).abs() < 1e-3 { is_walking } else { walking };
-        let stride = rig.stride.fract() * TAU;
+        let stride = rig.stride.rem_euclid(1.0) * TAU;
         let step = Vec2::new(stride.sin(), stride.cos()) * rig.walking;
 
         // Where in the strike we are: drawing (0..1), holding, then striking during the windup,
