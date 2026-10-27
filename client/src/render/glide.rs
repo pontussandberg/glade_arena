@@ -82,21 +82,23 @@ pub(super) fn glide_me(mut commands: Commands, clock: AttackClock, mut me: Query
 /// How much of what the server put the prediction off by is shown away each second.
 const CORRECTION_RATE: f32 = 8.0;
 /// Ticks between a key going out and the server's state with it coming back, over the round
-/// trip itself (the server's own step and the packets' framing): the first guess, until it's
-/// been measured (`PredictedWalk::lead`).
+/// trip itself (the server's own step and the packets' framing): the first guess at the lead,
+/// until the server has told how early a walk got there (`PredictedWalk::lead`).
 const PREDICT_SLACK_TICKS: f32 = 2.0;
-/// How much of each measurement of that delay the learned one takes on.
-const LEAD_PULL: f32 = 0.3;
-/// How long (seconds) what we walked is remembered, to replay.
-const WALKS_KEPT: f32 = 2.0;
+/// How many ticks before the one it's for a walk should reach the server: the lead is pulled
+/// toward that, so a late packet doesn't make it late, and no more is waited than need be.
+const MARGIN_TICKS: f32 = 1.0;
+/// How much of each walk's earliness or lateness the lead takes on.
+const LEAD_PULL: f32 = 0.2;
 /// How many ticks ahead of the server's latest position the prediction will walk at most (a
 /// stalled connection doesn't run off).
 const PREDICT_MOST_TICKS: u32 = 64;
 
 /// Our own fighter with the action camera, drawn where it will be once the server has our keys
-/// rather than where it was: its latest position walked on by the keys we've held since, a
-/// round trip's worth (`predict_me`), by the same sim the server walks it with. Where the server
-/// turns out to disagree, the difference is shown away smoothly rather than snapped.
+/// rather than where it was: its latest position walked on by the walks we've sent since
+/// (`SentWalks`), a round trip's worth (`predict_me`), by the same sim the server walks it with.
+/// Where the server turns out to disagree, the difference is shown away smoothly rather than
+/// snapped.
 #[derive(Component, Default)]
 pub(super) struct PredictedWalk {
     /// The latest position from the server, and the tick it's from.
@@ -105,10 +107,9 @@ pub(super) struct PredictedWalk {
     drawn: Vec2,
     /// How far what's drawn still is from the prediction the server's latest position gives.
     error: Vec2,
-    /// Which way our keys walked, each frame: (seconds, way), oldest first.
-    walks: VecDeque<(f32, Vec2)>,
-    /// How many ticks past the server's latest position our newest keys will be stepped, as
-    /// measured from when each change of ours showed in `Walking`; none measured yet at first.
+    /// How many ticks past the server's latest position our newest walk is ordered for: kept so
+    /// each reaches the server `MARGIN_TICKS` early, by when `Walking` says each arrived; none
+    /// seen yet at first.
     lead: Option<f32>,
     /// Which way the server last said it stepped us (`Walking`), to catch each change.
     server_walk: Vec2,
@@ -133,74 +134,77 @@ impl PredictedWalk {
         self.error.length()
     }
 
-    /// Which way we walked at `at` seconds (the last noted before it).
-    fn walk_at(&self, at: f32) -> Vec2 {
-        self.walks.iter().rev().find(|(t, _)| *t <= at).or(self.walks.front()).map_or(Vec2::ZERO, |(_, way)| *way)
-    }
+}
 
-    /// Where we are at tick `at` (fractional, between two ticks' steps), walked on from `base`
-    /// tick by tick by `step`, each tick by the keys held when its input went out, taken to be
-    /// `at + 1 - tick` ticks before `now` (seconds).
-    fn predict(&self, base: (u32, Vec2), at: f32, now: f32, mut step: impl FnMut(Vec2, Vec2, u32) -> Vec2) -> Vec2 {
-        let (base_tick, mut pos) = base;
-        let last = (at.floor() as u32).max(base_tick).min(base_tick + PREDICT_MOST_TICKS);
-        let mut before = pos;
-        for tick in base_tick + 1..=last + 1 {
-            before = pos;
-            pos = step(pos, self.walk_at(now - (at + 1.0 - tick as f32) * TICK_DT), tick);
-        }
-        before.lerp(pos, at.fract())
+/// Which way the walk last ordered for `tick` or an earlier one went (none: standing).
+fn walk_at(sends: &VecDeque<(u32, Vec2)>, tick: u32) -> Vec2 {
+    sends.iter().rev().find(|(t, _)| *t <= tick).map_or(Vec2::ZERO, |(_, way)| *way)
+}
+
+/// Where we are at tick `at` (fractional, between two ticks' steps), walked on from `base` tick
+/// by tick by `step`, each tick by the walk ordered for it.
+fn predict(sends: &VecDeque<(u32, Vec2)>, base: (u32, Vec2), at: f32, mut step: impl FnMut(Vec2, Vec2, u32) -> Vec2) -> Vec2 {
+    let (base_tick, mut pos) = base;
+    let last = (at.floor() as u32).max(base_tick).min(base_tick + PREDICT_MOST_TICKS);
+    let mut before = pos;
+    for tick in base_tick + 1..=last + 1 {
+        before = pos;
+        pos = step(pos, walk_at(sends, tick), tick);
     }
+    before.lerp(pos, at.fract())
 }
 
 /// Our fighter's position with the action camera: predicted from the server's latest position
 /// (see `PredictedWalk`). A new position from the server replaces the base; what that changes in the
 /// prediction goes into the error shown away. A position that hasn't changed since is still news
-/// each tick (the server only sends one when it changes). How far ahead of the server's latest
-/// position our keys are stepped is guessed from the ping, then measured: each change of our
-/// keys shows up in `Walking` at some tick, and the lead is pulled toward what would have put
-/// it there, so a stop is predicted where the server stops, not short of it or past it.
+/// each tick (the server only sends one when it changes). Each walk we send is ordered for the
+/// newest tick stepped here (`WalkSchedule`), so the server steps it from the very tick the
+/// prediction does, and a stop lands where the server stops. How far ahead that is starts from
+/// the ping and is then kept so each walk reaches the server a little early (`MARGIN_TICKS`),
+/// by when `Walking` says it arrived. A change of the lead moves the prediction; that too is
+/// shown away smoothly.
 pub(super) fn predict_me(
     mut commands: Commands,
     time: Res<Time<Real>>,
     clock: AttackClock,
     map: Res<crate::rooms::CurrentMap>,
-    desired: Res<crate::DesiredInput>,
+    sends: Res<crate::SentWalks>,
+    mut schedule: ResMut<crate::WalkSchedule>,
     link: Query<&Link, With<Client>>,
     mut me: Query<(Entity, &mut Pos, &ClassId, Option<&Dashing>, Option<&Chilled>, Option<&Hasted>, Option<&Frenzy>, Option<&Walking>, Option<&mut PredictedWalk>), With<Me>>,
 ) {
     let Some(latest) = clock.latest_tick() else { return };
     let rtt = link.single().map_or(0.0, |link| link.stats.rtt.as_secs_f32());
-    let now = time.elapsed_secs();
     let guessed_lead = rtt * TICK_HZ as f32 + PREDICT_SLACK_TICKS;
     let map = map.map();
     for (entity, mut pos, class, dashing, chilled, hasted, frenzy, walking, predicted) in &mut me {
         let Some(mut predicted) = predicted else {
             commands.entity(entity).insert(PredictedWalk { drawn: pos.0, server_walk: walking.map_or(Vec2::ZERO, |w| w.0), ..default() });
+            schedule.0 = 0;
             continue;
         };
-        predicted.walks.push_back((now, desired.0.walk));
-        while predicted.walks.front().is_some_and(|(t, _)| *t < now - WALKS_KEPT) {
-            predicted.walks.pop_front();
-        }
-        let mut lead = predicted.lead.unwrap_or(guessed_lead);
+        let sends = &sends.0;
+        let lead_before = predicted.lead.unwrap_or(guessed_lead);
+        let mut lead = lead_before;
         if let Some(walking) = walking
             && walking.0 != predicted.server_walk
         {
             predicted.server_walk = walking.0;
-            // When our keys last turned to what the server just stepped (the newest run of it,
-            // still held): the model steps that at some tick; the server did at `latest`.
-            let held = predicted.walks.back().is_some_and(|(_, way)| *way == walking.0);
-            let since = predicted.walks.iter().rev().take_while(|(_, way)| *way == walking.0).last().map(|(t, _)| *t);
-            if let (true, Some(since)) = (held, since) {
-                let at = clock.now(true) + ME_BEHIND_TICKS + lead;
-                let modeled = at + 1.0 - (now - since) / TICK_DT;
-                let measured = (lead - (modeled - latest as f32)).clamp(0.0, PREDICT_MOST_TICKS as f32 / 2.0);
-                lead = if predicted.lead.is_some() { lead + (measured - lead) * LEAD_PULL } else { measured };
+            // The walk the server just stepped was ordered for a tick, and it tells which tick it
+            // got the order on: the lead is pulled toward getting it there `MARGIN_TICKS` early.
+            if let Some((ordered_for, _)) = sends.iter().rev().find(|(_, way)| *way == walking.0) {
+                let margin = *ordered_for as f32 - walking.1 as f32;
+                let pull = if predicted.lead.is_some() { LEAD_PULL } else { 1.0 };
+                lead = (lead + (MARGIN_TICKS - margin) * pull).clamp(0.0, PREDICT_MOST_TICKS as f32 / 2.0);
                 predicted.lead = Some(lead);
             }
         }
+        let at_before = clock.now(true) + ME_BEHIND_TICKS + lead_before;
         let at = clock.now(true) + ME_BEHIND_TICKS + lead;
+        // The next walk we send is for the newest tick stepped here: never one before the last
+        // sent, unless that was left far ahead by a lead that shrank.
+        let next = at.floor() as u32 + 1;
+        schedule.0 = if schedule.0 > next + 4 { next } else { schedule.0.max(next) };
         // The server's step for one tick of ours: walking (never rooted by a windup, in action
         // mode; faster in a frenzy, as the server walks it), or a dash running on.
         let (chilled, hasted, frenzy) = (chilled.copied().unwrap_or_default(), hasted.copied().unwrap_or_default(), frenzy.copied().unwrap_or_default());
@@ -214,20 +218,26 @@ pub(super) fn predict_me(
         let dashing = dashing.copied().unwrap_or_default();
         let fresh = pos.0 != predicted.drawn;
         let newer = predicted.base.is_none_or(|(tick, _)| tick < latest);
+        // What the server's news (or the lead's change) moves the prediction by goes into the
+        // error, so what's drawn doesn't jump.
         if fresh || newer {
             let base = (latest, if fresh { pos.0 } else { predicted.base.map_or(pos.0, |(_, p)| p) });
             if let Some(old) = predicted.base {
-                let was = predicted.predict(old, at, now, step(dashing));
-                let is = predicted.predict(base, at, now, step(dashing));
+                let was = predict(sends, old, at_before, step(dashing));
+                let is = predict(sends, base, at, step(dashing));
                 predicted.error += was - is;
                 if (was - is).length() >= 0.02 {
                     predicted.last_fix = (was - is).length();
                 }
             }
             predicted.base = Some(base);
+        } else if let Some(base) = predicted.base
+            && at != at_before
+        {
+            predicted.error += predict(sends, base, at_before, step(dashing)) - predict(sends, base, at, step(dashing));
         }
         let Some(base) = predicted.base else { continue };
-        let prediction = predicted.predict(base, at, now, step(dashing));
+        let prediction = predict(sends, base, at, step(dashing));
         // A jump (a respawn) isn't eased.
         if predicted.error.length() > JUMP {
             predicted.error = Vec2::ZERO;

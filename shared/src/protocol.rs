@@ -32,11 +32,12 @@ impl Team {
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect, Deref, DerefMut)]
 pub struct Pos(pub Vec2);
 
-/// Which way a fighter's keys walked it on the server's last step (zero: none held). The
-/// client's prediction of its own fighter (`render::glide`) measures by it how long its keys
-/// take to be stepped, since each change is its own order (`PlayerCommand::Walk`).
+/// Which way a fighter's keys walked it on the server's last step (zero: none held), and the
+/// tick the server got that order on (`PlayerCommand::Walk`). The client's prediction of its
+/// own fighter (`render::glide`) orders each walk for a tick, and sees by this how early it got
+/// there.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
-pub struct Walking(pub Vec2);
+pub struct Walking(pub Vec2, pub u32);
 
 impl Ease for Pos {
     fn interpolating_curve_unbounded(start: Self, end: Self) -> impl Curve<Self> {
@@ -648,8 +649,10 @@ pub enum PlayerCommand {
     MoveTo(Vec2),
     /// Stop walking (S).
     Stop,
-    /// Keys held to walk (WASD, free camera), this way; zero when none are.
-    Walk(Vec2),
+    /// Keys held to walk (WASD, action mode), this way; zero when none are. Stepped from the
+    /// tick given, the one the client's prediction steps it from (`render::glide`), so the two
+    /// agree; a tick already past (or 0) means at once.
+    Walk(Vec2, u32),
     /// Left click: auto-attack toward this aim. Holding the button doesn't attack again: each
     /// attack is its own click, once the last one is done. (In action mode the client sends one
     /// for each attack while the button is held: `RoomRequest::ActionMode`.)
@@ -667,7 +670,7 @@ impl PlayerCommand {
     pub fn moves(&self) -> bool {
         match *self {
             PlayerCommand::MoveTo(_) | PlayerCommand::Stop => true,
-            PlayerCommand::Walk(dir) => dir != Vec2::ZERO,
+            PlayerCommand::Walk(dir, _) => dir != Vec2::ZERO,
             PlayerCommand::Attack(_) | PlayerCommand::Cast(..) | PlayerCommand::Aim(_) => false,
         }
     }
@@ -683,7 +686,7 @@ impl PlayerCommand {
                 input.walk = Vec2::ZERO;
             }
             PlayerCommand::Stop => input.move_to = None,
-            PlayerCommand::Walk(dir) => {
+            PlayerCommand::Walk(dir, _) => {
                 input.walk = dir;
                 if dir != Vec2::ZERO {
                     input.move_to = None;

@@ -14,21 +14,44 @@ use crate::rooms::{InRoom, Lobby};
 #[derive(Component)]
 pub struct ActionMode;
 
+/// Server-only: walks ordered for ticks still to come (`PlayerCommand::Walk`'s tick), oldest
+/// first, each with the tick it arrived on; and the arrival tick of the walk being stepped now
+/// (told back in `Walking`).
+#[derive(Component, Default)]
+pub struct WalkOrders {
+    pending: std::collections::VecDeque<(u32, Vec2, u32)>,
+    received: u32,
+}
+
 /// Each client's commands change its own fighter's intent, the moment they arrive. A link only
 /// ever drives the fighter it controls; commands while it has none (still picking a class) are
 /// dropped. An order to move cancels an attack still winding up, right away, so the fighter
 /// walks off this very tick (not in action mode: there it walks through the windup).
 pub(super) fn apply_commands(
+    timeline: Res<LocalTimeline>,
     mut links: Query<&mut MessageReceiver<PlayerCommand>, With<ClientOf>>,
-    mut players: Query<(&ControlledBy, &mut PlayerInput, &mut AttackState, Has<ActionMode>)>,
+    mut players: Query<(&ControlledBy, &mut PlayerInput, &mut AttackState, &mut WalkOrders, Has<ActionMode>)>,
 ) {
-    for (controlled_by, mut input, mut attack, action) in &mut players {
+    let now = timeline.tick().0;
+    for (controlled_by, mut input, mut attack, mut orders, action) in &mut players {
         let Ok(mut receiver) = links.get_mut(controlled_by.owner) else { continue };
         for command in receiver.receive() {
             if command.moves() && !action {
                 attack.set_if_neq(sim::cancel_attack(*attack));
             }
-            command.apply(&mut input);
+            match command {
+                // A walk for a tick to come waits for it (`move_players`); the keys' change still
+                // drops a click.
+                PlayerCommand::Walk(dir, tick) if tick > now => {
+                    input.fire = false;
+                    orders.pending.push_back((tick, dir, now));
+                }
+                PlayerCommand::Walk(..) => {
+                    orders.received = now;
+                    command.apply(&mut input);
+                }
+                _ => command.apply(&mut input),
+            }
         }
     }
 }
@@ -52,10 +75,19 @@ pub(super) fn move_players(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     rifts: Res<Rifts>,
-    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, (&AttackState, Has<ActionMode>), &mut Dashing, &Chilled, &Hasted, &InRoom, &Frenzy, Option<&Sluggish>, &mut Walking), InPlay>,
+    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, (&AttackState, Has<ActionMode>), &mut Dashing, &Chilled, &Hasted, &InRoom, &Frenzy, Option<&Sluggish>, (&mut Walking, &mut WalkOrders)), InPlay>,
 ) {
     let now = timeline.tick().0;
-    for (id, mut pos, class, mut input, (attack, action), mut dashing, chilled, hasted, room, frenzy, sluggish, mut walking) in &mut players {
+    for (id, mut pos, class, mut input, (attack, action), mut dashing, chilled, hasted, room, frenzy, sluggish, (mut walking, mut orders)) in &mut players {
+        // Walks ordered for this tick (or one gone by) take now.
+        while let Some(&(tick, dir, received)) = orders.pending.front() {
+            if tick > now {
+                break;
+            }
+            orders.pending.pop_front();
+            orders.received = received;
+            PlayerCommand::Walk(dir, tick).apply(&mut input);
+        }
         let map = lobby.map(room);
         let mut next = *dashing;
         let attack = if action { AttackState { swing: None, ..*attack } } else { *attack };
@@ -64,7 +96,7 @@ pub(super) fn move_players(
         let boost = boost * (1.0 + frenzy.at(now as f32)) * sluggish.map_or(1.0, |s| s.0);
         pos.set_if_neq(Pos(sim::move_player_boosted(map, pos.0, &input, *class, &attack, &mut next, chilled, hasted, now, boost)));
         dashing.set_if_neq(next);
-        walking.set_if_neq(Walking(input.walk));
+        walking.set_if_neq(Walking(input.walk, orders.received));
         if input.move_to.is_some_and(|point| sim::arrived(map, pos.0, point)) {
             input.move_to = None;
         }

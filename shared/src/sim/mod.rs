@@ -314,7 +314,7 @@ mod tests {
         let mut input = PlayerInput::default();
         PlayerCommand::Attack(Vec2::X).apply(&mut input);
         assert!(input.fire);
-        PlayerCommand::Walk(Vec2::ZERO).apply(&mut input);
+        PlayerCommand::Walk(Vec2::ZERO, 0).apply(&mut input);
         assert!(input.fire, "letting go of the walking keys isn't an order to move");
         PlayerCommand::MoveTo(Vec2::ONE).apply(&mut input);
         assert!(!input.fire);
