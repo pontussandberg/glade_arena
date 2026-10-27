@@ -14,7 +14,7 @@
 //!   button keeps attacking. Wheel (or + / -) zooms, down to arm's length to look at fighters up
 //!   close. Tab moves it on to the next fighter (and back to you), to watch them play.
 
-use arena_shared::config::SHOT_HEIGHT;
+use arena_shared::config::{PLAYER_RADIUS, SHOT_HEIGHT};
 use arena_shared::protocol::{PlayerId, Pos};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
@@ -50,9 +50,11 @@ const DRAG_PX: f32 = 6.0;
 /// short of a wall it stops when one is in the way.
 const ACTION_DISTANCE: f32 = 6.0;
 const ACTION_PITCH: f32 = 0.1;
-/// How high over your fighter's feet the action camera looks (meters): over their head, so
-/// they stand in the lower middle of the view and the crosshair floats clear above them.
-const ACTION_LOOK_HEIGHT: f32 = 2.6;
+/// How high over your fighter's feet the action camera looks (meters), and how far to their
+/// right (meters, over the shoulder): they stand left of the middle of the view, the
+/// crosshair clear of them.
+const ACTION_LOOK_HEIGHT: f32 = 1.9;
+const ACTION_SHOULDER: f32 = 1.1;
 const ACTION_FOV: f32 = 1.05;
 const WALL_MARGIN: f32 = 0.45;
 /// How far ahead of your fighter (meters) a shot's path crosses the camera's line of sight:
@@ -123,8 +125,10 @@ pub struct CameraMode {
     /// How far back the action camera is this frame: its orbit's distance, or less while a wall
     /// holds it in (`follow_camera`).
     held_at: f32,
-    /// How much the action camera's aim rises per meter ahead: the pitch from your hand to what
-    /// the crosshair is on (`aim_climb`), as a tangent.
+    /// Where the action camera aims along the ground, from your fighter, and how much the aim
+    /// rises per meter ahead, as a tangent (`aim_of`). Not quite the camera's forward: it stands
+    /// off your shoulder, and the aim converges on its line of sight.
+    pub aim: Vec2,
     pub climb: f32,
     /// Whom the free camera follows instead of you (Tab), if anyone.
     watching: Option<Entity>,
@@ -136,7 +140,7 @@ pub struct CameraMode {
 
 impl Default for CameraMode {
     fn default() -> Self {
-        CameraMode { free: false, locked: false, just_locked: false, just_unlocked: false, uncapped: false, unlocked: false, orbit: Orbit { yaw: 0.0, pitch: ACTION_PITCH, distance: ACTION_DISTANCE }, held_at: ACTION_DISTANCE, climb: 0.0, watching: None, dragged: 0.0, grabbed_at: None }
+        CameraMode { free: false, locked: false, just_locked: false, just_unlocked: false, uncapped: false, unlocked: false, orbit: Orbit { yaw: 0.0, pitch: ACTION_PITCH, distance: ACTION_DISTANCE }, held_at: ACTION_DISTANCE, aim: Vec2::Y, climb: 0.0, watching: None, dragged: 0.0, grabbed_at: None }
     }
 }
 
@@ -421,8 +425,9 @@ fn follow_camera(
     }
     let Some(target) = watched.or(me.single().ok()) else { return };
     // Follow its feet (not its posed, leaning body).
-    let forward = mode.forward();
+    let (forward, right) = mode.ground_axes();
     let pivot = arena::to_gameplay(target.translation);
+    let shoulder = pivot + right * ACTION_SHOULDER;
     // The first wall on the way back from the pivot to the camera stops it short: at once, and
     // it eases back out when the wall is past.
     let map = map.map();
@@ -430,7 +435,7 @@ fn follow_camera(
     let mut distance = mode.orbit.distance;
     let mut back = step;
     while back < distance {
-        if map.get(arena_shared::map::Map::tile_of(pivot - forward * back)).blocks_shots() {
+        if map.get(arena_shared::map::Map::tile_of(shoulder - forward * back)).blocks_shots() {
             distance = (back - WALL_MARGIN).max(FREE_DISTANCE.0);
             break;
         }
@@ -439,24 +444,25 @@ fn follow_camera(
     let ease = 1.0 - (-WALL_EASE_OUT * time.delta_secs()).exp();
     mode.held_at = if distance < mode.held_at { distance } else { mode.held_at + (distance - mode.held_at) * ease };
     let orbit = Orbit { distance: mode.held_at, ..mode.orbit };
-    camera.set_if_neq(orbit.transform(arena::to_world(pivot, ACTION_LOOK_HEIGHT)));
-    mode.climb = aim_climb(&camera, pivot);
+    camera.set_if_neq(orbit.transform(arena::to_world(shoulder, ACTION_LOOK_HEIGHT)));
+    (mode.aim, mode.climb) = aim_of(&camera, pivot, forward);
 }
 
-/// How much the aim rises per meter ahead, as a tangent: from the hand of the fighter at `pivot`
-/// (at `SHOT_HEIGHT`) to the point `AIM_CONVERGE` ahead on the camera's line of sight. The
-/// angle alone, whatever is in the way: the crosshair moved sideways at one height keeps the
-/// shot at that height. The line passes through the fighter, so the aim's direction along the
-/// ground is the camera's; only its pitch comes from here.
-fn aim_climb(camera: &Transform, pivot: Vec2) -> f32 {
+/// The aim: its direction along the ground from the fighter at `pivot`, and how much it rises
+/// per meter ahead, as a tangent, from their hand (at `SHOT_HEIGHT`) to the point `AIM_CONVERGE`
+/// ahead on the camera's line of sight. The camera's angle alone, whatever is in the way: the
+/// crosshair moved sideways at one height keeps the shot at that height. `forward` is the
+/// camera's, along the ground, for when the point is right over the fighter.
+fn aim_of(camera: &Transform, pivot: Vec2, forward: Vec2) -> (Vec2, f32) {
     let (from, look) = (camera.translation, *camera.forward());
     let along = arena::to_gameplay(look);
     let flat = along.length().max(1e-6);
-    // Along the line (meters) to the point over the fighter, and on to the one `AIM_CONVERGE`
+    // Along the line (meters) to the point beside the fighter, and on to the one `AIM_CONVERGE`
     // past it.
     let past = (pivot - arena::to_gameplay(from)).dot(along) / flat;
-    let on = from.y + look.y * (past + AIM_CONVERGE) / flat;
-    (on - SHOT_HEIGHT) / AIM_CONVERGE
+    let on = from + look * ((past + AIM_CONVERGE) / flat);
+    let ahead = arena::to_gameplay(on) - pivot;
+    (ahead.try_normalize().unwrap_or(forward), (on.y - SHOT_HEIGHT) / ahead.length().max(PLAYER_RADIUS))
 }
 
 /// Y in the arena locks or unlocks the MOBA camera (the lock by the minimap does too).

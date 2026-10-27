@@ -109,10 +109,9 @@ pub(super) fn read_local_input(
         move_to = None;
     }
 
-    // The action camera aims straight ahead, where it looks, and up or down at what its
-    // crosshair is on.
+    // The action camera aims where it looks, up or down too (`camera::aim_of`).
     let aim = match (cursor, me) {
-        _ if mode.free => mode.forward(),
+        _ if mode.free => mode.aim,
         (Some(cursor), Some(me)) => cursor - me,
         _ => desired.0.aim,
     };
