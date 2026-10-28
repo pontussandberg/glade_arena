@@ -54,6 +54,7 @@ impl Theme {
             MapId::Keep => &FEN,
             MapId::Gorge => &HIGHLANDS,
             MapId::Wilds => &HOLLOW,
+            MapId::Yard => &GLADE,
             _ => &BASTION,
         }
     }

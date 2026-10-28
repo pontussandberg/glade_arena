@@ -7,6 +7,7 @@
 //!   arch and two rope bridges, and by waygates that jump a fighter to the far side.
 //! - `wilds`: the waves mode's map, far bigger: a camp in the middle and places to explore all
 //!   round it, monsters coming out of lairs out there.
+//! - `yard`: practice's: a flat field with two target dummies standing on it from the start.
 //!
 //! Every PvP layout (`MapId::PVP`) is point-symmetric, (x, y) -> (-x, -y), so both halves are
 //! equally good; the wilds aren't, there are no sides there. Tile
@@ -34,6 +35,7 @@ mod crossing;
 mod gorge;
 mod keep;
 mod wilds;
+mod yard;
 
 /// Player clearance used when checking straight-line movement against walls. Smaller than the
 /// drawn pawn (0.48 m), so a fighter can brush a wall corner slightly; it must stay below 0.5 so
@@ -98,12 +100,14 @@ pub enum MapId {
     Bastion2,
     Bastion3,
     Bastion4,
+    /// Practice's own: open ground with target dummies on it from the start.
+    Yard,
 }
 
 impl MapId {
     /// Every pickable map (the bastion's staged variants aren't: they're reached through
     /// `at_stage` alone).
-    pub const ALL: [MapId; 5] = [MapId::Crossing, MapId::Keep, MapId::Gorge, MapId::Wilds, MapId::Bastion];
+    pub const ALL: [MapId; 6] = [MapId::Crossing, MapId::Keep, MapId::Gorge, MapId::Wilds, MapId::Bastion, MapId::Yard];
     /// The maps for fighting each other: mirrored, of a size for it.
     pub const PVP: [MapId; 3] = [MapId::Crossing, MapId::Keep, MapId::Gorge];
 
@@ -116,6 +120,7 @@ impl MapId {
         static BASTION2: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion2, 1));
         static BASTION3: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion3, 2));
         static BASTION4: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion4, 3));
+        static YARD: LazyLock<Map> = LazyLock::new(yard::build);
         match self {
             MapId::Crossing => &CROSSING,
             MapId::Keep => &KEEP,
@@ -125,6 +130,7 @@ impl MapId {
             MapId::Bastion2 => &BASTION2,
             MapId::Bastion3 => &BASTION3,
             MapId::Bastion4 => &BASTION4,
+            MapId::Yard => &YARD,
         }
     }
 
@@ -179,6 +185,7 @@ impl MapId {
             MapId::Keep => "Sunken Keep",
             MapId::Gorge => "Riven Gorge",
             MapId::Wilds => "Hollow Wilds",
+            MapId::Yard => "Practice Yard",
             _ => "Sunken Bastion",
         }
     }
@@ -190,6 +197,7 @@ impl MapId {
             MapId::Keep => "A moated keep; marshes slow you",
             MapId::Gorge => "A chasm to shoot across; waygates",
             MapId::Wilds => "A camp in the wilds; monsters all round",
+            MapId::Yard => "Open ground; target dummies to hit",
             _ => "A drowned fortress; its courts unlock as you survive",
         }
     }
@@ -213,6 +221,8 @@ pub struct Map {
     pub lairs: Vec<Vec2>,
     /// Where chests may turn up during a wave (tile centers).
     pub chests: Vec<Vec2>,
+    /// Where target dummies stand from the start, in practice (tile centers).
+    pub dummies: Vec<Vec2>,
     /// Where the shopkeeper stands, if the map has a shop.
     pub shop: Option<Vec2>,
     /// Which way the shopkeeper faces: toward whoever comes to trade.
@@ -257,6 +267,7 @@ impl Map {
             torches: Vec::new(),
             lairs: Vec::new(),
             chests: Vec::new(),
+            dummies: Vec::new(),
             shop: None,
             shop_faces: Vec2::NEG_Y,
             counter: Vec::new(),
@@ -873,10 +884,11 @@ mod tests {
     fn unreachable_targets_have_no_path() {
         for m in maps() {
             let from = Map::tile_of(m.spawn_points[0]);
-            let water = m.tiles().find(|(_, t)| matches!(t, Tile::Water | Tile::Chasm)).unwrap().0;
-            assert!(m.find_path(from, water).is_none());
+            // Water or a chasm, or a wall on a map without any (the yard's).
+            let blocked = m.tiles().find(|(_, t)| matches!(t, Tile::Water | Tile::Chasm)).or_else(|| m.tiles().find(|(_, t)| *t == Tile::Wall)).unwrap().0;
+            assert!(m.find_path(from, blocked).is_none());
             assert!(m.find_path(from, IVec2::new(-500, 3)).is_none());
-            assert!(m.nearest_walkable(water, 6).is_some_and(|t| m.walkable(t)));
+            assert!(m.nearest_walkable(blocked, 6).is_some_and(|t| m.walkable(t)));
         }
     }
 

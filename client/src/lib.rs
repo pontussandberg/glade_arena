@@ -5,6 +5,7 @@
 //! The networking part (`ClientNetPlugin`) has no rendering, so integration tests can run it
 //! headless as a bot. `render` adds the window, 3D scene and keyboard/mouse input on top.
 
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -137,6 +138,20 @@ pub struct FakeLatency(pub Duration);
 #[derive(Component, Debug)]
 pub struct Me;
 
+/// Which tick each `PlayerCommand::Walk` we sent was for, and which way, oldest first: what our
+/// own fighter's prediction replays (`render::glide`), since the server steps what was sent,
+/// from the tick it was sent for.
+#[derive(Resource, Default)]
+pub struct SentWalks(pub VecDeque<(u32, Vec2)>);
+
+/// How many sent walks are kept for replaying.
+const SENT_WALKS_KEPT: usize = 64;
+
+/// The server tick the next walk we send is for: the newest tick our fighter's prediction steps
+/// (`render::glide` sets it each frame); 0 without the action camera, for at once.
+#[derive(Resource, Default)]
+pub struct WalkSchedule(pub u32);
+
 /// Builds a client app without rendering, for tests and bots.
 pub fn build_headless_client_app(settings: ClientSettings) -> App {
     let mut app = App::new();
@@ -173,6 +188,8 @@ impl Plugin for ClientNetPlugin {
         app.add_observer(mark_controlled_player);
         app.configure_sets(Update, SendCommands.after(PlayerControls));
         app.init_resource::<WalkWhenOrdered>();
+        app.init_resource::<SentWalks>();
+        app.init_resource::<WalkSchedule>();
         app.add_systems(Update, (forget_walk_on_attack, send_commands).chain().in_set(SendCommands));
         app.add_systems(Update, fake_latency.run_if(resource_changed::<FakeLatency>));
     }
@@ -228,9 +245,12 @@ fn mark_controlled_player(trigger: On<Add, Controlled>, players: Query<(), With<
 struct Sent {
     move_to: Option<Vec2>,
     walk: Vec2,
-    /// When the attack or walk was last sent (`Time<Real>`), to send changes at most once a tick.
+    aim: Vec2,
+    /// When the attack, walk or aim was last sent (`Time<Real>`), to send changes at most once a
+    /// tick.
     attack_at: Duration,
     walk_at: Duration,
+    aim_at: Duration,
 }
 
 /// Sends the server what changed in `DesiredInput`: a new destination, a stop, walking keys, an
@@ -242,12 +262,16 @@ fn send_commands(
     mut desired: ResMut<DesiredInput>,
     mut walk_when_ordered: ResMut<WalkWhenOrdered>,
     mut stop: ResMut<StopWalking>,
-    me: Query<(), With<Me>>,
+    me: Query<Option<&AttackState>, With<Me>>,
     mut client: Query<&mut MessageSender<PlayerCommand>, (With<Client>, With<Connected>)>,
     mut sent: Local<Sent>,
+    mode: Option<Res<crate::camera::CameraMode>>,
+    mut sent_walks: ResMut<SentWalks>,
+    schedule: Res<WalkSchedule>,
 ) {
-    let (Ok(mut sender), false) = (client.single_mut(), me.is_empty()) else {
+    let (Ok(mut sender), Ok(attack)) = (client.single_mut(), me.single()) else {
         *sent = Sent::default();
+        sent_walks.0.clear();
         // Nothing carries over to our next fighter: not a destination, not a click.
         desired.0 = PlayerInput { aim: desired.0.aim, ..default() };
         stop.0 = false;
@@ -270,12 +294,24 @@ fn send_commands(
     }
     let started_or_stopped = (input.walk == Vec2::ZERO) != (sent.walk == Vec2::ZERO);
     if input.walk != sent.walk && (started_or_stopped || due(sent.walk_at)) {
-        send(PlayerCommand::Walk(input.walk));
+        send(PlayerCommand::Walk(input.walk, schedule.0));
         (sent.walk, sent.walk_at) = (input.walk, now);
+        sent_walks.0.push_back((schedule.0, input.walk));
+        while sent_walks.0.len() > SENT_WALKS_KEPT {
+            sent_walks.0.pop_front();
+        }
+    }
+    // In action mode the aim is the camera's, sent as it turns while our attack winds up (the
+    // only time the server has a use for it), so the attack follows it until it goes off
+    // (`PlayerCommand::Aim`); the click that starts one carries the aim itself.
+    let winding_up = attack.is_some_and(|attack| attack.winding_up().is_some());
+    if mode.as_ref().is_some_and(|mode| mode.free) && winding_up && input.aim != sent.aim && due(sent.aim_at) {
+        send(PlayerCommand::Aim(input.aim));
+        (sent.aim, sent.aim_at) = (input.aim, now);
     }
     if input.fire && due(sent.attack_at) {
         send(PlayerCommand::Attack(input.aim));
-        sent.attack_at = now;
+        (sent.aim, sent.attack_at) = (input.aim, now);
         desired.0.fire = false;
         walk_when_ordered.0 = input.move_to;
     }

@@ -5,8 +5,8 @@
 //! - "Map" switches practice to the next map, everyone starting over on it.
 //! - Switches (`Switch`), lit while on: "No cooldowns" (our Q's cooldown off: what the server
 //!   says, via our `Cooldowns`), "Hitboxes" (`hitboxes`: what hits are judged by, drawn on the
-//!   ground), "3D hitboxes" (the same standing up, colored by height) and "Free camera"
-//!   (`camera`: a camera to turn around fighters and look at them up close).
+//!   ground), "3D hitboxes" (the same standing up, colored by height) and "Action mode"
+//!   (`camera::CameraMode::free`: WASD walks, the mouse aims, the attack's reach is drawn).
 //! - "Fake ping" steps through extra latency on what we receive (`FakeLatency`), and back off, to
 //!   feel how the game plays at a higher ping.
 //! - "Target dummy" and "Moving dummy" place one (`dummies`).
@@ -39,9 +39,9 @@ impl Plugin for PracticePlugin {
         app.add_systems(Startup, picker::load_faces);
         app.add_systems(
             Update,
-            (show_tools, fold_tools, use_switches, step_fake_ping, switch_map).chain().run_if(in_state(Screen::InGame)),
+            (show_tools, fold_tools, use_switches, sync_action_mode, step_fake_ping, switch_map).chain().run_if(in_state(Screen::InGame)),
         );
-        app.add_systems(Update, (picker::show_picker, picker::pick_class, picker::mark_current));
+        app.add_systems(Update, (picker::show_picker, picker::pick_class, picker::mark_current, picker::rest_faces));
         app.add_systems(Update, tools_off.run_if(not(in_state(Screen::InGame)).or_else(not(practicing))));
         app.add_systems(OnExit(Screen::InGame), close_tools);
     }
@@ -73,7 +73,7 @@ impl Switch {
             Switch::NoCooldowns => "No cooldowns",
             Switch::Hitboxes => "Hitboxes",
             Switch::Hitboxes3d => "3D hitboxes",
-            Switch::FreeCamera => "Free camera",
+            Switch::FreeCamera => "Action mode",
             Switch::UncappedZoom => "Uncapped zoom",
         }
     }
@@ -115,6 +115,22 @@ impl Switched<'_, '_> {
             Switch::FreeCamera => self.camera.free = !on,
             Switch::UncappedZoom => self.camera.uncapped = !on,
         }
+    }
+}
+
+/// Action mode is the server's too (`RoomRequest::ActionMode`: it lets the fighter walk through
+/// its windup). Told whenever the switch changes, and again for each new fighter of ours, since
+/// the server keeps it on the fighter.
+fn sync_action_mode(
+    camera: Res<CameraMode>,
+    me: Query<Entity, With<Me>>,
+    mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
+    mut told: Local<Option<(Entity, bool)>>,
+) {
+    let Ok(me) = me.single() else { return };
+    if *told != Some((me, camera.free)) {
+        *told = Some((me, camera.free));
+        request(&mut sender, RoomRequest::ActionMode(camera.free));
     }
 }
 

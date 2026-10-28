@@ -32,6 +32,13 @@ impl Team {
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect, Deref, DerefMut)]
 pub struct Pos(pub Vec2);
 
+/// Which way a fighter's keys walked it on the server's last step (zero: none held), and the
+/// tick the server got that order on (`PlayerCommand::Walk`). The client's prediction of its
+/// own fighter (`render::glide`) orders each walk for a tick, and sees by this how early it got
+/// there.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
+pub struct Walking(pub Vec2, pub u32);
+
 impl Ease for Pos {
     fn interpolating_curve_unbounded(start: Self, end: Self) -> impl Curve<Self> {
         FunctionCurve::new(Interval::UNIT, move |t| Pos(start.0.lerp(end.0, t)))
@@ -642,38 +649,47 @@ pub enum PlayerCommand {
     MoveTo(Vec2),
     /// Stop walking (S).
     Stop,
-    /// Keys held to walk (WASD, free camera), this way; zero when none are.
-    Walk(Vec2),
+    /// Keys held to walk (WASD, action mode), this way; zero when none are. Stepped from the
+    /// tick given, the one the client's prediction steps it from (`render::glide`), so the two
+    /// agree; a tick already past (or 0) means at once.
+    Walk(Vec2, u32),
     /// Left click: auto-attack toward this aim. Holding the button doesn't attack again: each
-    /// attack is its own click, once the last one is done.
+    /// attack is its own click, once the last one is done. (In action mode the client sends one
+    /// for each attack while the button is held: `RoomRequest::ActionMode`.)
     Attack(Vec2),
     /// An ability's key (Q, W, E, R): use the ability in this slot toward this aim.
     Cast(AbilitySlot, Vec2),
+    /// Action mode only: the aim as the camera turns (at most once a tick), so an attack winding
+    /// up goes off the way the player looks then, not the way they looked when it started.
+    Aim(Vec2),
 }
 
 impl PlayerCommand {
     /// Is it an order to move (or stop)? One cancels an attack still winding up, as in League
-    /// (`sim::cancel_attack`), and drops a click no tick has seen yet: the last order wins.
+    /// (`sim::cancel_attack`); a click (`MoveTo`, `Stop`) drops a click no tick has seen yet
+    /// too: the last order wins. The walking keys don't: they're the action camera's, which
+    /// walks through an attack, and they change with every turn of the camera.
     pub fn moves(&self) -> bool {
         match *self {
             PlayerCommand::MoveTo(_) | PlayerCommand::Stop => true,
-            PlayerCommand::Walk(dir) => dir != Vec2::ZERO,
-            PlayerCommand::Attack(_) | PlayerCommand::Cast(..) => false,
+            PlayerCommand::Walk(dir, _) => dir != Vec2::ZERO,
+            PlayerCommand::Attack(_) | PlayerCommand::Cast(..) | PlayerCommand::Aim(_) => false,
         }
     }
 
     /// What the command does to a player's intent.
     pub fn apply(self, input: &mut PlayerInput) {
-        if self.moves() {
-            input.fire = false;
-        }
         match self {
             PlayerCommand::MoveTo(point) => {
                 input.move_to = Some(point);
                 input.walk = Vec2::ZERO;
+                input.fire = false;
             }
-            PlayerCommand::Stop => input.move_to = None,
-            PlayerCommand::Walk(dir) => {
+            PlayerCommand::Stop => {
+                input.move_to = None;
+                input.fire = false;
+            }
+            PlayerCommand::Walk(dir, _) => {
                 input.walk = dir;
                 if dir != Vec2::ZERO {
                     input.move_to = None;
@@ -684,6 +700,7 @@ impl PlayerCommand {
                 input.fire = true;
             }
             PlayerCommand::Cast(slot, aim) => input.order_cast(slot, aim),
+            PlayerCommand::Aim(aim) => input.aim = aim,
         }
     }
 }
@@ -734,6 +751,9 @@ pub enum RoomRequest {
     /// Practice only: our abilities with no cooldowns of their own (ready again the moment
     /// they're used), or back to normal.
     NoCooldowns(bool),
+    /// Practice only: action mode (the client's action camera, Smite style), or back to normal.
+    /// Our fighter walks while its attack winds up, and walking doesn't cancel the windup.
+    ActionMode(bool),
     /// Waves only, near the shopkeeper: buy this item, or raise it a level.
     Buy(crate::items::Item),
     /// Waves only, near the shopkeeper: sell the item in this slot.
@@ -806,6 +826,7 @@ impl Plugin for ProtocolPlugin {
         // Others' fighters are interpolated (smooth, a little in the past); our own isn't: it's
         // shown as the server last said it was, for the least delay after a command.
         app.component::<Pos>().replicate().add_interpolation_with(lerp_or_jump);
+        app.component::<Walking>().replicate();
         app.component::<AttackState>().replicate().add_interpolation_with(hold);
         app.component::<LastSwing>().replicate().add_interpolation_with(hold);
         app.component::<Cooldowns>().replicate().add_interpolation_with(hold);

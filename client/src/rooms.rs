@@ -162,8 +162,10 @@ impl Default for CurrentMap {
     }
 }
 
-/// The map shown at home, and practiced on.
+/// The map shown at home.
 pub const HOME_MAP: MapId = MapId::Wilds;
+/// The map practice starts on (its tools switch to the others).
+pub const PRACTICE_MAP: MapId = MapId::Yard;
 
 impl CurrentMap {
     pub fn map(&self) -> &'static Map {

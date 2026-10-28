@@ -218,7 +218,7 @@ pub(super) struct FrameRate {
     pub(super) shown: u32,
 }
 
-/// The ping and frame rate (with the free camera, for watching the netcode, also the jitter), or
+/// The ping and frame rate (with the action camera, for watching the netcode, also the jitter), or
 /// that we're connecting or cut off.
 pub(super) fn update_status(
     time: Res<Time<Real>>,
@@ -226,12 +226,16 @@ pub(super) fn update_status(
     mut status: Single<&mut Text, With<Status>>,
     client: Query<(&Link, Has<Connected>, Option<&Disconnected>), With<Client>>,
     mode: Res<CameraMode>,
+    predicted: Query<&PredictedWalk, With<crate::Me>>,
 ) {
     frame_rate.seconds += time.delta_secs();
     frame_rate.frames += 1;
-    if frame_rate.seconds >= 0.5 {
-        *frame_rate = FrameRate { shown: (frame_rate.frames as f32 / frame_rate.seconds).round() as u32, ..default() };
+    // Rewritten only as the frame rate is recounted: a text that changed every frame would have
+    // the UI laid out again every frame.
+    if frame_rate.seconds < 0.5 {
+        return;
     }
+    *frame_rate = FrameRate { shown: (frame_rate.frames as f32 / frame_rate.seconds).round() as u32, ..default() };
     let Ok((link, connected, disconnected)) = client.single() else { return };
     let mut text = String::new();
     if let Some(disconnected) = disconnected {
@@ -243,6 +247,12 @@ pub(super) fn update_status(
         let _ = write!(text, "ping {:.0} ms   {} fps", ms(link.stats.rtt), frame_rate.shown);
         if mode.free {
             let _ = write!(text, "   jitter {:.0} ms", ms(link.stats.jitter));
+            // The prediction's numbers: how far ahead of the server it steps our keys, the glide
+            // it still has to show away, and the last correction worth noticing.
+            if let Ok(predicted) = predicted.single() {
+                let lead = predicted.lead().map_or("?".to_string(), |lead| format!("{lead:.1}"));
+                let _ = write!(text, "   lead {lead} t   glide {:.2} m   fix {:.2} m", predicted.error(), predicted.last_fix());
+            }
         }
     }
     // Only touch the component when the text changed, so Bevy doesn't re-layout it every frame.
@@ -296,11 +306,11 @@ pub(super) fn update_key_hints(
     let keys: Vec<(&str, &str)> = if mode.free {
         vec![
             ("WASD", "move"),
-            ("Left click", "attack"),
+            ("Mouse", "aim"),
+            ("Hold left click", "attack"),
             (&abilities.0, abilities.1),
-            ("Right drag, arrows", "turn camera"),
-            ("Wheel, + -", "zoom"),
-            ("Tab", "watch next fighter"),
+            ("Wheel", "zoom"),
+            ("Y", "lock / unlock camera"),
         ]
     } else {
         vec![
