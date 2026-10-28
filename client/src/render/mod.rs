@@ -27,7 +27,7 @@ pub(crate) use hud::*;
 mod input;
 pub(crate) use input::*;
 mod glide;
-pub(crate) use glide::{Falling, shown_ground};
+pub(crate) use glide::{PredictedWalk, shown_height};
 use glide::*;
 mod aim;
 use aim::*;
@@ -70,7 +70,7 @@ impl Plugin for RenderPlugin {
             Update,
             (
                 (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
-                (add_visuals, sync_transforms, watch_falls, lift_fighters).chain().before(crate::rig::Posing),
+                (add_visuals, sync_transforms, lift_fighters).chain().before(crate::rig::Posing),
                 (fly_shots, fade_wakes, fly_impacts, crate::rig::empty_hands).chain().after(crate::rig::Posing),
                 (show_novas, grow_bursts, end_fleeting, show_frost),
                 align_to_world.after(crate::rig::Posing).after(fly_shots),

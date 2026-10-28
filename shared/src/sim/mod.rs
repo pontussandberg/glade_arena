@@ -22,7 +22,7 @@ mod tests {
     use crate::abilities::{self, AbilityDef, AbilitySlot, Cast, CastOrder, Cooldowns};
     use crate::classes::{AbilityKind, AttackDef, AttackKind, Chill, ClassId, FollowUp, common};
     use crate::map::Map;
-    use crate::protocol::{AttackState, Chilled, Dashing, Hasted, LastSwing, PlayerCommand, PlayerInput, Projectile, Swing, Waygate};
+    use crate::protocol::{AttackState, Chilled, Dashing, Hasted, LastSwing, Motion, PlayerCommand, PlayerInput, Projectile, Swing, Waygate};
     use lightyear::prelude::PeerId;
 
     /// The tests walk and fight on the first map.
@@ -287,7 +287,7 @@ mod tests {
             let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
             let (_, windup) = timers(class);
             let (idle, warm) = (Dashing::default(), Chilled::default());
-            let moves = |state: &AttackState| move_player(map(), from, &walk, class, state, &mut { idle }, &warm, &default(), 11) != from;
+            let moves = |state: &AttackState| move_player(map(), from, &walk, class, state, &mut { idle }, &mut Motion::default(), &warm, &default(), 11) != from;
             let (_, winding) = attack_ticks(class, &[10], 10, 9 + windup);
             assert!(winding.winding_up().is_some() && !moves(&winding), "{}: moved during the windup", class.def().id);
             let (_, backswing) = attack_ticks(class, &[10], 10, 10 + windup);
@@ -366,14 +366,47 @@ mod tests {
         assert!(projectile_expired(map(), Map::center(wall), &proj, 6), "hit a wall");
     }
 
+    /// A fighter walked by its keys from `from`, tick after tick: where it is and how it moves.
+    fn walk_ticks(from: Vec2, keys: &[(Vec2, u32)], jump_at: Option<u32>) -> Vec<(Vec2, Motion)> {
+        let (mut pos, mut motion, mut tick, mut out) = (from, Motion::default(), 0u32, Vec::new());
+        for &(walk, ticks) in keys {
+            for _ in 0..ticks {
+                tick += 1;
+                let input = PlayerInput { walk, jump: jump_at == Some(tick), ..default() };
+                pos = move_player(map(), pos, &input, fighter(), &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick);
+                out.push((pos, motion));
+            }
+        }
+        out
+    }
+
     #[test]
-    fn a_jump_goes_up_and_comes_down_and_a_level_shot_passes_under_it() {
-        use crate::config::{JUMP_HEIGHT, JUMP_TICKS};
-        let jump = crate::protocol::Jump { started_at: 10 };
-        assert_eq!(jump.height_at(10.0), 0.0);
-        assert!((jump.height_at(10.0 + JUMP_TICKS as f32 / 2.0) - JUMP_HEIGHT).abs() < 1e-5, "at the top halfway");
-        assert_eq!(jump.height_at(10.0 + JUMP_TICKS as f32), 0.0);
-        assert!(!jump.over(10 + JUMP_TICKS - 1) && jump.over(10 + JUMP_TICKS));
+    fn walking_has_momentum_and_slides_to_a_stop() {
+        let from = spawns()[0];
+        let top = fighter().def().move_speed;
+        let run = walk_ticks(from, &[(Vec2::X, 48), (Vec2::ZERO, 96)], None);
+        let speed = |i: usize| run[i].1.along.length();
+        assert!(speed(0) > 0.0 && speed(0) < top * 0.5, "set off at {} of {top} m/s", speed(0));
+        assert!(speed(10) > speed(0), "not getting going");
+        assert!((speed(47) - top).abs() < top * 0.02, "running at {} of {top} m/s", speed(47));
+        assert!(speed(48) > top * 0.8 && speed(48) < speed(47), "stopped dead, not sliding: {}", speed(48));
+        assert!(speed(48 + 40) < top * 0.1, "still sliding at {}", speed(88));
+        assert_eq!(speed(143), 0.0, "never came to rest");
+        assert!(run[143].0.x > run[47].0.x + 1.0, "slid on less than a meter");
+    }
+
+    #[test]
+    fn a_jump_rises_to_its_height_and_lands_and_a_level_shot_passes_under_it() {
+        use crate::config::JUMP_HEIGHT;
+        let run = walk_ticks(spawns()[0], &[(Vec2::ZERO, 64)], Some(5));
+        let height = |i: usize| run[i].1.height;
+        assert_eq!(height(3), 0.0);
+        assert!(height(4) > 0.0, "didn't leave the ground");
+        let top = run.iter().map(|(_, m)| m.height).fold(0.0f32, f32::max);
+        assert!((top - JUMP_HEIGHT).abs() < 0.08, "jumped to {top} m");
+        let landed = 5 + run[5..].iter().position(|(_, m)| m.height == 0.0 && m.rise == 0.0).unwrap();
+        assert!(landed < 40, "took {landed} ticks to land");
+        assert!(landed > 20, "landed after only {landed} ticks");
         let proj = Projectile { owner: PeerId::Netcode(1), class: bolter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 0, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
         let at = projectile_pos(&proj, 3.0);
         assert!(projectile_hits(at, &proj, 3, at, 0.0), "standing, it's hit");
@@ -541,7 +574,7 @@ mod tests {
         while state.dashing.0.is_some() {
             tick += 1;
             assert!(tick < 1000, "the dash never ended");
-            pos = move_player(map(), pos, &PlayerInput::default(), class, &AttackState::default(), &mut state.dashing, chilled, hasted, tick);
+            pos = move_player(map(), pos, &PlayerInput::default(), class, &AttackState::default(), &mut state.dashing, &mut Motion::default(), chilled, hasted, tick);
             assert!(map().walkable_at(pos), "dashed into a wall at {pos}");
             state = step_kit(tick, class, pos, &PlayerInput::default(), chilled, state).0;
         }
@@ -590,7 +623,7 @@ mod tests {
         let (_, winding) = attack_ticks(class, &[10], 10, 10);
         let (kit, _) = step_kit(11, class, from, &press_q(Vec2::Y), &default(), default());
         assert!(kit.dashing.0.is_some(), "no dash mid-windup");
-        let moved = move_player(map(), from, &PlayerInput::default(), class, &winding, &mut { kit.dashing }, &default(), &default(), 11);
+        let moved = move_player(map(), from, &PlayerInput::default(), class, &winding, &mut { kit.dashing }, &mut Motion::default(), &default(), &default(), 11);
         assert_ne!(moved, from, "the dash didn't move you mid-windup");
         let (_, windup) = timers(class);
         let (released, _) = (11..=10 + windup).fold((None, winding), |(released, state), tick| {
@@ -622,7 +655,7 @@ mod tests {
         let from = spawns()[0];
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let (attack, ability) = (AttackState::default(), Dashing::default());
-        let step = |chilled: &Chilled| move_player(map(), from, &walk, chiller(), &attack, &mut { ability }, chilled, &default(), 101).distance(from);
+        let step = |chilled: &Chilled| move_player(map(), from, &walk, chiller(), &attack, &mut { ability }, &mut Motion::default(), chilled, &default(), 101).distance(from);
         assert!((step(&chilled) - step(&Chilled::default()) * (1.0 - chill.slow)).abs() < 1e-5);
 
         // A weaker slow doesn't replace a stronger one; the same one again renews it.
@@ -641,7 +674,7 @@ mod tests {
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let class = dasher();
         let (attack, idle, warm) = (AttackState::default(), Dashing::default(), Chilled::default());
-        let step = |tick| move_player(map(), from, &walk, class, &attack, &mut { idle }, &warm, &hasted, tick).distance(from);
+        let step = |tick| move_player(map(), from, &walk, class, &attack, &mut { idle }, &mut Motion::default(), &warm, &hasted, tick).distance(from);
         let normal = class.def().move_speed * TICK_DT;
         assert!((step(100) - normal).abs() < 1e-5, "hasted on the tick it was taken");
         assert!((step(101) - normal * HASTE_FACTOR).abs() < 1e-5);
@@ -666,8 +699,8 @@ mod tests {
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let class = dasher();
         let (attack, idle) = (AttackState::default(), Dashing::default());
-        assert_eq!(move_player(map(), from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 11), from, "walked while rooted");
-        assert_ne!(move_player(map(), from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 11 + TICK_HZ as u32), from, "still rooted after it wore off");
+        assert_eq!(move_player(map(), from, &walk, class, &attack, &mut { idle }, &mut Motion::default(), &chilled, &default(), 11), from, "walked while rooted");
+        assert_ne!(move_player(map(), from, &walk, class, &attack, &mut { idle }, &mut Motion::default(), &chilled, &default(), 11 + TICK_HZ as u32), from, "still rooted after it wore off");
 
         let (state, _) = step_kit(11, class, from, &press_q(Vec2::X), &chilled, default());
         assert!(state.dashing.0.is_none() && state.cooldowns.used_at(Q).is_none(), "dashed (or spent the cooldown) while rooted");
@@ -675,7 +708,7 @@ mod tests {
         // A dash in progress when the root lands goes no further, and ends.
         let (dashing, _) = step_kit(9, class, from, &press_q(Vec2::X), &default(), default());
         assert!(dashing.dashing.0.is_some());
-        assert_eq!(move_player(map(), from, &walk, class, &attack, &mut { dashing.dashing }, &chilled, &default(), 11), from, "dashed on while rooted");
+        assert_eq!(move_player(map(), from, &walk, class, &attack, &mut { dashing.dashing }, &mut Motion::default(), &chilled, &default(), 11), from, "dashed on while rooted");
         let (stopped, _) = step_kit(11, class, from, &PlayerInput::default(), &chilled, dashing);
         assert!(stopped.dashing.0.is_none(), "the dash should stop");
     }
@@ -744,8 +777,8 @@ mod tests {
         // Walking there is that much faster.
         let walk = PlayerInput { walk: Vec2::X, ..default() };
         let (idle, warm) = (Dashing::default(), Chilled::default());
-        let plain = move_player(map(), at, &walk, class, &AttackState::default(), &mut { idle }, &warm, &default(), 11).distance(at);
-        let boosted = move_player_boosted(map(), at, &walk, class, &AttackState::default(), &mut { idle }, &warm, &default(), 11, 1.0 + def.haste).distance(at);
+        let plain = move_player(map(), at, &walk, class, &AttackState::default(), &mut { idle }, &mut Motion::default(), &warm, &default(), 11).distance(at);
+        let boosted = move_player_boosted(map(), at, &walk, class, &AttackState::default(), &mut { idle }, &mut Motion::default(), &warm, &default(), 11, 1.0 + def.haste).distance(at);
         assert!((boosted - plain * (1.0 + def.haste)).abs() < 1e-4, "{boosted} vs {plain}");
     }
 
@@ -784,7 +817,7 @@ mod tests {
         let DashDef { distance, ticks, .. } = dash_def();
         let mut dashing = Dashing(Some(dash_def().start(Q, Vec2::X, Vec2::X * 100.0, 10)));
         let warm = Chilled::default();
-        let moved = move_player(keep, from, &PlayerInput::default(), class, &AttackState::default(), &mut dashing, &warm, &default(), 11);
+        let moved = move_player(keep, from, &PlayerInput::default(), class, &AttackState::default(), &mut dashing, &mut Motion::default(), &warm, &default(), 11);
         // Its first tick, the longest of an eased-out dash.
         let first = distance * (1.0 - (1.0 - 1.0 / ticks as f32).powi(2));
         assert!((moved.distance(from) - first).abs() < 1e-4, "moved {} the first tick, not {first}", moved.distance(from));

@@ -100,9 +100,13 @@ const PREDICT_MOST_TICKS: u32 = 64;
 /// Where the server turns out to disagree, the difference is shown away smoothly rather than
 /// snapped.
 #[derive(Component, Default)]
-pub(super) struct PredictedWalk {
-    /// The latest position from the server, and the tick it's from.
-    base: Option<(u32, Vec2)>,
+pub(crate) struct PredictedWalk {
+    /// The latest position and motion from the server, and the tick they're from.
+    base: Option<(u32, Vec2, Motion)>,
+    /// The motion the server last sent, to tell a new one from the server from our own.
+    motion_seen: Motion,
+    /// How high we're predicted to be, over the gameplay plane (`shown_height`).
+    pub(crate) height: f32,
     /// What it last drew, to tell a new position from the server (anything else) from its own.
     drawn: Vec2,
     /// How far what's drawn still is from the prediction the server's latest position gives.
@@ -148,15 +152,15 @@ fn walk_at(sends: &VecDeque<(u32, Vec2)>, tick: u32) -> Vec2 {
 
 /// Where we are at tick `at` (fractional, between two ticks' steps), walked on from `base` tick
 /// by tick by `step`, each tick by the walk ordered for it.
-fn predict(sends: &VecDeque<(u32, Vec2)>, base: (u32, Vec2), at: f32, mut step: impl FnMut(Vec2, Vec2, u32) -> Vec2) -> Vec2 {
-    let (base_tick, mut pos) = base;
+fn predict(sends: &VecDeque<(u32, Vec2)>, base: (u32, Vec2, Motion), at: f32, mut step: impl FnMut(Vec2, Motion, Vec2, u32) -> (Vec2, Motion)) -> (Vec2, f32) {
+    let (base_tick, mut pos, mut motion) = base;
     let last = (at.floor() as u32).max(base_tick).min(base_tick + PREDICT_MOST_TICKS);
-    let mut before = pos;
+    let mut before = (pos, motion.height);
     for tick in base_tick + 1..=last + 1 {
-        before = pos;
-        pos = step(pos, walk_at(sends, tick), tick);
+        before = (pos, motion.height);
+        (pos, motion) = step(pos, motion, walk_at(sends, tick), tick);
     }
-    before.lerp(pos, at.fract())
+    (before.0.lerp(pos, at.fract()), before.1 + (motion.height - before.1) * at.fract())
 }
 
 /// Our fighter's position with the action camera: predicted from the server's latest position
@@ -176,15 +180,15 @@ pub(super) fn predict_me(
     sends: Res<crate::SentWalks>,
     mut schedule: ResMut<crate::WalkSchedule>,
     link: Query<&Link, With<Client>>,
-    mut me: Query<(Entity, &mut Pos, &ClassId, Option<&Dashing>, Option<&Chilled>, Option<&Hasted>, Option<&Frenzy>, Option<&Walking>, Option<&mut PredictedWalk>), With<Me>>,
+    mut me: Query<(Entity, &mut Pos, &Motion, &ClassId, Option<&Dashing>, Option<&Chilled>, Option<&Hasted>, Option<&Frenzy>, Option<&Walking>, Option<&mut PredictedWalk>), With<Me>>,
 ) {
     let Some(latest) = clock.latest_tick() else { return };
     let rtt = link.single().map_or(0.0, |link| link.stats.rtt.as_secs_f32());
     let guessed_lead = rtt * TICK_HZ as f32 + PREDICT_SLACK_TICKS;
     let map = map.map();
-    for (entity, mut pos, class, dashing, chilled, hasted, frenzy, walking, predicted) in &mut me {
+    for (entity, mut pos, motion, class, dashing, chilled, hasted, frenzy, walking, predicted) in &mut me {
         let Some(mut predicted) = predicted else {
-            commands.entity(entity).insert(PredictedWalk { drawn: pos.0, server_walk: walking.map_or(Vec2::ZERO, |w| w.0), ..default() });
+            commands.entity(entity).insert(PredictedWalk { drawn: pos.0, motion_seen: *motion, height: motion.height, server_walk: walking.map_or(Vec2::ZERO, |w| w.0), ..default() });
             schedule.0 = 0;
             continue;
         };
@@ -217,13 +221,14 @@ pub(super) fn predict_me(
         // instead of waiting for the server to say so.
         let (chilled, hasted, frenzy) = (chilled.copied().unwrap_or_default(), hasted.copied().unwrap_or_default(), frenzy.copied().unwrap_or_default());
         let step = |mut dashing: Dashing| {
-            move |from: Vec2, walk: Vec2, tick: u32| {
+            move |from: Vec2, mut motion: Motion, walk: Vec2, tick: u32| {
                 if dashing.0.is_some_and(|dash| dash.over()) || chilled.rooted_at(tick) || chilled.lifted_at(tick) {
                     dashing.0 = None;
                 }
                 let input = PlayerInput { walk, aim: Vec2::X, ..default() };
                 let boost = 1.0 + frenzy.at(tick as f32);
-                sim::move_player_boosted(map, from, &input, *class, &AttackState::default(), &mut dashing, &chilled, &hasted, tick, boost)
+                let to = sim::move_player_boosted(map, from, &input, *class, &AttackState::default(), &mut dashing, &mut motion, &chilled, &hasted, tick, boost);
+                (to, motion)
             }
         };
         let dashing = dashing.copied().unwrap_or_default();
@@ -231,15 +236,21 @@ pub(super) fn predict_me(
         // shown away: it's stepped from the old base too.
         let was_dashing = if predicted.dashing.0.is_some() { predicted.dashing } else { dashing };
         predicted.dashing = dashing;
-        let fresh = pos.0 != predicted.drawn;
-        let newer = predicted.base.is_none_or(|(tick, _)| tick < latest);
+        // News of our motion too (the server sends it with the position, or alone in the air).
+        let moved = *motion != predicted.motion_seen;
+        predicted.motion_seen = *motion;
+        let fresh = pos.0 != predicted.drawn || moved;
+        let newer = predicted.base.is_none_or(|(tick, ..)| tick < latest);
         // What the server's news (or the lead's change) moves the prediction by goes into the
         // error, so what's drawn doesn't jump.
         if fresh || newer {
-            let base = (latest, if fresh { pos.0 } else { predicted.base.map_or(pos.0, |(_, p)| p) });
+            let base = match predicted.base {
+                Some((_, p, m)) if !fresh => (latest, p, m),
+                _ => (latest, if pos.0 != predicted.drawn { pos.0 } else { predicted.base.map_or(pos.0, |(_, p, _)| p) }, *motion),
+            };
             if let Some(old) = predicted.base {
-                let was = predict(sends, old, at_before, step(was_dashing));
-                let is = predict(sends, base, at, step(dashing));
+                let was = predict(sends, old, at_before, step(was_dashing)).0;
+                let is = predict(sends, base, at, step(dashing)).0;
                 predicted.error += was - is;
                 if (was - is).length() >= 0.02 {
                     predicted.last_fix = (was - is).length();
@@ -249,10 +260,11 @@ pub(super) fn predict_me(
         } else if let Some(base) = predicted.base
             && at != at_before
         {
-            predicted.error += predict(sends, base, at_before, step(dashing)) - predict(sends, base, at, step(dashing));
+            predicted.error += predict(sends, base, at_before, step(dashing)).0 - predict(sends, base, at, step(dashing)).0;
         }
         let Some(base) = predicted.base else { continue };
-        let prediction = predict(sends, base, at, step(dashing));
+        let (prediction, height) = predict(sends, base, at, step(dashing));
+        predicted.height = height;
         // A jump (a respawn) isn't eased.
         if predicted.error.length() > JUMP {
             predicted.error = Vec2::ZERO;
@@ -271,16 +283,21 @@ pub(super) fn predict_me(
 const LIFT_HEIGHT: f32 = 0.45;
 const FULL_LIFT_TICKS: f32 = 24.0;
 
+/// How high over the gameplay plane a fighter at `p` is shown: where its motion has it, or our
+/// own where it's predicted to be; on the ground for one with no motion of its own.
+pub(crate) fn shown_height(map: &arena_shared::map::Map, motion: Option<&Motion>, predicted: Option<&PredictedWalk>, p: Vec2) -> f32 {
+    predicted.map(|predicted| predicted.height).or(motion.map(|motion| motion.height)).unwrap_or_else(|| map.height_at(p))
+}
+
 /// Knocked up (`Chilled::lifted`): off the ground, up and back down over the knock-up, on the
-/// timeline it's shown on; set down again once it's over. (A jump is the rig's: `rig::pose_rigs`
-/// places the figure, and lifts it by the jump.)
+/// timeline it's shown on; set down again once it's over. (The rig places the figure's body
+/// over this: `rig::pose_rigs`.)
 pub(super) fn lift_fighters(
     clock: crate::feedback::AttackClock,
-    time: Res<Time>,
     map: Res<crate::rooms::CurrentMap>,
-    mut q: Query<(&Chilled, Option<&Falling>, &mut Transform, Has<crate::Me>)>,
+    mut q: Query<(&Chilled, Option<&Motion>, Option<&PredictedWalk>, &mut Transform, Has<crate::Me>)>,
 ) {
-    for (chilled, falling, mut transform, me) in &mut q {
+    for (chilled, motion, predicted, mut transform, me) in &mut q {
         let now = clock.now(me);
         let span = chilled.lifted;
         let lifted = if span.covers(now) {
@@ -290,67 +307,21 @@ pub(super) fn lift_fighters(
         } else {
             0.0
         };
-        let y = shown_ground(map.map(), falling, time.elapsed_secs(), to_gameplay(transform.translation)) + lifted;
+        let y = shown_height(map.map(), motion, predicted, to_gameplay(transform.translation)) + lifted;
         if transform.translation.y != y {
             transform.translation.y = y;
         }
     }
 }
 
-/// Every fighter's transform on its position, on the ground there (`Map::height_at`).
-pub(super) fn sync_transforms(map: Res<crate::rooms::CurrentMap>, mut q: Query<(&Pos, &mut Transform), (Changed<Pos>, Without<Projectile>)>) {
-    for (pos, mut transform) in &mut q {
-        transform.translation = to_world(pos.0, map.map().height_at(pos.0));
-    }
-}
-
-/// A fighter falling: the ground dropped away under it (off a ledge, a cliff), and it's shown
-/// coming down from where it was, under gravity, until it reaches the ground. Only shown: the
-/// server has it on the ground the moment it steps off.
-#[derive(Component, Clone, Copy, Debug)]
-pub(crate) struct Falling {
-    /// How high it was (meters over the gameplay plane) when the ground went, and when (`Time`).
-    from: f32,
-    started: f32,
-}
-
-impl Falling {
-    /// How high it is at `now`, falling.
-    fn height(&self, now: f32) -> f32 {
-        self.from - 0.5 * arena_shared::config::GRAVITY * (now - self.started).powi(2)
-    }
-}
-
-/// How high the ground is shown under a fighter at `p` at `now`: the ground itself, or, falling,
-/// where it has fallen to on its way down to it.
-pub(crate) fn shown_ground(map: &arena_shared::map::Map, falling: Option<&Falling>, now: f32, p: Vec2) -> f32 {
-    let ground = map.height_at(p);
-    falling.map_or(ground, |falling| falling.height(now).max(ground))
-}
-
-/// How far the ground must drop under a fighter between two frames to be a fall, not a slope.
-const LEDGE: f32 = 0.5;
-
-/// Watches the ground under every fighter: dropping away by a ledge or more, the fighter falls
-/// (`Falling`) from where it was shown; down on the ground again, the fall is over.
-pub(super) fn watch_falls(
-    mut commands: Commands,
-    time: Res<Time>,
+/// Every fighter's transform on its position, as high as its motion has it (on the ground, or
+/// in a jump or a fall; one with no motion of its own on the ground: `Map::height_at`).
+pub(super) fn sync_transforms(
     map: Res<crate::rooms::CurrentMap>,
-    mut stood: Local<bevy::platform::collections::HashMap<Entity, f32>>,
-    fighters: Query<(Entity, &Pos, Option<&Falling>), With<PlayerId>>,
+    mut q: Query<(&Pos, Option<&Motion>, &mut Transform), (Or<(Changed<Pos>, Changed<Motion>)>, Without<Projectile>)>,
 ) {
-    let now = time.elapsed_secs();
-    let map = map.map();
-    stood.retain(|entity, _| fighters.contains(*entity));
-    for (entity, pos, falling) in &fighters {
-        let ground = map.height_at(pos.0);
-        let shown = shown_ground(map, falling, now, pos.0);
-        let was = stood.insert(entity, shown).unwrap_or(shown);
-        if was - ground > LEDGE && falling.is_none_or(|falling| falling.height(now) > was + 0.01) {
-            commands.entity(entity).insert(Falling { from: was, started: now });
-        } else if falling.is_some_and(|falling| falling.height(now) <= ground) {
-            commands.entity(entity).remove::<Falling>();
-        }
+    for (pos, motion, mut transform) in &mut q {
+        transform.translation = to_world(pos.0, motion.map_or_else(|| map.map().height_at(pos.0), |motion| motion.height));
     }
 }
+

@@ -7,7 +7,8 @@ use lightyear::prelude::PeerId;
 
 use crate::classes::{AbilityKind, ClassId};
 use crate::map::Map;
-use crate::protocol::{AttackState, Chilled, Dashing, Hasted, LastSwing, PlayerInput, Waygate};
+use crate::config::{AIR_ACCEL, AIR_CONTROL_SPEED, GRAVITY, GROUND_ACCEL, GROUND_FRICTION, JUMP_HEIGHT, STEP_DOWN, STOP_SPEED};
+use crate::protocol::{AttackState, Chilled, Dashing, Hasted, LastSwing, Motion, PlayerInput, Waygate};
 
 /// Advance a player one tick on `map`: straight the way its keys walk it, or else toward the
 /// point it was told to walk to (point-and-click), pathfinding there. Unreachable or missing
@@ -35,10 +36,10 @@ fn walk_step(map: &Map, pos: Vec2, step: Vec2) -> Vec2 {
 }
 
 /// One tick (`tick`) of a player's movement: frozen in place while rooted, dashing, standing
-/// still while winding up an attack, or walking at its class's speed. A slow or a haste changes
-/// how fast it walks and dashes alike (a dash still goes its full distance, just slower or
-/// faster: each step comes off what's `left` of it here, and `abilities::step` ends it once
-/// that's none). Marsh slows walking, not dashing.
+/// still while winding up an attack, or walking at its class's speed (with momentum: see
+/// `move_player_boosted`). A slow or a haste changes how fast it walks and dashes alike (a dash
+/// still goes its full distance, just slower or faster: each step comes off what's `left` of
+/// it here, and `abilities::step` ends it once that's none). Marsh slows walking, not dashing.
 #[allow(clippy::too_many_arguments)]
 pub fn move_player(
     map: &Map,
@@ -47,14 +48,24 @@ pub fn move_player(
     class: ClassId,
     attack: &AttackState,
     dashing: &mut Dashing,
+    motion: &mut Motion,
     chilled: &Chilled,
     hasted: &Hasted,
     tick: u32,
 ) -> Vec2 {
-    move_player_boosted(map, pos, input, class, attack, dashing, chilled, hasted, tick, 1.0)
+    move_player_boosted(map, pos, input, class, attack, dashing, motion, chilled, hasted, tick, 1.0)
 }
 
 /// `move_player`, its walking (not its dashing) `boost` times as fast: standing in its own rift.
+///
+/// Walking has momentum (`motion`): the keys ask for a speed and a way, and the ground
+/// accelerates the walker toward it (`GROUND_ACCEL`) and slows it when they ask for nothing
+/// (`GROUND_FRICTION`, low: a slide to a stop); in the air the keys only steer a little
+/// (`AIR_ACCEL` up to `AIR_CONTROL_SPEED`). Whatever blocks a step stops that part of the
+/// motion. Up and down: on the ground it follows the ground, up a slope and down one (not off a
+/// ledge: `STEP_DOWN`); `input.jump` on the ground sends it up (`jump_speed`); in the air it
+/// falls (`GRAVITY`) until the ground. A dash or a click-to-walk sets the motion by where it
+/// went, so a dash off a ledge flies on out.
 #[allow(clippy::too_many_arguments)]
 pub fn move_player_boosted(
     map: &Map,
@@ -63,25 +74,82 @@ pub fn move_player_boosted(
     class: ClassId,
     attack: &AttackState,
     dashing: &mut Dashing,
+    motion: &mut Motion,
     chilled: &Chilled,
     hasted: &Hasted,
     tick: u32,
     boost: f32,
 ) -> Vec2 {
     let speed = chilled.speed_factor(tick) * hasted.speed_factor(tick);
-    if chilled.rooted_at(tick) || chilled.lifted_at(tick) {
-        pos
+    let held = chilled.rooted_at(tick) || chilled.lifted_at(tick);
+    let grounded = motion.height <= map.height_at(pos) + 1e-3;
+    let mut next = pos;
+    if held {
+        motion.along = Vec2::ZERO;
     } else if let Some(dash) = &mut dashing.0 {
         let pace = match class.def().ability(dash.slot).map(|ability| ability.kind) {
             Some(AbilityKind::Dash(def)) => def.pace(),
             _ => 0.0,
         };
-        dash.step(map, pos, pace * speed, tick)
+        next = dash.step(map, pos, pace * speed, tick);
+        motion.along = (next - pos) / TICK_DT;
     } else if attack.winding_up().is_some() {
-        pos
-    } else {
-        step_player(map, pos, input, class.def().move_speed * speed * boost)
+        motion.along = Vec2::ZERO;
+    } else if input.walk != Vec2::ZERO || motion.along != Vec2::ZERO {
+        let wish_speed = class.def().move_speed * speed * boost * map.speed_factor_at(pos);
+        let wish = input.walk.normalize_or_zero();
+        let mut v = motion.along;
+        if grounded {
+            let going = v.length();
+            if going > 0.0 {
+                let drop = going.max(STOP_SPEED) * GROUND_FRICTION * TICK_DT;
+                v *= (going - drop).max(0.0) / going;
+            }
+        }
+        if wish != Vec2::ZERO {
+            let (cap, accel) = if grounded { (wish_speed, GROUND_ACCEL) } else { (wish_speed.min(AIR_CONTROL_SPEED), AIR_ACCEL) };
+            v += wish * (cap - v.dot(wish)).clamp(0.0, accel * wish_speed * TICK_DT);
+        }
+        // The step, or each axis of it that's open; a blocked axis stops that part of the motion.
+        let step = v * TICK_DT;
+        if map.line_walkable(pos, pos + step) {
+            next = pos + step;
+        } else if map.line_walkable(pos, pos + step.with_y(0.0)) {
+            next = pos + step.with_y(0.0);
+            v.y = 0.0;
+        } else if map.line_walkable(pos, pos + step.with_x(0.0)) {
+            next = pos + step.with_x(0.0);
+            v.x = 0.0;
+        } else {
+            v = Vec2::ZERO;
+        }
+        motion.along = v;
+    } else if input.move_to.is_some() {
+        next = step_player(map, pos, input, class.def().move_speed * speed * boost);
+        motion.along = (next - pos) / TICK_DT;
     }
+    let under = map.height_at(next);
+    if input.jump && grounded && !held && dashing.0.is_none() {
+        motion.rise = jump_speed();
+    }
+    if grounded && motion.rise <= 0.0 && motion.height <= under + STEP_DOWN {
+        // On the ground, up or down it.
+        motion.height = under;
+        motion.rise = 0.0;
+    } else {
+        motion.rise -= GRAVITY * TICK_DT;
+        motion.height += motion.rise * TICK_DT;
+        if motion.height <= under {
+            motion.height = under;
+            motion.rise = 0.0;
+        }
+    }
+    next
+}
+
+/// How fast a jump leaves the ground (m/s): enough to reach `JUMP_HEIGHT` against `GRAVITY`.
+pub fn jump_speed() -> f32 {
+    (2.0 * GRAVITY * JUMP_HEIGHT).sqrt()
 }
 
 /// Ground a strike tore open (`RiftDef`), hasting `owner` while its body is in it, until `until`

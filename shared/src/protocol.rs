@@ -596,35 +596,30 @@ pub struct Projectile {
     /// flies over bodies accordingly, and a thrown one drops from that line as it flies
     /// (`sim::projectile_height`).
     pub climb: f32,
-    /// How far above the gameplay plane's usual the shooter's hand was as it left (the ground
-    /// they stood on, and a jump's height then), so it starts that much higher.
+    /// How far above the gameplay plane's usual the shooter's hand was as it left (how high they
+    /// were: `Motion::height`), so it starts that much higher.
     pub lift: f32,
 }
 
-/// A fighter's jump in progress, if any (`PlayerCommand::Jump`): off the ground from
-/// `started_at` for `JUMP_TICKS`, up to `JUMP_HEIGHT` and back down (`Jump::height_at`). While
-/// up, shots pass under its feet and it walks on as before. Server-authoritative, replicated and
-/// shown like `Dashing`.
+/// A fighter's motion: how it's moving (meters per second, `along` the gameplay plane and
+/// `rise` up it), and how high it is over the plane (the ground it stands on, or the air it's
+/// in: a jump, a fall off a ledge). Walking has momentum (`sim::move_player`): a run to get
+/// going, a slide to a stop, little say in the air. Server-authoritative, replicated; our own
+/// is predicted along with our position (`render::glide`).
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
-pub struct Jumping(pub Option<Jump>);
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
-pub struct Jump {
-    pub started_at: u32,
+pub struct Motion {
+    pub along: Vec2,
+    pub rise: f32,
+    pub height: f32,
 }
 
-impl Jump {
-    /// How high off the ground (meters) it is at `tick` (fractional, for drawing in between):
-    /// an arc, up and down, flat at the top.
-    pub fn height_at(&self, tick: f32) -> f32 {
-        let t = ((tick - self.started_at as f32) / crate::config::JUMP_TICKS as f32).clamp(0.0, 1.0);
-        crate::config::JUMP_HEIGHT * 4.0 * t * (1.0 - t)
+/// Others' motion blends between updates like their position, but a height that leaps (a
+/// respawn, a waygate) is taken at once.
+fn lerp_motion(start: Motion, end: Motion, t: f32) -> Motion {
+    if (start.height - end.height).abs() > crate::config::JUMP {
+        return start;
     }
-
-    /// Back on the ground at `tick`.
-    pub fn over(&self, tick: u32) -> bool {
-        tick >= self.started_at + crate::config::JUMP_TICKS
-    }
+    Motion { along: start.along.lerp(end.along, t), rise: start.rise + (end.rise - start.rise) * t, height: start.height + (end.height - start.height) * t }
 }
 
 impl Projectile {
@@ -653,8 +648,8 @@ pub struct PlayerInput {
     /// Left click: auto-attack toward `aim`, if the last attack is done (else the click is
     /// dropped). Set by `PlayerCommand::Attack`, used up by the next tick.
     pub fire: bool,
-    /// Space: jump, if standing on the ground (else it's dropped). Set by `PlayerCommand::Jump`,
-    /// used up by the next tick.
+    /// Space: jump, if standing on the ground (else it's dropped: `sim::move_player`). Set by
+    /// `PlayerCommand::Jump`, used up by the next tick.
     pub jump: bool,
     /// Abilities' keys pressed since the last tick, in order (`order_cast`), each used toward its
     /// own aim. Set by `PlayerCommand::Cast`, used up by the next tick, whether or not they could
@@ -703,7 +698,7 @@ pub enum PlayerCommand {
     /// its pitch (`PlayerInput::climb`), so an attack winding up goes off the way the player
     /// looks then, not the way they looked when it started.
     Aim(Vec2, f32),
-    /// Space: jump (`Jumping`).
+    /// Space: jump (`Motion`).
     Jump,
 }
 
@@ -875,7 +870,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<LastSwing>().replicate().add_interpolation_with(hold);
         app.component::<Cooldowns>().replicate().add_interpolation_with(hold);
         app.component::<Dashing>().replicate().add_interpolation_with(hold);
-        app.component::<Jumping>().replicate().add_interpolation_with(hold);
+        app.component::<Motion>().replicate().add_interpolation_with(lerp_motion);
         // Projectiles fly on rails: clients draw them from this alone (`sim::projectile_pos`).
         app.component::<Projectile>().replicate();
     }

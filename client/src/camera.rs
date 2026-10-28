@@ -17,7 +17,7 @@
 use arena_shared::classes::ClassId;
 use arena_shared::config::{GRAVITY, PLAYER_RADIUS, SHOT_HEIGHT};
 use arena_shared::map::Map;
-use arena_shared::protocol::{Jumping, PlayerId, Pos};
+use arena_shared::protocol::{Motion, PlayerId, Pos};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
@@ -385,10 +385,9 @@ fn follow_camera(
     >,
     mut mode: ResMut<CameraMode>,
     settings: Res<crate::settings::Settings>,
-    clock: Option<crate::feedback::AttackClock>,
     // Its own transform, set this frame (`GlobalTransform` lags a frame and would jitter).
-    me: Query<(Entity, &Transform, &ClassId, Option<&Jumping>, Option<&crate::render::Falling>), (With<Me>, With<PlayerId>, Without<CameraRig>)>,
-    fighters: Query<(Entity, &Transform, &ClassId, Option<&Jumping>, Option<&crate::render::Falling>), (With<PlayerId>, Without<CameraRig>)>,
+    me: Query<(Entity, &Transform, &ClassId, Option<&Motion>, Option<&crate::render::PredictedWalk>), (With<Me>, With<PlayerId>, Without<CameraRig>)>,
+    fighters: Query<(Entity, &Transform, &ClassId, Option<&Motion>, Option<&crate::render::PredictedWalk>), (With<PlayerId>, Without<CameraRig>)>,
     mut camera: Single<&mut Transform, With<CameraRig>>,
     window: Single<(&mut Window, &mut CursorOptions)>,
 ) {
@@ -478,14 +477,13 @@ fn follow_camera(
     if watched.is_none() && mode.watching.is_some() {
         mode.watching = None;
     }
-    let Some((_, at, class, jumping, falling)) = watched.or(me.single().ok()) else { return };
-    // Follow its feet (not its posed, leaning body), up and down with its jump.
-    let lift = jumping.and_then(|jumping| jumping.0).zip(clock.as_ref()).map_or(0.0, |(jump, clock)| jump.height_at(clock.now(mode.watching.is_none())));
+    let Some((_, at, class, motion, predicted)) = watched.or(me.single().ok()) else { return };
     let (forward, right) = mode.ground_axes();
     let pivot = arena::to_gameplay(at.translation);
     let shoulder = pivot + right * ACTION_SHOULDER;
-    // Up the ground it stands on (or is falling to), too.
-    let lift = lift + crate::render::shown_ground(map.map(), falling, time.elapsed_secs(), pivot);
+    // Follow its feet (not its posed, leaning body): as high as it is, on the ground or up in
+    // a jump or a fall.
+    let lift = crate::render::shown_height(map.map(), motion, predicted, pivot);
     // The first wall on the way back from the pivot to the camera stops it short: at once, and
     // it eases back out when the wall is past.
     let map = map.map();

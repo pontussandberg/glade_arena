@@ -62,27 +62,18 @@ pub(super) fn use_up_clicks(mut players: Query<&mut PlayerInput>) {
     }
 }
 
-/// Walking (or dashing), and jumping: off the ground from the tick Space arrives, if standing on
-/// it, back on it once the jump is over. Arriving forgets the destination, so nothing lingers. A frenzy speeds up
+/// Walking (or dashing), with momentum, and jumping and falling (`sim::move_player_boosted`).
+/// Arriving forgets the destination, so nothing lingers. A frenzy speeds up
 /// walking, like a rift. In action mode the windup doesn't root the fighter: the sim is shown
 /// no swing.
 pub(super) fn move_players(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     rifts: Res<Rifts>,
-    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, (&AttackState, Has<ActionMode>), &mut Dashing, &Chilled, &Hasted, &InRoom, &Frenzy, Option<&Sluggish>, (&mut Walking, &mut WalkOrders), &mut arena_shared::protocol::Jumping), InPlay>,
+    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, (&AttackState, Has<ActionMode>), &mut Dashing, &Chilled, &Hasted, &InRoom, &Frenzy, Option<&Sluggish>, (&mut Walking, &mut WalkOrders), &mut arena_shared::protocol::Motion), InPlay>,
 ) {
     let now = timeline.tick().0;
-    for (id, mut pos, class, mut input, (attack, action), mut dashing, chilled, hasted, room, frenzy, sluggish, (mut walking, mut orders), mut jumping) in &mut players {
-        if jumping.0.is_some_and(|jump| jump.over(now)) {
-            jumping.0 = None;
-        }
-        if input.jump {
-            input.jump = false;
-            if jumping.0.is_none() && dashing.0.is_none() && !chilled.rooted_at(now) && !chilled.lifted_at(now) {
-                jumping.0 = Some(arena_shared::protocol::Jump { started_at: now });
-            }
-        }
+    for (id, mut pos, class, mut input, (attack, action), mut dashing, chilled, hasted, room, frenzy, sluggish, (mut walking, mut orders), mut motion) in &mut players {
         // Walks ordered for this tick (or one gone by) take now.
         while let Some(&(tick, dir, received)) = orders.pending.front() {
             if tick > now {
@@ -98,8 +89,12 @@ pub(super) fn move_players(
         // Hasted in its own rift (the most hasting, if it stands in several).
         let boost = rifts.0.iter().filter(|(r, rift)| r == room && rift.owner == id.0 && rift.holds(pos.0, now)).fold(1.0f32, |most, (_, rift)| most.max(1.0 + rift.haste));
         let boost = boost * (1.0 + frenzy.at(now as f32)) * sluggish.map_or(1.0, |s| s.0);
-        pos.set_if_neq(Pos(sim::move_player_boosted(map, pos.0, &input, *class, &attack, &mut next, chilled, hasted, now, boost)));
+        let mut moving = *motion;
+        pos.set_if_neq(Pos(sim::move_player_boosted(map, pos.0, &input, *class, &attack, &mut next, &mut moving, chilled, hasted, now, boost)));
         dashing.set_if_neq(next);
+        motion.set_if_neq(moving);
+        // The jump has been taken, or dropped.
+        input.jump = false;
         walking.set_if_neq(Walking(input.walk, orders.received));
         if input.move_to.is_some_and(|point| sim::arrived(map, pos.0, point)) {
             input.move_to = None;

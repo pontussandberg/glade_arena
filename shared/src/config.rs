@@ -34,10 +34,22 @@ pub const BODY_HEIGHT: f32 = 2.1;
 pub const SHOT_HEIGHT: f32 = 1.0;
 /// How fast a thrown shot falls (m/s², the real thing), one that falls at all (`Shot::falls`).
 pub const GRAVITY: f32 = 9.81;
-/// A jump (`protocol::Jump`): how high it goes at the top (meters), and how long it is in the
-/// air (ticks), up and down.
+/// How high a jump goes at the top (meters), from flat ground (`sim::jump_speed`).
 pub const JUMP_HEIGHT: f32 = 1.0;
-pub const JUMP_TICKS: u32 = 28;
+/// Walking has momentum (`sim::move_player`): how hard the ground accelerates a walker toward
+/// the speed its keys ask for (per second, as a share of that speed); how hard it slows one
+/// whose keys ask for nothing (per second, as a share of its speed: low, so it slides to a stop
+/// like a skater); the speed under which it's slowed as if going that fast, so it comes to rest
+/// instead of creeping; and in the air how hard the keys steer it and up to what speed they can
+/// add, so it steers a little mid-jump (strafing), not as on the ground.
+pub const GROUND_ACCEL: f32 = 8.0;
+pub const GROUND_FRICTION: f32 = 2.5;
+pub const STOP_SPEED: f32 = 0.8;
+pub const AIR_ACCEL: f32 = 12.0;
+pub const AIR_CONTROL_SPEED: f32 = 0.6;
+/// How far below a walker's feet the ground may fall away in a tick and still be walked down
+/// (a slope); farther is a ledge, stepped off into the air.
+pub const STEP_DOWN: f32 = 0.4;
 /// How long a killed player is out of the fight before respawning (3 s).
 pub const RESPAWN_TICKS: u32 = 3 * TICK_HZ as u32;
 
