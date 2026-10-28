@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn an_order_to_move_drops_an_unseen_click() {
         let mut input = PlayerInput::default();
-        PlayerCommand::Attack(Vec2::X).apply(&mut input);
+        PlayerCommand::Attack(Vec2::X, 0).apply(&mut input);
         assert!(input.fire);
         PlayerCommand::Walk(Vec2::ZERO, 0).apply(&mut input);
         assert!(input.fire, "letting go of the walking keys isn't an order to move");
@@ -383,7 +383,7 @@ mod tests {
         assert!(input.fire, "the walking keys walk through an attack, so they keep the click");
         PlayerCommand::MoveTo(Vec2::ONE).apply(&mut input);
         assert!(!input.fire);
-        PlayerCommand::Attack(Vec2::X).apply(&mut input);
+        PlayerCommand::Attack(Vec2::X, 0).apply(&mut input);
         assert!(input.fire && input.move_to.is_some(), "only an attack that starts drops the walk (the server does)");
     }
 
@@ -447,57 +447,86 @@ mod tests {
         [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y].into_iter().find(|&way| map().line_walkable(from, from + way * meters)).expect("open ground somewhere")
     }
 
-    /// `class` walked from `from` the way `way`, `run` ticks and then `drawn` more with its attack
-    /// button held (`PlayerInput::draw`), jumping on the tick it's first held if `jump`: where it
-    /// is and how it moves, tick by tick.
-    fn walk_drawn(class: ClassId, (from, way): (Vec2, Vec2), (run, drawn): (u32, u32), jump: bool) -> Vec<(Vec2, Motion)> {
-        let (mut pos, mut motion, mut out) = (from, Motion::default(), Vec::new());
-        for tick in 1..=run + drawn {
-            let input = PlayerInput { walk: way, draw: tick > run, jump: jump && tick == run + 1, ..default() };
-            pos = move_player(map(), pos, &input, class, &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick);
-            out.push((pos, motion));
+    /// How `class` is walked by its keys the way `way` from `from`, `ticks` ticks, as the server
+    /// steps a fighter in action mode (its windup never roots it; a shot winding up slows it:
+    /// `winding_speed`), clicking to attack on the tick `click` (if any) with its button held on
+    /// the ticks in `held`, and jumping on the tick `jump` (if any): where it is, how it moves and
+    /// its attack, tick by tick (from tick 1).
+    fn walk_attacking(class: ClassId, (from, way): (Vec2, Vec2), ticks: u32, click: Option<u32>, held: std::ops::Range<u32>, jump: Option<u32>) -> Vec<(Vec2, Motion, AttackState)> {
+        let (mut pos, mut motion, mut attack, mut out) = (from, Motion::default(), AttackState::default(), Vec::new());
+        for tick in 1..=ticks {
+            let input = PlayerInput { walk: way, aim: way, fire: click == Some(tick), draw: held.contains(&tick), jump: jump == Some(tick), ..default() };
+            let boost = winding_speed(class, &attack);
+            pos = move_player_boosted(map(), pos, &input, class, &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick, boost);
+            attack = step_attack(tick, PeerId::Netcode(1), class, pos, &input, attack).0;
+            out.push((pos, motion, attack));
         }
         out
     }
 
     #[test]
-    fn holding_a_shot_drawn_slows_the_walk_toward_its_draw_speed_not_at_once() {
+    fn a_shot_winding_up_slows_the_walk_toward_its_draw_speed_not_at_once_till_it_goes_off() {
         use crate::config::DRAW_SPEED;
         let (class, from) = (shooter(), spawns()[0]);
         let top = class.def().move_speed;
-        let way = open_way(from, 12.0);
-        let (run, drawn) = (60, 60);
-        let walked = walk_drawn(class, (from, way), (run, drawn), false);
-        let speed = |i: u32| walked[i as usize - 1].1.along.length();
-        assert!((speed(run) - top).abs() < top * 0.02, "walking at {} of {top} m/s before drawing", speed(run));
-        // Its speed isn't cut: it slows on the ground, a step at a time, to its draw speed.
-        assert!(speed(run + 1) > top * DRAW_SPEED + 0.1 && speed(run + 1) < speed(run), "slowed at once to {} m/s", speed(run + 1));
-        assert!(speed(run + 2) < speed(run + 1), "not slowing");
-        let held = speed(run + drawn);
-        assert!((held - top * DRAW_SPEED).abs() < top * 0.02, "walking drawn at {held} of {top} m/s");
-        assert!(speed(run + 15) - held < 0.05, "still slowing a quarter second in: {} m/s", speed(run + 15));
-        // A swing's button held doesn't slow it.
-        let striker = fighter();
-        let plain = walk_drawn(striker, (from, way), (run + drawn, 0), false);
-        let held_down = walk_drawn(striker, (from, way), (run, drawn), false);
-        assert_eq!(plain.last().map(|w| w.0), held_down.last().map(|w| w.0), "a swing's button slowed its walk");
+        let (_, windup) = timers(class);
+        let way = open_way(from, 14.0);
+        // At full speed by the click; held drawn well past its windup, then let go.
+        let (click, gone) = (60, 60 + windup + 30);
+        let walked = walk_attacking(class, (from, way), gone + 40, Some(click), click..gone, None);
+        let speed = |tick: u32| walked[tick as usize - 1].1.along.length();
+        let winding = |tick: u32| walked[tick as usize - 1].2.winding_up().is_some();
+        assert!((speed(click) - top).abs() < top * 0.02, "walking at {} of {top} m/s before the click", speed(click));
+        assert!(winding(click) && winding(gone - 1) && !winding(gone), "the shot didn't wind up from {click} and go off at {gone}");
+        // From the windup's start its speed isn't cut: it slows on the ground, a step at a time.
+        assert!(speed(click + 1) > top * DRAW_SPEED + 0.1 && speed(click + 1) < speed(click), "slowed at once to {} m/s", speed(click + 1));
+        assert!(speed(click + 2) < speed(click + 1), "not slowing");
+        for tick in click + 15..=gone {
+            assert!((speed(tick) - top * DRAW_SPEED).abs() < top * 0.02, "walking at {} of {top} m/s at {tick}, winding up", speed(tick));
+        }
+        // Gone off, it speeds up again to its full speed.
+        assert!(speed(gone + 2) > speed(gone + 1), "not speeding up again");
+        assert!((speed(gone + 40) - top).abs() < top * 0.02, "walking at {} of {top} m/s after the shot", speed(gone + 40));
     }
 
     #[test]
-    fn a_jump_before_drawing_keeps_its_speed_through_the_air() {
+    fn the_windup_slows_a_tapped_shot_too_and_the_button_alone_or_a_swing_never() {
+        use crate::config::DRAW_SPEED;
+        let (shot, from) = (shooter(), spawns()[0]);
+        let (_, windup) = timers(shot);
+        let way = open_way(from, 14.0);
+        let top = shot.def().move_speed;
+        // Let go at once: slowed all through the windup still, not after it.
+        let tapped = walk_attacking(shot, (from, way), 60 + windup + 40, Some(60), 60..61, None);
+        let speed = |tick: u32| tapped[tick as usize - 1].1.along.length();
+        assert!(speed(60 + windup) < top * DRAW_SPEED + 0.1, "not slowed through the windup: {} m/s", speed(60 + windup));
+        assert!((speed(60 + windup + 40) - top).abs() < top * 0.02, "still slowed after the shot: {} m/s", speed(60 + windup + 40));
+        // The button held with no attack winding up, or a swing's windup: as fast as a plain walk.
+        let plain = |class: ClassId| walk_attacking(class, (from, way), 120, None, 0..0, None).last().unwrap().0;
+        let held = walk_attacking(shot, (from, way), 120, None, 60..120, None);
+        assert_eq!(held.last().unwrap().0, plain(shot), "the button alone slowed the walk");
+        let striker = fighter();
+        let swung = walk_attacking(striker, (from, way), 120, Some(60), 60..120, None);
+        assert!(swung[60].2.swing.is_some(), "the swing didn't start");
+        assert_eq!(swung.last().unwrap().0, plain(striker), "a swing's windup slowed the walk");
+    }
+
+    #[test]
+    fn a_jump_as_the_shot_winds_up_keeps_its_speed_through_the_air() {
         let (class, from) = (shooter(), spawns()[0]);
-        let way = open_way(from, 12.0);
-        let (run, drawn) = (60, 60);
-        let walked = walk_drawn(class, (from, way), (run, drawn), false);
-        let jumped = walk_drawn(class, (from, way), (run, drawn), true);
-        let off = jumped[run as usize - 1].1.along.length();
-        // In the air it goes on as fast as it took off, drawn or not, till it lands.
-        let airborne: Vec<_> = jumped[run as usize..].iter().take_while(|(_, motion)| motion.height > 0.0).collect();
+        let way = open_way(from, 14.0);
+        let held = 60..200;
+        let walked = walk_attacking(class, (from, way), 120, Some(60), held.clone(), None);
+        let jumped = walk_attacking(class, (from, way), 120, Some(60), held, Some(60));
+        let off = jumped[58].1.along.length();
+        // In the air it goes on as fast as it took off, winding up or not, till it lands.
+        let airborne: Vec<_> = jumped[59..].iter().take_while(|(_, motion, _)| motion.height > 0.0).collect();
         assert!(airborne.len() > 10, "jumped for {} ticks", airborne.len());
-        for (_, motion) in &airborne {
+        for (_, motion, attack) in &airborne {
+            assert!(attack.winding_up().is_some(), "the shot isn't winding up");
             assert!((motion.along.length() - off).abs() < off * 0.01, "slowed in the air: {} of {off} m/s", motion.along.length());
         }
-        // So it gets further, drawn, than one that stayed on the ground.
+        // So it gets further, winding up, than one that stayed on the ground.
         let (ground, air) = ((walked.last().unwrap().0 - from).dot(way), (jumped.last().unwrap().0 - from).dot(way));
         assert!(air > ground + 0.5, "jumped first it got {air} m, on the ground {ground} m");
     }

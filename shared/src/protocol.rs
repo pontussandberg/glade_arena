@@ -653,8 +653,7 @@ pub struct PlayerInput {
     /// dropped). Set by `PlayerCommand::Attack`, used up by the next tick.
     pub fire: bool,
     /// The attack button held down (`PlayerCommand::Draw`). For a class that shoots: its shot,
-    /// once drawn (its windup over), is held so until it's let go (`sim::release_attack`), and
-    /// meanwhile it walks slower (`DRAW_SPEED`).
+    /// once drawn (its windup over), is held so until it's let go (`sim::release_attack`).
     pub draw: bool,
     /// Space: jump, if standing on the ground (else it's dropped: `sim::move_player`): pressed
     /// since the last tick (`PlayerCommand::Jump`), used up by the next one, so a tap let go
@@ -705,10 +704,11 @@ pub enum PlayerCommand {
     /// tick given, the one the client's prediction steps it from (`render::glide`), so the two
     /// agree; a tick already past (or 0) means at once.
     Walk(Vec2, u32),
-    /// Left click: auto-attack toward this aim. Holding the button doesn't attack again: each
-    /// attack is its own click, once the last one is done (the client sends one for each attack
-    /// while the button is held).
-    Attack(Vec2),
+    /// Left click: auto-attack toward this aim, from the tick given, as a walk is (`Walk`), so the
+    /// prediction knows when a shot starts winding up, slowing the walk (`sim::winding_speed`).
+    /// Holding the button doesn't attack again: each attack is its own click, once the last one
+    /// is done (the client sends one for each attack while the button is held).
+    Attack(Vec2, u32),
     /// An ability's key (1, 2, 3, 4): use the ability in this slot toward this aim.
     Cast(AbilitySlot, Vec2),
     /// Action mode only: the aim as the camera turns (at most once a tick), its direction and
@@ -733,7 +733,7 @@ impl PlayerCommand {
         match *self {
             PlayerCommand::MoveTo(_) | PlayerCommand::Stop => true,
             PlayerCommand::Walk(dir, _) => dir != Vec2::ZERO,
-            PlayerCommand::Attack(_) | PlayerCommand::Cast(..) | PlayerCommand::Aim(..) | PlayerCommand::Jump(_) | PlayerCommand::Draw(..) => false,
+            PlayerCommand::Attack(..) | PlayerCommand::Cast(..) | PlayerCommand::Aim(..) | PlayerCommand::Jump(_) | PlayerCommand::Draw(..) => false,
         }
     }
 
@@ -755,7 +755,7 @@ impl PlayerCommand {
                     input.move_to = None;
                 }
             }
-            PlayerCommand::Attack(aim) => {
+            PlayerCommand::Attack(aim, _) => {
                 input.aim = aim;
                 input.fire = true;
             }
@@ -912,7 +912,7 @@ mod tests {
     #[test]
     fn the_attack_button_held_or_let_go_is_held_or_not() {
         let mut input = PlayerInput { move_to: Some(Vec2::X), ..default() };
-        PlayerCommand::Attack(Vec2::Y).apply(&mut input);
+        PlayerCommand::Attack(Vec2::Y, 0).apply(&mut input);
         PlayerCommand::Draw(true, 7).apply(&mut input);
         assert!(input.draw && input.fire && input.move_to.is_some() && !PlayerCommand::Draw(true, 7).moves());
         PlayerCommand::Draw(false, 9).apply(&mut input);

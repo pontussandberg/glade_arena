@@ -163,6 +163,18 @@ impl SentDraws {
     }
 }
 
+/// Which tick each `PlayerCommand::Attack` we sent was for, oldest first: what our own fighter's
+/// prediction steps its attack by (`render::glide`), a shot winding up slowing its walk.
+#[derive(Resource, Default)]
+pub struct SentAttacks(pub VecDeque<u32>);
+
+impl SentAttacks {
+    /// Whether an attack was clicked for `tick`, as sent.
+    pub fn clicked_at(&self, tick: u32) -> bool {
+        self.0.contains(&tick)
+    }
+}
+
 /// The server tick the next walk we send is for: the newest tick our fighter's prediction steps
 /// (`render::glide` sets it each frame); 0 without the action camera, for at once.
 #[derive(Resource, Default)]
@@ -206,6 +218,7 @@ impl Plugin for ClientNetPlugin {
         app.init_resource::<WalkWhenOrdered>();
         app.init_resource::<SentWalks>();
         app.init_resource::<SentDraws>();
+        app.init_resource::<SentAttacks>();
         app.init_resource::<WalkSchedule>();
         app.add_systems(Update, (forget_walk_on_attack, send_commands).chain().in_set(SendCommands));
         app.add_systems(Update, fake_latency.run_if(resource_changed::<FakeLatency>));
@@ -287,13 +300,14 @@ fn send_commands(
     mut client: Query<&mut MessageSender<PlayerCommand>, (With<Client>, With<Connected>)>,
     mut sent: Local<Sent>,
     #[cfg(feature = "render")] mode: Option<Res<crate::camera::CameraMode>>,
-    (mut sent_walks, mut sent_draws): (ResMut<SentWalks>, ResMut<SentDraws>),
+    (mut sent_walks, mut sent_draws, mut sent_attacks): (ResMut<SentWalks>, ResMut<SentDraws>, ResMut<SentAttacks>),
     schedule: Res<WalkSchedule>,
 ) {
     let (Ok(mut sender), Ok(attack)) = (client.single_mut(), me.single()) else {
         *sent = Sent::default();
         sent_walks.0.clear();
         sent_draws.0.clear();
+        sent_attacks.0.clear();
         // Nothing carries over to our next fighter: not a destination, not a click.
         desired.0 = PlayerInput { aim: desired.0.aim, ..default() };
         stop.0 = false;
@@ -341,7 +355,12 @@ fn send_commands(
         (sent.aim, sent.climb, sent.aim_at) = (input.aim, input.climb, now);
     }
     if firing {
-        send(PlayerCommand::Attack(input.aim));
+        // For the tick a walk would be (`PlayerCommand::Attack`).
+        send(PlayerCommand::Attack(input.aim, schedule.0));
+        sent_attacks.0.push_back(schedule.0);
+        while sent_attacks.0.len() > SENT_WALKS_KEPT {
+            sent_attacks.0.pop_front();
+        }
         (sent.aim, sent.attack_at) = (input.aim, now);
         desired.0.fire = false;
         walk_when_ordered.0 = input.move_to;

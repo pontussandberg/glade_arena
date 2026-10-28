@@ -95,15 +95,17 @@ pub fn start_attack_hasted(tick: u32, class: ClassId, input: &PlayerInput, mut s
 }
 
 /// Whether `class`'s auto-attack is a shot (`AttackKind::Projectile`): one held drawn while its
-/// button is (`release_attack`), walking slower meanwhile (`draw_speed`).
+/// button is (`release_attack`), walking slower while it winds up (`winding_speed`).
 pub fn shoots(class: ClassId) -> bool {
     matches!(class.def().attack.kind, AttackKind::Projectile { .. })
 }
 
-/// How fast (a share of its walking speed) `class` walks by `input` just now: slower holding its
-/// shot drawn (`DRAW_SPEED`), else as fast as it walks.
-pub fn draw_speed(class: ClassId, input: &PlayerInput) -> f32 {
-    if input.draw && shoots(class) { crate::config::DRAW_SPEED } else { 1.0 }
+/// How fast (a share of its walking speed) `class` walks with its attack as `attack` has it:
+/// slower while its shot winds up, from the click until it goes off, held drawn or not
+/// (`DRAW_SPEED`); else as fast as it walks. A walking boost (`move_player_boosted`): the speed
+/// asked for, not the speed it has.
+pub fn winding_speed(class: ClassId, attack: &AttackState) -> f32 {
+    if shoots(class) && attack.winding_up().is_some() { crate::config::DRAW_SPEED } else { 1.0 }
 }
 
 /// An order to move cancels an attack still winding up: it never goes off, and the next may

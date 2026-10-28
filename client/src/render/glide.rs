@@ -101,10 +101,11 @@ const PREDICT_MOST_TICKS: u32 = 64;
 /// snapped.
 #[derive(Component, Default)]
 pub(crate) struct PredictedWalk {
-    /// The latest position and motion from the server, and the tick they're from.
-    base: Option<(u32, Vec2, Motion)>,
-    /// The motion the server last sent, to tell a new one from the server from our own.
+    /// The latest position, motion and attack from the server, and the tick they're from.
+    base: Option<Base>,
+    /// The motion and the attack the server last sent, to tell news from the server.
     motion_seen: Motion,
+    attack_seen: AttackState,
     /// How high we're predicted to be, over the gameplay plane (`shown_height`).
     pub(crate) height: f32,
     /// What it last drew, to tell a new position from the server (anything else) from its own.
@@ -150,15 +151,19 @@ fn walk_at(sends: &VecDeque<(u32, Vec2)>, tick: u32) -> Vec2 {
     sends.iter().rev().find(|(t, _)| *t <= tick).map_or(Vec2::ZERO, |(_, way)| *way)
 }
 
+/// The server's latest word on us that a prediction walks on from: the tick it's from, and our
+/// position, motion and attack then.
+type Base = (u32, Vec2, Motion, AttackState);
+
 /// Where we are at tick `at` (fractional, between two ticks' steps), walked on from `base` tick
-/// by tick by `step`, each tick by the walk ordered for it.
-fn predict(sends: &VecDeque<(u32, Vec2)>, base: (u32, Vec2, Motion), at: f32, mut step: impl FnMut(Vec2, Motion, Vec2, u32) -> (Vec2, Motion)) -> (Vec2, f32) {
-    let (base_tick, mut pos, mut motion) = base;
+/// by tick by `step`, each tick by the walk ordered for it, our attack stepped along with it.
+fn predict(sends: &VecDeque<(u32, Vec2)>, base: Base, at: f32, mut step: impl FnMut(Vec2, Motion, &mut AttackState, Vec2, u32) -> (Vec2, Motion)) -> (Vec2, f32) {
+    let (base_tick, mut pos, mut motion, mut attack) = base;
     let last = (at.floor() as u32).max(base_tick).min(base_tick + PREDICT_MOST_TICKS);
     let mut before = (pos, motion.height);
     for tick in base_tick + 1..=last + 1 {
         before = (pos, motion.height);
-        (pos, motion) = step(pos, motion, walk_at(sends, tick), tick);
+        (pos, motion) = step(pos, motion, &mut attack, walk_at(sends, tick), tick);
     }
     (before.0.lerp(pos, at.fract()), before.1 + (motion.height - before.1) * at.fract())
 }
@@ -177,16 +182,16 @@ pub(super) fn predict_me(
     time: Res<Time<Real>>,
     clock: AttackClock,
     map: Res<crate::rooms::CurrentMap>,
-    (sends, draws): (Res<crate::SentWalks>, Res<crate::SentDraws>),
+    (sends, draws, attacks): (Res<crate::SentWalks>, Res<crate::SentDraws>, Res<crate::SentAttacks>),
     mut schedule: ResMut<crate::WalkSchedule>,
     link: Query<&Link, With<Client>>,
-    mut me: Query<(Entity, &mut Pos, &Motion, &ClassId, Option<&Dashing>, Option<&Chilled>, Option<&Hasted>, Option<&Frenzy>, Option<&Walking>, Option<&mut PredictedWalk>), With<Me>>,
+    mut me: Query<(Entity, &mut Pos, (&Motion, Option<&AttackState>), &ClassId, Option<&Dashing>, Option<&Chilled>, Option<&Hasted>, (Option<&Frenzy>, Option<&Fury>), Option<&Walking>, Option<&mut PredictedWalk>), With<Me>>,
 ) {
     let Some(latest) = clock.latest_tick() else { return };
     let rtt = link.single().map_or(0.0, |link| link.stats.rtt.as_secs_f32());
     let guessed_lead = rtt * TICK_HZ as f32 + PREDICT_SLACK_TICKS;
-    let (map, draws) = (map.map(), &*draws);
-    for (entity, mut pos, motion, class, dashing, chilled, hasted, frenzy, walking, predicted) in &mut me {
+    let (map, draws, attacks) = (map.map(), &*draws, &*attacks);
+    for (entity, mut pos, (motion, attack), class, dashing, chilled, hasted, (frenzy, fury), walking, predicted) in &mut me {
         let Some(mut predicted) = predicted else {
             commands.entity(entity).insert(PredictedWalk { drawn: pos.0, motion_seen: *motion, height: motion.height, server_walk: walking.map_or(Vec2::ZERO, |w| w.0), ..default() });
             schedule.0 = 0;
@@ -215,20 +220,31 @@ pub(super) fn predict_me(
         let next = at.floor() as u32 + 1;
         schedule.0 = if schedule.0 > next + 4 { next } else { schedule.0.max(next) };
         // The server's step for one tick of ours: walking (never rooted by a windup, in action
-        // mode; faster in a frenzy, slower holding a shot drawn, as the server walks it), or a
-        // dash running on. A dash that
-        // has gone its length (or is knocked off its feet) is dropped before the tick's move, as
-        // the server drops it (`abilities::step`), so the walk goes on from where it ended
-        // instead of waiting for the server to say so.
-        let (chilled, hasted, frenzy) = (chilled.copied().unwrap_or_default(), hasted.copied().unwrap_or_default(), frenzy.copied().unwrap_or_default());
+        // mode; faster in a frenzy, slower while a shot winds up, as the server walks it), or a
+        // dash running on; then our attack, as the server steps it after the walk
+        // (`combat::attack`), by the clicks and the attack button as we sent them, so we know
+        // just when a shot starts winding up and goes off. A dash that has gone its length (or
+        // is knocked off its feet) is dropped before the tick's move, as the server drops it
+        // (`abilities::step`), so the walk goes on from where it ended instead of waiting for
+        // the server to say so.
+        let (chilled, hasted, frenzy, fury) = (chilled.copied().unwrap_or_default(), hasted.copied().unwrap_or_default(), frenzy.copied().unwrap_or_default(), fury.copied());
         let step = |mut dashing: Dashing| {
-            move |from: Vec2, mut motion: Motion, walk: Vec2, tick: u32| {
+            move |from: Vec2, mut motion: Motion, attack: &mut AttackState, walk: Vec2, tick: u32| {
                 if dashing.0.is_some_and(|dash| dash.over()) || chilled.rooted_at(tick) || chilled.lifted_at(tick) {
                     dashing.0 = None;
                 }
-                let input = PlayerInput { walk, draw: draws.held_at(tick), aim: Vec2::X, ..default() };
-                let boost = 1.0 + frenzy.at(tick as f32);
+                let input = PlayerInput { walk, aim: Vec2::X, ..default() };
+                let boost = (1.0 + frenzy.at(tick as f32)) * sim::winding_speed(*class, attack);
                 let to = sim::move_player_boosted(map, from, &input, *class, &AttackState::default(), &mut dashing, &mut motion, &chilled, &hasted, tick, boost);
+                // Knocked up, no attacking, and one winding up is lost.
+                *attack = if chilled.lifted_at(tick) {
+                    sim::cancel_attack(*attack)
+                } else {
+                    let clicked = PlayerInput { aim: Vec2::X, fire: attacks.clicked_at(tick), draw: draws.held_at(tick), ..default() };
+                    let (next, _) = sim::release_attack(tick, PeerId::Server, *class, to, clicked.draw, *attack);
+                    let haste = frenzy.at(tick as f32) + fury.map_or(0.0, |fury| fury.0.at(tick as f32));
+                    sim::start_attack_hasted(tick, *class, &clicked, next, haste)
+                };
                 (to, motion)
             }
         };
@@ -240,14 +256,18 @@ pub(super) fn predict_me(
         // News of our motion too (the server sends it with the position, or alone in the air).
         let moved = *motion != predicted.motion_seen;
         predicted.motion_seen = *motion;
-        let fresh = pos.0 != predicted.drawn || moved;
+        // And of our attack (a click taken, a shot gone off).
+        let attack = attack.copied().unwrap_or_default();
+        let attacked = attack != predicted.attack_seen;
+        predicted.attack_seen = attack;
+        let fresh = pos.0 != predicted.drawn || moved || attacked;
         let newer = predicted.base.is_none_or(|(tick, ..)| tick < latest);
         // What the server's news (or the lead's change) moves the prediction by goes into the
         // error, so what's drawn doesn't jump.
         if fresh || newer {
             let base = match predicted.base {
-                Some((_, p, m)) if !fresh => (latest, p, m),
-                _ => (latest, if pos.0 != predicted.drawn { pos.0 } else { predicted.base.map_or(pos.0, |(_, p, _)| p) }, *motion),
+                Some((_, p, m, a)) if !fresh => (latest, p, m, a),
+                _ => (latest, if pos.0 != predicted.drawn { pos.0 } else { predicted.base.map_or(pos.0, |(_, p, ..)| p) }, *motion, attack),
             };
             if let Some(old) = predicted.base {
                 let was = predict(sends, old, at_before, step(was_dashing)).0;

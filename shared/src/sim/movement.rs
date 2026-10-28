@@ -61,9 +61,10 @@ pub fn move_player(
 /// Walking has momentum (`motion`): the keys ask for a speed and a way, and the ground
 /// accelerates the walker toward it (`GROUND_ACCEL`) and slows it when they ask for nothing
 /// (`GROUND_FRICTION`, high: only a short slide to a stop); in the air the keys only steer a little
-/// (`AIR_ACCEL` up to `AIR_CONTROL_SPEED`). Holding a shot drawn (`draw_speed`) lowers the speed
-/// asked for, not the speed it's going: the ground slows it to that in a few steps, the air
-/// hardly at all. Whatever blocks a step stops that part of the motion. Up and down: on the ground it follows the ground, up a slope and down one (not off a
+/// (`AIR_ACCEL` up to `AIR_CONTROL_SPEED`). A boost (or a slow: a shot winding up,
+/// `winding_speed`) changes the speed asked for, not the speed it's going: the ground brings it
+/// to that in a few steps, the air hardly at all. Whatever blocks a step stops that part of the
+/// motion. Up and down: on the ground it follows the ground, up a slope and down one (not off a
 /// ledge: `STEP_DOWN`); `input.jumping()` on the ground sends it up (`jump_speed`); in the air it
 /// falls (`GRAVITY`) until the ground. A dash or a click-to-walk sets the motion by where it
 /// went, so a dash off a ledge flies on out; a click-to-walk goes on at its speed, not sliding
@@ -102,7 +103,7 @@ pub fn move_player_boosted(
     } else if attack.winding_up().is_some() {
         motion.along = Vec2::ZERO;
     } else if input.walk != Vec2::ZERO || (motion.along != Vec2::ZERO && input.move_to.is_none()) {
-        let wish_speed = class.def().move_speed * speed * boost * draw_speed(class, input) * map.speed_factor_at(pos);
+        let wish_speed = class.def().move_speed * speed * boost * map.speed_factor_at(pos);
         let wish = input.walk.normalize_or_zero();
         let mut v = motion.along;
         if grounded && !jumps {
@@ -131,7 +132,7 @@ pub fn move_player_boosted(
         }
         motion.along = v;
     } else if let Some(target) = input.move_to {
-        next = step_player(map, pos, input, class.def().move_speed * speed * boost * draw_speed(class, input));
+        next = step_player(map, pos, input, class.def().move_speed * speed * boost);
         // Arrived, it stands there: it doesn't slide on past the point.
         motion.along = if arrived(map, next, target) { Vec2::ZERO } else { (next - pos) / TICK_DT };
     }

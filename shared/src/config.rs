@@ -48,9 +48,10 @@ pub const GROUND_FRICTION: f32 = 14.0;
 pub const STOP_SPEED: f32 = 0.8;
 pub const AIR_ACCEL: f32 = 12.0;
 pub const AIR_CONTROL_SPEED: f32 = 0.6;
-/// How fast (a share of its walking speed) a fighter walks holding its shot drawn
-/// (`PlayerInput::draw`): the speed its walking is sped up toward, and how hard, not how fast
-/// it's going, so it slows to it on the ground in a few steps and hardly at all in the air.
+/// How fast (a share of its walking speed) a fighter walks while its shot winds up, from the
+/// click until it goes off, held drawn or not (`sim::winding_speed`): the speed its walking is
+/// sped up toward, and how hard, not how fast it's going, so it slows to it on the ground in a
+/// few steps and hardly at all in the air.
 pub const DRAW_SPEED: f32 = 0.5;
 /// How far below a walker's feet the ground may fall away in a tick and still be walked down
 /// (a slope); farther is a ledge, stepped off into the air.

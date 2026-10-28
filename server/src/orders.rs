@@ -14,9 +14,9 @@ use crate::rooms::{InRoom, Lobby};
 #[derive(Component)]
 pub struct ActionMode;
 
-/// Server-only: walks and the attack button's holds ordered for ticks still to come
-/// (`PlayerCommand::Walk`'s and `Draw`'s tick), oldest first, each with the tick it arrived on;
-/// and the arrival tick of the walk being stepped now (told back in `Walking`).
+/// Server-only: walks, attack clicks and the attack button's holds ordered for ticks still to
+/// come (`PlayerCommand::Walk`'s, `Attack`'s and `Draw`'s tick), oldest first, each with the tick
+/// it arrived on; and the arrival tick of the walk being stepped now (told back in `Walking`).
 #[derive(Component, Default)]
 pub struct WalkOrders {
     pending: std::collections::VecDeque<(u32, PlayerCommand, u32)>,
@@ -37,9 +37,9 @@ pub(super) fn apply_commands(
         let Ok(mut receiver) = links.get_mut(controlled_by.owner) else { continue };
         for command in receiver.receive() {
             match command {
-                // A walk (or the attack button's hold) for a tick to come waits for it
-                // (`move_players`).
-                PlayerCommand::Walk(_, tick) | PlayerCommand::Draw(_, tick) if tick > now => orders.pending.push_back((tick, command, now)),
+                // A walk (or an attack click, or the attack button's hold) for a tick to come
+                // waits for it (`move_players`).
+                PlayerCommand::Walk(_, tick) | PlayerCommand::Attack(_, tick) | PlayerCommand::Draw(_, tick) if tick > now => orders.pending.push_back((tick, command, now)),
                 PlayerCommand::Walk(..) => {
                     orders.received = now;
                     command.apply(&mut input);
@@ -66,8 +66,8 @@ pub(super) fn use_up_clicks(mut players: Query<&mut PlayerInput>) {
 
 /// Walking (or dashing), with momentum, and jumping and falling (`sim::move_player_boosted`).
 /// Arriving forgets the destination, so nothing lingers. A frenzy speeds up
-/// walking, like a rift. In action mode the windup doesn't root the fighter: the sim is shown
-/// no swing.
+/// walking, like a rift, and a shot winding up slows it (`sim::winding_speed`). In action mode
+/// the windup doesn't root the fighter: the sim is shown no swing.
 pub(super) fn move_players(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
@@ -76,7 +76,8 @@ pub(super) fn move_players(
 ) {
     let now = timeline.tick().0;
     for (id, mut pos, class, mut input, (attack, action), mut dashing, chilled, hasted, room, frenzy, sluggish, (mut walking, mut orders), mut motion) in &mut players {
-        // Walks (and the attack button's holds) ordered for this tick (or one gone by) take now.
+        // Walks (and attack clicks, and the attack button's holds) ordered for this tick (or one
+        // gone by) take now: before the tick's attacks are stepped (`combat::attack`).
         while let Some(&(tick, command, received)) = orders.pending.front() {
             if tick > now {
                 break;
@@ -89,10 +90,11 @@ pub(super) fn move_players(
         }
         let map = lobby.map(room);
         let mut next = *dashing;
+        let winding = sim::winding_speed(*class, attack);
         let attack = if action { AttackState { swing: None, ..*attack } } else { *attack };
         // Hasted in its own rift (the most hasting, if it stands in several).
         let boost = rifts.0.iter().filter(|(r, rift)| r == room && rift.owner == id.0 && rift.holds(map, pos.0, motion.height, now)).fold(1.0f32, |most, (_, rift)| most.max(1.0 + rift.haste));
-        let boost = boost * (1.0 + frenzy.at(now as f32)) * sluggish.map_or(1.0, |s| s.0);
+        let boost = boost * (1.0 + frenzy.at(now as f32)) * sluggish.map_or(1.0, |s| s.0) * winding;
         let mut moving = *motion;
         pos.set_if_neq(Pos(sim::move_player_boosted(map, pos.0, &input, *class, &attack, &mut next, &mut moving, chilled, hasted, now, boost)));
         dashing.set_if_neq(next);

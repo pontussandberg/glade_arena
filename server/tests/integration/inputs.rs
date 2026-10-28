@@ -112,6 +112,33 @@ fn a_click_fires_once_at_4_fps() {
     assert_eq!(p.shots(), after_release, "server kept firing after the click");
 }
 
+/// Walking with the keys, a shot winding up slows us to its draw speed (`DRAW_SPEED`) from the
+/// click till it goes off, held drawn or not; once it's off we're back up to full speed.
+#[test]
+fn a_shot_winding_up_slows_the_walk_till_it_goes_off() {
+    use arena_shared::config::DRAW_SPEED;
+    let mut p = Pair::new(5907);
+    p.until(Duration::from_secs(5), "our player is spawned", |p| client_view(&mut p.client, CLIENT).is_some_and(|v| v.2));
+    let start = p.server_pos();
+    let way = [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y].into_iter().find(|&way| map().line_walkable(start, start + way * 16.0)).expect("open ground");
+    let top = class_id(CLASS).def().move_speed * map().speed_factor_at(start);
+    let speed = |p: &mut Pair| player::<Motion>(&mut p.server, CLIENT).map_or(0.0, |m| m.along.length());
+    p.input(PlayerInput { walk: way, aim: way, ..default() });
+    p.run(Duration::from_millis(800), SMOOTH);
+    assert!((speed(&mut p) - top).abs() < top * 0.05, "walking at {} of {top} m/s", speed(&mut p));
+    p.input(PlayerInput { walk: way, aim: way, fire: true, draw: true, ..default() });
+    p.until(Duration::from_secs(1), "the attack starts", |p| p.attack().is_some_and(|a| a.swing.is_some()));
+    // Through the windup and held drawn past it: slowed.
+    p.run(windup(CLASS) + Duration::from_millis(400), SMOOTH);
+    assert!(p.attack().is_some_and(|a| a.winding_up().is_some()), "not held drawn");
+    assert!((speed(&mut p) - top * DRAW_SPEED).abs() < top * 0.05, "walking at {} of {top} m/s winding up", speed(&mut p));
+    // Let go: it's off, and we speed up again.
+    p.input(PlayerInput { walk: way, aim: way, ..default() });
+    p.until(Duration::from_millis(500), "the shot goes off", |p| p.shots() == 1);
+    p.run(Duration::from_millis(700), SMOOTH);
+    assert!((speed(&mut p) - top).abs() < top * 0.05, "walking at {} of {top} m/s after the shot", speed(&mut p));
+}
+
 /// A shot's button held keeps it drawn past its windup, never going off, until it's let go; then
 /// it goes off at once, the one shot.
 #[test]
