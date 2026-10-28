@@ -46,8 +46,8 @@ fn main() {
     app.add_plugins(hidden_tab::HiddenTabPlugin);
     app.add_plugins(ClientPlugins { tick_duration: TICK_DURATION });
     app.add_plugins(ClientNetPlugin { settings });
-    if bot_plays() {
-        app.add_plugins(arena_client::bot::BotPlugin);
+    if let Some(stand) = bot_plays() {
+        app.add_plugins(arena_client::bot::BotPlugin { stand });
     }
     app.add_plugins(RenderPlugin);
     #[cfg(not(target_family = "wasm"))]
@@ -157,10 +157,12 @@ fn client_settings() -> ClientSettings {
     }
 }
 
-/// Whether a bot plays this client: `ARENA_BOT=1` natively, `?bot` on the page in local dev.
-fn bot_plays() -> bool {
+/// Whether a bot plays this client (`ARENA_BOT=1` natively, `?bot` on the page in local dev),
+/// and whether it holds its ground (`ARENA_BOT=stand`, `?bot=stand`).
+fn bot_plays() -> Option<bool> {
     #[cfg(target_family = "wasm")]
-    return web_sys::window().is_some_and(|window| js_sys::Reflect::has(&window, &"ARENA_BOT".into()).unwrap_or(false));
+    let bot = web_sys::window().and_then(|window| js_sys::Reflect::get(&window, &"ARENA_BOT".into()).ok()).filter(|bot| !bot.is_undefined()).map(|bot| bot.as_string().unwrap_or_default());
     #[cfg(not(target_family = "wasm"))]
-    return std::env::var_os("ARENA_BOT").is_some();
+    let bot = std::env::var("ARENA_BOT").ok();
+    bot.map(|bot| bot == "stand")
 }

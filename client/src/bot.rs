@@ -29,16 +29,34 @@ const DODGE_STEP: f32 = 3.0;
 
 /// Present when this client is played by the bot.
 #[derive(Resource)]
-pub struct Bot;
+pub struct Bot {
+    /// It holds its ground in a fight (`ARENA_BOT=stand`): back where it first stood, it fights
+    /// whatever comes into reach from there, so a crowd piles up round it (for measuring a
+    /// fight).
+    pub stand: bool,
+}
 
-pub struct BotPlugin;
+pub struct BotPlugin {
+    pub stand: bool,
+}
 
 impl Plugin for BotPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Bot);
+        app.insert_resource(Bot { stand: self.stand });
         app.configure_sets(Update, PlayerControls.run_if(|| false));
         // Decide every frame, right before what changed is sent.
-        app.add_systems(Update, (think, go_shopping).chain().before(SendCommands));
+        app.add_systems(Update, (think, go_shopping, stand_ground).chain().before(SendCommands));
+    }
+}
+
+/// A bot holding its ground walks nowhere but to the merchant between waves, and back to where
+/// it first stood when the fight's on.
+fn stand_ground(bot: Res<Bot>, room: Res<CurrentRoom>, me: Query<&Pos, With<Me>>, mut desired: ResMut<DesiredInput>, mut home: Local<Option<Vec2>>) {
+    let Ok(me) = me.single() else { return };
+    let home = *home.get_or_insert(me.0);
+    let shopping = room.run().is_some_and(|run| matches!(run.phase, arena_shared::rooms::Phase::Shop { .. }));
+    if bot.stand && !shopping {
+        desired.0.move_to = (me.0.distance(home) > 1.0).then_some(home);
     }
 }
 

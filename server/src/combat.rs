@@ -149,7 +149,9 @@ pub(super) fn damage(
     }
     let crit = blow.sure_crit || blow.crit_roll.is_some_and(|roll| roll < class.def().crit.chance_against(chilled.rooted_at(now), blow.empowered));
     let amount = if crit { (blow.amount as f32 * common().crit_multiplier).round() as i32 } else { blow.amount };
-    health.0 = (health.0 - amount).max(0);
+    // Measuring a crowd (`waves::HORDE`), a player is never brought down.
+    let least = i32::from(crate::waves::HORDE.is_some() && matches!(id, PeerId::Netcode(_)));
+    health.0 = (health.0 - amount).max(least);
     // A blow of crowd control alone (a slow, a freeze) shows no number.
     if amount > 0 {
         hits.push(amount, if crit { HitKind::Crit } else { HitKind::Damage });

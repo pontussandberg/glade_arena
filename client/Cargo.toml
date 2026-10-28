@@ -19,6 +19,9 @@ render = ["bevy/3d", "bevy/ui"]
 # Every system's time, every frame, into a Chrome trace (trace-*.json, open it in Perfetto or
 # chrome://tracing), for finding what a frame spends its time on. Native only.
 profile = ["bevy/trace_chrome"]
+# The browser build on WebGPU instead of WebGL 2 (it can't fall back): the GPU culls and batches
+# what's drawn, and each draw costs the page far less.
+webgpu = ["bevy/webgpu"]
 
 [dependencies]
 arena-shared.workspace = true

@@ -99,8 +99,8 @@ fn most_about(wave: u32, party: usize) -> usize {
 
 /// `ARENA_HORDE=N` (for measuring what a crowd costs): every wave keeps `N` monsters about, a
 /// pack coming out every other tick till it has them, and never runs out of them; and the party
-/// never falls.
-static HORDE: std::sync::LazyLock<Option<usize>> = std::sync::LazyLock::new(|| std::env::var("ARENA_HORDE").ok().and_then(|n| n.parse().ok()));
+/// never falls (`combat::damage`).
+pub(crate) static HORDE: std::sync::LazyLock<Option<usize>> = std::sync::LazyLock::new(|| std::env::var("ARENA_HORDE").ok().and_then(|n| n.parse().ok()));
 
 /// What an elite is, against its kind: (toughness, might, bounty).
 const ELITE: (f32, f32, u32) = (2.5, 1.3, 3);
