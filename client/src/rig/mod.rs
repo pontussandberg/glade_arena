@@ -617,14 +617,24 @@ fn pose_rigs(
         let mut aimed = targets(moves, phase, Vec2::ZERO, rig.walking);
         aimed.add(&fidget, 1.0);
         let walk = rig.walking * free;
-        let posed = assemble(moves, &angles, &aimed, facing.look, stride, walk, stretch * smear, blade, free);
+        // As high as it is: on the ground where it stands, or up in a jump or a fall
+        // (`render::shown_height`).
+        let at = arena::to_gameplay(body.translation);
+        let height = map.as_ref().map_or(0.0, |map| crate::render::shown_height(map.map(), motion, predicted, at));
+        let pose = |angles: &Angles| assemble(moves, angles, &aimed, facing.look, stride, walk, stretch * smear, blade, free);
+        // A blade striking meets the ground where it is.
+        let posed = match (&map, matches!(moves.held, Held::Gripped { .. } | Held::Swept { .. })) {
+            (Some(map), true) if free < 1.0 => {
+                let figure = def.figure();
+                let corner = if figure == "revenant" { arena::glaive_edge(1.0) } else { Vec3::Y * arena::blade_span(figure).1 };
+                onto_ground(map.map(), at, height, rig.size, [Vec3::Y * arena::blade_span(figure).1, corner], 1.0 - free, &angles, pose)
+            }
+            _ => pose(&angles),
+        };
         // Just hit, the whole figure flinches: squashed wide and short, springing back over
         // `SQUASH_SECONDS`, so a blow visibly lands in the body and not just on the health bar.
         let flinch = squash.map_or(0.0, |s| (1.0 - (wall_clock - s.at) / SQUASH_SECONDS).clamp(0.0, 1.0).powi(2));
         let squashed = Vec3::new(1.0 + 0.12 * flinch, 1.0 - 0.16 * flinch, 1.0 + 0.12 * flinch);
-        // As high as it is: on the ground where it stands, or up in a jump or a fall
-        // (`render::shown_height`).
-        let height = map.as_ref().map_or(0.0, |map| crate::render::shown_height(map.map(), motion, predicted, arena::to_gameplay(body.translation)));
         let placed = Transform {
             translation: body.translation.with_y((posed.body.translation.y + BREATH_RISE * (0.5 + 0.5 * breath) * breathing) * rig.size + height),
             scale: posed.body.scale * rig.size * squashed,

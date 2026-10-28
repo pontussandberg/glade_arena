@@ -14,6 +14,7 @@
 //! scrapes. The same whoever swung (who it was shows in the
 //! health bar).
 
+use arena_shared::map::{Map, STEP_UP};
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
@@ -90,6 +91,74 @@ impl OffBlade {
     /// The point `up` (0 at its base, 1 at its point) along it, in the world.
     fn at(&self, held: &GlobalTransform, up: f32) -> Vec3 {
         held.transform_point(Vec3::Y * (self.span.0 + (self.span.1 - self.span.0) * up))
+    }
+}
+
+/// How far below a striker's feet (meters) its blade still reaches the ground coming down (down
+/// a slope, over a drop), and how far above them it meets it (up a slope, on a step): past the
+/// one it strikes only air, and the other stops it short.
+pub(crate) const REACH_DOWN: f32 = 0.6;
+pub(crate) const REACH_UP: f32 = 1.2;
+
+/// What a blade coming down at `p` meets, for a striker with its feet `feet` high: the ground,
+/// or the top of something standing on it, as high up as the blade comes from.
+pub(crate) fn struck_surface(map: &Map, p: Vec2, feet: f32) -> f32 {
+    map.floor_at(p, feet + REACH_UP - STEP_UP)
+}
+
+/// How far apart (meters) a strike's lane is looked along for the ground it meets; how much
+/// the ground may change from one look to the next and still be one stretch of it (more is a
+/// step); and how far off the straight line between a stretch's ends it may lie and the tear
+/// still lie flat on it.
+const LANE_STEP: f32 = 0.2;
+const LANE_JUMP: f32 = 0.25;
+const LANE_BEND: f32 = 0.08;
+
+/// Where along a strike's lane, `near` to `far` (meters out along `dir` from `pos`), its blade
+/// meets the ground, for a striker with its feet `feet` high: the longest straight stretch of
+/// ground within its reach (`REACH_DOWN`, `REACH_UP`), as how far along the lane each end of it is
+/// and how high the ground is there. Up a slope or onto a step it meets what rises; down one or
+/// out over a drop only as far as it reaches: nothing if the whole lane is out of its reach.
+pub(crate) fn struck_stretch(map: &Map, pos: Vec2, dir: Vec2, feet: f32, near: f32, far: f32) -> Option<[(f32, f32); 2]> {
+    let n = (((far - near) / LANE_STEP).ceil() as usize).max(1);
+    let along = |i: usize| near + (far - near) * i as f32 / n as f32;
+    let heights: Vec<Option<f32>> = (0..=n)
+        .map(|i| Some(struck_surface(map, pos + dir * along(i), feet)).filter(|h| (-REACH_DOWN..=REACH_UP).contains(&(h - feet))))
+        .collect();
+    // Unbroken stretches: in reach, no step between one look and the next; each split where it
+    // bends (`straight`).
+    let mut stretches = Vec::new();
+    let mut from = None;
+    for i in 0..=n {
+        let breaks = match (heights[i], i.checked_sub(1).and_then(|j| heights[j])) {
+            (Some(h), Some(was)) => (h - was).abs() > LANE_JUMP,
+            _ => true,
+        };
+        if breaks {
+            if let Some(a) = from.take() {
+                straight(&heights, a, i - 1, &mut stretches);
+            }
+            from = heights[i].map(|_| i);
+        }
+    }
+    if let Some(a) = from {
+        straight(&heights, a, n, &mut stretches);
+    }
+    let (a, b) = stretches.into_iter().filter(|(a, b)| b > a).max_by_key(|&(a, b)| (b - a, usize::MAX - a))?;
+    Some([(along(a), heights[a]?), (along(b), heights[b]?)])
+}
+
+/// The stretch `a` to `b` of the ground's `heights` (all there), split where it bends away from
+/// the straight line between its ends by more than `LANE_BEND` until every piece lies on one.
+fn straight(heights: &[Option<f32>], a: usize, b: usize, out: &mut Vec<(usize, usize)>) {
+    let h = |i: usize| heights[i].unwrap_or_default();
+    let off = |i: usize| (h(i) - (h(a) + (h(b) - h(a)) * (i - a) as f32 / (b - a).max(1) as f32)).abs();
+    match (a + 1..b).max_by(|&i, &j| off(i).total_cmp(&off(j))) {
+        Some(k) if off(k) > LANE_BEND => {
+            straight(heights, a, k, out);
+            straight(heights, k, b, out);
+        }
+        _ => out.push((a, b)),
     }
 }
 

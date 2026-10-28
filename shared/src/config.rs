@@ -35,15 +35,16 @@ pub const SHOT_HEIGHT: f32 = 1.0;
 /// How fast a thrown shot falls (m/s², the real thing), one that falls at all (`Shot::falls`).
 pub const GRAVITY: f32 = 9.81;
 /// How high a jump goes at the top (meters), from flat ground (`sim::jump_speed`).
-pub const JUMP_HEIGHT: f32 = 1.0;
+pub const JUMP_HEIGHT: f32 = 1.3;
 /// Walking has momentum (`sim::move_player`): how hard the ground accelerates a walker toward
 /// the speed its keys ask for (per second, as a share of that speed); how hard it slows one
-/// whose keys ask for nothing (per second, as a share of its speed: lowish, so it slides a
-/// short way to a stop, like a skater); the speed under which it's slowed as if going that fast, so it comes to rest
-/// instead of creeping; and in the air how hard the keys steer it and up to what speed they can
-/// add, so it steers a little mid-jump (strafing), not as on the ground.
-pub const GROUND_ACCEL: f32 = 16.0;
-pub const GROUND_FRICTION: f32 = 6.0;
+/// whose keys ask for nothing, or for another way (per second, as a share of its speed: high,
+/// so it barely slides to a stop or round a turn; never more than the accel, or a walker never
+/// reaches its speed); the speed under which it's slowed as if going that fast, so it comes to
+/// rest instead of creeping; and in the air how hard the keys steer it and up to what speed
+/// they can add, so it steers a little mid-jump (strafing), not as on the ground.
+pub const GROUND_ACCEL: f32 = 20.0;
+pub const GROUND_FRICTION: f32 = 14.0;
 pub const STOP_SPEED: f32 = 0.8;
 pub const AIR_ACCEL: f32 = 12.0;
 pub const AIR_CONTROL_SPEED: f32 = 0.6;

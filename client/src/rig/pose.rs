@@ -402,6 +402,52 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
     }
 }
 
+/// How high over its feet (meters) a blade's lowest point is when it starts meeting the ground
+/// where it is rather than where level ground would be (`onto_ground`), fully once it's down.
+const GROUND_BAND: f32 = 0.5;
+
+/// A blade coming down meets the ground where it is (`swish::struck_surface`), not where level
+/// ground at its striker's feet would be: up a slope or onto a step ahead it stops short on it,
+/// down one or out over a drop it reaches on down (as far as `swish::REACH_DOWN`, past that it
+/// cuts the air). The weapon arm swings it there (Newton's method), keeping it as deep in the
+/// ground as it goes into level ground, as far as its lowest point (`ends`: its point, its
+/// edge's corner, in its own space) comes near the ground, and `striking` of the way (a carried
+/// blade is kept on the ground by `Moves::rests`). `pose` puts the rig together from its angles;
+/// it stands at `at`, its feet `feet` high, drawn `size` times its figure's size.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn onto_ground(map: &arena_shared::map::Map, at: Vec2, feet: f32, size: f32, ends: [Vec3; 2], striking: f32, angles: &Angles, pose: impl Fn(&Angles) -> Posed) -> Posed {
+    use crate::swish::{REACH_DOWN, REACH_UP, struck_surface};
+    let lowest = |posed: &Posed| ends.map(|end| posed.held_on_body.transform_point(end) * size).into_iter().min_by(|a, b| a.y.total_cmp(&b.y)).unwrap_or_default();
+    let level = pose(angles);
+    let deep = lowest(&level).y;
+    let near = (1.0 - deep / GROUND_BAND).clamp(0.0, 1.0) * striking;
+    if near <= 0.0 {
+        return level;
+    }
+    let swung = |by: f32| pose(&Angles { weapon_arm: angles.weapon_arm + by, ..*angles });
+    // How far it is over where it should be, swung by `by`: as deep as in level ground, under
+    // the ground where it is now.
+    let over = |posed: &Posed| {
+        let low = lowest(posed);
+        let ground = struck_surface(map, at + arena::to_gameplay(low), feet) - feet;
+        low.y - deep - near * ground.clamp(-REACH_DOWN, REACH_UP)
+    };
+    let (mut by, mut posed) = (0.0, level);
+    for _ in 0..3 {
+        let off = over(&posed);
+        if off.abs() < 0.01 {
+            break;
+        }
+        let slope = (lowest(&swung(by + 0.02)).y - lowest(&posed).y) / 0.02;
+        if slope.abs() < 1e-3 {
+            break;
+        }
+        by = (by - (off / slope).clamp(-0.4, 0.4)).clamp(-1.0, 1.0);
+        posed = swung(by);
+    }
+    posed
+}
+
 /// The lower of two heights, rounded off where they cross (by about `FOOT_BLEND`): standing on
 /// the lower foot, the body passing smoothly from one to the other as they swap, rather than
 /// jolting.

@@ -202,6 +202,8 @@ pub(super) struct Impact {
     pub(super) length: f32,
     pub(super) width: f32,
     pub(super) grown: Vec2,
+    /// How high the ground under its middle is, for its mist to rise from.
+    pub(super) ground: f32,
 }
 
 /// A chunk of earth thrown up by an impact: flying (m/s), tumbling (rad/s), from `started`.
@@ -211,20 +213,26 @@ pub(super) struct Chunk {
     pub(super) velocity: Vec3,
     pub(super) spin: Vec3,
     pub(super) size: f32,
+    /// How high the ground it comes down on is.
+    pub(super) ground: f32,
 }
 
 /// A strike going off breaks the ground all over its hitbox (its lane, `AttackDef::lane`: longer
 /// and wider empowered), from where the striker stands toward the blow, the moment its hit is
-/// dealt: the hit area, shown.
+/// dealt: the hit area, shown, lying on the ground the blade meets along it (`struck_stretch`:
+/// up a slope or a step, only as far down one or over a drop as it reaches, none at all struck
+/// out over a drop).
+#[allow(clippy::type_complexity)]
 pub(super) fn strike_ground(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<SwishAssets>,
+    map: Res<crate::rooms::CurrentMap>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut fighters: Query<(Entity, &mut Blade, &LastSwing, &Pos, &ClassId, (&PlayerId, Option<&Team>), Option<&mut TornRifts>)>,
+    mut fighters: Query<(Entity, &mut Blade, &LastSwing, &Pos, &ClassId, (&PlayerId, Option<&Team>), Option<&mut TornRifts>, (Option<&Motion>, Option<&crate::render::PredictedWalk>))>,
 ) {
     let now = time.elapsed_secs();
-    for (entity, mut blade, swing, pos, class, (id, team), torn) in &mut fighters {
+    for (entity, mut blade, swing, pos, class, (id, team), torn, (motion, predicted)) in &mut fighters {
         if !std::mem::take(&mut blade.striking) {
             continue;
         }
@@ -251,14 +259,19 @@ pub(super) fn strike_ground(
         }
         // The plain strike's break, and an empowered one's: the same, grown to its lane.
         let (Some((from, range, width)), Some((near_end, far_end, wide))) = (class.def().attack.lane(false), class.def().attack.lane_grown(swing.empowered, swing.grown)) else { continue };
+        let dir = swing.dir.normalize_or(Vec2::X);
+        let feet = crate::render::shown_height(map.map(), motion, predicted, pos.0);
+        let lane = far_end - near_end;
+        let Some([(near_end, near_ground), (far_end, far_ground)]) = struck_stretch(map.map(), pos.0, dir, feet, near_end, far_end) else { continue };
+        // Its chunks as big as the whole lane's, as many as the stretch it meets has.
+        let (big, kept) = (lane / (range - from), (far_end - near_end) / lane);
         let (grown, grown_across) = ((far_end - near_end) / (range - from), wide / width);
         // Drawn as long as its rift is open, if it tears one.
         let life = class.def().attack.rift.map_or(RIFT_LIFE, |rift| {
             let open = rift.ticks as f32 / arena_shared::config::TICK_HZ as f32;
             (open * RIFT_CLOSES, open)
         });
-        let dir = swing.dir.normalize_or(Vec2::X);
-        let (near, far) = (to_world(pos.0 + dir * near_end, 0.03), to_world(pos.0 + dir * far_end, 0.03));
+        let (near, far) = (to_world(pos.0 + dir * near_end, near_ground + 0.03), to_world(pos.0 + dir * far_end, far_ground + 0.03));
         let length = range - from;
         let turn = Quat::from_rotation_arc(Vec3::X, (far - near).normalize_or(Vec3::X));
         let seed = swing.tick;
@@ -286,21 +299,21 @@ pub(super) fn strike_ground(
             Mesh3d(closing[0][0].clone()),
             MeshMaterial3d(assets.rift_fades[0].clone()),
             place(near, Vec3::new(1.0, 1.0, 0.0)),
-            Impact { started: now, rim, bleed, dust, core, closing, life, length: length * grown, width: wide, grown: Vec2::new(grown, grown_across) },
+            Impact { started: now, rim, bleed, dust, core, closing, life, length: length * grown, width: wide, grown: Vec2::new(grown, grown_across), ground: (near_ground + far_ground) / 2.0 },
             NotShadowCaster,
             NotShadowReceiver,
         ));
         // Earth thrown up all over it, out to either side.
         let side = turn * Vec3::Z;
         // As many as the plain strike throws, each grown.
-        let count = (length * CHUNKS_PER_METER).round() as u32;
+        let count = (length * kept * CHUNKS_PER_METER).round() as u32;
         for i in 0..count {
             let r = |k: u32| noise(seed, 1000 + i * 8 + k);
             let across = (r(1) - 0.5) * wide;
             let at = near.lerp(far, r(0)) + side * across;
             let out = side * across.signum() * (0.4 + r(1)) + (far - near).normalize_or(Vec3::X) * (r(2) - 0.3) * 0.6;
-            let velocity = (Vec3::Y * CHUNK_THROW.0 * (0.5 + r(3)) + out * CHUNK_THROW.1) * grown.sqrt();
-            let size = (CHUNK_SIZE.0 + (CHUNK_SIZE.1 - CHUNK_SIZE.0) * r(4) * r(4)) * grown;
+            let velocity = (Vec3::Y * CHUNK_THROW.0 * (0.5 + r(3)) + out * CHUNK_THROW.1) * big.sqrt();
+            let size = (CHUNK_SIZE.0 + (CHUNK_SIZE.1 - CHUNK_SIZE.0) * r(4) * r(4)) * big;
             let spin = Vec3::new(r(5) - 0.5, r(6) - 0.5, r(7) - 0.5) * 30.0;
             let transform = Transform::from_translation(at + Vec3::Y * size / 2.0).with_scale(Vec3::splat(size));
             commands.spawn((
@@ -308,7 +321,7 @@ pub(super) fn strike_ground(
                 MeshMaterial3d(assets.chunks[(i % 3 == 0) as usize].clone()),
                 transform,
                 GlobalTransform::from(transform),
-                Chunk { started: now, velocity, spin, size },
+                Chunk { started: now, velocity, spin, size, ground: at.y - 0.03 },
                 NotShadowReceiver,
             ));
         }
@@ -389,7 +402,7 @@ pub(super) fn drive_impacts(
             let t = (age / DUST_LIFE).min(1.0);
             let burst = crate::ease::ease_out(0.0, DUST_LIFE, age) * (t < 1.0) as u8 as f32;
             dust.scale = Vec3::new(impact.length + DUST_OUT, 1.0, impact.width + DUST_OUT) * (0.6 + 0.6 * burst) * (t < 1.0) as u8 as f32;
-            dust.translation.y = 0.04 + 0.25 * burst;
+            dust.translation.y = impact.ground + 0.04 + 0.25 * burst;
             let faded = fade(&assets.dust_fades, t);
             if dust_material.0 != faded {
                 dust_material.0 = faded;
@@ -456,11 +469,11 @@ pub(super) fn throw_chunks(mut commands: Commands, time: Res<Time>, mut chunks: 
             commands.entity(entity).despawn();
             continue;
         }
-        let resting = transform.translation.y <= chunk.size / 2.0 && chunk.velocity.y <= 0.0;
+        let resting = transform.translation.y <= chunk.ground + chunk.size / 2.0 && chunk.velocity.y <= 0.0;
         if resting {
             chunk.velocity = Vec3::ZERO;
             chunk.spin = Vec3::ZERO;
-            transform.translation.y = chunk.size / 2.0;
+            transform.translation.y = chunk.ground + chunk.size / 2.0;
         } else {
             chunk.velocity.y -= GRAVITY * dt;
             transform.translation += chunk.velocity * dt;

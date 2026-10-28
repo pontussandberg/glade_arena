@@ -67,8 +67,9 @@ impl Mark {
 }
 
 /// A mark for each new swing, lying on the ground where the blade comes down: along the middle
-/// of the strike's lane (`AttackDef::lane`, longer empowered), wherever the blade itself happens
-/// to be as the hit arrives. Without a lane, along the blade where it is (after it's posed and
+/// of the strike's lane (`AttackDef::lane`, longer empowered), over the stretch of ground it
+/// meets (`struck_stretch`), wherever the blade itself happens to be as the hit arrives; struck
+/// out over a drop, along the blade where it is. Without a lane, along the blade where it is (after it's posed and
 /// placed). `LastSwing` comes from the server; each is drawn once. An attack that cuts twice
 /// (`AttackDef::twice`) marks its second cut too, along the other hand's blade (`OffBlade`) as
 /// the server lands it.
@@ -76,7 +77,8 @@ pub(super) fn show_marks(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<SwishAssets>,
-    mut swings: Query<(Entity, &LastSwing, &mut Blade, &Pos, &ClassId), Changed<LastSwing>>,
+    map: Res<crate::rooms::CurrentMap>,
+    mut swings: Query<(Entity, &LastSwing, &mut Blade, &Pos, &ClassId, (Option<&Motion>, Option<&crate::render::PredictedWalk>)), Changed<LastSwing>>,
     mut offhands: Query<&mut OffBlade>,
     blades: Query<&GlobalTransform>,
 ) {
@@ -93,7 +95,7 @@ pub(super) fn show_marks(
             NotShadowReceiver,
         ));
     };
-    for (entity, swing, mut blade, pos, class) in &mut swings {
+    for (entity, swing, mut blade, pos, class, (motion, predicted)) in &mut swings {
         if swing.tick <= blade.shown {
             continue;
         }
@@ -101,10 +103,11 @@ pub(super) fn show_marks(
         // The ground breaks over its hitbox at once, as the hit is dealt (`strike_ground`): it
         // shows where the strike hit, cut short or not.
         blade.striking = true;
-        let lane = class.def().attack.lane_grown(swing.empowered, swing.grown);
         let dir = swing.dir.normalize_or(Vec2::X);
+        let feet = crate::render::shown_height(map.map(), motion, predicted, pos.0);
+        let lane = class.def().attack.lane_grown(swing.empowered, swing.grown).and_then(|(near, far, width)| Some((struck_stretch(map.map(), pos.0, dir, feet, near, far)?, width)));
         let mark = match lane {
-            Some((near, far, _)) => Mark { started: now, from: to_world(pos.0 + dir * near, MARK_HEIGHT), to: to_world(pos.0 + dir * far, MARK_HEIGHT) },
+            Some(([(near, low), (far, high)], _)) => Mark { started: now, from: to_world(pos.0 + dir * near, low + MARK_HEIGHT), to: to_world(pos.0 + dir * far, high + MARK_HEIGHT) },
             None => {
                 let Ok(held) = blades.get(blade.held) else { continue };
                 Mark { started: now, from: blade.at(held, blade.from), to: blade.at(held, 1.0) }
@@ -117,9 +120,9 @@ pub(super) fn show_marks(
         {
             let at = now + gap as f32 / TICK_HZ as f32;
             off.cut = Some(match lane {
-                Some((near, far, width)) => {
+                Some(([(near, low), (far, high)], width)) => {
                     let beside = Vec2::new(-dir.y, dir.x) * width * SECOND_CUT_BESIDE;
-                    (at, to_world(pos.0 + dir * near + beside, MARK_HEIGHT), to_world(pos.0 + dir * far + beside, MARK_HEIGHT))
+                    (at, to_world(pos.0 + dir * near + beside, low + MARK_HEIGHT), to_world(pos.0 + dir * far + beside, high + MARK_HEIGHT))
                 }
                 None => (at, Vec3::NAN, Vec3::NAN),
             });

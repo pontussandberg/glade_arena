@@ -60,7 +60,7 @@ pub fn move_player(
 ///
 /// Walking has momentum (`motion`): the keys ask for a speed and a way, and the ground
 /// accelerates the walker toward it (`GROUND_ACCEL`) and slows it when they ask for nothing
-/// (`GROUND_FRICTION`, low: a slide to a stop); in the air the keys only steer a little
+/// (`GROUND_FRICTION`, high: only a short slide to a stop); in the air the keys only steer a little
 /// (`AIR_ACCEL` up to `AIR_CONTROL_SPEED`). Whatever blocks a step stops that part of the
 /// motion. Up and down: on the ground it follows the ground, up a slope and down one (not off a
 /// ledge: `STEP_DOWN`); `input.jump` on the ground sends it up (`jump_speed`); in the air it
