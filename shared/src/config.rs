@@ -42,7 +42,7 @@ pub const JUMP_HEIGHT: f32 = 1.0;
 /// like a skater); the speed under which it's slowed as if going that fast, so it comes to rest
 /// instead of creeping; and in the air how hard the keys steer it and up to what speed they can
 /// add, so it steers a little mid-jump (strafing), not as on the ground.
-pub const GROUND_ACCEL: f32 = 8.0;
+pub const GROUND_ACCEL: f32 = 16.0;
 pub const GROUND_FRICTION: f32 = 2.5;
 pub const STOP_SPEED: f32 = 0.8;
 pub const AIR_ACCEL: f32 = 12.0;

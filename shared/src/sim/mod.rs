@@ -386,7 +386,7 @@ mod tests {
         let top = fighter().def().move_speed;
         let run = walk_ticks(from, &[(Vec2::X, 48), (Vec2::ZERO, 96)], None);
         let speed = |i: usize| run[i].1.along.length();
-        assert!(speed(0) > 0.0 && speed(0) < top * 0.5, "set off at {} of {top} m/s", speed(0));
+        assert!(speed(0) > 0.0 && speed(0) < top * 0.75, "set off at {} of {top} m/s", speed(0));
         assert!(speed(10) > speed(0), "not getting going");
         assert!((speed(47) - top).abs() < top * 0.02, "running at {} of {top} m/s", speed(47));
         assert!(speed(48) > top * 0.8 && speed(48) < speed(47), "stopped dead, not sliding: {}", speed(48));
