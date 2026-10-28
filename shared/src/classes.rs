@@ -461,8 +461,8 @@ pub struct Shot {
 }
 
 /// How many times its range a thrown shot may fly in all before it's given up on: room for one
-/// lobbed high to come down (the map's edge stops it sooner).
-const FALL_SPAN: f32 = 6.0;
+/// lobbed as high as the camera aims to come down (the map's edge stops it sooner).
+const FALL_SPAN: f32 = 14.0;
 
 impl Shot {
     /// How far from its shooter's center a target's body can reach and still be hit: its front

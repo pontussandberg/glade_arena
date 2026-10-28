@@ -15,7 +15,7 @@
 //!   close. Tab moves it on to the next fighter (and back to you), to watch them play.
 
 use arena_shared::classes::ClassId;
-use arena_shared::config::{BODY_HEIGHT, PLAYER_RADIUS, SHOT_HEIGHT};
+use arena_shared::config::{BODY_HEIGHT, GRAVITY, PLAYER_RADIUS, SHOT_HEIGHT};
 use arena_shared::protocol::{PlayerId, Pos};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
@@ -59,9 +59,9 @@ const ACTION_SHOULDER: f32 = 0.0;
 const ACTION_FOV: f32 = 1.05;
 const WALL_MARGIN: f32 = 0.45;
 /// How far ahead of your fighter (meters) the aim crosses the camera's line of sight with no
-/// fighter near the crosshair, for a class without a shot (a shot's crosses at its range, where
-/// it starts to fall): there the crosshair is exact; nearer, the aim passes a little under it,
-/// farther a little over, by as much as the camera stands above the hand.
+/// fighter near the crosshair, for a class without a shot (a shot's crosses at its range):
+/// there the crosshair is exact; nearer, the aim passes a little under it, farther a little
+/// over, by as much as the camera stands above the hand.
 const AIM_CONVERGE: f32 = 12.0;
 /// How near the camera's line of sight (meters) a fighter's body (head to foot) draws the
 /// crossing to its own distance fully, and how far off it the pull is gone, so the crosshair is
@@ -468,8 +468,11 @@ fn follow_camera(
     // The others' bodies (their middle; `aim_of` reckons with their height) pull the aim's
     // crossing to them; with none near, a shot's crosses at its range, where it starts to fall.
     let bodies = fighters.iter().filter(|(who, ..)| *who != target).map(|(_, at, _)| at.translation.with_y(BODY_HEIGHT / 2.0));
-    let converge = class.def().attack.kind.shot().map_or(AIM_CONVERGE, |shot| shot.range);
-    (mode.aim, mode.climb, mode.ground) = aim_of(&camera, pivot, forward, converge, bodies);
+    let shot = class.def().attack.kind.shot();
+    let converge = shot.map_or(AIM_CONVERGE, |shot| shot.range);
+    // A thrown shot is zeroed on the point: pitched up by what gravity takes from it on the way.
+    let drop = shot.filter(|shot| shot.falls).map_or(0.0, |shot| GRAVITY / (2.0 * shot.speed * shot.speed));
+    (mode.aim, mode.climb, mode.ground) = aim_of(&camera, pivot, forward, converge, drop, bodies);
 }
 
 /// The aim: its direction along the ground from the fighter at `pivot`, how much it rises per
@@ -480,8 +483,12 @@ fn follow_camera(
 /// exact on the ground), drawn to the distance of the `bodies` near the line (`AIM_PULL`), the
 /// nearer to it the more. The camera's angle alone, whatever is in the way: the crosshair moved
 /// sideways at one height keeps the shot at that height, and beside a body as at it. `forward`
-/// is the camera's, along the ground, for when the point is right over the fighter.
-fn aim_of(camera: &Transform, pivot: Vec2, forward: Vec2, converge: f32, bodies: impl Iterator<Item = Vec3>) -> (Vec2, f32, Option<Vec2>) {
+/// is the camera's, along the ground, for when the point is right over the fighter. A shot
+/// that falls is pitched up over the straight line to the point by `drop` times the distance
+/// to it (gravity over twice its speed squared: what it falls per meter flown, per meter), so
+/// it comes down on the point itself, rising to it from under the line of sight, never over it
+/// (the camera stands well above the hand); past the point it drops away, as a throw does.
+fn aim_of(camera: &Transform, pivot: Vec2, forward: Vec2, converge: f32, drop: f32, bodies: impl Iterator<Item = Vec3>) -> (Vec2, f32, Option<Vec2>) {
     let (from, look) = (camera.translation, *camera.forward());
     let along = arena::to_gameplay(look);
     let flat = along.length().max(1e-6);
@@ -513,7 +520,8 @@ fn aim_of(camera: &Transform, pivot: Vec2, forward: Vec2, converge: f32, bodies:
     let on = from + look * at;
     let ahead = arena::to_gameplay(on) - pivot;
     let ground = if pull > 0.0 { Some(arena::to_gameplay(on)) } else { ground.map(|ground| arena::to_gameplay(from + look * ground)) };
-    (ahead.try_normalize().unwrap_or(forward), (on.y - SHOT_HEIGHT) / ahead.length().max(PLAYER_RADIUS), ground)
+    let dist = ahead.length().max(PLAYER_RADIUS);
+    (ahead.try_normalize().unwrap_or(forward), (on.y - SHOT_HEIGHT) / dist + drop * dist, ground)
 }
 
 /// Y in the arena locks or unlocks the MOBA camera (the lock by the minimap does too).
