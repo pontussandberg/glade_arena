@@ -1,8 +1,8 @@
 //! The action camera's crosshair: in the middle of the screen, where the camera looks, shown
-//! while it has the cursor. The aim is what the crosshair is on: a shot goes from your hand
-//! toward the first body the camera's line of sight meets past you, else the ground where it
-//! meets that, else a point far out along it (`camera::aim_climb`), rising or falling on its
-//! way, so the camera aims up and down as well as around.
+//! while it has the cursor. The aim is the camera's angle (`camera::aim_of`): a shot goes from
+//! your hand to cross the camera's line of sight ahead, at whoever (or whatever ground) is near
+//! the crosshair, else at its range, rising or falling on its way, so the camera aims up and down
+//! as well as around.
 
 use super::*;
 

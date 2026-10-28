@@ -3,6 +3,8 @@
 
 use super::*;
 
+use arena_shared::abilities::AbilityKind;
+use arena_shared::config::PLAYER_RADIUS;
 use arena_shared::sim;
 
 use crate::Me;
@@ -89,13 +91,14 @@ pub(super) fn read_local_input(
         move_to = None;
     }
     *last_pos = me;
-    // A right click (MOBA camera) while aiming a normal cast only drops the aim: it doesn't walk.
-    let right_click = !mode.free && mouse.just_pressed(MouseButton::Right);
+    // A right click while aiming a normal cast only drops the aim: it doesn't walk.
+    let right_click = mouse.just_pressed(MouseButton::Right);
     let drops_aim = right_click && aiming.0.is_some();
     // Once per click: holding the button doesn't keep re-targeting. Not with the free camera:
     // there the right button turns the camera, and WASD walks. A click on the minimap walks to
     // where it is there.
-    if right_click
+    if !mode.free
+        && right_click
         && !drops_aim
         && let Some(cursor) = on_minimap.or(cursor)
         && let Some(point) = map.map().walk_target(cursor, 4)
@@ -119,14 +122,17 @@ pub(super) fn read_local_input(
     // Casts not sent yet, and new ones after them, each toward the cursor as its key went down.
     let mut casts = PlayerInput { casts: desired.0.casts, ..default() };
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    for (slot, _) in my_class.into_iter().flat_map(|def| def.abilities()) {
+    for (slot, ability) in my_class.into_iter().flat_map(|def| def.abilities()) {
         if !keys.just_pressed(ability_key(slot)) || !key_casts(slot, mode.free) {
             continue;
         }
-        // A prime has nothing to aim: its key casts it at once, quick cast or not.
-        let aimed = my_class.and_then(|def| def.ability(slot)).is_some_and(|ability| ability.kind.aimed());
-        if cast_mode.casts_now(shift) || !aimed {
-            casts.order_cast(slot, aim);
+        // In action mode a strike is always a normal cast: its ring shows where the crosshair is
+        // on the ground until a left click calls it there (`cast_aim`); everything else goes
+        // off at once, a dash its whole distance. Otherwise a prime has nothing to aim: its key
+        // casts it at once, quick cast or not.
+        let now = if mode.free { !matches!(ability.kind, AbilityKind::Strike(_)) } else { cast_mode.casts_now(shift) || !ability.kind.aimed() };
+        if now {
+            casts.order_cast(slot, cast_aim(&mode, &ability.kind, me, aim));
             aiming.0 = None;
         } else if ready(slot) {
             aiming.0 = Some(slot);
@@ -147,7 +153,8 @@ pub(super) fn read_local_input(
             aiming.0 = Some(slot).filter(|&slot| ready(slot));
             *held_click = true;
         } else if let Some(slot) = aiming.0.take() {
-            casts.order_cast(slot, aim);
+            let kind = my_class.and_then(|def| def.ability(slot)).map(|ability| ability.kind);
+            casts.order_cast(slot, kind.map_or(aim, |kind| cast_aim(&mode, &kind, me, aim)));
             *held_click = true;
         }
     }
@@ -177,6 +184,19 @@ pub(super) fn read_local_input(
     // `casts` and `fire` are kept until they've been sent (`send_commands` clears them), so a
     // short tap isn't missed.
     desired.0 = PlayerInput { move_to, walk, aim, climb, fire, casts: casts.casts };
+}
+
+/// What a cast of `kind` by our fighter at `me` is aimed with, aiming `aim`: in action mode a
+/// dash's aim reaches its whole distance (`DashDef::length`), and a strike's is where the
+/// crosshair is on the ground (`CameraMode::strike_aim`); the rest, and everything in the MOBA,
+/// the aim as it is.
+fn cast_aim(mode: &CameraMode, kind: &AbilityKind, me: Option<Vec2>, aim: Vec2) -> Vec2 {
+    match kind {
+        _ if !mode.free => aim,
+        AbilityKind::Dash(dash) => aim.normalize_or(Vec2::Y) * (dash.distance + PLAYER_RADIUS),
+        AbilityKind::Strike(strike) => mode.strike_aim(me.unwrap_or_default(), strike.range),
+        _ => aim,
+    }
 }
 
 /// The range circle shows how far our attack reaches as it is now: further while our `follow_up`

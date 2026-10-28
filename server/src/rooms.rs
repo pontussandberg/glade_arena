@@ -873,19 +873,6 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             let player = ctx.player_of(link).ok_or("You're not in the arena")?;
             ctx.commands.entity(player).entry::<Cooldowns>().and_modify(move |mut cooldowns| cooldowns.free = on);
         }
-        RoomRequest::ActionMode(on) => {
-            let key = room_key.ok_or("You're not in a room")?;
-            if !lobby.rooms[&key].practice {
-                return Err("Action mode is for practice");
-            }
-            let player = ctx.player_of(link).ok_or("You're not in the arena")?;
-            let mut player = ctx.commands.entity(player);
-            if on {
-                player.insert(crate::ActionMode);
-            } else {
-                player.remove::<crate::ActionMode>();
-            }
-        }
         RoomRequest::Buy(item) => {
             let key = room_key.ok_or("You're not in a room")?;
             // For the fighter they are, whatever they've picked to be next.

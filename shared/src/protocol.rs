@@ -661,8 +661,8 @@ pub enum PlayerCommand {
     /// agree; a tick already past (or 0) means at once.
     Walk(Vec2, u32),
     /// Left click: auto-attack toward this aim. Holding the button doesn't attack again: each
-    /// attack is its own click, once the last one is done. (In action mode the client sends one
-    /// for each attack while the button is held: `RoomRequest::ActionMode`.)
+    /// attack is its own click, once the last one is done (the client sends one for each attack
+    /// while the button is held).
     Attack(Vec2),
     /// An ability's key (Q, W, E, R): use the ability in this slot toward this aim.
     Cast(AbilitySlot, Vec2),
@@ -759,9 +759,6 @@ pub enum RoomRequest {
     /// Practice only: our abilities with no cooldowns of their own (ready again the moment
     /// they're used), or back to normal.
     NoCooldowns(bool),
-    /// Practice only: action mode (the client's action camera, Smite style), or back to normal.
-    /// Our fighter walks while its attack winds up, and walking doesn't cancel the windup.
-    ActionMode(bool),
     /// Waves only, near the shopkeeper: buy this item, or raise it a level.
     Buy(crate::items::Item),
     /// Waves only, near the shopkeeper: sell the item in this slot.

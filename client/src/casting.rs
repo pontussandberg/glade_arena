@@ -192,11 +192,13 @@ fn spawn_indicator(
     }
 }
 
-/// Shows the indicator of the ability being aimed at our feet, turned toward the cursor. Dropped
-/// (aiming ends) once we're dead.
+/// Shows the indicator of the ability being aimed at our feet, turned toward the cursor; a
+/// strike's where it would land (`CameraMode::strike_aim`). Dropped (aiming ends) once we're
+/// dead.
 fn show_indicator(
     mut aiming: ResMut<Aiming>,
     desired: Res<DesiredInput>,
+    mode: Res<crate::camera::CameraMode>,
     me: Query<(&Transform, &Health, &ClassId), (With<Me>, With<PlayerId>, Without<AimIndicator>)>,
     mut indicators: Query<(&AimIndicator, &mut Transform, &mut Visibility)>,
 ) {
@@ -211,7 +213,12 @@ fn show_indicator(
         let Some(ability) = class.def().ability(indicator.slot) else { continue };
         let turn = if indicator.aimed { desired.0.aim.to_angle() } else { 0.0 };
         let length = crate::abilities::indicator_length(&ability.kind, desired.0.aim);
-        let wanted = Transform::from_xyz(at.translation.x, INDICATOR_HEIGHT, at.translation.z)
+        let feet = arena::to_gameplay(at.translation);
+        let place = match ability.kind {
+            arena_shared::abilities::AbilityKind::Strike(strike) => feet + mode.strike_aim(feet, strike.range),
+            _ => feet,
+        };
+        let wanted = Transform::from_translation(arena::to_world(place, INDICATOR_HEIGHT))
             .with_rotation(Quat::from_rotation_y(turn))
             .with_scale(Vec3::new(length, 1.0, 1.0));
         transform.set_if_neq(wanted);

@@ -1,27 +1,19 @@
-//! A strike: the lane out to where it can be called, with the shell's blast circle at the end;
-//! a falling star on its icon. (The warning ring where it will land is the server's Fx.)
+//! A strike: the shell's blast circle, put on the ground where it's called
+//! (`casting::show_indicator`); a falling star on its icon. (The warning ring where it will
+//! land is the server's Fx.)
 
 use std::f32::consts::FRAC_PI_2;
 
 use arena_shared::abilities::strike::StrikeDef;
-use arena_shared::config::PLAYER_RADIUS;
 use bevy::prelude::*;
 
 use super::Indicator;
 use crate::action_bar::fill;
-use crate::arena::{self, palette};
+use crate::arena::palette;
 
 pub(super) fn indicator(strike: &StrikeDef) -> Indicator {
-    // A thin guide out to its range, ending in the circle the shell will cover.
-    let mut mesh = arena::lane_mesh(PLAYER_RADIUS, strike.range, 0.25);
-    let ring = Circle::new(strike.radius)
-        .mesh()
-        .resolution(48)
-        .build()
-        .rotated_by(Quat::from_rotation_x(-FRAC_PI_2))
-        .translated_by(Vec3::new(strike.range, 0.0, 0.0));
-    let _ = mesh.merge(&ring);
-    Indicator { mesh, aimed: true }
+    let mesh = Circle::new(strike.radius).mesh().resolution(48).build().rotated_by(Quat::from_rotation_x(-FRAC_PI_2));
+    Indicator { mesh, aimed: false }
 }
 
 /// A star falling: a bar slanting down-right into a small blast square.

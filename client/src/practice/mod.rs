@@ -5,8 +5,7 @@
 //! - "Map" switches practice to the next map, everyone starting over on it.
 //! - Switches (`Switch`), lit while on: "No cooldowns" (our Q's cooldown off: what the server
 //!   says, via our `Cooldowns`), "Hitboxes" (`hitboxes`: what hits are judged by, drawn on the
-//!   ground), "3D hitboxes" (the same standing up, colored by height) and "Free camera"
-//!   (`camera`: a camera to turn around fighters and look at them up close).
+//!   ground) and "3D hitboxes" (the same standing up, colored by height).
 //! - "Fake ping" steps through extra latency on what we receive (`FakeLatency`), and back off, to
 //!   feel how the game plays at a higher ping.
 //! - "Target dummy" and "Moving dummy" place one (`dummies`).
@@ -39,7 +38,7 @@ impl Plugin for PracticePlugin {
         app.add_systems(Startup, picker::load_faces);
         app.add_systems(
             Update,
-            (show_tools, fold_tools, use_switches, sync_action_mode, step_fake_ping, switch_map).chain().run_if(in_state(Screen::InGame)),
+            (show_tools, fold_tools, use_switches, step_fake_ping, switch_map).chain().run_if(in_state(Screen::InGame)),
         );
         app.add_systems(Update, (picker::show_picker, picker::pick_class, picker::mark_current, picker::rest_faces));
         app.add_systems(Update, tools_off.run_if(not(in_state(Screen::InGame)).or_else(not(practicing))));
@@ -61,19 +60,17 @@ enum Switch {
     NoCooldowns,
     Hitboxes,
     Hitboxes3d,
-    FreeCamera,
     UncappedZoom,
 }
 
 impl Switch {
-    const ALL: [Switch; 5] = [Switch::NoCooldowns, Switch::Hitboxes, Switch::Hitboxes3d, Switch::FreeCamera, Switch::UncappedZoom];
+    const ALL: [Switch; 4] = [Switch::NoCooldowns, Switch::Hitboxes, Switch::Hitboxes3d, Switch::UncappedZoom];
 
     fn label(self) -> &'static str {
         match self {
             Switch::NoCooldowns => "No cooldowns",
             Switch::Hitboxes => "Hitboxes",
             Switch::Hitboxes3d => "3D hitboxes",
-            Switch::FreeCamera => "Action mode",
             Switch::UncappedZoom => "Uncapped zoom",
         }
     }
@@ -99,7 +96,6 @@ impl Switched<'_, '_> {
             Switch::NoCooldowns => self.me.iter().next().is_some_and(|cooldowns| cooldowns.free),
             Switch::Hitboxes => self.hitboxes.0,
             Switch::Hitboxes3d => self.hitboxes_3d.0,
-            Switch::FreeCamera => self.camera.free,
             Switch::UncappedZoom => self.camera.uncapped,
         }
     }
@@ -112,25 +108,8 @@ impl Switched<'_, '_> {
             Switch::NoCooldowns => request(&mut self.sender, RoomRequest::NoCooldowns(!on)),
             Switch::Hitboxes => self.hitboxes.0 = !on,
             Switch::Hitboxes3d => self.hitboxes_3d.0 = !on,
-            Switch::FreeCamera => self.camera.free = !on,
             Switch::UncappedZoom => self.camera.uncapped = !on,
         }
-    }
-}
-
-/// Action mode is the server's too (`RoomRequest::ActionMode`: it lets the fighter walk through
-/// its windup). Told whenever the switch changes, and again for each new fighter of ours, since
-/// the server keeps it on the fighter.
-fn sync_action_mode(
-    camera: Res<CameraMode>,
-    me: Query<Entity, With<Me>>,
-    mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
-    mut told: Local<Option<(Entity, bool)>>,
-) {
-    let Ok(me) = me.single() else { return };
-    if *told != Some((me, camera.free)) {
-        *told = Some((me, camera.free));
-        request(&mut sender, RoomRequest::ActionMode(camera.free));
     }
 }
 
@@ -232,8 +211,7 @@ fn tools_off(
     hitboxes.set_if_neq(ShowHitboxes(false));
     hitboxes_3d.set_if_neq(ShowHitboxes3d(false));
     fake_ping.set_if_neq(FakeLatency::default());
-    if camera.free || camera.uncapped {
-        camera.free = false;
+    if camera.uncapped {
         camera.uncapped = false;
     }
     placing.set_if_neq(Placing::default());

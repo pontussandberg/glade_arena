@@ -20,7 +20,7 @@ pub struct Throw {
 
 impl Throw {
     pub fn shot(&self) -> Shot {
-        Shot { speed: self.speed, radius: self.radius, range: self.range }
+        Shot { speed: self.speed, radius: self.radius, range: self.range, falls: false }
     }
 
     /// Thrown by `owner` (of `class`, with the ability in `slot`) from `pos` toward `dir` at

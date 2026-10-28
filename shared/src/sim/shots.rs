@@ -1,10 +1,11 @@
 //! Shots in flight: where one starts and is at a tick (and how high: aimed up or down, it
-//! climbs or falls as it flies), when it's spent, whom it hits, and for how much.
+//! climbs or falls as it flies, and one that `falls` drops past its range), when it's spent,
+//! whom it hits, and for how much.
 
 use super::*;
 
 use crate::classes::{Chill, Shot};
-use crate::config::{BODY_HEIGHT, SHOT_HEIGHT};
+use crate::config::{BODY_HEIGHT, GRAVITY, SHOT_HEIGHT};
 use crate::map::Map;
 use crate::protocol::Projectile;
 
@@ -31,13 +32,30 @@ pub fn projectile_pos(projectile: &Projectile, tick: f32) -> Vec2 {
     projectile.origin + projectile.dir * projectile_flown(projectile, tick)
 }
 
-/// How high a projectile flies at `tick`: from the hand, up or down as it was aimed (`climb`).
+/// How high a projectile flies at `tick`: from the hand, up or down as it was aimed (`climb`),
+/// straight. One that falls (`Shot::falls`) flies that line to its range, and from there
+/// gravity has it: on at its speed along the ground, dropping ever faster.
 pub fn projectile_height(projectile: &Projectile, tick: f32) -> f32 {
-    SHOT_HEIGHT + projectile.climb * projectile_flown(projectile, tick)
+    let flown = projectile_flown(projectile, tick);
+    SHOT_HEIGHT + projectile.climb * flown - 0.5 * GRAVITY * projectile_falling(projectile, flown).powi(2)
 }
 
-/// Out of range, into a wall, rock or tree (water and chasms don't stop shots), or into the
-/// ground (aimed down).
+/// How steeply a projectile flies at `tick`: how much it rises per meter ahead, as a tangent
+/// (negative falling): as aimed, and steeper down the longer it has fallen.
+pub fn projectile_pitch(projectile: &Projectile, tick: f32) -> f32 {
+    let shot = shot(projectile);
+    projectile.climb - GRAVITY * projectile_falling(projectile, projectile_flown(projectile, tick)) / shot.speed
+}
+
+/// How long (seconds) a projectile that has `flown` this far has been falling: none until past
+/// its range, and never for one that doesn't fall.
+fn projectile_falling(projectile: &Projectile, flown: f32) -> f32 {
+    let shot = shot(projectile);
+    if shot.falls { (flown - shot.range).max(0.0) / shot.speed } else { 0.0 }
+}
+
+/// Out of range (or, for one that falls, given up on), into a wall, rock or tree (water and
+/// chasms don't stop shots), or into the ground (aimed down, or fallen).
 pub fn projectile_expired(map: &Map, pos: Vec2, projectile: &Projectile, tick: u32) -> bool {
     tick.saturating_sub(projectile.spawn_tick) >= shot(projectile).lifetime_ticks()
         || map.get(Map::tile_of(pos)).blocks_shots()

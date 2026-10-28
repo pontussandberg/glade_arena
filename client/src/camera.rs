@@ -14,6 +14,7 @@
 //!   button keeps attacking. Wheel (or + / -) zooms, down to arm's length to look at fighters up
 //!   close. Tab moves it on to the next fighter (and back to you), to watch them play.
 
+use arena_shared::classes::ClassId;
 use arena_shared::config::{BODY_HEIGHT, PLAYER_RADIUS, SHOT_HEIGHT};
 use arena_shared::protocol::{PlayerId, Pos};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
@@ -57,14 +58,14 @@ const ACTION_LOOK_HEIGHT: f32 = 3.0;
 const ACTION_SHOULDER: f32 = 0.0;
 const ACTION_FOV: f32 = 1.05;
 const WALL_MARGIN: f32 = 0.45;
-/// How far ahead of your fighter (meters) a shot's path crosses the camera's line of sight
-/// with no fighter near the crosshair: there the crosshair is exact; nearer, the shot passes a
-/// little under and beside it, farther a little over, by as much as the camera stands off the
-/// hand.
+/// How far ahead of your fighter (meters) the aim crosses the camera's line of sight with no
+/// fighter near the crosshair, for a class without a shot (a shot's crosses at its range, where
+/// it starts to fall): there the crosshair is exact; nearer, the aim passes a little under it,
+/// farther a little over, by as much as the camera stands above the hand.
 const AIM_CONVERGE: f32 = 12.0;
-/// How near the camera's line of sight (meters) a fighter's body draws the crossing to its own
-/// distance fully, and how far off it the pull is gone, so the crosshair is exact on anyone
-/// it's at or just beside, with no jump between the two (`aim_of`).
+/// How near the camera's line of sight (meters) a fighter's body (head to foot) draws the
+/// crossing to its own distance fully, and how far off it the pull is gone, so the crosshair is
+/// exact on anyone it's at or just beside, with no jump between the two (`aim_of`).
 const AIM_PULL: (f32, f32) = (0.6, 1.8);
 /// How fast the camera eases back out once a wall no longer holds it in (per second,
 /// exponential); coming in it snaps, so it's never inside the wall.
@@ -132,10 +133,13 @@ pub struct CameraMode {
     held_at: f32,
     /// Where the action camera aims along the ground, from your fighter, and how much the aim
     /// rises per meter ahead, as a tangent (`aim_of`). Not quite the camera's forward: it stands
-    /// off your shoulder, and the aim converges on its line of sight, at whoever is near the
-    /// crosshair.
+    /// above your hand, and the aim converges on its line of sight, at whoever (or whatever
+    /// ground) is near the crosshair.
     pub aim: Vec2,
     pub climb: f32,
+    /// Where the camera's line of sight meets the ground, if it does (looking over the horizon it
+    /// doesn't), or under whoever it's on: where a strike is called (`strike_aim`).
+    pub ground: Option<Vec2>,
     /// Whom the free camera follows instead of you (Tab), if anyone.
     watching: Option<Entity>,
     /// How far the mouse has moved (pixels) since the right button went down.
@@ -146,11 +150,21 @@ pub struct CameraMode {
 
 impl Default for CameraMode {
     fn default() -> Self {
-        CameraMode { free: false, locked: false, just_locked: false, just_unlocked: false, uncapped: false, unlocked: false, orbit: Orbit { yaw: 0.0, pitch: ACTION_PITCH, distance: ACTION_DISTANCE }, held_at: ACTION_DISTANCE, aim: Vec2::Y, climb: 0.0, watching: None, dragged: 0.0, grabbed_at: None }
+        CameraMode { free: true, locked: false, just_locked: false, just_unlocked: false, uncapped: false, unlocked: false, orbit: Orbit { yaw: 0.0, pitch: ACTION_PITCH, distance: ACTION_DISTANCE }, held_at: ACTION_DISTANCE, aim: Vec2::Y, climb: 0.0, ground: None, watching: None, dragged: 0.0, grabbed_at: None }
     }
 }
 
 impl CameraMode {
+    /// Where a strike of `range` called by the fighter at `me` lands, as its aim (from them):
+    /// where the crosshair is on the ground, no farther out than its range; looking over the
+    /// horizon, its range out along the aim.
+    pub fn strike_aim(&self, me: Vec2, range: f32) -> Vec2 {
+        match self.ground {
+            Some(ground) => (ground - me).clamp_length_max(range),
+            None => self.aim * range,
+        }
+    }
+
     /// Whether the right button, since it went down, has been dragged (turning the camera, the
     /// cursor hidden) rather than just clicked.
     fn turning(&self) -> bool {
@@ -363,8 +377,8 @@ fn follow_camera(
     >,
     mut mode: ResMut<CameraMode>,
     // Its own transform, set this frame (`GlobalTransform` lags a frame and would jitter).
-    me: Query<(Entity, &Transform), (With<Me>, With<PlayerId>, Without<CameraRig>)>,
-    fighters: Query<(Entity, &Transform), (With<PlayerId>, Without<CameraRig>)>,
+    me: Query<(Entity, &Transform, &ClassId), (With<Me>, With<PlayerId>, Without<CameraRig>)>,
+    fighters: Query<(Entity, &Transform, &ClassId), (With<PlayerId>, Without<CameraRig>)>,
     mut camera: Single<&mut Transform, With<CameraRig>>,
     window: Single<(&mut Window, &mut CursorOptions)>,
 ) {
@@ -429,7 +443,7 @@ fn follow_camera(
     if watched.is_none() && mode.watching.is_some() {
         mode.watching = None;
     }
-    let Some((target, at)) = watched.or(me.single().ok()) else { return };
+    let Some((target, at, class)) = watched.or(me.single().ok()) else { return };
     // Follow its feet (not its posed, leaning body).
     let (forward, right) = mode.ground_axes();
     let pivot = arena::to_gameplay(at.translation);
@@ -451,25 +465,30 @@ fn follow_camera(
     mode.held_at = if distance < mode.held_at { distance } else { mode.held_at + (distance - mode.held_at) * ease };
     let orbit = Orbit { distance: mode.held_at, ..mode.orbit };
     camera.set_if_neq(orbit.transform(arena::to_world(shoulder, ACTION_LOOK_HEIGHT)));
-    // The others' bodies, at the middle of their height, pull the aim's crossing to them.
-    let bodies = fighters.iter().filter(|(who, _)| *who != target).map(|(_, at)| at.translation.with_y(BODY_HEIGHT / 2.0));
-    (mode.aim, mode.climb) = aim_of(&camera, pivot, forward, bodies);
+    // The others' bodies (their middle; `aim_of` reckons with their height) pull the aim's
+    // crossing to them; with none near, a shot's crosses at its range, where it starts to fall.
+    let bodies = fighters.iter().filter(|(who, ..)| *who != target).map(|(_, at, _)| at.translation.with_y(BODY_HEIGHT / 2.0));
+    let converge = class.def().attack.kind.shot().map_or(AIM_CONVERGE, |shot| shot.range);
+    (mode.aim, mode.climb, mode.ground) = aim_of(&camera, pivot, forward, converge, bodies);
 }
 
-/// The aim: its direction along the ground from the fighter at `pivot`, and how much it rises
-/// per meter ahead, as a tangent, from their hand (at `SHOT_HEIGHT`) to a point ahead on the
-/// camera's line of sight: `AIM_CONVERGE` ahead, drawn to the distance of the `bodies` near
-/// the line (`AIM_PULL`), the nearer to it the more. The camera's angle alone, whatever is in
-/// the way: the crosshair moved sideways at one height keeps the shot at that height, and
-/// beside a body as at it. `forward` is the camera's, along the ground, for when the point is
-/// right over the fighter.
-fn aim_of(camera: &Transform, pivot: Vec2, forward: Vec2, bodies: impl Iterator<Item = Vec3>) -> (Vec2, f32) {
+/// The aim: its direction along the ground from the fighter at `pivot`, how much it rises per
+/// meter ahead, as a tangent, from their hand (at `SHOT_HEIGHT`) to a point ahead on the
+/// camera's line of sight, and the ground under that point when a body draws it, else where the
+/// line meets the ground, if it does. The point is
+/// `converge` ahead, or where the line meets the ground when that's nearer (so the crosshair is
+/// exact on the ground), drawn to the distance of the `bodies` near the line (`AIM_PULL`), the
+/// nearer to it the more. The camera's angle alone, whatever is in the way: the crosshair moved
+/// sideways at one height keeps the shot at that height, and beside a body as at it. `forward`
+/// is the camera's, along the ground, for when the point is right over the fighter.
+fn aim_of(camera: &Transform, pivot: Vec2, forward: Vec2, converge: f32, bodies: impl Iterator<Item = Vec3>) -> (Vec2, f32, Option<Vec2>) {
     let (from, look) = (camera.translation, *camera.forward());
     let along = arena::to_gameplay(look);
     let flat = along.length().max(1e-6);
-    // Along the line (meters) to the point beside the fighter, and on to the one `AIM_CONVERGE`
-    // past it.
+    // Along the line (meters) to the point beside the fighter, and on to the one `converge`
+    // past it; and to the ground, looking down.
     let past = (pivot - arena::to_gameplay(from)).dot(along) / flat;
+    let ground = (look.y < -1e-4).then(|| -from.y / look.y);
     let (mut pull, mut drawn) = (0.0, 0.0);
     for body in bodies {
         let to = body - from;
@@ -478,16 +497,23 @@ fn aim_of(camera: &Transform, pivot: Vec2, forward: Vec2, bodies: impl Iterator<
         if at * flat <= past + PLAYER_RADIUS {
             continue;
         }
-        let off = (to - look * at).length();
+        // Off the line: across, and above its top or below its feet (not along its height).
+        let off = to - look * at;
+        let off = Vec2::new(off.xz().length(), (off.y.abs() - BODY_HEIGHT / 2.0).max(0.0)).length();
         let weight = 1.0 - ((off - AIM_PULL.0) / (AIM_PULL.1 - AIM_PULL.0)).clamp(0.0, 1.0);
         pull += weight;
         drawn += weight * at;
     }
-    let converge = (past + AIM_CONVERGE) / flat;
-    let converge = if pull > 0.0 { converge.lerp(drawn / pull, pull.min(1.0)) } else { converge };
-    let on = from + look * converge;
+    let mut at = (past + converge) / flat;
+    // Ground ahead of the fighter (not at their feet or behind them) nearer than that.
+    if let Some(ground) = ground.filter(|ground| ground * flat > past + PLAYER_RADIUS) {
+        at = at.min(ground);
+    }
+    let at = if pull > 0.0 { at.lerp(drawn / pull, pull.min(1.0)) } else { at };
+    let on = from + look * at;
     let ahead = arena::to_gameplay(on) - pivot;
-    (ahead.try_normalize().unwrap_or(forward), (on.y - SHOT_HEIGHT) / ahead.length().max(PLAYER_RADIUS))
+    let ground = if pull > 0.0 { Some(arena::to_gameplay(on)) } else { ground.map(|ground| arena::to_gameplay(from + look * ground)) };
+    (ahead.try_normalize().unwrap_or(forward), (on.y - SHOT_HEIGHT) / ahead.length().max(PLAYER_RADIUS), ground)
 }
 
 /// Y in the arena locks or unlocks the MOBA camera (the lock by the minimap does too).

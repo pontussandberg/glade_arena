@@ -74,6 +74,7 @@ pub(super) fn spawn_player(commands: &mut Commands, link: Entity, id: PeerId, cl
             OnGate::default(),
             PlayerInput::default(),
             (Satchel::default(), ItemState::default()),
+            crate::ActionMode,
             // Replication starts in `place_players`, once it has a real position.
             ControlledBy { owner: link, lifetime: default() },
         ))

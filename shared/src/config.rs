@@ -32,6 +32,9 @@ pub const PLAYER_RADIUS: f32 = 0.5;
 pub const BODY_HEIGHT: f32 = 2.1;
 /// How high a shot leaves the hand (meters): where its climb or fall starts from.
 pub const SHOT_HEIGHT: f32 = 1.0;
+/// How fast a shot past its range falls (m/s², the real thing), one that falls at all
+/// (`Shot::falls`).
+pub const GRAVITY: f32 = 9.81;
 /// How long a killed player is out of the fight before respawning (3 s).
 pub const RESPAWN_TICKS: u32 = 3 * TICK_HZ as u32;
 

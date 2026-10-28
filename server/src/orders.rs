@@ -7,10 +7,10 @@ use arena_shared::sim;
 
 use crate::rooms::{InRoom, Lobby};
 
-/// A fighter in action mode (`RoomRequest::ActionMode`, practice's tool): it walks while its
-/// attack winds up, and an order to move doesn't cancel the windup. Everything else is as
-/// normal: the aim still locks as the attack starts, and the blow goes off from wherever it
-/// stands then.
+/// A fighter in action mode (every player's: `spawning::spawn_player`; not a monster's or a
+/// dummy's): it walks while its attack winds up, an order to move doesn't cancel the windup, and
+/// the windup follows its aim (`combat`). Everything else is as normal: the blow goes off from
+/// wherever it stands then.
 #[derive(Component)]
 pub struct ActionMode;
 

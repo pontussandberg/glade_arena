@@ -1,10 +1,12 @@
-//! Shots in flight: where each is drawn every frame (`fly_shots`), and a thrown spear's hand-off
-//! from the hand, its curve onto its real path and the wake of wind it leaves behind.
+//! Shots in flight: where each is drawn every frame (`fly_shots`), a thrown spear's hand-off
+//! from the hand, its curve onto its real path and the wake of wind it leaves behind, and the
+//! end of a shot (`strike_home`): a spear's strike, a bolt's burst.
 
 use super::*;
 
 use bevy::light::NotShadowCaster;
 
+use arena_shared::config::SHOT_HEIGHT;
 use arena_shared::sim;
 
 use crate::feedback::AttackClock;
@@ -118,14 +120,16 @@ pub(super) fn fly_shots(
     for (projectile, mut transform, mut visibility, thrown, spin) in &mut shots {
         let speed = projectile.class.def().shot(projectile.ability).map_or(0.0, |s| s.speed);
         let at_tick = tick.max(projectile.spawn_tick as f32 - 1.0);
-        // Aimed up or down (the action camera's), it rises or falls as it flies.
-        let height = shot_height(thrown.is_some()) + projectile.climb * sim::projectile_flown(projectile, at_tick);
+        // Aimed up or down (the action camera's), it rises or falls as it flies (and one that
+        // falls drops past its range), its nose along its flight.
+        let height = shot_height(thrown.is_some()) + sim::projectile_height(projectile, at_tick) - SHOT_HEIGHT;
         let on_path = to_world(sim::projectile_pos(projectile, at_tick), height);
         let along = Quat::from_rotation_y(projectile.dir.to_angle());
+        let tilt = Quat::from_rotation_z(sim::projectile_pitch(projectile, at_tick).atan());
         let forward_dir = along * Vec3::X;
         let Some(mut thrown) = thrown else {
             let spun = spin.map_or(Quat::IDENTITY, |s| Quat::from_rotation_x(s.0 * now));
-            transform.set_if_neq(Transform::from_translation(on_path).with_rotation(along * spun));
+            transform.set_if_neq(Transform::from_translation(on_path).with_rotation(along * tilt * spun));
             continue;
         };
         let launch = match thrown.launch {
@@ -189,7 +193,7 @@ pub(super) fn fly_shots(
         let rest = (1.0 - flown / CONVERGE_METERS).max(0.0);
         let at = on_path + off * rest * rest + forward_dir * ahead * left(give_back);
         let heading = (forward_dir - off * 2.0 * rest / CONVERGE_METERS).normalize();
-        let flying = Quat::from_rotation_arc(forward_dir, heading) * along;
+        let flying = Quat::from_rotation_arc(forward_dir, heading) * along * tilt;
         let turned = 1.0 - left(SETTLE_SECONDS);
         transform.set_if_neq(Transform::from_translation(at).with_rotation(launch.held.slerp(flying, turned)).with_scale(launch.scale));
         // A piece of wake from where it came off the spear last frame to where it does now, left in
@@ -224,6 +228,13 @@ const SPLINTER_STRETCH: f32 = 4.0;
 const SPLINTER_FALL: f32 = 9.0;
 /// A spear gone this much short of its range (meters) was stopped by something, not spent.
 const STOPPED_SHORT: f32 = 0.4;
+/// A bolt bursting as it's spent (`strike_home`): how long its flash lasts and how big it gets
+/// (seconds, meters); how many sparks fly out of it every way, how fast (m/s) and for how long.
+const BURST_SECONDS: f32 = 0.12;
+const BURST_SIZE: f32 = 0.14;
+const BURST_SPARKS: u32 = 10;
+const BURST_SPEED: (f32, f32) = (1.6, 3.6);
+const BURST_LIFE: (f32, f32) = (0.2, 0.4);
 
 /// A piece of a spear's impact (`strike_home`), from `started`: the flash, or a splinter flying
 /// at `velocity`.
@@ -235,10 +246,13 @@ pub(super) struct Impact {
     velocity: Option<Vec3>,
 }
 
-/// A thrown spear gone short of its range hit something (a fighter, a wall, a rock, a tree): a
-/// flash where its point was, and splinters thrown back the way it came, out and up. One that flew
-/// its whole range just ends, and so does every one cleared away mid-flight: at the end of a won
-/// match, or with the map changed.
+/// A thrown spear gone short of its range hit something (a fighter, a wall, a rock, a tree), and
+/// one that falls (`Shot::falls`) ends on something past it too: a flash where its point was,
+/// and splinters thrown back the way it came, out and up. A bolt that flew its whole range
+/// bursts there, in its own light, as if it lost hold of itself: a bigger flash, sparks flung
+/// out every way. A spear that flew its whole range just ends, as does a bolt stopped short
+/// (its hit is the fighter's to show), and so does every one cleared away mid-flight: at the
+/// end of a won match, or with the map changed.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn strike_home(
     trigger: On<Remove, Projectile>,
@@ -248,26 +262,33 @@ pub(super) fn strike_home(
     map: Res<crate::rooms::CurrentMap>,
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    shots: Query<(&Projectile, &Transform, &Thrown, &InheritedVisibility)>,
+    shots: Query<(&Projectile, &Transform, Option<&Thrown>, &InheritedVisibility, &MeshMaterial3d<StandardMaterial>)>,
 ) {
     let cleared = room.0.as_ref().is_some_and(|view| view.winner.is_some()) || map.is_changed();
-    let Ok((projectile, transform, thrown, visible)) = shots.get(trigger.entity) else { return };
-    if cleared {
+    let Ok((projectile, transform, thrown, visible, own_light)) = shots.get(trigger.entity) else { return };
+    if cleared || !visible.get() {
         return;
     }
-    let Some(range) = projectile.class.def().shot(projectile.ability).map(|shot| shot.range) else { return };
+    let Some(shot) = projectile.class.def().shot(projectile.ability) else { return };
     let point = transform.translation;
     let flown = arena::to_gameplay(point).distance(projectile.origin);
-    if thrown.launch.is_none() || !visible.get() || flown > range - STOPPED_SHORT {
+    let spent = flown > shot.range - STOPPED_SHORT;
+    let now = time.elapsed_secs();
+    let seed = trigger.entity.index().index();
+    let Some(thrown) = thrown else {
+        if spent {
+            burst(&mut commands, &visuals, own_light.0.clone(), point, now, seed);
+        }
+        return;
+    };
+    if thrown.launch.is_none() || (spent && !shot.falls) {
         return;
     }
-    let now = time.elapsed_secs();
     let light = visuals.material(&mut materials, projectile.owner, Look::Spark);
     let bit = || (Mesh3d(visuals.impact.clone()), MeshMaterial3d(light.clone()), Transform::from_translation(point).with_scale(Vec3::ZERO), NotShadowCaster);
     commands.spawn((Impact { started: now, life: FLASH_SECONDS, size: FLASH_SIZE, velocity: None }, bit()));
     let back = -(transform.rotation * Vec3::X).with_y(0.0).normalize_or(Vec3::X);
     let across = Vec3::new(-back.z, 0.0, back.x);
-    let seed = trigger.entity.index().index();
     for k in 0..SPLINTERS {
         let r = |i: u32| crate::swish::noise(seed, k * 8 + i);
         let speed = SPLINTER_SPEED.0 + (SPLINTER_SPEED.1 - SPLINTER_SPEED.0) * r(0);
@@ -275,6 +296,21 @@ pub(super) fn strike_home(
         let size = SPLINTER_SIZE.0 + (SPLINTER_SIZE.1 - SPLINTER_SIZE.0) * r(3);
         let life = SPLINTER_LIFE.0 + (SPLINTER_LIFE.1 - SPLINTER_LIFE.0) * r(4);
         commands.spawn((Impact { started: now, life, size, velocity: Some(velocity) }, bit()));
+    }
+}
+
+/// A bolt bursting at `point` as it's spent, in `light`: its flash, and sparks flung out every
+/// way (up more than down), falling and winking out like a spear's splinters.
+fn burst(commands: &mut Commands, visuals: &Visuals, light: Handle<StandardMaterial>, point: Vec3, now: f32, seed: u32) {
+    let bit = || (Mesh3d(visuals.impact.clone()), MeshMaterial3d(light.clone()), Transform::from_translation(point).with_scale(Vec3::ZERO), NotShadowCaster);
+    commands.spawn((Impact { started: now, life: BURST_SECONDS, size: BURST_SIZE, velocity: None }, bit()));
+    for k in 0..BURST_SPARKS {
+        let r = |i: u32| crate::swish::noise(seed, k * 8 + i);
+        let dir = Vec3::new(r(0) * 2.0 - 1.0, r(1) * 1.4 - 0.4, r(2) * 2.0 - 1.0).normalize_or(Vec3::Y);
+        let speed = BURST_SPEED.0 + (BURST_SPEED.1 - BURST_SPEED.0) * r(3);
+        let size = SPLINTER_SIZE.0 + (SPLINTER_SIZE.1 - SPLINTER_SIZE.0) * r(4);
+        let life = BURST_LIFE.0 + (BURST_LIFE.1 - BURST_LIFE.0) * r(5);
+        commands.spawn((Impact { started: now, life, size, velocity: Some(dir * speed) }, bit()));
     }
 }
 
