@@ -7,32 +7,17 @@
 use std::f32::consts::SQRT_2;
 
 use arena_shared::map::CLIMB;
+use arena_shared::sim::{STRUCK_STEP, surface_on};
 use bevy::platform::collections::HashMap;
 
 use super::*;
 
 use crate::arena::{FlatMesh, to_world};
 
-/// How far apart (meters) the surfaces under a lane are looked up, going out from the striker:
-/// in between, smoothly where the looks round a point are all on one surface, afresh at the
-/// point itself where they aren't.
-const LOOK_STEP: f32 = 0.04;
-
-/// What's just under `p`, `step` on from where the surface was `before` on the way out from a
-/// striker with its feet `feet` high: the highest surface there as high up as its blade comes
-/// from (`REACH_UP`), or as the surface before rises on up to it no steeper than a climb (a
-/// slope, a roof, followed on up however high it goes); however far down that is.
-fn surface_on(map: &Map, p: Vec2, feet: f32, before: f32, step: f32) -> f32 {
-    map.surface_under(p, (feet + REACH_UP).max(before + CLIMB * step + 1e-3))
-}
-
-/// What a blade coming down at `p` meets, for a striker at `from` with its feet `feet` high: the
-/// surface under it, followed out to it from the striker's feet (`surface_on`).
-pub(crate) fn struck_surface(map: &Map, from: Vec2, p: Vec2, feet: f32) -> f32 {
-    let steps = (from.distance(p) / LOOK_STEP).ceil().max(1.0);
-    let step = from.distance(p) / steps;
-    (0..=steps as u32).fold(f32::NEG_INFINITY, |before, k| surface_on(map, from.lerp(p, k as f32 / steps), feet, before, step))
-}
+/// How far apart (meters) the surfaces under a lane are looked up, going out from the striker
+/// as the sim does (`struck_surface`): in between, smoothly where the looks round a point are
+/// all on one surface, afresh at the point itself where they aren't.
+const LOOK_STEP: f32 = STRUCK_STEP;
 
 /// The surfaces under a strike's lane, from `origin` (in the world's plane) along `dir` and
 /// across it to its right, for a striker with its feet `feet` high: followed out along the lane
@@ -50,6 +35,11 @@ pub(crate) struct Underfoot {
 impl Underfoot {
     pub(crate) fn new(map: &'static Map, origin: Vec2, dir: Vec2, feet: f32) -> Self {
         Underfoot { map, origin, dir: dir.normalize_or(Vec2::X), feet, looked: HashMap::default() }
+    }
+
+    /// How high the striker's feet are.
+    pub(crate) fn feet(&self) -> f32 {
+        self.feet
     }
 
     /// The lane's point `local` (along it, and across it to its right) in the world's plane.

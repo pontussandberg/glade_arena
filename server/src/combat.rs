@@ -183,8 +183,9 @@ pub(super) type Targets<'w, 's> = Query<
         &'static mut Chilled,
         &'static mut RecentHits,
         &'static MaxHealth,
-        // Kept from harm (just back), and whose decoy it is if it's one: never its owner's foe.
-        (Has<Sheltered>, Option<&'static crate::items::Decoy>),
+        // Kept from harm (just back), and whose decoy it is if it's one: never its owner's foe;
+        // and how high its feet are (every fighter has a motion: `spawning::fighter`).
+        (Has<Sheltered>, Option<&'static crate::items::Decoy>, &'static arena_shared::protocol::Motion),
     ),
     (InPlay, Without<Untouchable>),
 >;
@@ -207,13 +208,13 @@ pub(super) fn hit_foes(
     attacker: Attacker,
     (side, source): (Side, Source),
     blow: Blow,
-    mut hits: impl FnMut(PeerId, Vec2) -> bool,
+    mut hits: impl FnMut(PeerId, Vec2, f32) -> bool,
 ) -> usize {
-    hit_foes_each(commands, log, now, targets, attacker, (side, source), |id, at| hits(id, at).then_some(blow))
+    hit_foes_each(commands, log, now, targets, attacker, (side, source), |id, at, feet| hits(id, at, feet).then_some(blow))
 }
 
-/// `hit_foes`, with a blow of its own for each foe (`blow_for`, by who and where they are:
-/// `None` for one not hit).
+/// `hit_foes`, with a blow of its own for each foe (`blow_for`, by who and where they are, and
+/// how high their feet are: `None` for one not hit).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn hit_foes_each(
     commands: &mut Commands,
@@ -222,10 +223,10 @@ pub(super) fn hit_foes_each(
     targets: &mut Targets,
     attacker: Attacker,
     (side, source): (Side, Source),
-    mut blow_for: impl FnMut(PeerId, Vec2) -> Option<Blow>,
+    mut blow_for: impl FnMut(PeerId, Vec2, f32) -> Option<Blow>,
 ) -> usize {
     let mut count = 0;
-    for (target, target_id, (room, team), target_pos, mut health, mut chilled, mut recent, _, (sheltered, decoy)) in targets {
+    for (target, target_id, (room, team), target_pos, mut health, mut chilled, mut recent, _, (sheltered, decoy, motion)) in targets {
         if owns(attacker.0, decoy) {
             continue;
         }
@@ -235,7 +236,7 @@ pub(super) fn hit_foes_each(
             && !sheltered
             && target_id.0 != attacker.0
             && foes(side, (*room, *team))
-            && let Some(blow) = blow_for(target_id.0, target_pos.0)
+            && let Some(blow) = blow_for(target_id.0, target_pos.0, motion.height)
         {
             let hit = (&mut *health, &mut *chilled, &mut *recent);
             damage(commands, log, now, (target, target_id.0, target_pos.0), hit, blow, attacker, (side, source, None));
@@ -317,20 +318,21 @@ pub(super) fn attack(
         {
             cooldowns.start_own(slot, ability, now.0);
         }
+        // How high the attacker's feet are just now (the ground, a jump): a shot's thrown from
+        // there, a swing sweeps round there.
+        let feet = motion.map_or_else(|| lobby.map(room).height_at(pos.0), |motion| motion.height);
         match released {
             None => {}
             Some(sim::Attack::Projectile(projectile)) => {
                 // Pitched as the aim is now (action mode's; level in the MOBA).
-                // Thrown from as high as the shooter is just now (the ground, a jump).
-                let lift = motion.map_or_else(|| lobby.map(room).height_at(pos.0), |motion| motion.height);
-                spawn_projectile(&mut commands, Projectile { crit: primed, climb: input.climb, lift, ..projectile }, side, might);
+                spawn_projectile(&mut commands, Projectile { crit: primed, climb: input.climb, lift: feet, ..projectile }, side, might);
             }
             Some(sim::Attack::Melee(mut swing)) => {
                 // An empowered strike grows with a Gravecaller Rift.
                 let level = satchel.map_or(0, |s| s.level(arena_shared::items::Item::GravecallerRift));
                 swing.grown = if swing.empowered && level > 0 { arena_shared::items::gravecaller_rift(level) } else { 0.0 };
                 *last_swing = swing;
-                if let Some(rift) = sim::Rift::torn(id.0, *class, pos.0, &swing) {
+                if let Some(rift) = sim::Rift::torn(id.0, *class, pos.0, feet, &swing) {
                     rifts.0.push((*room, rift));
                 }
                 let amount = mighty(class.def().attack.damage, might);
@@ -344,8 +346,8 @@ pub(super) fn attack(
                 // An ambush (`Crit::ambush_ticks`): the first hit into someone not hit lately is
                 // sure to crit. Each hit is noted as it lands.
                 let ambush = class.def().crit.ambush_ticks;
-                let landed = hit_foes_each(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Attack), |target, at| {
-                    if !sim::melee_hits(lobby.map(room), pos.0, swing.dir, (swing.empowered, swing.grown), *class, at) {
+                let landed = hit_foes_each(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Attack), |target, at, target_feet| {
+                    if !sim::melee_hits(lobby.map(room), (pos.0, feet), swing.dir, (swing.empowered, swing.grown), *class, (at, target_feet)) {
                         return None;
                     }
                     let fresh = ambush > 0 && ambushes.0.insert((id.0, target), now.0).is_none_or(|last| now.0 - last > ambush);
@@ -394,12 +396,12 @@ pub(super) fn second_cuts(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
-    cutters: Query<(Entity, &PlayerId, &ClassId, &Pos, (&InRoom, &Team), &SecondCut)>,
+    cutters: Query<(Entity, &PlayerId, &ClassId, (&Pos, &arena_shared::protocol::Motion), (&InRoom, &Team), &SecondCut)>,
     mut targets: Targets,
     mut log: ResMut<HitLog>,
 ) {
     let now = timeline.tick().0;
-    for (entity, id, class, pos, (room, team), cut) in &cutters {
+    for (entity, id, class, (pos, motion), (room, team), cut) in &cutters {
         if cut.at > now {
             continue;
         }
@@ -409,8 +411,8 @@ pub(super) fn second_cuts(
         }
         let blow = Blow::attack(cut.amount, cut.chill, cut.swing.empowered, false);
         let with = (id.0, *class, "auto-attack");
-        hit_foes(&mut commands, &mut log, now, &mut targets, with, ((*room, *team), Source::Attack), blow, |_, at| {
-            sim::melee_hits(lobby.map(room), pos.0, cut.swing.dir, (cut.swing.empowered, cut.swing.grown), *class, at)
+        hit_foes(&mut commands, &mut log, now, &mut targets, with, ((*room, *team), Source::Attack), blow, |_, at, feet| {
+            sim::melee_hits(lobby.map(room), (pos.0, motion.height), cut.swing.dir, (cut.swing.empowered, cut.swing.grown), *class, (at, feet))
         });
     }
 }
@@ -473,6 +475,7 @@ pub(super) struct Rifts(pub(super) Vec<(InRoom, sim::Rift)>);
 pub(super) fn burn_rifts(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
+    lobby: Res<Lobby>,
     rifts: Res<Rifts>,
     mut targets: Targets,
     classes: Query<&ClassId>,
@@ -492,8 +495,9 @@ pub(super) fn burn_rifts(
         let Ok(class) = classes.get(entity).copied() else { continue };
         let theirs: Vec<sim::Rift> = rifts.0.iter().filter(|(room, rift)| *room == side.0 && rift.owner == owner && rift.until > now).map(|(_, rift)| *rift).collect();
         let (burn, leech) = (theirs[0].burn, theirs[0].leech);
-        let burned = hit_foes(&mut commands, &mut log, now, &mut targets, (owner, class, "rift"), (side, Source::Passive), Blow::ability(burn, Chill::default()), |_, at| {
-            theirs.iter().any(|rift| rift.holds(at, now))
+        let map = lobby.map(&side.0);
+        let burned = hit_foes(&mut commands, &mut log, now, &mut targets, (owner, class, "rift"), (side, Source::Passive), Blow::ability(burn, Chill::default()), |_, at, feet| {
+            theirs.iter().any(|rift| rift.holds(map, at, feet, now))
         });
         let owed = owed.entry(owner).or_default();
         *owed += burn as f32 * burned as f32 * leech;

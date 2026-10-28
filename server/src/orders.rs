@@ -87,7 +87,7 @@ pub(super) fn move_players(
         let mut next = *dashing;
         let attack = if action { AttackState { swing: None, ..*attack } } else { *attack };
         // Hasted in its own rift (the most hasting, if it stands in several).
-        let boost = rifts.0.iter().filter(|(r, rift)| r == room && rift.owner == id.0 && rift.holds(pos.0, now)).fold(1.0f32, |most, (_, rift)| most.max(1.0 + rift.haste));
+        let boost = rifts.0.iter().filter(|(r, rift)| r == room && rift.owner == id.0 && rift.holds(map, pos.0, motion.height, now)).fold(1.0f32, |most, (_, rift)| most.max(1.0 + rift.haste));
         let boost = boost * (1.0 + frenzy.at(now as f32)) * sluggish.map_or(1.0, |s| s.0);
         let mut moving = *motion;
         pos.set_if_neq(Pos(sim::move_player_boosted(map, pos.0, &input, *class, &attack, &mut next, &mut moving, chilled, hasted, now, boost)));

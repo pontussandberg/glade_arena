@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::AbilitySlot;
-use crate::config::PLAYER_RADIUS;
+use crate::config::{BODY_HEIGHT, PLAYER_RADIUS};
 use crate::map::Map;
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -85,7 +85,8 @@ impl Dash {
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct Dashing(pub Option<Dash>);
 
-/// Does a dash at `dasher` cut `target`? Bodies touching, and not through a wall.
-pub fn hits(map: &Map, dasher: Vec2, target: Vec2) -> bool {
-    dasher.distance(target) <= 2.0 * PLAYER_RADIUS && map.shot_clear(dasher, target)
+/// Does a dash at `dasher` cut `target`, each with how high its feet are? Bodies touching (side
+/// by side, and one not over the other's head), and not through a wall.
+pub fn hits(map: &Map, (dasher, from): (Vec2, f32), (target, feet): (Vec2, f32)) -> bool {
+    dasher.distance(target) <= 2.0 * PLAYER_RADIUS && (feet - from).abs() < BODY_HEIGHT && map.shot_clear((dasher, from), (target, feet))
 }

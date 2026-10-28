@@ -2,13 +2,14 @@
 //! parapet, post and chimney is one or a few (`Collider`), worked out once from the map
 //! (`build`) and listed by the tiles they're near, so a move only looks at what's around it.
 //! A box stops a body from the side up to its top, holds it up from above, and lets it under if
-//! the body fits beneath (`Map::colliders_block`, `Map::floor_at`, `Map::ceiling_at`). The scene
+//! the body fits beneath (`Map::colliders_block`, `Map::floor_at`, `Map::ceiling_at`); it stops a
+//! shot that flies into it, and one over its top clears it (`Map::shot_meets`). The scene
 //! draws each from the same numbers (`Map::ruin_at`, `boulder`, `Map::parapet`,
 //! `Map::torch_post`, the `House` and well constants), so what's drawn is what's hit.
 
 use bevy::math::{IVec2, Vec2, Vec3};
 
-use super::{CRATE, FENCE_TOP, House, Map, NAV_RADIUS, PARAPET_DROP, PARAPET_HEIGHT, PARAPET_IN, PARAPET_THICK, SIDES, STEP_UP, TORCH_POST, TORCH_STAKE, Tile};
+use super::{CRATE, FENCE_TOP, House, Map, NAV_RADIUS, PARAPET_DROP, PARAPET_HEIGHT, PARAPET_IN, PARAPET_THICK, SIDES, STEP_UP, STEPS, TORCH_POST, TORCH_STAKE, Tile};
 use crate::config::BODY_HEIGHT;
 
 /// A box standing in the way (on the gameplay plane, `lo` to `hi`; heights in meters), or a
@@ -71,6 +72,34 @@ impl Collider {
             return false;
         }
         !(self.reach(a) < NAV_RADIUS && self.reach(b) >= self.reach(a))
+    }
+
+    /// Whether something going straight from `a`, `from` high, to `b`, `to` high, meets it on
+    /// the way: is ever within it (between its bottom and its top, a roof's sloping one).
+    fn cut_by(&self, (a, from): (Vec2, f32), (b, to): (Vec2, f32)) -> bool {
+        // How much of the way (0 at `a`, 1 at `b`) is within it across the plane and between
+        // its bottom and its highest top, each way at once.
+        let mut span = (0.0f32, 1.0f32);
+        for (start, end, low, high) in [(a.x, b.x, self.lo.x, self.hi.x), (a.y, b.y, self.lo.y, self.hi.y), (from, to, self.bottom, self.top)] {
+            let d = end - start;
+            if d.abs() < 1e-9 {
+                if start < low || start > high {
+                    return false;
+                }
+                continue;
+            }
+            let (t0, t1) = ((low - start) / d, (high - start) / d);
+            span = (span.0.max(t0.min(t1)), span.1.min(t0.max(t1)));
+            if span.0 > span.1 {
+                return false;
+            }
+        }
+        let Some(roof) = self.roof else { return true };
+        // Under a roof's slope somewhere in there: the roof falls away from its ridge either way,
+        // so if anywhere, at either end of that stretch or where it crosses the ridge.
+        let (across_a, across_b) = if roof.along_x { (a.y, b.y) } else { (a.x, b.x) };
+        let ridge = if (across_b - across_a).abs() < 1e-9 { span.0 } else { ((roof.ridge - across_a) / (across_b - across_a)).clamp(span.0, span.1) };
+        [span.0, span.1, ridge].into_iter().any(|t| from + (to - from) * t < self.top_at(a.lerp(b, t).clamp(self.lo, self.hi)))
     }
 }
 
@@ -246,29 +275,47 @@ impl Map {
         self.index(t).and_then(|i| self.near.get(i)).into_iter().flatten().map(|&i| &self.colliders[i as usize])
     }
 
-    /// Lists each collider on the tiles it reaches onto, grown by a body's reach, and marks the
-    /// tiles a body can't stand in the middle of for something on the ground there (`walkable`):
-    /// a post, a parapet, a fence's rail.
+    /// Lists each collider on the tiles it reaches onto, grown by a body's reach, and finds where
+    /// on each walkable tile a body stands (`stand_on`).
     pub(super) fn index_colliders(&mut self) {
         let mut near = vec![Vec::new(); self.tiles.len()];
-        let mut crowded = vec![false; self.tiles.len()];
         let grown = Vec2::splat(NAV_RADIUS + 0.01);
         for (i, collider) in self.colliders.iter().enumerate() {
             let (a, b) = (Map::tile_of(collider.lo - grown), Map::tile_of(collider.hi + grown));
             for y in a.y..=b.y {
                 for x in a.x..=b.x {
-                    let t = IVec2::new(x, y);
-                    let Some(k) = self.index(t) else { continue };
+                    let Some(k) = self.index(IVec2::new(x, y)) else { continue };
                     near[k].push(i as u16);
-                    let c = Map::center(t);
-                    if collider.reach(c) < NAV_RADIUS && collider.in_the_way(c, self.height_at(c)) {
-                        crowded[k] = true;
-                    }
                 }
             }
         }
         self.near = near;
-        self.crowded = crowded;
+        self.stands = (0..self.tiles.len()).map(|i| self.stand_on(self.tile_at(i))).collect();
+    }
+
+    /// Where on tile `t` a body stands, if anywhere (`Map::stand`): its middle, or if something
+    /// on the ground there is in the way (a post, a parapet, a fence's rail) the spot nearest it
+    /// that's clear of that, and of the tiles round it no one walks on. None on a tile that
+    /// isn't open ground, or has no room left on it.
+    fn stand_on(&self, t: IVec2) -> Option<Vec2> {
+        if !self.get(t).walkable() {
+            return None;
+        }
+        // Clear of a box as a walk's line is (`line_walkable`): out of it grown square by a
+        // body's reach.
+        let apart = |p: Vec2, lo: Vec2, hi: Vec2| (p.clamp(lo, hi) - p).abs().max_element() >= NAV_RADIUS;
+        let fits = |p: Vec2| {
+            self.colliders_on(t).all(|collider| apart(p, collider.lo, collider.hi) || !collider.in_the_way(p, self.height_at(p)))
+                && STEPS.iter().map(|&d| t + d).all(|n| self.get(n).walkable() || apart(p, Map::center(n) - Vec2::splat(0.5), Map::center(n) + Vec2::splat(0.5)))
+        };
+        let c = Map::center(t);
+        if fits(c) {
+            return Some(c);
+        }
+        // The nearest of a grid over the tile finer than anything that stands in the way.
+        let mut spots: Vec<Vec2> = (-9..=9).flat_map(|y| (-9..=9).map(move |x| c + Vec2::new(x as f32, y as f32) * 0.05)).collect();
+        spots.sort_by(|a, b| a.distance_squared(c).total_cmp(&b.distance_squared(c)));
+        spots.into_iter().find(|&p| fits(p))
     }
 
     /// Whether a collider keeps a body with its feet `feet` high from moving straight from `a`
@@ -313,6 +360,25 @@ impl Map {
             .filter(|collider| collider.reach(p) < NAV_RADIUS && collider.bottom >= feet + BODY_HEIGHT - 1e-3)
             .map(|collider| collider.bottom - BODY_HEIGHT)
             .fold(f32::INFINITY, f32::min)
+    }
+
+    /// Whether something flying straight from `a`, `from` high, to `b`, `to` high (a shot's
+    /// middle, the line it would fly along) meets what stops shots on the way: a collider (a
+    /// wall, a roof, a rock, a crate, a fence: `Collider::cut_by`), a tree or the forest (none of
+    /// their own: `Tile::blocks_shots_at`, over the ground there), or the ground (a hillside, a
+    /// cliff). One over the top of each clears it.
+    pub fn shot_meets(&self, (a, from): (Vec2, f32), (b, to): (Vec2, f32)) -> bool {
+        if self.line_blocker_by(a, b, |t| self.colliders_on(t).any(|collider| collider.cut_by((a, from), (b, to)))).is_some() {
+            return true;
+        }
+        let steps = (a.distance(b) / 0.25).ceil().max(1.0) as i32;
+        (0..=steps).any(|s| {
+            let k = s as f32 / steps as f32;
+            let (p, height) = (a.lerp(b, k), from + (to - from) * k);
+            let tile = self.get(Map::tile_of(p));
+            let over = height - self.height_at(p);
+            over < 0.0 || (matches!(tile, Tile::Tree | Tile::Forest) && tile.blocks_shots_at(over))
+        })
     }
 
     /// Every collider (for showing them: the "3D hitboxes" switch).
@@ -378,16 +444,37 @@ mod tests {
         }
     }
 
-    /// A tile is walkable just when nothing stands in the way of a body on the ground in its
-    /// middle (`index_colliders`), worked out from every collider there is.
+    /// Where a body stands on a tile (`Map::stand`) is clear of everything that stands in the way
+    /// on the ground there and of the tiles no one walks on, worked out from every collider and
+    /// tile there is: its middle where that's clear, else no further from it than it has to be;
+    /// and a parapet along a terrace's edge, or a post in a tile's middle, leaves open ground
+    /// walkable.
     #[test]
-    fn a_tile_is_crowded_just_when_something_stands_in_its_middle() {
+    fn a_body_stands_on_a_tile_clear_of_what_stands_there_as_near_its_middle_as_it_can() {
+        let apart = |p: Vec2, lo: Vec2, hi: Vec2| (p.clamp(lo, hi) - p).abs().max_element() >= NAV_RADIUS;
+        let clear = |m: &Map, p: Vec2| {
+            m.colliders().iter().all(|collider| apart(p, collider.lo, collider.hi) || !collider.in_the_way(p, m.height_at(p)))
+                && m.tiles().all(|(n, tile)| tile.walkable() || apart(p, Map::center(n) - Vec2::splat(0.5), Map::center(n) + Vec2::splat(0.5)))
+        };
         for m in maps() {
             for (t, tile) in m.tiles() {
-                let c = Map::center(t);
-                let blocked = m.colliders().iter().any(|collider| collider.reach(c) < NAV_RADIUS && collider.in_the_way(c, m.height_at(c)));
-                assert_eq!(m.walkable(t), tile.walkable() && !blocked, "{:?}: tile {t}", m.id);
+                if !m.walkable(t) {
+                    assert!(!tile.walkable() || !(-9..=9).any(|x| (-9..=9).any(|y| clear(m, Map::center(t) + Vec2::new(x as f32, y as f32) * 0.05))), "{:?}: no stand on {t}, yet room", m.id);
+                    continue;
+                }
+                let (c, stand) = (Map::center(t), m.stand(t));
+                assert!(clear(m, stand), "{:?}: the stand on {t} at {stand} is in something", m.id);
+                assert!(Map::tile_of(stand) == t && (clear(m, c) == (stand == c)), "{:?}: the stand on {t} is {stand}", m.id);
             }
+        }
+        // The yard's terraces' edges and torch posts.
+        let yard = crate::map::MapId::Yard.map();
+        let along_parapets: Vec<IVec2> = yard.tiles().filter(|&(t, tile)| tile.walkable() && SIDES.iter().any(|&d| yard.parapet(t, d).is_some())).map(|(t, _)| t).collect();
+        let off: Vec<IVec2> = along_parapets.iter().copied().filter(|&t| !yard.walkable(t)).collect();
+        assert!(along_parapets.len() > 20 && off.is_empty(), "of the {} open tiles along parapets these aren't walkable: {off:?}", along_parapets.len());
+        for &p in &yard.torches {
+            let t = Map::tile_of(p);
+            assert!(!yard.get(t).walkable() || (yard.walkable(t) && yard.stand(t) != Map::center(t)), "the torch at {p} leaves its tile {t} unwalkable or is walked into");
         }
     }
 
@@ -403,7 +490,7 @@ mod tests {
                     .filter(|&next| {
                         let d = next - t;
                         let diagonal = d.x != 0 && d.y != 0;
-                        m.walkable(next) && (!diagonal || (m.walkable(t + IVec2::new(d.x, 0)) && m.walkable(t + IVec2::new(0, d.y)))) && m.climbable(Map::center(t), Map::center(next))
+                        m.walkable(next) && (!diagonal || (m.walkable(t + IVec2::new(d.x, 0)) && m.walkable(t + IVec2::new(0, d.y)))) && m.line_walkable(m.stand(t), m.stand(next))
                     })
                     .collect();
                 let worked_out: Vec<_> = m.steps(t).map(|(next, _)| next).collect();

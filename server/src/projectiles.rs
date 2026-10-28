@@ -61,7 +61,7 @@ pub(super) fn resolve_projectile_hits(
     for (projectile_entity, projectile_pos, projectile, room, team, might, spares, (bounces, mut pierced)) in &mut projectiles {
         let pierces = projectile.ability.is_none() && projectile.class.def().attack.pierces;
         let mut through: Vec<PeerId> = pierced.as_ref().map_or_else(Vec::new, |p| p.0.clone());
-        for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent, _, (sheltered, decoy)) in &mut targets {
+        for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent, _, (sheltered, decoy, _)) in &mut targets {
             if target_id.0 == projectile.owner
                 || sheltered
                 || owns(projectile.owner, decoy)
@@ -117,7 +117,7 @@ pub(super) fn resolve_projectile_hits(
         crate::fx::spawn_fx(&mut commands, side.0, Fx::at(FxKind::Blast(burst.color), at, burst.radius, now.0, 10));
         let reach = burst.radius + PLAYER_RADIUS;
         let blow = Blow::attack(amount, chill, false, projectile.crit);
-        hit_foes(&mut commands, &mut log, now.0, &mut targets, (projectile.owner, projectile.class, "auto-attack"), (side, Source::Splash), blow, |id, p| id != struck && p.distance(at) <= reach);
+        hit_foes(&mut commands, &mut log, now.0, &mut targets, (projectile.owner, projectile.class, "auto-attack"), (side, Source::Splash), blow, |id, p, _| id != struck && p.distance(at) <= reach);
     }
     // Each arc leaps to the nearest foe within reach of the last one struck that hasn't been
     // struck by this bolt, and on from there, so a shot into a pack runs through it.
@@ -127,7 +127,7 @@ pub(super) fn resolve_projectile_hits(
         for _ in 0..chain.hops {
             let next = targets
                 .iter()
-                .filter(|(_, id, (room, team), pos, health, _, _, _, (sheltered, decoy))| {
+                .filter(|(_, id, (room, team), pos, health, _, _, _, (sheltered, decoy, _))| {
                     !hit.contains(&id.0) && id.0 != projectile.owner && health.0 > 0 && !*sheltered && !owns(projectile.owner, *decoy) && foes(side, (**room, **team)) && pos.0.distance(from) <= reach
                 })
                 .min_by(|a, b| a.3.0.distance(from).total_cmp(&b.3.0.distance(from)))

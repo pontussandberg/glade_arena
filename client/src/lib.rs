@@ -20,6 +20,7 @@ use lightyear::prelude::*;
 #[cfg(feature = "render")]
 pub mod abilities;
 
+#[cfg(feature = "render")]
 pub mod audio;
 #[cfg(feature = "render")]
 pub mod action_bar;
@@ -36,6 +37,7 @@ mod ease;
 pub mod casting;
 #[cfg(feature = "render")]
 pub mod esc_menu;
+#[cfg(feature = "render")]
 pub mod settings;
 #[cfg(feature = "render")]
 pub mod practice;
@@ -268,7 +270,7 @@ fn send_commands(
     me: Query<Option<&AttackState>, With<Me>>,
     mut client: Query<&mut MessageSender<PlayerCommand>, (With<Client>, With<Connected>)>,
     mut sent: Local<Sent>,
-    mode: Option<Res<crate::camera::CameraMode>>,
+    #[cfg(feature = "render")] mode: Option<Res<crate::camera::CameraMode>>,
     mut sent_walks: ResMut<SentWalks>,
     schedule: Res<WalkSchedule>,
 ) {
@@ -309,7 +311,10 @@ fn send_commands(
     // so the attack follows it until it goes off (`PlayerCommand::Aim`); the click that starts
     // one carries the direction itself, and the pitch goes ahead of it if it changed. Out of
     // action mode the pitch is sent level once, so no shot keeps the last one.
+    #[cfg(feature = "render")]
     let action = mode.as_ref().is_some_and(|mode| mode.free);
+    #[cfg(not(feature = "render"))]
+    let action = false;
     let winding_up = attack.is_some_and(|attack| attack.winding_up().is_some());
     let turned = input.aim != sent.aim || input.climb != sent.climb;
     let pitched = input.climb != sent.climb;

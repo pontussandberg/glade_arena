@@ -262,11 +262,11 @@ pub struct Map {
     /// Stacks of crates (tile, how many high): wall tiles under each, stood on (`CRATE`).
     pub crates: Vec<(IVec2, u8)>,
     /// Everything that stands in the way, as boxes (`colliders`, worked out in `finished`), the
-    /// ones near each tile (by tile index), and the tiles a body can't stand in the middle of
-    /// for something on the ground there.
+    /// ones near each tile (by tile index), and where on each tile a body stands, if anywhere
+    /// (`stand`).
     colliders: Vec<Collider>,
     near: Vec<Vec<u16>>,
-    crowded: Vec<bool>,
+    stands: Vec<Option<Vec2>>,
     /// Which steps a walker can take from each tile (by tile index; `work_out_steps`).
     open_steps: Vec<u8>,
     /// Meters inside the playable area's edge (negative outside). Continuous, for terrain and
@@ -421,7 +421,7 @@ impl Map {
             crates: Vec::new(),
             colliders: Vec::new(),
             near: Vec::new(),
-            crowded: Vec::new(),
+            stands: Vec::new(),
             open_steps: Vec::new(),
             edge,
             relief: flat,
@@ -534,12 +534,14 @@ impl Map {
     }
 
     /// Which of the steps from each tile (`STEPS`) the ground and what stands on it let a walker
-    /// take (`climbable`), a bit each: the same every time, so worked out once (`finished`).
+    /// take, from where it stands on the one to where it stands on the next (`stand`,
+    /// `line_walkable`), a bit each: the same every time, so worked out once (`finished`).
     fn work_out_steps(&mut self) {
         self.open_steps = (0..self.tiles.len())
             .map(|i| {
-                let here = Map::center(self.tile_at(i));
-                STEPS.iter().enumerate().filter(|(_, d)| self.climbable(here, here + d.as_vec2())).fold(0, |open, (k, _)| open | 1 << k)
+                let t = self.tile_at(i);
+                let here = self.stand(t);
+                STEPS.iter().enumerate().filter(|(_, d)| self.line_walkable(here, self.stand(t + **d))).fold(0, |open, (k, _)| open | 1 << k)
             })
             .collect();
     }
@@ -594,10 +596,16 @@ impl Map {
         self.index(t).map_or(Tile::Forest, |i| self.tiles[i])
     }
 
-    /// Whether a walker can stand on tile `t`, in its middle: open ground, nothing on it there
-    /// (a post, a parapet, a fence's rail: `index_colliders`).
+    /// Whether a walker can stand on tile `t`: open ground, with room for a body somewhere on it
+    /// beside whatever stands there (a post, a parapet, a fence's rail: `stand`).
     pub fn walkable(&self, t: IVec2) -> bool {
-        self.index(t).is_some_and(|i| self.tiles[i].walkable() && self.crowded.get(i) != Some(&true))
+        self.index(t).is_some_and(|i| self.tiles[i].walkable() && self.stands.get(i).is_none_or(Option::is_some))
+    }
+
+    /// Where on tile `t` a walker stands: its middle, or the spot nearest it that's clear of
+    /// what stands there (`index_colliders`). Paths go from one tile's to the next's.
+    pub fn stand(&self, t: IVec2) -> Vec2 {
+        self.index(t).and_then(|i| self.stands.get(i).copied().flatten()).unwrap_or_else(|| Map::center(t))
     }
 
     pub fn walkable_at(&self, p: Vec2) -> bool {
@@ -736,11 +744,13 @@ impl Map {
         !self.walkable(t) && segment_hits_box(a, b, Map::center(t) - half, Map::center(t) + half)
     }
 
-    /// True if no wall, rock or tree lies on the line from `a` to `b` (water and chasms don't
-    /// block). Sampled, which is fine for its uses: melee hits on the server, and the bot.
-    pub fn shot_clear(&self, a: Vec2, b: Vec2) -> bool {
-        let steps = ((b - a).length() / 0.25).ceil().max(1.0) as i32;
-        (0..=steps).all(|s| !self.get(Map::tile_of(a.lerp(b, s as f32 / steps as f32))).blocks_shots())
+    /// Whether a shot could fly straight from a body at `a` to one at `b`, each with how high
+    /// its feet are, at the height shots fly over them (`SHOT_HEIGHT`): nothing that stops shots
+    /// lies between (`shot_meets`: a wall, a roof, a rock, a tree, a hillside; not a crate or a
+    /// fence it flies over; water and chasms don't). For melee hits and novas on the server, and
+    /// the bot's and monsters' eyes.
+    pub fn shot_clear(&self, (a, from): (Vec2, f32), (b, to): (Vec2, f32)) -> bool {
+        !self.shot_meets((a, from + crate::config::SHOT_HEIGHT), (b, to + crate::config::SHOT_HEIGHT))
     }
 
     /// The walkable tile closest to `t` (searching outward up to `max_radius` tiles).
@@ -804,35 +814,36 @@ impl Map {
         None
     }
 
-    /// Where a click at `p` sends a walker: `p` itself if a body fits there; pulled toward its
-    /// tile's center if it's too close to something blocked to stand on; or, if `p` isn't on
-    /// walkable ground, the center of the nearest walkable tile (up to `max_radius` tiles out).
-    /// `next_waypoint` reaches whatever this returns.
+    /// Where a click at `p` sends a walker: `p` itself if a body fits there; pulled toward where
+    /// a body stands on its tile (`stand`) if it's too close to something blocked to stand on;
+    /// or, if `p` isn't on walkable ground, where one stands on the nearest walkable tile (up to
+    /// `max_radius` tiles out). `next_waypoint` reaches whatever this returns.
     pub fn walk_target(&self, p: Vec2, max_radius: i32) -> Option<Vec2> {
         if !p.is_finite() {
             return None;
         }
         let tile = self.nearest_walkable(Map::tile_of(p), max_radius)?;
-        Some(if tile == Map::tile_of(p) { self.standing_point(p) } else { Map::center(tile) })
+        Some(if tile == Map::tile_of(p) { self.standing_point(p) } else { self.stand(tile) })
     }
 
-    /// `p` (on a walkable tile) if a body fits there, else the farthest point toward it from its
-    /// tile's center that one does. From that center it's always in a straight line.
+    /// `p` (on a walkable tile) if a body fits there, else the farthest point toward it from
+    /// where one stands on its tile (`stand`) that one does. From there it's always in a straight
+    /// line.
     pub(crate) fn standing_point(&self, p: Vec2) -> Vec2 {
-        let center = Map::center(Map::tile_of(p));
-        if self.line_walkable(center, p) {
+        let stand = self.stand(Map::tile_of(p));
+        if self.line_walkable(stand, p) {
             return p;
         }
         let (mut reachable, mut blocked) = (0.0, 1.0);
         for _ in 0..12 {
             let mid = (reachable + blocked) / 2.0;
-            if self.line_walkable(center, center.lerp(p, mid)) {
+            if self.line_walkable(stand, stand.lerp(p, mid)) {
                 reachable = mid;
             } else {
                 blocked = mid;
             }
         }
-        center.lerp(p, reachable)
+        stand.lerp(p, reachable)
     }
 
     /// Where to head next on the way from `pos` to `target`: the farthest point on the A* path
@@ -852,11 +863,11 @@ impl Map {
         let mut blocker = self.line_blocker(pos, goal);
         let start = Map::tile_of(pos);
         let path = self.cached_path(start, target_tile)?;
-        // The goal is out of sight (or up too steep a rise): find the farthest tile center on
-        // the path that isn't, the target tile's first. Tiles next to each other on the path are
+        // The goal is out of sight (or up too steep a rise): find the farthest tile on the path
+        // whose stand isn't, the target tile's first. Tiles next to each other on the path are
         // mostly hidden by the same obstacle, so the one that hid the last tile is tried first.
         // Exactly what checking every line in full would find, only cheaper.
-        let farthest_visible = path.get(1..).unwrap_or_default().iter().rev().map(|t| Map::center(*t)).find(|&p| {
+        let farthest_visible = path.get(1..).unwrap_or_default().iter().rev().map(|t| self.stand(*t)).find(|&p| {
             if blocker.is_some_and(|blocker| self.blocks_line(blocker, pos, p)) {
                 return false;
             }
@@ -868,10 +879,10 @@ impl Map {
                 None => self.climbable(pos, p),
             }
         });
-        // Nothing visible (we're hugging a wall, e.g. after a server teleport): go to our own
-        // tile's center first. That stays inside one walkable tile, and from any tile center the
-        // next path step is always visible.
-        Some(farthest_visible.unwrap_or(Map::center(start)))
+        // Nothing visible (we're hugging a wall, e.g. after a server teleport): go to where one
+        // stands on our own tile first. That stays inside one walkable tile, and from any tile's
+        // stand the next path step is always visible.
+        Some(farthest_visible.unwrap_or(self.stand(start)))
     }
 }
 
@@ -943,7 +954,7 @@ impl Map {
         self.index(Map::tile_of(p)).map(|i| field.dist[i]).filter(|d| *d != u32::MAX)
     }
 
-    /// Where a walker at `pos` heads to get nearer the field's sources: the farthest tile center
+    /// Where a walker at `pos` heads to get nearer the field's sources: the farthest tile's stand
     /// it can see in a straight line, of the next few tiles downhill. `None` if there's no way.
     pub fn downhill(&self, field: &FlowField, pos: Vec2) -> Option<Vec2> {
         let mut at = Map::tile_of(pos);
@@ -958,13 +969,13 @@ impl Map {
                 break;
             }
             at = next.1;
-            if self.line_walkable(pos, Map::center(at)) {
-                best = Some(Map::center(at));
+            if self.line_walkable(pos, self.stand(at)) {
+                best = Some(self.stand(at));
             } else if best.is_some() {
                 break;
             }
         }
-        best.or_else(|| Some(Map::center(Map::tile_of(pos))))
+        best.or_else(|| Some(self.stand(Map::tile_of(pos))))
     }
 }
 
@@ -1027,7 +1038,7 @@ mod tests {
         for m in maps() {
             assert!(m.spawn_points.len() >= 8, "{:?} has too few spawn points", m.id);
             for p in &m.spawn_points {
-                assert!(m.walkable_at(*p), "{:?}: spawn point {p} is not walkable", m.id);
+                assert!(m.walkable_at(*p) && m.standing_point(*p) == *p, "{:?}: spawn point {p} is not walkable", m.id);
                 assert_eq!(m.speed_factor_at(*p), 1.0, "{:?}: spawn point {p} is in a marsh", m.id);
                 let near = m.spawn_points.iter().filter(|q| q.distance(*p) < 3.0).count();
                 assert_eq!(near, 1, "{:?}: spawn point {p} is crowded", m.id);
@@ -1279,8 +1290,8 @@ mod tests {
                 }
                 let start = Map::tile_of(pos);
                 let path = m.find_path(start, tile)?;
-                let farthest = path[1..].iter().rev().map(|t| Map::center(*t)).find(|p| m.line_walkable(pos, *p));
-                Some(farthest.unwrap_or(Map::center(start)))
+                let farthest = path[1..].iter().rev().map(|t| m.stand(*t)).find(|p| m.line_walkable(pos, *p));
+                Some(farthest.unwrap_or(m.stand(start)))
             };
             let all: Vec<IVec2> = m.tiles().map(|(t, _)| t).collect();
             let walkable: Vec<IVec2> = all.iter().copied().filter(|t| m.walkable(*t)).collect();

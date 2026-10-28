@@ -99,12 +99,7 @@ impl OffBlade {
     }
 }
 
-/// How far below a striker's feet (meters) its blade still reaches the ground coming down (down
-/// a slope, over a drop: past that it cuts the air, and its marks fall on down onto whatever's
-/// below), and how far above them it meets something (onto a step: higher stops it short, though
-/// a slope it follows on up).
-pub(crate) const REACH_DOWN: f32 = 0.6;
-pub(crate) const REACH_UP: f32 = 1.2;
+pub(crate) use arena_shared::sim::{REACH_DOWN, REACH_UP, struck_surface};
 
 impl Blade {
     /// How low the end of the blade comes (meters): its point or its edge's corner, whichever.

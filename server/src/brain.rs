@@ -188,7 +188,7 @@ pub(super) fn think(
         };
         let to = target - pos.0;
         let dist = to.length();
-        let sees = map.shot_clear(pos.0, target);
+        let sees = map.shot_clear((pos.0, map.height_at(pos.0)), (target, map.height_at(target)));
         // Where it can hit from: a little inside its reach, so it lands on prey that stands still.
         let reach = match def.attack.kind.shot() {
             Some(shot) => shot.edge_reach() * 0.85,

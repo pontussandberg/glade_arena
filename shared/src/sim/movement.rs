@@ -6,7 +6,7 @@ use super::*;
 use lightyear::prelude::PeerId;
 
 use crate::classes::{AbilityKind, ClassId};
-use crate::map::Map;
+use crate::map::{Map, STEP_UP};
 use crate::config::{AIR_ACCEL, AIR_CONTROL_SPEED, GRAVITY, GROUND_ACCEL, GROUND_FRICTION, JUMP_HEIGHT, STEP_DOWN, STOP_SPEED};
 use crate::protocol::{AttackState, Chilled, Dashing, Hasted, LastSwing, Motion, PlayerInput, Waygate};
 
@@ -161,12 +161,14 @@ pub fn jump_speed() -> f32 {
 }
 
 /// Ground a strike tore open (`RiftDef`), hasting `owner` while its body is in it, until `until`
-/// (a tick): its lane (from `from` out to `range` from `origin` along `dir`, `width` wide), and
-/// how much faster it walks there.
+/// (a tick): its lane (from `from` out to `range` from `origin` along `dir`, `width` wide), torn
+/// in what the blade came down on there from feet `feet` high (`struck_surface`), and how much
+/// faster it walks there.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rift {
     pub owner: PeerId,
     pub origin: Vec2,
+    pub feet: f32,
     pub dir: Vec2,
     pub from: f32,
     pub range: f32,
@@ -181,19 +183,24 @@ pub struct Rift {
 
 impl Rift {
     /// The rift a swing tears open, if its class's strike tears any: over the swing's lane
-    /// (empowered or not), from where `owner` stood at `pos`.
-    pub fn torn(owner: PeerId, class: ClassId, pos: Vec2, swing: &LastSwing) -> Option<Rift> {
+    /// (empowered or not), from where `owner` stood at `pos`, its feet `feet` high.
+    pub fn torn(owner: PeerId, class: ClassId, pos: Vec2, feet: f32, swing: &LastSwing) -> Option<Rift> {
         let attack = &class.def().attack;
         let (rift, (from, range, width)) = (attack.rift?, attack.lane_grown(swing.empowered, swing.grown)?);
         let dir = swing.dir.normalize_or_zero();
-        Some(Rift { owner, origin: pos, dir, from, range, width, until: swing.tick + rift.ticks, haste: rift.haste, burn: rift.burn, leech: rift.leech })
+        Some(Rift { owner, origin: pos, feet, dir, from, range, width, until: swing.tick + rift.ticks, haste: rift.haste, burn: rift.burn, leech: rift.leech })
     }
 
-    /// Is a body at `at` in it (touching it at all) at `tick`?
-    pub fn holds(&self, at: Vec2, tick: u32) -> bool {
+    /// Is a body at `at`, its feet `feet` high, in it at `tick`: touching it across the ground,
+    /// and standing on what it's torn in there (within a step of it), not up over it (a jump, a
+    /// roof) or down under it?
+    pub fn holds(&self, map: &Map, at: Vec2, feet: f32, tick: u32) -> bool {
         let to = at - self.origin;
         let (along, across) = (to.dot(self.dir), to.perp_dot(self.dir).abs());
-        tick < self.until && (self.from - PLAYER_RADIUS..=self.range + PLAYER_RADIUS).contains(&along) && across <= self.width / 2.0 + PLAYER_RADIUS
+        tick < self.until
+            && (self.from - PLAYER_RADIUS..=self.range + PLAYER_RADIUS).contains(&along)
+            && across <= self.width / 2.0 + PLAYER_RADIUS
+            && (feet - struck_surface(map, self.origin, at, self.feet)).abs() <= STEP_UP
     }
 }
 

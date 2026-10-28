@@ -129,7 +129,8 @@ fn think(
         desired.0 = PlayerInput { move_to: to, aim: to_target, ..default() };
         return;
     }
-    let clear = map.shot_clear(me.0, target);
+    // As if each stood on the ground there.
+    let clear = map.shot_clear((me.0, map.height_at(me.0)), (target, map.height_at(target)));
     let fire = in_reach && clear;
     let move_to = move_to.filter(|_| !fire && attack.winding_up().is_none());
     // The first ready ability that would land: a dash to close in from just out of reach, a

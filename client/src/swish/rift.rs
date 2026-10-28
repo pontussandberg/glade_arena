@@ -253,7 +253,9 @@ pub(super) fn strike_ground(
         if class.def().attack.rift.is_none() {
             continue;
         }
-        if let Some(rift) = arena_shared::sim::Rift::torn(id.0, *class, pos.0, swing) {
+        if let Some(feet) = blade.struck.as_ref().map(Underfoot::feet)
+            && let Some(rift) = arena_shared::sim::Rift::torn(id.0, *class, pos.0, feet, swing)
+        {
             // Where it burns its striker's foes (`burn_in_rifts`), while it's open.
             if rift.burn > 0 {
                 let open = (rift.until - swing.tick) as f32 / arena_shared::config::TICK_HZ as f32;
@@ -420,8 +422,9 @@ pub(super) fn burn_in_rifts(
     mut commands: Commands,
     time: Res<Time>,
     art: Res<crate::fx::FxArt>,
+    map: Res<crate::rooms::CurrentMap>,
     zones: Query<(Entity, &RiftZone)>,
-    fighters: Query<(&Pos, &Health, Option<&Team>), (With<PlayerId>, Without<Shopkeeper>)>,
+    fighters: Query<(&Pos, &Health, Option<&Team>, (Option<&Motion>, Option<&crate::render::PredictedWalk>)), (With<PlayerId>, Without<Shopkeeper>)>,
     mut next: Local<(f32, u32)>,
 ) {
     let now = time.elapsed_secs();
@@ -435,9 +438,10 @@ pub(super) fn burn_in_rifts(
     }
     *next = (now + BURN_EVERY, next.1.wrapping_add(1));
     let mut k = next.1.wrapping_mul(97);
-    for (pos, health, team) in &fighters {
+    for (pos, health, team, (motion, predicted)) in &fighters {
         let foe = |zone: &RiftZone| !zone.team.zip(team).is_some_and(|(theirs, mine)| theirs.allied(*mine));
-        if health.alive() && zones.iter().any(|(_, zone)| now < zone.until && foe(zone) && zone.rift.holds(pos.0, zone.tick)) {
+        let feet = crate::render::shown_height(map.map(), motion, predicted, pos.0);
+        if health.alive() && zones.iter().any(|(_, zone)| now < zone.until && foe(zone) && zone.rift.holds(map.map(), pos.0, feet, zone.tick)) {
             k = k.wrapping_add(1);
             crate::fx::sparkle(&mut commands, &art, now, to_world(pos.0, 0.0), crate::fx::Sparkle::Burn, k);
         }

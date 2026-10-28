@@ -259,11 +259,11 @@ fn spawn_my_frame(
 fn update_live_stats(
     clock: crate::feedback::AttackClock,
     map: Res<crate::rooms::CurrentMap>,
-    me: Query<(&ClassId, &AttackState, (Option<&Frenzy>, Option<&Fury>), (&Pos, Option<&Chilled>, Option<&Hasted>, Option<&crate::swish::TornRifts>)), (With<Me>, With<PlayerId>)>,
+    me: Query<(&ClassId, &AttackState, (Option<&Frenzy>, Option<&Fury>), (&Pos, Option<&Chilled>, Option<&Hasted>, Option<&crate::swish::TornRifts>), (Option<&Motion>, Option<&crate::render::PredictedWalk>)), (With<Me>, With<PlayerId>)>,
     frame: Option<Single<&MyFrame>>,
     mut texts: Query<(&mut Text, &mut TextColor)>,
 ) {
-    let (Some(frame), Ok((class, attack, (frenzy, fury), (pos, chilled, hasted, rifts)))) = (frame, me.single()) else { return };
+    let (Some(frame), Ok((class, attack, (frenzy, fury), (pos, chilled, hasted, rifts), (motion, predicted)))) = (frame, me.single()) else { return };
     let def = class.def();
     let now = clock.now(true);
     let empowered = attack.armed_at(now) && def.attack.follow_up.is_some();
@@ -283,7 +283,8 @@ fn update_live_stats(
     // Walking: every slow and haste on it, as `sim::move_player_boosted` has them.
     let tick = now as u32;
     // Hasted in our own rift (the most hasting, if we stand in several), as `move_players` has it.
-    let rift = rifts.map_or(0.0, |rifts| rifts.0.iter().filter(|rift| rift.holds(pos.0, tick)).fold(0.0f32, |most, rift| most.max(rift.haste)));
+    let feet = crate::render::shown_height(map.map(), motion, predicted, pos.0);
+    let rift = rifts.map_or(0.0, |rifts| rifts.0.iter().filter(|rift| rift.holds(map.map(), pos.0, feet, tick)).fold(0.0f32, |most, rift| most.max(rift.haste)));
     let factor = chilled.map_or(1.0, |c| c.speed_factor(tick))
         * hasted.map_or(1.0, |h| h.speed_factor(tick))
         * (1.0 + frenzy.map_or(0.0, |f| f.at(now)))
