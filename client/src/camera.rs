@@ -64,6 +64,9 @@ const ACTION_LOOK_HEIGHT: f32 = 3.0;
 const ACTION_SHOULDER: f32 = 0.0;
 const ACTION_FOV: f32 = 1.05;
 const WALL_MARGIN: f32 = 0.45;
+/// How far the camera keeps above the ground under it (meters), backing in toward you off a
+/// hillside behind you.
+const GROUND_MARGIN: f32 = 0.5;
 /// How far ahead of your fighter (meters) the aim crosses the camera's line of sight with no
 /// fighter near the crosshair, for a class without a shot (a shot's crosses at its range):
 /// there the crosshair is exact; nearer, the aim passes a little under it, farther a little
@@ -384,8 +387,8 @@ fn follow_camera(
     settings: Res<crate::settings::Settings>,
     clock: Option<crate::feedback::AttackClock>,
     // Its own transform, set this frame (`GlobalTransform` lags a frame and would jitter).
-    me: Query<(Entity, &Transform, &ClassId, Option<&Jumping>), (With<Me>, With<PlayerId>, Without<CameraRig>)>,
-    fighters: Query<(Entity, &Transform, &ClassId, Option<&Jumping>), (With<PlayerId>, Without<CameraRig>)>,
+    me: Query<(Entity, &Transform, &ClassId, Option<&Jumping>, Option<&crate::render::Falling>), (With<Me>, With<PlayerId>, Without<CameraRig>)>,
+    fighters: Query<(Entity, &Transform, &ClassId, Option<&Jumping>, Option<&crate::render::Falling>), (With<PlayerId>, Without<CameraRig>)>,
     mut camera: Single<&mut Transform, With<CameraRig>>,
     window: Single<(&mut Window, &mut CursorOptions)>,
 ) {
@@ -475,14 +478,14 @@ fn follow_camera(
     if watched.is_none() && mode.watching.is_some() {
         mode.watching = None;
     }
-    let Some((_, at, class, jumping)) = watched.or(me.single().ok()) else { return };
+    let Some((_, at, class, jumping, falling)) = watched.or(me.single().ok()) else { return };
     // Follow its feet (not its posed, leaning body), up and down with its jump.
     let lift = jumping.and_then(|jumping| jumping.0).zip(clock.as_ref()).map_or(0.0, |(jump, clock)| jump.height_at(clock.now(mode.watching.is_none())));
     let (forward, right) = mode.ground_axes();
     let pivot = arena::to_gameplay(at.translation);
     let shoulder = pivot + right * ACTION_SHOULDER;
-    // Up the ground it stands on, too.
-    let lift = lift + map.map().height_at(pivot);
+    // Up the ground it stands on (or is falling to), too.
+    let lift = lift + crate::render::shown_ground(map.map(), falling, time.elapsed_secs(), pivot);
     // The first wall on the way back from the pivot to the camera stops it short: at once, and
     // it eases back out when the wall is past.
     let map = map.map();
@@ -496,10 +499,22 @@ fn follow_camera(
         }
         back += step;
     }
+    // Nor into the ground: back from where it looks, the first step down into a hillside stops
+    // it short the same way.
+    let look = arena::to_world(shoulder, ACTION_LOOK_HEIGHT + lift);
+    let mut back = step;
+    while back < distance {
+        let eye = Orbit { distance: back, ..mode.orbit }.transform(look).translation;
+        if eye.y < map.height_at(arena::to_gameplay(eye)) + GROUND_MARGIN {
+            distance = (back - step).max(FREE_DISTANCE.0);
+            break;
+        }
+        back += step;
+    }
     let ease = 1.0 - (-WALL_EASE_OUT * time.delta_secs()).exp();
     mode.held_at = if distance < mode.held_at { distance } else { mode.held_at + (distance - mode.held_at) * ease };
     let orbit = Orbit { distance: mode.held_at, ..mode.orbit };
-    camera.set_if_neq(orbit.transform(arena::to_world(shoulder, ACTION_LOOK_HEIGHT + lift)));
+    camera.set_if_neq(orbit.transform(look));
     // A shot's aim crosses the camera's line at its range (the ground, when nearer): the same
     // whatever the crosshair is on.
     let shot = class.def().attack.kind.shot();
@@ -529,10 +544,13 @@ fn aim_of(map: &Map, camera: &Transform, pivot: Vec2, forward: Vec2, converge: f
     let past = (pivot - arena::to_gameplay(from)).dot(along) / flat;
     let ground = ground_along(map, from, look);
     let mut at = (past + converge) / flat;
-    // Ground ahead of the fighter (not at their feet or behind them) nearer than that.
+    // Ground ahead of the fighter (not at their feet or behind them) nearer than that. Never a
+    // point short of the fighter (the camera pressed in close, looking down): that would aim
+    // backward.
     if let Some(ground) = ground.filter(|ground| ground * flat > past + PLAYER_RADIUS) {
         at = at.min(ground);
     }
+    at = at.max((past + PLAYER_RADIUS) / flat);
     let on = from + look * at;
     let ahead = arena::to_gameplay(on) - pivot;
     let ground = ground.map(|ground| arena::to_gameplay(from + look * ground));

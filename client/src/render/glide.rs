@@ -274,8 +274,13 @@ const FULL_LIFT_TICKS: f32 = 24.0;
 /// Knocked up (`Chilled::lifted`): off the ground, up and back down over the knock-up, on the
 /// timeline it's shown on; set down again once it's over. (A jump is the rig's: `rig::pose_rigs`
 /// places the figure, and lifts it by the jump.)
-pub(super) fn lift_fighters(clock: crate::feedback::AttackClock, map: Res<crate::rooms::CurrentMap>, mut q: Query<(&Chilled, &mut Transform, Has<crate::Me>)>) {
-    for (chilled, mut transform, me) in &mut q {
+pub(super) fn lift_fighters(
+    clock: crate::feedback::AttackClock,
+    time: Res<Time>,
+    map: Res<crate::rooms::CurrentMap>,
+    mut q: Query<(&Chilled, Option<&Falling>, &mut Transform, Has<crate::Me>)>,
+) {
+    for (chilled, falling, mut transform, me) in &mut q {
         let now = clock.now(me);
         let span = chilled.lifted;
         let lifted = if span.covers(now) {
@@ -285,7 +290,7 @@ pub(super) fn lift_fighters(clock: crate::feedback::AttackClock, map: Res<crate:
         } else {
             0.0
         };
-        let y = map.map().height_at(to_gameplay(transform.translation)) + lifted;
+        let y = shown_ground(map.map(), falling, time.elapsed_secs(), to_gameplay(transform.translation)) + lifted;
         if transform.translation.y != y {
             transform.translation.y = y;
         }
@@ -296,5 +301,56 @@ pub(super) fn lift_fighters(clock: crate::feedback::AttackClock, map: Res<crate:
 pub(super) fn sync_transforms(map: Res<crate::rooms::CurrentMap>, mut q: Query<(&Pos, &mut Transform), (Changed<Pos>, Without<Projectile>)>) {
     for (pos, mut transform) in &mut q {
         transform.translation = to_world(pos.0, map.map().height_at(pos.0));
+    }
+}
+
+/// A fighter falling: the ground dropped away under it (off a ledge, a cliff), and it's shown
+/// coming down from where it was, under gravity, until it reaches the ground. Only shown: the
+/// server has it on the ground the moment it steps off.
+#[derive(Component, Clone, Copy, Debug)]
+pub(crate) struct Falling {
+    /// How high it was (meters over the gameplay plane) when the ground went, and when (`Time`).
+    from: f32,
+    started: f32,
+}
+
+impl Falling {
+    /// How high it is at `now`, falling.
+    fn height(&self, now: f32) -> f32 {
+        self.from - 0.5 * arena_shared::config::GRAVITY * (now - self.started).powi(2)
+    }
+}
+
+/// How high the ground is shown under a fighter at `p` at `now`: the ground itself, or, falling,
+/// where it has fallen to on its way down to it.
+pub(crate) fn shown_ground(map: &arena_shared::map::Map, falling: Option<&Falling>, now: f32, p: Vec2) -> f32 {
+    let ground = map.height_at(p);
+    falling.map_or(ground, |falling| falling.height(now).max(ground))
+}
+
+/// How far the ground must drop under a fighter between two frames to be a fall, not a slope.
+const LEDGE: f32 = 0.5;
+
+/// Watches the ground under every fighter: dropping away by a ledge or more, the fighter falls
+/// (`Falling`) from where it was shown; down on the ground again, the fall is over.
+pub(super) fn watch_falls(
+    mut commands: Commands,
+    time: Res<Time>,
+    map: Res<crate::rooms::CurrentMap>,
+    mut stood: Local<bevy::platform::collections::HashMap<Entity, f32>>,
+    fighters: Query<(Entity, &Pos, Option<&Falling>), With<PlayerId>>,
+) {
+    let now = time.elapsed_secs();
+    let map = map.map();
+    stood.retain(|entity, _| fighters.contains(*entity));
+    for (entity, pos, falling) in &fighters {
+        let ground = map.height_at(pos.0);
+        let shown = shown_ground(map, falling, now, pos.0);
+        let was = stood.insert(entity, shown).unwrap_or(shown);
+        if was - ground > LEDGE && falling.is_none_or(|falling| falling.height(now) > was + 0.01) {
+            commands.entity(entity).insert(Falling { from: was, started: now });
+        } else if falling.is_some_and(|falling| falling.height(now) <= ground) {
+            commands.entity(entity).remove::<Falling>();
+        }
     }
 }
