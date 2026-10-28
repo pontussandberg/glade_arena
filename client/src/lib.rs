@@ -36,6 +36,7 @@ mod ease;
 pub mod casting;
 #[cfg(feature = "render")]
 pub mod esc_menu;
+pub mod settings;
 #[cfg(feature = "render")]
 pub mod practice;
 #[cfg(feature = "render")]

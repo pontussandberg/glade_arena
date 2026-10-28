@@ -1,6 +1,7 @@
 //! The in-game menu, opened and closed with ESC (or opened with the HUD's Home button): back to
 //! the fight; in a lobby, back to it (to pick another fighter, still in the room) or out of it
-//! altogether; in practice, home. The room goes on without us. While it's open, the fight's controls and the camera's are off.
+//! altogether; in practice, home; and the settings (`settings`), in a pane under the buttons.
+//! The room goes on without us. While it's open, the fight's controls and the camera's are off.
 
 use arena_shared::protocol::RoomRequest;
 use bevy::prelude::*;
@@ -46,6 +47,14 @@ struct LobbyButton;
 /// Out of the room, home.
 #[derive(Component)]
 struct LeaveButton;
+
+/// Opens (and closes) the settings pane under the buttons.
+#[derive(Component)]
+struct SettingsButton;
+
+/// The settings pane, while it's open.
+#[derive(Component)]
+struct SettingsPane;
 
 fn menu_open(menu: Query<(), With<EscMenu>>) -> bool {
     !menu.is_empty()
@@ -116,6 +125,7 @@ fn toggle_menu(
                 menu.spawn((LobbyButton, quiet("Back to the lobby")));
                 menu.spawn((LeaveButton, quiet("Leave the lobby")));
             }
+            menu.spawn((SettingsButton, quiet("Settings")));
             menu.spawn(ui_text("ESC to close", 11.0, palette::ui::MUTED));
         });
 }
@@ -126,11 +136,34 @@ fn menu_buttons(
     resume: Query<Ref<Interaction>, With<ResumeButton>>,
     lobby: Query<Ref<Interaction>, With<LobbyButton>>,
     leave: Query<Ref<Interaction>, With<LeaveButton>>,
+    settings_button: Query<Ref<Interaction>, With<SettingsButton>>,
+    pane: Query<Entity, With<SettingsPane>>,
+    settings: Res<crate::settings::Settings>,
     mut leaving: ResMut<Leaving>,
     menu: Query<Entity, With<EscMenu>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
+    if settings_button.iter().any(clicked) {
+        match (pane.single(), menu.single()) {
+            (Ok(pane), _) => commands.entity(pane).despawn(),
+            (Err(_), Ok(menu)) => {
+                commands.entity(menu).with_children(|menu| {
+                    menu.spawn((
+                        SettingsPane,
+                        Node { flex_direction: FlexDirection::Column, row_gap: px(14.0), padding: UiRect::axes(px(20.0), px(16.0)), border: UiRect::all(px(1.0)), ..default() },
+                        BackgroundColor(palette::ui::PANEL),
+                        BorderColor::all(palette::ui::MUTED.with_alpha(0.5)),
+                    ))
+                    .with_children(|pane| {
+                        crate::settings::slider(pane, crate::settings::Setting::Sensitivity, &settings);
+                        crate::settings::slider(pane, crate::settings::Setting::Volume, &settings);
+                    });
+                });
+            }
+            _ => {}
+        }
+    }
     if resume.iter().any(clicked) {
         // Or the click would be taken for an attack.
         mouse.reset(MouseButton::Left);

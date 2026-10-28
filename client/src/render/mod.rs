@@ -44,6 +44,7 @@ impl Plugin for RenderPlugin {
             crate::browser::BrowserPlugin,
             crate::lobby::LobbyPlugin,
             crate::esc_menu::EscMenuPlugin,
+            crate::settings::SettingsPlugin,
             crate::feedback::FeedbackPlugin,
             crate::rig::RigPlugin,
             crate::action_bar::ActionBarPlugin,
