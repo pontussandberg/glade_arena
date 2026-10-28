@@ -56,11 +56,12 @@ fn projectile_falling(projectile: &Projectile, flown: f32) -> f32 {
 }
 
 /// Out of range (or, for one that falls, given up on), into a wall, rock or tree (water and
-/// chasms don't stop shots), or into the ground (aimed down, or fallen).
+/// chasms don't stop shots, and one flying over the top of it clears it: `Tile::top`), or into
+/// the ground (aimed down, or fallen).
 pub fn projectile_expired(map: &Map, pos: Vec2, projectile: &Projectile, tick: u32) -> bool {
-    tick.saturating_sub(projectile.spawn_tick) >= shot(projectile).lifetime_ticks()
-        || map.get(Map::tile_of(pos)).blocks_shots()
-        || projectile_height(projectile, tick as f32) < 0.0
+    let shot = shot(projectile);
+    let height = projectile_height(projectile, tick as f32);
+    tick.saturating_sub(projectile.spawn_tick) >= shot.lifetime_ticks() || map.get(Map::tile_of(pos)).blocks_shots_at(height - shot.radius) || height < 0.0
 }
 
 /// Whether a projectile at `projectile_pos` (at `tick`) hits a body standing at `player_pos`:

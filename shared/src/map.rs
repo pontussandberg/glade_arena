@@ -72,9 +72,28 @@ impl Tile {
         matches!(self, Tile::Grass | Tile::Path | Tile::Ford | Tile::Bridge | Tile::Planks | Tile::Marsh)
     }
 
-    /// Projectiles fly over water and chasms but not through walls, rocks or trees.
+    /// Projectiles fly over water and chasms but not through walls, rocks or trees (at the
+    /// height a shot flies level; a shot high enough clears what it's over: `blocks_shots_at`).
     pub fn blocks_shots(self) -> bool {
         matches!(self, Tile::Wall | Tile::Rock | Tile::Tree | Tile::Forest)
+    }
+
+    /// How high (meters) what blocks shots on it reaches: a ruined wall's blocks, a boulder, a
+    /// tree's crown; the forest has no top to clear. As the scene draws them, give or take.
+    pub fn top(self) -> f32 {
+        match self {
+            Tile::Wall => 2.8,
+            Tile::Rock => 2.2,
+            Tile::Tree => 6.0,
+            Tile::Forest => f32::INFINITY,
+            _ => 0.0,
+        }
+    }
+
+    /// Whether a shot whose underside is `height` above the ground is stopped on it: by
+    /// something that blocks shots, unless the shot is over its top (a lob over a wall).
+    pub fn blocks_shots_at(self, height: f32) -> bool {
+        self.blocks_shots() && height < self.top()
     }
 
     /// How fast walking on it is, as a share of a fighter's speed.

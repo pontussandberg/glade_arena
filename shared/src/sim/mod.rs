@@ -367,6 +367,20 @@ mod tests {
     }
 
     #[test]
+    fn a_shot_over_the_top_of_a_wall_clears_it() {
+        let wall = map().tiles().find(|(_, t)| *t == crate::map::Tile::Wall).unwrap().0;
+        let at = Map::center(wall);
+        let shot = bolter().def().shot(None).unwrap();
+        // Level, it's stopped; aimed up enough to be over the wall's top by the time it's there
+        // (a tick's flight out), it isn't.
+        let over = (crate::map::Tile::Wall.top() + shot.radius) / (shot.speed * TICK_DT);
+        for (climb, stopped) in [(0.0, true), (over, false)] {
+            let proj = Projectile { owner: PeerId::Netcode(1), class: bolter(), origin: at - Vec2::X * shot.speed * TICK_DT, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false, extra: false, climb };
+            assert_eq!(projectile_expired(map(), at, &proj, 5), stopped, "climbing {climb} per meter");
+        }
+    }
+
+    #[test]
     fn thrown_projectile_drops_from_the_hand_and_lands() {
         let thrown = |climb| Projectile { owner: PeerId::Netcode(1), class: thrower(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 0, ability: None, crit: false, extra: false, climb };
         let shot = thrower().def().shot(None).unwrap();
