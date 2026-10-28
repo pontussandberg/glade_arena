@@ -238,9 +238,10 @@ pub(super) fn tick_items(
     let due: Vec<Volley> = barrages.0.iter().filter(|v| v.at <= now).copied().collect();
     barrages.0.retain(|v| v.at > now);
     for volley in due {
-        // From where the thrower is now, if they're still in the fight, fanning out a touch.
+        // From where the thrower is now, if they're still in the fight, all but straight after
+        // the first: just enough scatter that they don't fly as one.
         let Some((_, _, pos, ..)) = holders.iter().find(|(id, ..)| id.0 == volley.shot.owner) else { continue };
-        let dir = Vec2::from_angle((fastrand::f32() - 0.5) * 0.14).rotate(volley.shot.dir);
+        let dir = Vec2::from_angle((fastrand::f32() - 0.5) * 0.02).rotate(volley.shot.dir);
         let radius = volley.shot.class.def().shot(None).map_or(0.0, |s| s.radius);
         let shot = Projectile { origin: pos.0 + dir * (PLAYER_RADIUS + radius), dir, spawn_tick: now, crit: false, extra: true, ..volley.shot };
         spawn_projectile(&mut commands, shot, volley.side, volley.might);
