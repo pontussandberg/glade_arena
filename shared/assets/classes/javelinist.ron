@@ -6,7 +6,7 @@
     role: "Marksman",
     blurb: "Hurls heavy javelins. The farther they fly, the harder they hit.",
     max_hp: 95,
-    move_speed: 3.7,
+    move_speed: 4.25,
     attack: (
         damage: 16,
         attack_ticks: 43,

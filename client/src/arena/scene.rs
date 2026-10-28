@@ -213,6 +213,7 @@ fn build_arena(
     props.fences(m);
     props.well(m);
     props.gardens(m, &mut rng);
+    props.retaining(m, &mut rng);
     props.bridges(m, &mut rng);
     props.rope_bridges(m, &mut rng);
     props.fords(m, &mut rng);
@@ -501,6 +502,42 @@ impl Props {
         }
     }
 
+    /// Stone faces wherever the ground drops sheer (`Map::height_at`): a terrace's edge, a
+    /// tower's sides, a plateau's cliff, so a level reads as built, not heaped. Each tile's
+    /// sides are looked at: a drop of a step or more to the next tile gets a wall of blocks
+    /// along that side, from the lower ground up to the higher, a battlement's worth over it.
+    pub(super) fn retaining(&mut self, m: &Map, rng: &mut Lcg) {
+        let step = 0.9;
+        for (t, tile) in m.tiles() {
+            if tile == Tile::Forest {
+                continue;
+            }
+            let c = Map::center(t);
+            let here = m.height_at(c);
+            for d in SIDES {
+                let there = Map::center(t + d);
+                let drop = here - m.height_at(there);
+                if drop < step || m.scene_tile(t + d) == Tile::Forest {
+                    continue;
+                }
+                // The wall stands on the side's edge, its foot where the ground is lowest just
+                // past it (the sheer slope runs over a short way).
+                let edge = c + d.as_vec2() * 0.5;
+                let foot = m.height_at(c + d.as_vec2() * 1.2).min(m.height_at(there));
+                let height = here - foot + 0.08;
+                let color = self.theme.stone.mix(&self.theme.wall, rng.range(0.0, 0.4));
+                let size = if d.x == 0 { Vec3::new(1.02, height, 0.3) } else { Vec3::new(0.3, height, 1.02) };
+                // Placed as if the ground were flat here: the block's own height is absolute.
+                let t = Transform::from_translation(to_world(edge, foot + height / 2.0 - (self.ground)(edge)));
+                self.block(size, color, t);
+                // A low parapet along the top.
+                let parapet = if d.x == 0 { Vec3::new(1.02, 0.5, 0.36) } else { Vec3::new(0.36, 0.5, 1.02) };
+                let t = Transform::from_translation(to_world(edge, here + 0.25 - (self.ground)(edge)));
+                self.block(parapet, color.darker(0.05), t);
+            }
+        }
+    }
+
     /// Fences (`Map::fences`): posts a meter apart with two rails between.
     pub(super) fn fences(&mut self, m: &Map) {
         for &(a, b) in &m.fences {
@@ -677,7 +714,8 @@ impl Props {
                 .min()
                 .unwrap_or(6);
             let over_water = SIDES.iter().any(|&d| matches!(m.scene_tile(t + d), Tile::Water | Tile::Ford));
-            let depth = if over_water { -RIVERBED_LEVEL } else { 0.4 + 2.2 / to_bank as f32 };
+            // Down to the riverbed, from however high the bridge is (an arch, a footbridge).
+            let depth = if over_water { -RIVERBED_LEVEL + (self.ground)(c) } else { 0.4 + 2.2 / to_bank as f32 };
             self.block(Vec3::new(1.0, depth, 1.0), self.theme.wall, Transform::from_translation(to_world(c, -0.36 - depth / 2.0)));
             for d in SIDES {
                 if !is_gap(m.scene_tile(t + d)) {

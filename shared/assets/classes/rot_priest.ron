@@ -7,7 +7,7 @@
     blurb: "Prays over the dead until they get back up.",
     playable: false,
     max_hp: 80,
-    move_speed: 2.8,
+    move_speed: 3.20,
     attack: (
         damage: 7,
         attack_ticks: 56,

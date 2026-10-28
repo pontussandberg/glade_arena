@@ -7,7 +7,7 @@
     role: "Tempest",
     blurb: "Keeps the sky in hand. Every bolt leaps on from the one it strikes to the next, a heavier one comes down on whoever stands out, and a step of wind takes her out of reach.",
     max_hp: 90,
-    move_speed: 3.7,
+    move_speed: 4.25,
     attack: (
         damage: 10,
         attack_ticks: 28,

@@ -6,7 +6,7 @@
     role: "Assassin",
     blurb: "Two knives and nowhere to be. Every attack cuts twice, and the first cut into anyone who wasn't watching goes deep.",
     max_hp: 85,
-    move_speed: 3.95,
+    move_speed: 4.55,
     attack: (
         damage: 6,
         attack_ticks: 22,

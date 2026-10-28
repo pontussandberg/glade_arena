@@ -6,7 +6,7 @@
     role: "Duelist",
     blurb: "A spectral blade that slips between worlds. Gets in close and keeps cutting.",
     max_hp: 140,
-    move_speed: 3.7,
+    move_speed: 4.25,
     attack: (
         damage: 20,
         attack_ticks: 34,

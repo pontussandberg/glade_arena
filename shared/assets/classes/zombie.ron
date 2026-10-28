@@ -8,7 +8,7 @@
     blurb: "Slow, rotten and hungry. Never stops coming.",
     playable: false,
     max_hp: 60,
-    move_speed: 2.0,
+    move_speed: 2.30,
     attack: (
         damage: 14,
         attack_ticks: 48,

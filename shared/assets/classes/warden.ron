@@ -6,7 +6,7 @@
     role: "Bulwark",
     blurb: "A wall with a sword. Every thrust drives the shield in first: whatever it hits goes backward, and what meets a wall stays there.",
     max_hp: 165,
-    move_speed: 3.3,
+    move_speed: 3.80,
     attack: (
         damage: 17,
         attack_ticks: 44,

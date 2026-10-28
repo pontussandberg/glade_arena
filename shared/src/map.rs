@@ -699,23 +699,26 @@ impl Map {
             return None;
         }
         let goal = self.standing_point(target);
-        let Some(mut blocker) = self.line_blocker(pos, goal) else { return Some(goal) };
+        if self.line_walkable(pos, goal) {
+            return Some(goal);
+        }
+        let mut blocker = self.line_blocker(pos, goal);
         let start = Map::tile_of(pos);
         let path = self.cached_path(start, target_tile)?;
-        // The goal is out of sight: find the farthest tile center on the path that isn't, the
-        // target tile's first. Tiles next to each other on the path are mostly hidden by the
-        // same obstacle, so the one that hid the last tile is tried first. Exactly what checking
-        // every line in full would find, only cheaper.
+        // The goal is out of sight (or up too steep a rise): find the farthest tile center on
+        // the path that isn't, the target tile's first. Tiles next to each other on the path are
+        // mostly hidden by the same obstacle, so the one that hid the last tile is tried first.
+        // Exactly what checking every line in full would find, only cheaper.
         let farthest_visible = path.get(1..).unwrap_or_default().iter().rev().map(|t| Map::center(*t)).find(|&p| {
-            if self.blocks_line(blocker, pos, p) {
+            if blocker.is_some_and(|blocker| self.blocks_line(blocker, pos, p)) {
                 return false;
             }
             match self.line_blocker(pos, p) {
                 Some(t) => {
-                    blocker = t;
+                    blocker = Some(t);
                     false
                 }
-                None => true,
+                None => self.climbable(pos, p),
             }
         });
         // Nothing visible (we're hugging a wall, e.g. after a server teleport): go to our own
@@ -1053,20 +1056,42 @@ mod tests {
     #[test]
     fn the_yards_high_ground_is_climbed_by_its_ramp_not_its_sides() {
         let m = MapId::Yard.map();
-        let (middle, radius, top) = (Vec2::new(-10.0, 20.0), 5.0, 4.0);
+        let (middle, radius, top) = (Vec2::new(-10.0, 23.0), 4.5, 6.0);
         assert!((m.height_at(middle) - top).abs() < 1e-5, "the plateau's top");
         // Up its sheer east side is no way; down it is.
         let (foot, brink) = (middle + Vec2::X * (radius + 0.7), middle + Vec2::X * (radius - 0.2));
         assert!(!m.line_walkable(foot, brink), "walked up a cliff");
         assert!(m.line_walkable(brink, foot), "couldn't step down off it");
-        // Up the ramp from the south, a walker's step at a time, onto the top.
-        let mut p = middle - Vec2::Y * (radius + top * 1.5 + 0.5);
+        // Up the stairs from the square onto the terrace, and on up the ramp onto the plateau, a
+        // walker's step at a time.
+        let mut p = Vec2::new(-10.0, 5.0);
+        while p.y < 12.0 {
+            let next = p + Vec2::Y * 0.12;
+            assert!(m.line_walkable(p, next), "the stairs aren't walkable at {p}");
+            p = next;
+        }
+        assert!((m.height_at(p) - 2.5).abs() < 1e-5, "the stairs didn't come out on the terrace");
+        let mut p = Vec2::new(middle.x, 12.0);
         while p.y < middle.y {
             let next = p + Vec2::Y * 0.12;
             assert!(m.line_walkable(p, next), "the ramp isn't walkable at {p}");
             p = next;
         }
         assert!((m.height_at(p) - top).abs() < 1e-5, "the ramp didn't come out on top");
+        // Up the tower's switchback onto its top.
+        let mut p = Vec2::new(-34.0 - 1.5 - 4.5 - 0.5, -8.0 - 1.5 - 1.5 - 0.2);
+        while p.x < -34.0 + 1.5 + 1.5 + 0.2 {
+            let next = p + Vec2::X * 0.12;
+            assert!(m.line_walkable(p, next), "the tower's first leg isn't walkable at {p}");
+            p = next;
+        }
+        while p.y < -8.0 {
+            let next = p + Vec2::Y * 0.12;
+            assert!(m.line_walkable(p, next), "the tower's second leg isn't walkable at {p}");
+            p = next;
+        }
+        p = Vec2::new(-34.0, p.y);
+        assert!((m.height_at(p) - 6.0).abs() < 1e-5, "the tower's ramp didn't come out on top: {} at {p}", m.height_at(p));
     }
 
     /// `next_waypoint`'s shortcuts (the remembered path, trying the last obstacle first) must

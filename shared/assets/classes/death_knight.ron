@@ -8,7 +8,7 @@
     blurb: "A revenant that forgot why it fights. Not how.",
     playable: false,
     max_hp: 200,
-    move_speed: 3.4,
+    move_speed: 3.90,
     attack: (
         damage: 22,
         attack_ticks: 44,

@@ -8,7 +8,7 @@
     blurb: "Calls the small dead up out of the ground. Kill it first.",
     playable: false,
     max_hp: 90,
-    move_speed: 2.8,
+    move_speed: 3.20,
     attack: (
         damage: 8,
         attack_ticks: 56,

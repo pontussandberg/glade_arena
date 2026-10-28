@@ -8,7 +8,7 @@
     blurb: "It was a cook once. It still is.",
     playable: false,
     max_hp: 1700,
-    move_speed: 2.9,
+    move_speed: 3.35,
     attack: (
         damage: 34,
         attack_ticks: 56,
