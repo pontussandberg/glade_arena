@@ -321,8 +321,8 @@ pub(super) fn attack(
             None => {}
             Some(sim::Attack::Projectile(projectile)) => {
                 // Pitched as the aim is now (action mode's; level in the MOBA).
-                // Thrown from as high as a jump has the hand just now.
-                let lift = jumping.and_then(|jumping| jumping.0).map_or(0.0, |jump| jump.height_at(now.0 as f32));
+                // Thrown from as high as the ground stood on and a jump have the hand just now.
+                let lift = lobby.map(room).height_at(pos.0) + jumping.and_then(|jumping| jumping.0).map_or(0.0, |jump| jump.height_at(now.0 as f32));
                 spawn_projectile(&mut commands, Projectile { crit: primed, climb: input.climb, lift, ..projectile }, side, might);
             }
             Some(sim::Attack::Melee(mut swing)) => {

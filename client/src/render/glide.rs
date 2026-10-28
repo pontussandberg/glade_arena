@@ -10,7 +10,7 @@ use arena_shared::sim;
 
 use crate::Me;
 use crate::feedback::{AttackClock, ME_BEHIND_TICKS};
-use crate::arena::to_world;
+use crate::arena::{to_gameplay, to_world};
 
 /// Our own fighter, drawn smoothly: each position from the server is noted with the server tick
 /// it's from, and the fighter is drawn on our clock (`AttackClock`, a tick behind the latest
@@ -274,25 +274,27 @@ const FULL_LIFT_TICKS: f32 = 24.0;
 /// Knocked up (`Chilled::lifted`): off the ground, up and back down over the knock-up, on the
 /// timeline it's shown on; set down again once it's over. (A jump is the rig's: `rig::pose_rigs`
 /// places the figure, and lifts it by the jump.)
-pub(super) fn lift_fighters(clock: crate::feedback::AttackClock, mut q: Query<(&Chilled, &mut Transform, Has<crate::Me>)>) {
+pub(super) fn lift_fighters(clock: crate::feedback::AttackClock, map: Res<crate::rooms::CurrentMap>, mut q: Query<(&Chilled, &mut Transform, Has<crate::Me>)>) {
     for (chilled, mut transform, me) in &mut q {
         let now = clock.now(me);
         let span = chilled.lifted;
-        let y = if span.covers(now) {
+        let lifted = if span.covers(now) {
             let ticks = (span.until - span.from).max(1) as f32;
             let t = (now - span.from as f32) / ticks;
             LIFT_HEIGHT * (ticks / FULL_LIFT_TICKS).min(1.0) * 4.0 * t * (1.0 - t)
         } else {
             0.0
         };
+        let y = map.map().height_at(to_gameplay(transform.translation)) + lifted;
         if transform.translation.y != y {
             transform.translation.y = y;
         }
     }
 }
 
-pub(super) fn sync_transforms(mut q: Query<(&Pos, &mut Transform), (Changed<Pos>, Without<Projectile>)>) {
+/// Every fighter's transform on its position, on the ground there (`Map::height_at`).
+pub(super) fn sync_transforms(map: Res<crate::rooms::CurrentMap>, mut q: Query<(&Pos, &mut Transform), (Changed<Pos>, Without<Projectile>)>) {
     for (pos, mut transform) in &mut q {
-        transform.translation = to_world(pos.0, 0.0);
+        transform.translation = to_world(pos.0, map.map().height_at(pos.0));
     }
 }

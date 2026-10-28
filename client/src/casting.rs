@@ -194,6 +194,7 @@ fn show_indicator(
     mut aiming: ResMut<Aiming>,
     desired: Res<DesiredInput>,
     mode: Res<crate::camera::CameraMode>,
+    map: Res<crate::rooms::CurrentMap>,
     me: Query<(&Transform, &Health, &ClassId), (With<Me>, With<PlayerId>, Without<AimIndicator>)>,
     mut indicators: Query<(&AimIndicator, &mut Transform, &mut Visibility)>,
 ) {
@@ -213,7 +214,7 @@ fn show_indicator(
             arena_shared::abilities::AbilityKind::Strike(strike) => feet + mode.strike_aim(feet, strike.range),
             _ => feet,
         };
-        let wanted = Transform::from_translation(arena::to_world(place, INDICATOR_HEIGHT))
+        let wanted = Transform::from_translation(arena::to_world(place, map.map().height_at(place) + INDICATOR_HEIGHT))
             .with_rotation(Quat::from_rotation_y(turn))
             .with_scale(Vec3::new(length, 1.0, 1.0));
         transform.set_if_neq(wanted);

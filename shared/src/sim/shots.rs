@@ -32,8 +32,10 @@ pub fn projectile_pos(projectile: &Projectile, tick: f32) -> Vec2 {
     projectile.origin + projectile.dir * projectile_flown(projectile, tick)
 }
 
-/// How high a projectile flies at `tick`: from the hand (raised by a jump's `lift`), up or
-/// down as it was aimed (`climb`), straight. A thrown one (`Shot::falls`) leaves along that
+/// How high a projectile flies at `tick`, over the gameplay plane (not the ground under it, which
+/// rises and falls: `Map::height_at`): from the hand (raised by the ground the shooter stood on
+/// and a jump, together its `lift`), up or down as it was aimed (`climb`), straight. A thrown
+/// one (`Shot::falls`) leaves along that
 /// line and gravity has it from there: on at its speed along the ground, dropping ever faster
 /// below the line it was aimed along (a throw is aimed where it leaves, not where it lands:
 /// hold over for a far mark).
@@ -57,17 +59,18 @@ fn projectile_falling(projectile: &Projectile, flown: f32) -> f32 {
 }
 
 /// Out of range (or, for one that falls, given up on), into a wall, rock or tree (water and
-/// chasms don't stop shots, and one flying over the top of it clears it: `Tile::top`), or into
-/// the ground (aimed down, or fallen).
+/// chasms don't stop shots, and one flying over the top of it clears it: `Tile::top`, over the
+/// ground it stands on), or into the ground (aimed down, or fallen, or into a hillside).
 pub fn projectile_expired(map: &Map, pos: Vec2, projectile: &Projectile, tick: u32) -> bool {
     let shot = shot(projectile);
-    let height = projectile_height(projectile, tick as f32);
-    tick.saturating_sub(projectile.spawn_tick) >= shot.lifetime_ticks() || map.get(Map::tile_of(pos)).blocks_shots_at(height - shot.radius) || height < 0.0
+    let over = projectile_height(projectile, tick as f32) - map.height_at(pos);
+    tick.saturating_sub(projectile.spawn_tick) >= shot.lifetime_ticks() || map.get(Map::tile_of(pos)).blocks_shots_at(over - shot.radius) || over < 0.0
 }
 
 /// Whether a projectile at `projectile_pos` (at `tick`) hits a body at `player_pos` whose feet
-/// are `feet` off the ground (a jump): touching it across the ground, and between its feet and
-/// its top (`BODY_HEIGHT` over them); aimed up it flies over, and under one that has jumped.
+/// are `feet` over the gameplay plane (the ground there, and a jump): touching it across the
+/// ground, and between its feet and its top (`BODY_HEIGHT` over them); aimed up it flies over,
+/// and under one that has jumped or stands below.
 pub fn projectile_hits(projectile_pos: Vec2, projectile: &Projectile, tick: u32, player_pos: Vec2, feet: f32) -> bool {
     let radius = shot(projectile).radius;
     let height = projectile_height(projectile, tick as f32);

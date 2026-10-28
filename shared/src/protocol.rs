@@ -596,8 +596,8 @@ pub struct Projectile {
     /// flies over bodies accordingly, and a thrown one drops from that line as it flies
     /// (`sim::projectile_height`).
     pub climb: f32,
-    /// How far above the usual the shooter's hand was as it left (a jump's height then), so it
-    /// starts that much higher.
+    /// How far above the gameplay plane's usual the shooter's hand was as it left (the ground
+    /// they stood on, and a jump's height then), so it starts that much higher.
     pub lift: f32,
 }
 

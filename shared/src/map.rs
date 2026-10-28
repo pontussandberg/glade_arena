@@ -251,10 +251,23 @@ pub struct Map {
     /// Meters inside the playable area's edge (negative outside). Continuous, for terrain and
     /// decoration.
     edge: fn(Vec2) -> f32,
+    /// How high the ground is (meters) at a gameplay position: the lie of the land, hills and
+    /// ledges, continuous (`height_at`). Flat (0) on most maps. A rise steeper than `CLIMB` is a
+    /// cliff: not walked up, only down off.
+    relief: fn(Vec2) -> f32,
     /// What the land is beyond the playable area, for the scene: forest, unless water or a chasm
     /// runs on out there.
     beyond: fn(Vec2) -> Tile,
 }
+
+/// Flat ground: most maps' `relief`.
+pub fn flat(_: Vec2) -> f32 {
+    0.0
+}
+
+/// How much the ground may rise per meter walked (a tangent): steeper is a cliff, walked down
+/// off but not up (`Map::line_walkable`, `Map::steps`).
+pub const CLIMB: f32 = 1.0;
 
 /// A rounded square's "radius" through `p`: the same along its sides, smaller across its corners.
 fn squircle(p: Vec2) -> f32 {
@@ -291,6 +304,7 @@ impl Map {
             shop_faces: Vec2::NEG_Y,
             counter: Vec::new(),
             edge,
+            relief: flat,
             beyond,
         };
         for i in 0..(size.x * size.y) as usize {
@@ -349,7 +363,9 @@ impl Map {
         [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)].into_iter().filter_map(move |(dx, dy)| {
             let next = here + IVec2::new(dx, dy);
             let diagonal = dx != 0 && dy != 0;
-            let clear = self.walkable(next) && (!diagonal || (self.walkable(here + IVec2::new(dx, 0)) && self.walkable(here + IVec2::new(0, dy))));
+            let clear = self.walkable(next)
+                && (!diagonal || (self.walkable(here + IVec2::new(dx, 0)) && self.walkable(here + IVec2::new(0, dy))))
+                && self.climbable(Map::center(here), Map::center(next));
             clear.then_some((next, if diagonal { 14 } else { 10 }))
         })
     }
@@ -427,6 +443,22 @@ impl Map {
         (self.edge)(p)
     }
 
+    /// How high the ground is at `p` (meters): where whatever stands there stands.
+    pub fn height_at(&self, p: Vec2) -> f32 {
+        (self.relief)(p)
+    }
+
+    /// The lie of the land itself (`height_at`), for the scene to stand its props on.
+    pub fn relief(&self) -> fn(Vec2) -> f32 {
+        self.relief
+    }
+
+    /// Whether the ground from `a` to `b` can be walked as far as its rise goes: up a slope no
+    /// steeper than `CLIMB`, or down anything.
+    fn climbable(&self, a: Vec2, b: Vec2) -> bool {
+        self.height_at(b) - self.height_at(a) <= CLIMB * (b - a).length() + 1e-4
+    }
+
     /// What the land at tile `t` looks like, on the grid or off it: the tile itself in the
     /// playable area, and out in the forest whatever runs on there (water, a chasm) or forest.
     pub fn scene_tile(&self, t: IVec2) -> Tile {
@@ -440,12 +472,13 @@ impl Map {
         }
     }
 
-    /// True if a body of radius `NAV_RADIUS` can move in a straight line from `a` to `b`.
+    /// True if a body of radius `NAV_RADIUS` can move in a straight line from `a` to `b`: nothing
+    /// blocked in the way, and the ground not rising too steeply (`climbable`).
     ///
     /// Exact (segment against blocked tiles grown by the radius), not sampled, so every piece
     /// of a walkable line is walkable too: following a line never turns it unwalkable halfway.
     pub fn line_walkable(&self, a: Vec2, b: Vec2) -> bool {
-        self.line_blocker(a, b).is_none()
+        self.line_blocker(a, b).is_none() && self.climbable(a, b)
     }
 
     /// A blocked tile that keeps a body from moving straight from `a` to `b` (`None`: nothing
@@ -949,9 +982,29 @@ mod tests {
                     1 => Vec2::new(a.x, a.y + rand(12.0)),
                     _ => a + Vec2::new(rand(12.0), rand(12.0)),
                 };
-                assert_eq!(m.line_walkable(a, b), brute(a, b), "{:?}: {a} -> {b}", m.id);
+                // The obstacles' part of it: the ground's rise is its own rule (`climbable`).
+                assert_eq!(m.line_blocker(a, b).is_none(), brute(a, b), "{:?}: {a} -> {b}", m.id);
             }
         }
+    }
+
+    #[test]
+    fn the_yards_high_ground_is_climbed_by_its_ramp_not_its_sides() {
+        let m = MapId::Yard.map();
+        let (middle, radius, top) = (Vec2::new(-18.0, 9.0), 6.0, 4.0);
+        assert!((m.height_at(middle) - top).abs() < 1e-5, "the plateau's top");
+        // Up its sheer east side is no way; down it is.
+        let (foot, brink) = (middle + Vec2::X * (radius + 0.7), middle + Vec2::X * (radius - 0.2));
+        assert!(!m.line_walkable(foot, brink), "walked up a cliff");
+        assert!(m.line_walkable(brink, foot), "couldn't step down off it");
+        // Up the ramp from the south, a walker's step at a time, onto the top.
+        let mut p = middle - Vec2::Y * (radius + top * 1.5 + 0.5);
+        while p.y < middle.y {
+            let next = p + Vec2::Y * 0.12;
+            assert!(m.line_walkable(p, next), "the ramp isn't walkable at {p}");
+            p = next;
+        }
+        assert!((m.height_at(p) - top).abs() < 1e-5, "the ramp didn't come out on top");
     }
 
     /// `next_waypoint`'s shortcuts (the remembered path, trying the last obstacle first) must

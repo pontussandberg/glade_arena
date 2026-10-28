@@ -117,6 +117,7 @@ fn note_attacks(
 
 /// Draws every body, attack winding up, attack just gone off and projectile.
 fn draw_hitboxes(
+    map: Res<crate::rooms::CurrentMap>,
     mut gizmos: Gizmos,
     time: Res<Time>,
     flashes: Res<Flashes>,
@@ -131,7 +132,7 @@ fn draw_hitboxes(
         if health.is_some_and(|h| !h.alive()) {
             continue;
         }
-        circle(&mut gizmos, to_world(pos.0, 0.0), PLAYER_RADIUS, BODY);
+        circle(&mut gizmos, to_world(pos.0, map.map().height_at(pos.0)), PLAYER_RADIUS, BODY);
         if let Some(swing) = attack.winding_up() {
             lane(&mut gizmos, pos.0, swing.dir, swing.quick, *class, WINDING_UP);
         }
@@ -142,7 +143,7 @@ fn draw_hitboxes(
         let color = |base: Color| base.with_alpha(((until - now) / FLASH_SECONDS).clamp(0.0, 1.0));
         match *flash {
             Flash::Lane { at, dir, empowered, class } => lane(&mut gizmos, at, dir, empowered, class, color(GOING_OFF)),
-            Flash::Burst { at, radius } => circle(&mut gizmos, to_world(at, 0.0), radius, color(BURST)),
+            Flash::Burst { at, radius } => circle(&mut gizmos, to_world(at, map.map().height_at(at)), radius, color(BURST)),
         }
     }
     for (shot, transform) in &shots {
@@ -153,6 +154,7 @@ fn draw_hitboxes(
 /// Draws every fighter's body as a column of rings and every projectile's as a ball around it
 /// where it's drawn (around its point), each colored by its height (`height_color`).
 fn draw_hitboxes_3d(
+    map: Res<crate::rooms::CurrentMap>,
     mut gizmos: Gizmos,
     fighters: Query<(&Pos, Option<&Health>), Without<Projectile>>,
     shots: Query<(&Projectile, &Transform, &InheritedVisibility)>,
@@ -168,7 +170,7 @@ fn draw_hitboxes_3d(
         if health.is_some_and(|h| !h.alive()) {
             continue;
         }
-        let at = to_world(pos.0, 0.0);
+        let at = to_world(pos.0, map.map().height_at(pos.0));
         for &(height, color) in &rings {
             gizmos.circle(Isometry3d::new(at.with_y(height), flat), PLAYER_RADIUS, color);
         }

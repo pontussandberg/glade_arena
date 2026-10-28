@@ -441,8 +441,9 @@ const STEADY_SETTLE: f32 = 0.15;
 fn pose_rigs(
     time: Res<Time>,
     // Not there until we're synced with the server; the lobby's fighter is posed before that
-    // (and it never attacks, so it doesn't need the clock).
+    // (and it never attacks, so it doesn't need the clock, nor the ground: it stands on a stage).
     clock: Option<AttackClock>,
+    map: Option<Res<crate::rooms::CurrentMap>>,
     mut rigs: Query<(
         &mut Rig,
         &Facing,
@@ -618,11 +619,12 @@ fn pose_rigs(
         // `SQUASH_SECONDS`, so a blow visibly lands in the body and not just on the health bar.
         let flinch = squash.map_or(0.0, |s| (1.0 - (wall_clock - s.at) / SQUASH_SECONDS).clamp(0.0, 1.0).powi(2));
         let squashed = Vec3::new(1.0 + 0.12 * flinch, 1.0 - 0.16 * flinch, 1.0 + 0.12 * flinch);
-        // Jumping, the whole figure is up off the ground by the jump's height (on the timeline
-        // it's shown on).
+        // On the ground where it stands (`Map::height_at`); jumping, the whole figure is up off
+        // it by the jump's height (on the timeline it's shown on).
+        let ground = map.as_ref().map_or(0.0, |map| map.map().height_at(arena::to_gameplay(body.translation)));
         let jumped = jumping.and_then(|jumping| jumping.0).map_or(0.0, |jump| jump.height_at(now));
         let placed = Transform {
-            translation: body.translation.with_y((posed.body.translation.y + BREATH_RISE * (0.5 + 0.5 * breath) * breathing) * rig.size + jumped),
+            translation: body.translation.with_y((posed.body.translation.y + BREATH_RISE * (0.5 + 0.5 * breath) * breathing) * rig.size + ground + jumped),
             scale: posed.body.scale * rig.size * squashed,
             ..posed.body
         };

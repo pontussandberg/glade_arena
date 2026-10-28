@@ -70,7 +70,7 @@ pub const DAIS_HEIGHT: f32 = 0.16;
 /// below and beyond. Vertex-colored, for one matte white material.
 pub fn crag_mesh(theme: &'static Theme, height: f32) -> Mesh {
     let mut rng = Lcg(11);
-    let mut props = Props::new(theme);
+    let mut props = Props::new(theme, arena_shared::map::flat);
     let dais = faceted(Cylinder::new(DAIS_RADIUS, DAIS_HEIGHT).mesh().resolution(24).build());
     props.push(dais.transformed_by(Transform::from_xyz(0.0, DAIS_HEIGHT / 2.0, 0.0)), theme.stone.mix(&theme.wall, 0.4));
     let top = faceted(Cylinder::new(CRAG_TOP, 0.5).mesh().resolution(9).build());
@@ -201,7 +201,7 @@ fn build_arena(
         commands.spawn((ArenaScene, Mesh3d(meshes.add(water)), MeshMaterial3d(materials.add(material))));
     }
 
-    let mut props = Props::new(theme);
+    let mut props = Props::new(theme, m.relief());
     let wall_tops = props.walls(m, &mut rng);
     props.stall(m);
     props.bridges(m, &mut rng);
@@ -313,6 +313,8 @@ enum Shape {
 /// Builds every static prop into one vertex-colored mesh.
 struct Props {
     pub(super) theme: &'static Theme,
+    /// The lie of the land (`Map::relief`): everything added stands on the ground where it is.
+    ground: fn(Vec2) -> f32,
     pub(super) rock: Mesh,
     trunk: Mesh,
     cones: [Mesh; 3],
@@ -325,9 +327,10 @@ struct Props {
 }
 
 impl Props {
-    pub(super) fn new(theme: &'static Theme) -> Self {
+    pub(super) fn new(theme: &'static Theme, ground: fn(Vec2) -> f32) -> Self {
         Props {
             theme,
+            ground,
             rock: faceted(Sphere::new(0.6).mesh().ico(0).unwrap()),
             trunk: faceted(Cylinder::new(0.22, 1.2).mesh().resolution(5).build()),
             cones: [0, 1, 2].map(|k| faceted(Cone::new(1.5 - k as f32 * 0.35, 1.7).mesh().resolution(7).build())),
@@ -341,6 +344,7 @@ impl Props {
     }
 
     pub(super) fn add(&mut self, shape: Shape, color: Color, t: Transform) {
+        let t = self.grounded(t);
         let base = match shape {
             Shape::Rock => &self.rock,
             Shape::Trunk => &self.trunk,
@@ -358,7 +362,14 @@ impl Props {
     /// edges bevelled so they catch the light.
     pub(super) fn block(&mut self, size: Vec3, color: Color, t: Transform) {
         let bevel = (size.min_element() * 0.12).clamp(0.02, 0.07);
-        self.push(bevel_box(size, bevel, color).transformed_by(t), color);
+        self.push(bevel_box(size, bevel, color).transformed_by(self.grounded(t)), color);
+    }
+
+    /// `t` raised onto the ground under it (`Map::height_at`): props are placed as if the land
+    /// were flat.
+    fn grounded(&self, mut t: Transform) -> Transform {
+        t.translation.y += (self.ground)(to_gameplay(t.translation));
+        t
     }
 
     pub(super) fn push(&mut self, mut mesh: Mesh, color: Color) {
@@ -1117,6 +1128,8 @@ fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut Lcg) -> Me
             } else {
                 wild_height(theme, m, p)
             };
+            // The map's own lie of the land runs on out into the wilds.
+            let h = if around.contains(&Tile::Chasm) || around.iter().any(|t| matches!(t, Tile::Water | Tile::Ford)) { h } else { h + m.height_at(p) };
             grid.push(to_world(p, h));
         }
     }
@@ -1184,7 +1197,9 @@ fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
         let base = if shaded { base.mix(&theme.fern, 0.3) } else { base };
         let color = Color::from(base.to_linear() * checker);
         let (lo, hi) = (c - Vec2::splat(0.5), c + Vec2::splat(0.5));
-        b.quad([to_world(lo, 0.0), to_world(Vec2::new(hi.x, lo.y), 0.0), to_world(hi, 0.0), to_world(Vec2::new(lo.x, hi.y), 0.0)], color);
+        // Each corner on the lie of the land, so slopes and ledges are the ground itself.
+        let corner = |p: Vec2| to_world(p, m.height_at(p));
+        b.quad([corner(lo), corner(Vec2::new(hi.x, lo.y)), corner(hi), corner(Vec2::new(lo.x, hi.y))], color);
         // Bank or cliff faces toward the gaps around it.
         for (dir, a, z) in [
             (IVec2::X, Vec2::new(hi.x, lo.y), Vec2::new(hi.x, hi.y)),

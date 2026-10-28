@@ -16,6 +16,7 @@
 
 use arena_shared::classes::ClassId;
 use arena_shared::config::{GRAVITY, PLAYER_RADIUS, SHOT_HEIGHT};
+use arena_shared::map::Map;
 use arena_shared::protocol::{Jumping, PlayerId, Pos};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
@@ -44,6 +45,10 @@ const FREE_DISTANCE: (f32, f32) = (1.2, 24.0);
 const FREE_PITCH: (f32, f32) = (-0.35, 1.1);
 /// At the usual sensitivity (`Settings::sensitivity` scales it).
 const FREE_TURN_SPEED: f32 = 0.005;
+/// How far out (meters) the aim looks for the ground along the camera's line, and in what steps
+/// (`ground_along`).
+const AIM_REACH: f32 = 160.0;
+const AIM_STEP: f32 = 0.5;
 const FREE_KEY_TURN: f32 = 2.0;
 const FREE_KEY_ZOOM: f32 = 4.0;
 const DRAG_PX: f32 = 6.0;
@@ -476,6 +481,8 @@ fn follow_camera(
     let (forward, right) = mode.ground_axes();
     let pivot = arena::to_gameplay(at.translation);
     let shoulder = pivot + right * ACTION_SHOULDER;
+    // Up the ground it stands on, too.
+    let lift = lift + map.map().height_at(pivot);
     // The first wall on the way back from the pivot to the camera stops it short: at once, and
     // it eases back out when the wall is past.
     let map = map.map();
@@ -499,7 +506,7 @@ fn follow_camera(
     let converge = shot.map_or(AIM_CONVERGE, |shot| shot.range);
     // A thrown shot is zeroed on the point: pitched up by what gravity takes from it on the way.
     let drop = shot.filter(|shot| shot.falls).map_or(0.0, |shot| GRAVITY / (2.0 * shot.speed * shot.speed));
-    (mode.aim, mode.climb, mode.ground) = aim_of(&camera, pivot, forward, converge, drop, SHOT_HEIGHT + lift);
+    (mode.aim, mode.climb, mode.ground) = aim_of(map, &camera, pivot, forward, converge, drop, SHOT_HEIGHT + lift);
 }
 
 /// The aim from the camera's angle: the direction (on the gameplay plane) from `pivot` (the
@@ -513,14 +520,14 @@ fn follow_camera(
 /// (gravity over twice its speed squared: what it falls per meter flown, per meter), so it comes
 /// down on the point itself, rising to it from under the line of sight, never over it (the
 /// camera stands well above the hand); past the point it drops away, as a throw does.
-fn aim_of(camera: &Transform, pivot: Vec2, forward: Vec2, converge: f32, drop: f32, hand: f32) -> (Vec2, f32, Option<Vec2>) {
+fn aim_of(map: &Map, camera: &Transform, pivot: Vec2, forward: Vec2, converge: f32, drop: f32, hand: f32) -> (Vec2, f32, Option<Vec2>) {
     let (from, look) = (camera.translation, *camera.forward());
     let along = arena::to_gameplay(look);
     let flat = along.length().max(1e-6);
     // Along the line (meters) to the point beside the fighter, and on to the one `converge`
-    // past it; and to the ground, looking down.
+    // past it; and to the ground, wherever the line meets the lie of the land.
     let past = (pivot - arena::to_gameplay(from)).dot(along) / flat;
-    let ground = (look.y < -1e-4).then(|| -from.y / look.y);
+    let ground = ground_along(map, from, look);
     let mut at = (past + converge) / flat;
     // Ground ahead of the fighter (not at their feet or behind them) nearer than that.
     if let Some(ground) = ground.filter(|ground| ground * flat > past + PLAYER_RADIUS) {
@@ -531,6 +538,28 @@ fn aim_of(camera: &Transform, pivot: Vec2, forward: Vec2, converge: f32, drop: f
     let ground = ground.map(|ground| arena::to_gameplay(from + look * ground));
     let dist = ahead.length().max(PLAYER_RADIUS);
     (ahead.try_normalize().unwrap_or(forward), (on.y - hand) / dist + drop * dist, ground)
+}
+
+/// How far along the line from `from` toward `look` the ground is (`Map::height_at`), if it's
+/// met within `AIM_REACH`: marched in steps, then closed in on.
+fn ground_along(map: &Map, from: Vec3, look: Vec3) -> Option<f32> {
+    let under = |at: f32| {
+        let on = from + look * at;
+        on.y <= map.height_at(arena::to_gameplay(on))
+    };
+    let mut at = AIM_STEP;
+    while at <= AIM_REACH {
+        if under(at) {
+            let (mut above, mut below) = (at - AIM_STEP, at);
+            for _ in 0..8 {
+                let mid = (above + below) / 2.0;
+                if under(mid) { below = mid } else { above = mid }
+            }
+            return Some((above + below) / 2.0);
+        }
+        at += AIM_STEP;
+    }
+    None
 }
 
 /// Y in the arena locks or unlocks the MOBA camera (the lock by the minimap does too).
