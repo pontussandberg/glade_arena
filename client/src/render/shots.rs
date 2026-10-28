@@ -120,8 +120,8 @@ pub(super) fn fly_shots(
     for (projectile, mut transform, mut visibility, thrown, spin) in &mut shots {
         let speed = projectile.class.def().shot(projectile.ability).map_or(0.0, |s| s.speed);
         let at_tick = tick.max(projectile.spawn_tick as f32 - 1.0);
-        // Aimed up or down (the action camera's), it rises or falls as it flies (and one that
-        // falls drops past its range), its nose along its flight.
+        // Aimed up or down (the action camera's), it rises or falls as it flies (and a thrown
+        // one drops from the hand on), its nose along its flight.
         let height = shot_height(thrown.is_some()) + sim::projectile_height(projectile, at_tick) - SHOT_HEIGHT;
         let on_path = to_world(sim::projectile_pos(projectile, at_tick), height);
         let along = Quat::from_rotation_y(projectile.dir.to_angle());
@@ -247,8 +247,8 @@ pub(super) struct Impact {
 }
 
 /// A thrown spear gone short of its range hit something (a fighter, a wall, a rock, a tree), and
-/// one that falls (`Shot::falls`) ends on something past it too: a flash where its point was,
-/// and splinters thrown back the way it came, out and up. A bolt that flew its whole range
+/// one that falls (`Shot::falls`) ends on something (or the ground) past it too: a flash where
+/// its point was, and splinters thrown back the way it came, out and up. A bolt that flew its whole range
 /// bursts there, in its own light, as if it lost hold of itself: a bigger flash, sparks flung
 /// out every way. A spear that flew its whole range just ends, as does a bolt stopped short
 /// (its hit is the fighter's to show), and so does every one cleared away mid-flight: at the

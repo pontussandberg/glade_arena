@@ -1,6 +1,6 @@
 //! Shots in flight: where one starts and is at a tick (and how high: aimed up or down, it
-//! climbs or falls as it flies, and one that `falls` drops past its range), when it's spent,
-//! whom it hits, and for how much.
+//! climbs or falls as it flies, and a thrown one, that `falls`, drops under gravity from the
+//! hand), when it's spent, whom it hits, and for how much.
 
 use super::*;
 
@@ -33,25 +33,26 @@ pub fn projectile_pos(projectile: &Projectile, tick: f32) -> Vec2 {
 }
 
 /// How high a projectile flies at `tick`: from the hand, up or down as it was aimed (`climb`),
-/// straight. One that falls (`Shot::falls`) flies that line to its range, and from there
-/// gravity has it: on at its speed along the ground, dropping ever faster.
+/// straight. A thrown one (`Shot::falls`) leaves along that line and gravity has it from
+/// there: on at its speed along the ground, dropping ever faster below the line it was aimed
+/// along (a throw is aimed where it leaves, not where it lands: hold over for a far mark).
 pub fn projectile_height(projectile: &Projectile, tick: f32) -> f32 {
     let flown = projectile_flown(projectile, tick);
     SHOT_HEIGHT + projectile.climb * flown - 0.5 * GRAVITY * projectile_falling(projectile, flown).powi(2)
 }
 
 /// How steeply a projectile flies at `tick`: how much it rises per meter ahead, as a tangent
-/// (negative falling): as aimed, and steeper down the longer it has fallen.
+/// (negative falling): as aimed, and steeper down the longer a thrown one has flown.
 pub fn projectile_pitch(projectile: &Projectile, tick: f32) -> f32 {
     let shot = shot(projectile);
     projectile.climb - GRAVITY * projectile_falling(projectile, projectile_flown(projectile, tick)) / shot.speed
 }
 
-/// How long (seconds) a projectile that has `flown` this far has been falling: none until past
-/// its range, and never for one that doesn't fall.
+/// How long (seconds) a projectile that has `flown` this far has been falling: a thrown one
+/// since it left the hand, one that doesn't fall never.
 fn projectile_falling(projectile: &Projectile, flown: f32) -> f32 {
     let shot = shot(projectile);
-    if shot.falls { (flown - shot.range).max(0.0) / shot.speed } else { 0.0 }
+    if shot.falls { flown / shot.speed } else { 0.0 }
 }
 
 /// Out of range (or, for one that falls, given up on), into a wall, rock or tree (water and

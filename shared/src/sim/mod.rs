@@ -56,7 +56,7 @@ mod tests {
     fn bolter() -> ClassId {
         ClassId::all().find(|c| matches!(c.def().attack.kind, AttackKind::Projectile { falls: false, .. })).unwrap()
     }
-    /// A class whose shot falls past its range.
+    /// A class whose shot is thrown: it drops under gravity from the hand.
     fn thrower() -> ClassId {
         ClassId::all().find(|c| matches!(c.def().attack.kind, AttackKind::Projectile { falls: true, .. })).unwrap()
     }
@@ -365,18 +365,26 @@ mod tests {
     }
 
     #[test]
-    fn falling_projectile_flies_past_its_range_and_comes_down() {
-        let proj = Projectile { owner: PeerId::Netcode(1), class: thrower(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 0, ability: None, crit: false, extra: false, climb: 0.0 };
+    fn thrown_projectile_drops_from_the_hand_and_lands() {
+        let thrown = |climb| Projectile { owner: PeerId::Netcode(1), class: thrower(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 0, ability: None, crit: false, extra: false, climb };
         let shot = thrower().def().shot(None).unwrap();
+        let lands = |proj: &Projectile| {
+            let down = (0..400).find(|&tick| projectile_expired(map(), projectile_pos(proj, tick as f32), proj, tick)).unwrap();
+            assert!(projectile_height(proj, down as f32) < 0.0, "ended on the ground, not given up on");
+            projectile_pos(proj, down as f32).x
+        };
+        // Thrown level: below the hand and nosing down from the first tick, down where a thing
+        // falling from the hand's height at its speed lands (within the tick it lands in).
+        let level = thrown(0.0);
+        assert!(projectile_height(&level, 0.0) < SHOT_HEIGHT && projectile_pitch(&level, 0.0) < 0.0);
+        let expected = shot.speed * (2.0 * SHOT_HEIGHT / GRAVITY).sqrt();
+        let landed = lands(&level);
+        assert!(landed >= expected && landed < expected + shot.speed * TICK_DT, "landed at {landed} m, expected {expected} m");
+        // Thrown upward it flies past its range before coming down, and isn't spent there.
+        let lobbed = thrown(0.1);
         let range_tick = (shot.range / shot.speed * TICK_HZ as f32).ceil() as u32;
-        // Level to its range, not spent there, falling after it, and down within a few meters.
-        assert_eq!(projectile_height(&proj, range_tick as f32 - 1.0), SHOT_HEIGHT);
-        assert!(!projectile_expired(map(), projectile_pos(&proj, range_tick as f32), &proj, range_tick));
-        assert!(projectile_pitch(&proj, range_tick as f32 + 8.0) < 0.0);
-        let down = (range_tick..range_tick + 200).find(|&tick| projectile_expired(map(), projectile_pos(&proj, tick as f32), &proj, tick)).unwrap();
-        let landed = projectile_pos(&proj, down as f32).x;
-        assert!(landed > shot.range && landed < shot.range + 10.0, "came down at {landed} m");
-        assert!(projectile_height(&proj, down as f32) < 0.0, "ended on the ground, not given up on");
+        assert!(!projectile_expired(map(), projectile_pos(&lobbed, range_tick as f32), &lobbed, range_tick));
+        assert!(lands(&lobbed) > shot.range, "a lob carries past the range");
     }
 
     const Q: AbilitySlot = AbilitySlot(0);

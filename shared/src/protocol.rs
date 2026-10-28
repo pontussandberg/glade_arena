@@ -591,9 +591,10 @@ pub struct Projectile {
     /// Thrown by an item (a barrage's javelin, a bounce), not from the hand: drawn straight from
     /// where it starts, and nothing an auto-attack's throw sets off goes off again for it.
     pub extra: bool,
-    /// How much it rises per meter flown (the tangent of its pitch), aimed up or down with the
-    /// action camera; 0 flies level, as the MOBA's do. It falls into the ground or flies over
-    /// bodies accordingly (`sim::projectile_height`).
+    /// How much it rises per meter flown (the tangent of its pitch) as it leaves, aimed up or
+    /// down with the action camera; 0 leaves level, as the MOBA's do. It falls into the ground or
+    /// flies over bodies accordingly, and a thrown one drops from that line as it flies
+    /// (`sim::projectile_height`).
     pub climb: f32,
 }
 

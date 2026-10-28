@@ -425,9 +425,10 @@ pub enum AttackKind {
     },
     /// Flies straight until it hits someone, a blocking tile, or runs out of range. With
     /// `far_scale`, damage scales linearly from the attack's `damage` (point blank) to `far_scale`
-    /// times it (after flying the full range, and no more past it). One that `falls` isn't spent
-    /// at its range: from there it drops, as a thrown thing does, until it hits something or the
-    /// ground (`sim::projectile_height`).
+    /// times it (after flying the full range, and no more past it). One that `falls` is thrown:
+    /// gravity pulls it down from the moment it leaves the hand, so it drops ever further below
+    /// the line it was aimed along, and it isn't spent at its range but ends where it hits
+    /// something or the ground (`sim::projectile_height`).
     Projectile {
         speed: f32,
         radius: f32,
@@ -454,11 +455,12 @@ pub struct Shot {
     pub speed: f32,
     pub radius: f32,
     pub range: f32,
-    /// Past its range it falls instead of ending (`AttackKind::Projectile`).
+    /// Thrown: it drops under gravity from the hand, and isn't spent at its range
+    /// (`AttackKind::Projectile`).
     pub falls: bool,
 }
 
-/// How many times its range a falling shot may fly in all before it's given up on: room for one
+/// How many times its range a thrown shot may fly in all before it's given up on: room for one
 /// lobbed high to come down (the map's edge stops it sooner).
 const FALL_SPAN: f32 = 6.0;
 
@@ -469,8 +471,8 @@ impl Shot {
         PLAYER_RADIUS + 2.0 * self.radius + self.range
     }
 
-    /// How many ticks it flies before it's out of range; one that falls, before it's given up
-    /// on (it ends on the ground long before).
+    /// How many ticks it flies before it's out of range; a thrown one, before it's given up on
+    /// (it ends on the ground long before).
     pub fn lifetime_ticks(&self) -> u32 {
         let span = if self.falls { self.range * FALL_SPAN } else { self.range };
         (span / self.speed * TICK_HZ as f32).ceil() as u32
