@@ -2,7 +2,6 @@ use std::net::{Ipv4Addr, SocketAddr};
 
 use arena_client::{ClientNetPlugin, ClientSettings, render::RenderPlugin};
 use arena_shared::config::*;
-#[cfg(not(target_family = "wasm"))]
 use arena_shared::protocol::ClassId;
 use bevy::prelude::*;
 use bevy::winit::WinitSettings;
@@ -11,29 +10,43 @@ use lightyear::prelude::client::ClientPlugins;
 #[cfg(target_family = "wasm")]
 mod hidden_tab;
 
+/// How often a client in the background (`ARENA_BACKGROUND`) draws a frame, a second.
+const BACKGROUND_FPS: f32 = 30.0;
+
 fn main() {
     #[cfg(target_family = "wasm")]
     console_error_panic_hook::set_once();
 
     let settings = client_settings();
     let mut app = App::new();
+    // `ARENA_BACKGROUND=1` (native): a small window, drawn at a low frame rate, for a bot played
+    // beside a client being measured, taking as little of the machine from it as it can.
+    #[cfg(not(target_family = "wasm"))]
+    let background = std::env::var_os("ARENA_BACKGROUND").is_some();
+    #[cfg(target_family = "wasm")]
+    let background = false;
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
             title: format!("Arena (client {})", settings.client_id),
             canvas: Some("#game".into()),
             fit_canvas_to_parent: true,
+            resolution: if background { (480, 270).into() } else { default() },
             ..default()
         }),
         ..default()
     }));
     // Keep simulating at full rate when the window is unfocused (two windows side by side).
-    app.insert_resource(WinitSettings::continuous());
+    app.insert_resource(if background {
+        let mode = bevy::winit::UpdateMode::reactive_low_power(std::time::Duration::from_secs_f32(1.0 / BACKGROUND_FPS));
+        WinitSettings { focused_mode: mode, unfocused_mode: mode }
+    } else {
+        WinitSettings::continuous()
+    });
     #[cfg(target_family = "wasm")]
     app.add_plugins(hidden_tab::HiddenTabPlugin);
     app.add_plugins(ClientPlugins { tick_duration: TICK_DURATION });
     app.add_plugins(ClientNetPlugin { settings });
-    #[cfg(not(target_family = "wasm"))]
-    if std::env::var_os("ARENA_BOT").is_some() {
+    if bot_plays() {
         app.add_plugins(arena_client::bot::BotPlugin);
     }
     app.add_plugins(RenderPlugin);
@@ -136,8 +149,18 @@ fn client_settings() -> ClientSettings {
         cert_digest,
         server_url: get("ARENA_SERVER_URL"),
         conditioner: None,
-        class: None,
-        quick_join: None,
+        // In local dev, `?class=…&room=…` joins that room as that class, as the native client's
+        // arguments do.
+        class: get("ARENA_CLASS").and_then(|key| ClassId::by_key(&key)),
+        quick_join: get("ARENA_ROOM"),
         guest_name: arena_client::rooms::load_guest_name(),
     }
+}
+
+/// Whether a bot plays this client: `ARENA_BOT=1` natively, `?bot` on the page in local dev.
+fn bot_plays() -> bool {
+    #[cfg(target_family = "wasm")]
+    return web_sys::window().is_some_and(|window| js_sys::Reflect::has(&window, &"ARENA_BOT".into()).unwrap_or(false));
+    #[cfg(not(target_family = "wasm"))]
+    return std::env::var_os("ARENA_BOT").is_some();
 }

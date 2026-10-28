@@ -88,11 +88,19 @@ fn elite_odds(wave: u32) -> f32 {
 
 /// How often a pack comes out, and how many may be about at once.
 fn spawn_every(wave: u32) -> u32 {
+    if HORDE.is_some() {
+        return 2;
+    }
     48u32.saturating_sub(wave).max(14)
 }
 fn most_about(wave: u32, party: usize) -> usize {
-    (14 + wave as usize + 4 * (party.max(1) - 1)).min(44)
+    HORDE.unwrap_or((14 + wave as usize + 4 * (party.max(1) - 1)).min(44))
 }
+
+/// `ARENA_HORDE=N` (for measuring what a crowd costs): every wave keeps `N` monsters about, a
+/// pack coming out every other tick till it has them, and never runs out of them; and the party
+/// never falls.
+static HORDE: std::sync::LazyLock<Option<usize>> = std::sync::LazyLock::new(|| std::env::var("ARENA_HORDE").ok().and_then(|n| n.parse().ok()));
 
 /// What an elite is, against its kind: (toughness, might, bounty).
 const ELITE: (f32, f32, u32) = (2.5, 1.3, 3);
@@ -384,7 +392,7 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, now: 
             // The wave comes, and chests with it.
             run.phase = RunPhase::Fight;
             run.ready.clear();
-            run.budget = budget(wave, size) * run.omen.map_or(1.0, Omen::budget_scale);
+            run.budget = budget(wave, size) * run.omen.map_or(1.0, Omen::budget_scale) * if HORDE.is_some() { 1000.0 } else { 1.0 };
             run.rng = wave_chances(wave);
             run.deaths = 0;
             // Under way: closed to newcomers now (the lobby list says so, below).
@@ -403,6 +411,15 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, now: 
             }
         }
         RunPhase::Fight => {
+            // Measuring a crowd (`HORDE`): the party stays on its feet, healed whole every tick,
+            // so the fight goes on.
+            if HORDE.is_some() {
+                for (_, r, _, mut health, max, dead) in party.iter_mut() {
+                    if *r == room && dead.is_none() {
+                        health.0 = max.0;
+                    }
+                }
+            }
             // A boss fell: the downed get up (back at the camp).
             if std::mem::take(&mut run.raise_fallen) {
                 run.waiting.clear();

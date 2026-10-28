@@ -102,7 +102,7 @@ fn measure(
     time: Res<Time<Real>>,
     mut perf: ResMut<Perf>,
     all: Query<Entity>,
-    meshes: Query<&ViewVisibility, With<Mesh3d>>,
+    meshes: Query<(&ViewVisibility, &Mesh3d, Option<&MeshMaterial3d<StandardMaterial>>)>,
     parts: Query<(), With<FxPart>>,
     lights: Query<(), Or<(With<PointLight>, With<SpotLight>, With<DirectionalLight>)>>,
     nodes: Query<(), With<Node>>,
@@ -121,9 +121,11 @@ fn measure(
         let second = std::mem::take(&mut perf.second);
         let avg = second.iter().sum::<f32>() / second.len().max(1) as f32;
         let worst = second.iter().copied().fold(0.0, f32::max);
-        let drawn = meshes.iter().filter(|v| v.get()).count();
+        let drawn = meshes.iter().filter(|(v, ..)| v.get()).count();
+        // What's drawn by mesh and material: about what batching leaves as draws.
+        let batches = meshes.iter().filter(|(v, ..)| v.get()).map(|(_, mesh, material)| (mesh.id(), material.map(|m| m.id()))).collect::<std::collections::HashSet<_>>().len();
         let line = format!(
-            "t={now:5.1}s fps={:5.0} avg={avg:5.2}ms worst={worst:6.2}ms entities={} meshes={} drawn={drawn} fx_parts={} lights={} ui_nodes={} mesh_assets={} materials={} images={}",
+            "t={now:5.1}s fps={:5.0} avg={avg:5.2}ms worst={worst:6.2}ms entities={} meshes={} drawn={drawn} batches={batches} fx_parts={} lights={} ui_nodes={} mesh_assets={} materials={} images={}",
             second.len(),
             all.iter().count(),
             meshes.iter().count(),

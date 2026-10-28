@@ -4,6 +4,8 @@
 //          down:KEY / up:KEY (hold a key) | mdown:X,Y / mup:X,Y (hold the left button)
 //          throttle:N (the tab's CPU N times slower, as on a loaded machine; 1 lifts it)
 //          profile:SECONDS,PATH (a CPU profile of the page for SECONDS, as a .cpuprofile)
+//          fps:SECONDS (the page's frame times over SECONDS: frames a second, and the median,
+//          95th percentile and worst frame)
 // CDP_PORT=9223 drives a Chrome started on that port instead (a second player).
 // Chrome must already be running with --remote-debugging-port=9222.
 import { writeFileSync } from "node:fs";
@@ -92,6 +94,28 @@ for (const step of steps) {
     await sleep(seconds);
     const r = await send("Profiler.stop");
     writeFileSync(path, JSON.stringify(r.result.profile));
+  } else if (cmd === "fps") {
+    // Every animation frame's time, as the game's own frames come on them.
+    const seconds = Number(rest);
+    const r = await send("Runtime.evaluate", {
+      awaitPromise: true,
+      returnByValue: true,
+      expression: `new Promise((done) => {
+        const times = [];
+        const start = performance.now();
+        const frame = (t) => {
+          times.push(t);
+          if (t - start < ${seconds * 1000}) requestAnimationFrame(frame);
+          else done(times);
+        };
+        requestAnimationFrame(frame);
+      })`,
+    });
+    const times = r.result?.result?.value ?? [];
+    const gaps = times.slice(1).map((t, i) => t - times[i]).sort((a, b) => a - b);
+    const at = (q) => gaps[Math.min(gaps.length - 1, Math.floor(gaps.length * q))]?.toFixed(2);
+    const fps = gaps.length / ((times.at(-1) - times[0]) / 1000);
+    console.log(`fps: ${fps.toFixed(1)} over ${gaps.length} frames; median ${at(0.5)} ms, p95 ${at(0.95)} ms, p99 ${at(0.99)} ms, worst ${gaps.at(-1)?.toFixed(2)} ms`);
   } else if (cmd === "type") await send("Input.insertText", { text: rest });
   else if (cmd === "key") {
     const codes = { Enter: 13, Escape: 27, Tab: 9 };

@@ -1,5 +1,6 @@
 /target
 /client/web/pkg
+/client/web/pkg-*
 /client/web/digest.txt
 /target-test
 /.env.local
