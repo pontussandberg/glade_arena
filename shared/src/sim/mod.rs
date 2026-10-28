@@ -324,6 +324,8 @@ mod tests {
         assert!(input.fire);
         PlayerCommand::Walk(Vec2::ZERO, 0).apply(&mut input);
         assert!(input.fire, "letting go of the walking keys isn't an order to move");
+        PlayerCommand::Walk(Vec2::X, 0).apply(&mut input);
+        assert!(input.fire, "the walking keys walk through an attack, so they keep the click");
         PlayerCommand::MoveTo(Vec2::ONE).apply(&mut input);
         assert!(!input.fire);
         PlayerCommand::Attack(Vec2::X).apply(&mut input);
@@ -370,8 +372,11 @@ mod tests {
         let shot = thrower().def().shot(None).unwrap();
         let lands = |proj: &Projectile| {
             let down = (0..400).find(|&tick| projectile_expired(map(), projectile_pos(proj, tick as f32), proj, tick)).unwrap();
-            assert!(projectile_height(proj, down as f32) < 0.0, "ended on the ground, not given up on");
-            projectile_pos(proj, down as f32).x
+            let at = projectile_pos(proj, down as f32);
+            assert!(!map().get(Map::tile_of(at)).blocks_shots(), "stopped by a wall at {at}, not the ground");
+            assert!(down < shot.lifetime_ticks(), "given up on in the air, not down on the ground");
+            assert!(projectile_height(proj, down as f32) < 0.0, "ended on the ground");
+            at.x
         };
         // Thrown level: below the hand and nosing down from the first tick, down where a thing
         // falling from the hand's height at its speed lands (within the tick it lands in).
