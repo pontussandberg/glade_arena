@@ -272,7 +272,8 @@ const LIFT_HEIGHT: f32 = 0.45;
 const FULL_LIFT_TICKS: f32 = 24.0;
 
 /// Knocked up (`Chilled::lifted`): off the ground, up and back down over the knock-up, on the
-/// timeline it's shown on; set down again once it's over.
+/// timeline it's shown on; set down again once it's over. (A jump is the rig's: `rig::pose_rigs`
+/// places the figure, and lifts it by the jump.)
 pub(super) fn lift_fighters(clock: crate::feedback::AttackClock, mut q: Query<(&Chilled, &mut Transform, Has<crate::Me>)>) {
     for (chilled, mut transform, me) in &mut q {
         let now = clock.now(me);

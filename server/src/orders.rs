@@ -58,24 +58,35 @@ pub(super) fn apply_commands(
 /// later). Every fighter's, in play or not: a key pressed while dead doesn't go off on respawn.
 pub(super) fn use_up_clicks(mut players: Query<&mut PlayerInput>) {
     for mut input in &mut players {
-        if input.fire || input.casts().next().is_some() {
+        if input.fire || input.jump || input.casts().next().is_some() {
             input.fire = false;
+            input.jump = false;
             input.casts = default();
         }
     }
 }
 
-/// Walking (or dashing). Arriving forgets the destination, so nothing lingers. A frenzy speeds up
+/// Walking (or dashing), and jumping: off the ground from the tick Space arrives, if standing on
+/// it, back on it once the jump is over. Arriving forgets the destination, so nothing lingers. A frenzy speeds up
 /// walking, like a rift. In action mode the windup doesn't root the fighter: the sim is shown
 /// no swing.
 pub(super) fn move_players(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     rifts: Res<Rifts>,
-    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, (&AttackState, Has<ActionMode>), &mut Dashing, &Chilled, &Hasted, &InRoom, &Frenzy, Option<&Sluggish>, (&mut Walking, &mut WalkOrders)), InPlay>,
+    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, (&AttackState, Has<ActionMode>), &mut Dashing, &Chilled, &Hasted, &InRoom, &Frenzy, Option<&Sluggish>, (&mut Walking, &mut WalkOrders), &mut arena_shared::protocol::Jumping), InPlay>,
 ) {
     let now = timeline.tick().0;
-    for (id, mut pos, class, mut input, (attack, action), mut dashing, chilled, hasted, room, frenzy, sluggish, (mut walking, mut orders)) in &mut players {
+    for (id, mut pos, class, mut input, (attack, action), mut dashing, chilled, hasted, room, frenzy, sluggish, (mut walking, mut orders), mut jumping) in &mut players {
+        if jumping.0.is_some_and(|jump| jump.over(now)) {
+            jumping.0 = None;
+        }
+        if input.jump {
+            input.jump = false;
+            if jumping.0.is_none() && dashing.0.is_none() && !chilled.rooted_at(now) && !chilled.lifted_at(now) {
+                jumping.0 = Some(arena_shared::protocol::Jump { started_at: now });
+            }
+        }
         // Walks ordered for this tick (or one gone by) take now.
         while let Some(&(tick, dir, received)) = orders.pending.front() {
             if tick > now {

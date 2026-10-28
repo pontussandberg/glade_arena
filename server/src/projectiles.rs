@@ -48,6 +48,7 @@ pub(super) fn resolve_projectile_hits(
     timeline: Res<LocalTimeline>,
     mut projectiles: Query<(Entity, &Pos, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Spares>, (Option<&Bounces>, Option<&mut Pierced>))>,
     mut targets: Targets,
+    jumpers: Query<&arena_shared::protocol::Jumping>,
     mut log: ResMut<HitLog>,
 ) {
     let now = timeline.tick();
@@ -67,7 +68,7 @@ pub(super) fn resolve_projectile_hits(
                 || through.contains(&target_id.0)
                 || health.0 == 0
                 || !foes((*room, *team), (*target_room, *target_team))
-                || !sim::projectile_hits(projectile_pos.0, projectile, now.0, target_pos.0) {
+                || !sim::projectile_hits(projectile_pos.0, projectile, now.0, target_pos.0, feet_of(&jumpers, target, now.0)) {
                 continue;
             }
             let goes_on = pierces && target_team.0 == arena_shared::rooms::ZOMBIES;
@@ -139,4 +140,10 @@ pub(super) fn resolve_projectile_hits(
             from = at;
         }
     }
+}
+
+/// How far off the ground `target`'s feet are at `tick`: a jump's height, if it's one who can
+/// jump and is.
+fn feet_of(jumpers: &Query<&arena_shared::protocol::Jumping>, target: Entity, tick: u32) -> f32 {
+    jumpers.get(target).ok().and_then(|jumping| jumping.0).map_or(0.0, |jump| jump.height_at(tick as f32))
 }

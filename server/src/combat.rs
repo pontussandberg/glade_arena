@@ -273,7 +273,7 @@ pub(super) fn attack(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut attackers: Query<
-        (Entity, &PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), (&Frenzy, Option<&Fury>), (&mut Cooldowns, Option<&Might>, Option<&arena_shared::items::Satchel>), Has<crate::ActionMode>),
+        (Entity, &PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), (&Frenzy, Option<&Fury>), (&mut Cooldowns, Option<&Might>, Option<&arena_shared::items::Satchel>), Has<crate::ActionMode>, Option<&arena_shared::protocol::Jumping>),
         InPlay,
     >,
     mut targets: Targets,
@@ -286,7 +286,7 @@ pub(super) fn attack(
         let longest = ClassId::all().map(|c| c.def().crit.ambush_ticks).max().unwrap_or(0);
         ambushes.0.retain(|_, last| now.0.saturating_sub(*last) <= longest);
     }
-    for (entity, id, class, pos, mut input, mut state, mut last_swing, (room, team), (frenzy, fury), (mut cooldowns, might, satchel), action) in &mut attackers {
+    for (entity, id, class, pos, mut input, mut state, mut last_swing, (room, team), (frenzy, fury), (mut cooldowns, might, satchel), action, jumping) in &mut attackers {
         let might = might_of(might);
         let side = (*room, *team);
         // Knocked up: no attacking; one winding up is lost.
@@ -321,7 +321,9 @@ pub(super) fn attack(
             None => {}
             Some(sim::Attack::Projectile(projectile)) => {
                 // Pitched as the aim is now (action mode's; level in the MOBA).
-                spawn_projectile(&mut commands, Projectile { crit: primed, climb: input.climb, ..projectile }, side, might);
+                // Thrown from as high as a jump has the hand just now.
+                let lift = jumping.and_then(|jumping| jumping.0).map_or(0.0, |jump| jump.height_at(now.0 as f32));
+                spawn_projectile(&mut commands, Projectile { crit: primed, climb: input.climb, lift, ..projectile }, side, might);
             }
             Some(sim::Attack::Melee(mut swing)) => {
                 // An empowered strike grows with a Gravecaller Rift.

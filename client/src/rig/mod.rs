@@ -456,13 +456,14 @@ fn pose_rigs(
         Option<&HitSquash>,
         &mut Footfalls,
         Option<&Chilled>,
+        Option<&arena_shared::protocol::Jumping>,
     )>,
     mut parts: Query<(&mut Transform, &mut Visibility), Without<Rig>>,
 ) {
     let ease_walk = rate(&time, WALK_RATE);
     let dt = time.delta_secs().min(0.1);
     let wall_clock = time.elapsed_secs();
-    for (mut rig, facing, mut body, mut held_at, class, attack, (cooldowns, dashing), seen, is_me, squash, mut footfalls, chilled) in &mut rigs {
+    for (mut rig, facing, mut body, mut held_at, class, attack, (cooldowns, dashing), seen, is_me, squash, mut footfalls, chilled, jumping) in &mut rigs {
         let rig = &mut *rig;
         // Dashing, it glides along in its pose without a stride, thrown into a lunge.
         let gliding = dashing.0.is_some();
@@ -617,8 +618,11 @@ fn pose_rigs(
         // `SQUASH_SECONDS`, so a blow visibly lands in the body and not just on the health bar.
         let flinch = squash.map_or(0.0, |s| (1.0 - (wall_clock - s.at) / SQUASH_SECONDS).clamp(0.0, 1.0).powi(2));
         let squashed = Vec3::new(1.0 + 0.12 * flinch, 1.0 - 0.16 * flinch, 1.0 + 0.12 * flinch);
+        // Jumping, the whole figure is up off the ground by the jump's height (on the timeline
+        // it's shown on).
+        let jumped = jumping.and_then(|jumping| jumping.0).map_or(0.0, |jump| jump.height_at(now));
         let placed = Transform {
-            translation: body.translation.with_y((posed.body.translation.y + BREATH_RISE * (0.5 + 0.5 * breath) * breathing) * rig.size),
+            translation: body.translation.with_y((posed.body.translation.y + BREATH_RISE * (0.5 + 0.5 * breath) * breathing) * rig.size + jumped),
             scale: posed.body.scale * rig.size * squashed,
             ..posed.body
         };

@@ -351,19 +351,33 @@ mod tests {
             panic!("a projectile class should shoot after its windup");
         };
         let lifetime = proj.class.def().shot(None).unwrap().lifetime_ticks();
-        let hit_tick = (windup..windup + lifetime).find(|&tick| projectile_hits(projectile_pos(&proj, tick as f32), &proj, tick, target));
+        let hit_tick = (windup..windup + lifetime).find(|&tick| projectile_hits(projectile_pos(&proj, tick as f32), &proj, tick, target, 0.0));
         assert!(hit_tick.is_some(), "projectile should hit a target 6 m away in its path");
     }
 
     #[test]
     fn projectile_expires_at_its_range_and_at_walls() {
-        let proj = Projectile { owner: PeerId::Netcode(1), class: bolter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false, extra: false, climb: 0.0 };
+        let proj = Projectile { owner: PeerId::Netcode(1), class: bolter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
         let lifetime = bolter().def().shot(None).unwrap().lifetime_ticks();
         assert!(!projectile_expired(map(), Vec2::ZERO, &proj, 5 + lifetime - 1));
         assert!(projectile_expired(map(), Vec2::ZERO, &proj, 5 + lifetime));
         assert!(projectile_expired(map(), Vec2::new(100.0, 0.0), &proj, 6), "left the map");
         let wall = map().tiles().find(|(_, t)| *t == crate::map::Tile::Wall).unwrap().0;
         assert!(projectile_expired(map(), Map::center(wall), &proj, 6), "hit a wall");
+    }
+
+    #[test]
+    fn a_jump_goes_up_and_comes_down_and_a_level_shot_passes_under_it() {
+        use crate::config::{JUMP_HEIGHT, JUMP_TICKS};
+        let jump = crate::protocol::Jump { started_at: 10 };
+        assert_eq!(jump.height_at(10.0), 0.0);
+        assert!((jump.height_at(10.0 + JUMP_TICKS as f32 / 2.0) - JUMP_HEIGHT).abs() < 1e-5, "at the top halfway");
+        assert_eq!(jump.height_at(10.0 + JUMP_TICKS as f32), 0.0);
+        assert!(!jump.over(10 + JUMP_TICKS - 1) && jump.over(10 + JUMP_TICKS));
+        let proj = Projectile { owner: PeerId::Netcode(1), class: bolter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 0, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
+        let at = projectile_pos(&proj, 3.0);
+        assert!(projectile_hits(at, &proj, 3, at, 0.0), "standing, it's hit");
+        assert!(!projectile_hits(at, &proj, 3, at, SHOT_HEIGHT + 0.5), "jumped over it");
     }
 
     #[test]
@@ -375,14 +389,14 @@ mod tests {
         // (a tick's flight out), it isn't.
         let over = (crate::map::Tile::Wall.top() + shot.radius) / (shot.speed * TICK_DT);
         for (climb, stopped) in [(0.0, true), (over, false)] {
-            let proj = Projectile { owner: PeerId::Netcode(1), class: bolter(), origin: at - Vec2::X * shot.speed * TICK_DT, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false, extra: false, climb };
+            let proj = Projectile { owner: PeerId::Netcode(1), class: bolter(), origin: at - Vec2::X * shot.speed * TICK_DT, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false, extra: false, climb, lift: 0.0 };
             assert_eq!(projectile_expired(map(), at, &proj, 5), stopped, "climbing {climb} per meter");
         }
     }
 
     #[test]
     fn thrown_projectile_drops_from_the_hand_and_lands() {
-        let thrown = |climb| Projectile { owner: PeerId::Netcode(1), class: thrower(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 0, ability: None, crit: false, extra: false, climb };
+        let thrown = |climb| Projectile { owner: PeerId::Netcode(1), class: thrower(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 0, ability: None, crit: false, extra: false, climb, lift: 0.0 };
         let shot = thrower().def().shot(None).unwrap();
         let lands = |proj: &Projectile| {
             let down = (0..400).find(|&tick| projectile_expired(map(), projectile_pos(proj, tick as f32), proj, tick)).unwrap();
@@ -686,7 +700,7 @@ mod tests {
     #[test]
     fn only_auto_attacks_chill() {
         let class = chiller();
-        let shot = Projectile { owner: PeerId::Netcode(1), class, origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 1, ability: None, crit: false, extra: false, climb: 0.0 };
+        let shot = Projectile { owner: PeerId::Netcode(1), class, origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 1, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
         assert_eq!(projectile_chill(&shot), class.def().attack.chill);
         assert!(projectile_chill(&Projectile { class: primer(), ability: Some(Q), ..shot }).is_none());
     }

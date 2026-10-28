@@ -596,6 +596,35 @@ pub struct Projectile {
     /// flies over bodies accordingly, and a thrown one drops from that line as it flies
     /// (`sim::projectile_height`).
     pub climb: f32,
+    /// How far above the usual the shooter's hand was as it left (a jump's height then), so it
+    /// starts that much higher.
+    pub lift: f32,
+}
+
+/// A fighter's jump in progress, if any (`PlayerCommand::Jump`): off the ground from
+/// `started_at` for `JUMP_TICKS`, up to `JUMP_HEIGHT` and back down (`Jump::height_at`). While
+/// up, shots pass under its feet and it walks on as before. Server-authoritative, replicated and
+/// shown like `Dashing`.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
+pub struct Jumping(pub Option<Jump>);
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct Jump {
+    pub started_at: u32,
+}
+
+impl Jump {
+    /// How high off the ground (meters) it is at `tick` (fractional, for drawing in between):
+    /// an arc, up and down, flat at the top.
+    pub fn height_at(&self, tick: f32) -> f32 {
+        let t = ((tick - self.started_at as f32) / crate::config::JUMP_TICKS as f32).clamp(0.0, 1.0);
+        crate::config::JUMP_HEIGHT * 4.0 * t * (1.0 - t)
+    }
+
+    /// Back on the ground at `tick`.
+    pub fn over(&self, tick: u32) -> bool {
+        tick >= self.started_at + crate::config::JUMP_TICKS
+    }
 }
 
 impl Projectile {
@@ -624,6 +653,9 @@ pub struct PlayerInput {
     /// Left click: auto-attack toward `aim`, if the last attack is done (else the click is
     /// dropped). Set by `PlayerCommand::Attack`, used up by the next tick.
     pub fire: bool,
+    /// Space: jump, if standing on the ground (else it's dropped). Set by `PlayerCommand::Jump`,
+    /// used up by the next tick.
+    pub jump: bool,
     /// Abilities' keys pressed since the last tick, in order (`order_cast`), each used toward its
     /// own aim. Set by `PlayerCommand::Cast`, used up by the next tick, whether or not they could
     /// be used (as in League).
@@ -671,6 +703,8 @@ pub enum PlayerCommand {
     /// its pitch (`PlayerInput::climb`), so an attack winding up goes off the way the player
     /// looks then, not the way they looked when it started.
     Aim(Vec2, f32),
+    /// Space: jump (`Jumping`).
+    Jump,
 }
 
 impl PlayerCommand {
@@ -682,7 +716,7 @@ impl PlayerCommand {
         match *self {
             PlayerCommand::MoveTo(_) | PlayerCommand::Stop => true,
             PlayerCommand::Walk(dir, _) => dir != Vec2::ZERO,
-            PlayerCommand::Attack(_) | PlayerCommand::Cast(..) | PlayerCommand::Aim(..) => false,
+            PlayerCommand::Attack(_) | PlayerCommand::Cast(..) | PlayerCommand::Aim(..) | PlayerCommand::Jump => false,
         }
     }
 
@@ -713,6 +747,7 @@ impl PlayerCommand {
                 input.aim = aim;
                 input.climb = climb;
             }
+            PlayerCommand::Jump => input.jump = true,
         }
     }
 }
@@ -840,6 +875,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<LastSwing>().replicate().add_interpolation_with(hold);
         app.component::<Cooldowns>().replicate().add_interpolation_with(hold);
         app.component::<Dashing>().replicate().add_interpolation_with(hold);
+        app.component::<Jumping>().replicate().add_interpolation_with(hold);
         // Projectiles fly on rails: clients draw them from this alone (`sim::projectile_pos`).
         app.component::<Projectile>().replicate();
     }

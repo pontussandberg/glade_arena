@@ -329,6 +329,10 @@ fn send_commands(
         desired.0.casts = default();
         walk_when_ordered.0 = input.move_to;
     }
+    if input.jump {
+        send(PlayerCommand::Jump);
+        desired.0.jump = false;
+    }
 }
 
 /// Where we were walking to when we last ordered an attack or an ability: what starting one

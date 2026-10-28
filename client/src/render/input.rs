@@ -164,7 +164,9 @@ pub(super) fn read_local_input(
     if !mouse.pressed(MouseButton::Left) {
         *held_click = false;
     }
-    let attacking = if mode.free { mouse.pressed(MouseButton::Left) && attack_ready } else { mouse.just_pressed(MouseButton::Left) };
+    // Not while the scoreboard is held up (Tab): the mouse is free then, for pointing at it.
+    let board = keys.pressed(KeyCode::Tab);
+    let attacking = if mode.free { mouse.pressed(MouseButton::Left) && attack_ready && !board } else { mouse.just_pressed(MouseButton::Left) };
     let fire = desired.0.fire || (attacking && aiming.0.is_none() && !*held_click);
     // With the action camera, WASD walks relative to it, dropping any destination; otherwise S
     // stops: drops the destination (as in LoL).
@@ -181,9 +183,10 @@ pub(super) fn read_local_input(
         move_to = None;
         stop.0 = true;
     }
-    // `casts` and `fire` are kept until they've been sent (`send_commands` clears them), so a
-    // short tap isn't missed.
-    desired.0 = PlayerInput { move_to, walk, aim, climb, fire, casts: casts.casts };
+    // Space jumps (action mode). `casts`, `fire` and `jump` are kept until they've been sent
+    // (`send_commands` clears them), so a short tap isn't missed.
+    let jump = desired.0.jump || (mode.free && keys.just_pressed(KeyCode::Space) && !board);
+    desired.0 = PlayerInput { move_to, walk, aim, climb, fire, jump, casts: casts.casts };
 }
 
 /// What a cast of `kind` by our fighter at `me` is aimed with, aiming `aim`: in action mode a
