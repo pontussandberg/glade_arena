@@ -129,16 +129,18 @@ fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight,
     }
 }
 
-/// The low sun, from the same side over every map (its color and strength are the map's).
+/// The low sun (where it stands, its color and strength are the map's: `light_scene`).
 fn spawn_sun(mut commands: Commands) {
     commands.spawn((
         DirectionalLight { color: SUN, illuminance: 2_050.0, shadow_maps_enabled: true, ..default() },
-        // A sinking sun from the upper left: low enough for evening light, high enough that
-        // trees don't carpet the arena in shadow.
-        Transform::from_xyz(-32.0, 32.0, -18.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_translation(SUN_FROM).looking_at(Vec3::ZERO, Vec3::Y),
         sun_shadows(SUN_SHADOWS),
     ));
 }
+
+/// Where the sun stands over the glade (and most maps): a sinking sun from the upper left, low
+/// enough for evening light, high enough that trees don't carpet the arena in shadow.
+pub const SUN_FROM: Vec3 = Vec3::new(-32.0, 32.0, -18.0);
 
 /// How far from the camera the sun casts shadows in the arena: enough to cover what it sees at
 /// full zoom-out; the far forest needs none.
@@ -149,22 +151,23 @@ pub fn sun_shadows(reach: f32) -> CascadeShadowConfig {
     CascadeShadowConfigBuilder { num_cascades: 1, maximum_distance: reach, ..default() }.build()
 }
 
-/// The map's light and air: the sun's color and strength, the sky's fill, and the haze (and the
-/// clear color behind it, the same).
+/// The map's light and air: where the sun stands, its color and strength, the sky's fill, and
+/// the haze (and the clear color behind it, the same).
 fn light_scene(
     current: Res<CurrentMap>,
     mut clear: ResMut<ClearColor>,
     mut ambient: ResMut<GlobalAmbientLight>,
-    mut suns: Query<&mut DirectionalLight>,
+    mut suns: Query<(&mut DirectionalLight, &mut Transform)>,
     mut fogs: Query<&mut DistanceFog>,
 ) {
     let theme = Theme::of(current.0);
     clear.0 = theme.haze;
     ambient.color = theme.sky;
     ambient.brightness = theme.sky_brightness;
-    for mut sun in &mut suns {
+    for (mut sun, mut transform) in &mut suns {
         sun.color = theme.sun;
         sun.illuminance = theme.sun_illuminance;
+        *transform = Transform::from_translation(theme.sun_from).looking_at(Vec3::ZERO, Vec3::Y);
     }
     for mut fog in &mut fogs {
         fog.color = theme.haze;
