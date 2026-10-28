@@ -11,7 +11,7 @@ use crate::action_bar::AbilityIcon;
 use crate::camera::{CameraMode, key_axis};
 use crate::casting::{Aiming, CastMode, ability_key, key_casts};
 use crate::feedback::AttackClock;
-use crate::arena::{to_gameplay, to_world};
+use crate::arena::{self, to_gameplay, to_world};
 
 /// How wide (meters) the circle at the edge of your auto-attack's range is.
 pub(super) const RANGE_CIRCLE_WIDTH: f32 = 0.05;
@@ -77,7 +77,8 @@ pub(super) fn read_local_input(
         .and_then(|minimap| crate::minimap::ground_on_minimap(minimap.0, *minimap.1, map.map(), screen?));
     let on_control = on_minimap.is_some() || hud.iter().filter(|part| part.3.is_none()).any(|part| under_cursor(&part));
     let on_icon = hud.iter().filter(under_cursor).find_map(|(.., icon)| icon.map(|icon| icon.slot));
-    let cursor = window.and_then(|w| w.cursor_position()).and_then(|c| ground_at(camera, camera_transform, c));
+    let on_screen = window.as_ref().and_then(|w| w.cursor_position());
+    let cursor = on_screen.and_then(|c| ground_at(camera, camera_transform, c));
 
     let mut move_to = desired.0.move_to;
     // A jump (respawn or server correction) cancels the old destination. (So does attacking:
@@ -108,9 +109,21 @@ pub(super) fn read_local_input(
         move_to = None;
     }
 
-    let aim = match (cursor, me) {
-        (Some(cursor), Some(me)) => cursor - me,
+    // In action mode a shooter's attack is aimed where the cursor is at the height the shot
+    // flies, so the shot (and its line, `show_attack_aim`) passes under the cursor on the
+    // screen; abilities land on the ground, so they're aimed where the cursor is there.
+    let flying = my_class.filter(|_| mode.free).and_then(|def| def.attack.kind.shot().map(|_| shot_height(arena::thrown(def, false))));
+    let aim_at = match flying {
+        Some(height) => on_screen.and_then(|c| plane_at(camera, camera_transform, c, height)),
+        None => cursor,
+    };
+    let aim = match (aim_at, me) {
+        (Some(at), Some(me)) => at - me,
         _ => desired.0.aim,
+    };
+    let ground_aim = match (cursor, me) {
+        (Some(cursor), Some(me)) => cursor - me,
+        _ => aim,
     };
     // Casts not sent yet, and new ones after them, each toward the cursor as its key went down.
     let mut casts = PlayerInput { casts: desired.0.casts, ..default() };
@@ -122,7 +135,7 @@ pub(super) fn read_local_input(
         // A prime has nothing to aim: its key casts it at once, quick cast or not.
         let aimed = my_class.and_then(|def| def.ability(slot)).is_some_and(|ability| ability.kind.aimed());
         if cast_mode.casts_now(shift) || !aimed {
-            casts.order_cast(slot, aim);
+            casts.order_cast(slot, ground_aim);
             aiming.0 = None;
         } else if ready(slot) {
             aiming.0 = Some(slot);
@@ -137,13 +150,13 @@ pub(super) fn read_local_input(
         } else if let Some(slot) = on_icon
             && my_class.and_then(|def| def.ability(slot)).is_some_and(|ability| !ability.kind.aimed())
         {
-            casts.order_cast(slot, aim);
+            casts.order_cast(slot, ground_aim);
             *held_click = true;
         } else if let Some(slot) = on_icon {
             aiming.0 = Some(slot).filter(|&slot| ready(slot));
             *held_click = true;
         } else if let Some(slot) = aiming.0.take() {
-            casts.order_cast(slot, aim);
+            casts.order_cast(slot, ground_aim);
             *held_click = true;
         }
     }
@@ -234,6 +247,12 @@ pub(super) fn show_destination(
 
 /// The point on the ground (gameplay coordinates) under a point on the screen.
 pub(crate) fn ground_at(camera: &Camera, transform: &GlobalTransform, screen: Vec2) -> Option<Vec2> {
+    plane_at(camera, transform, screen, 0.0)
+}
+
+/// The point `height` above the ground under `screen` (a window position), if the camera's ray
+/// through it reaches that height.
+fn plane_at(camera: &Camera, transform: &GlobalTransform, screen: Vec2, height: f32) -> Option<Vec2> {
     let ray = camera.viewport_to_world(transform, screen).ok()?;
-    ray.plane_intersection_point(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)).map(to_gameplay)
+    ray.plane_intersection_point(Vec3::Y * height, InfinitePlane3d::new(Vec3::Y)).map(to_gameplay)
 }
