@@ -80,8 +80,9 @@ const HOUSES: &[(IVec2, IVec2, IVec2)] = &[
     (IVec2::new(9, 14), IVec2::new(5, 4), IVec2::NEG_X),
 ];
 
-/// Stacks of crates (tile, how many high): steps up to a roof.
-const CRATES: &[(IVec2, u8)] = &[(IVec2::new(15, 2), 1), (IVec2::new(14, 2), 2), (IVec2::new(13, 2), 3)];
+/// Stacks of crates (tile, how many high): steps up to a roof, out from under its eaves so
+/// there's head room on top of them.
+const CRATES: &[(IVec2, u8)] = &[(IVec2::new(15, 1), 1), (IVec2::new(14, 1), 2), (IVec2::new(13, 1), 3)];
 
 /// Fences (from, to), round the yards and along the terrace's edge and the tower's top.
 const FENCES: &[(Vec2, Vec2)] = &[
@@ -259,7 +260,8 @@ pub(super) fn build() -> Map {
     for &(lo, size, door) in HOUSES {
         map.house(lo, size, door);
     }
-    // Crates stacked up the east house's south wall, a step at a time, onto its roof.
+    // Crates stacked along the lane's edge below the east house's eaves, a step at a time, up
+    // onto its roof.
     for &(t, high) in CRATES {
         map.crates(t, high);
     }

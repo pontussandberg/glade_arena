@@ -248,3 +248,74 @@ pub(crate) fn noise(seed: u32, i: u32) -> f32 {
     x ^= x >> 12;
     (x & 0xFFFF) as f32 / 65_535.0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arena_shared::map::{CRATE, MapId};
+
+    /// Where along the yard's lane from `pos` along `dir` a blade struck by a striker with its
+    /// feet `feet` high meets the ground, `near` to `far` out.
+    fn struck(pos: Vec2, dir: Vec2, feet: f32, near: f32, far: f32) -> Option<[(f32, f32); 2]> {
+        struck_stretch(MapId::Yard.map(), pos, dir, feet, near, far)
+    }
+
+    #[test]
+    fn on_level_ground_the_whole_lane_is_struck() {
+        assert_eq!(struck(Vec2::new(-34.5, -0.5), Vec2::X, 0.0, 0.5, 3.0), Some([(0.5, 0.0), (3.0, 0.0)]));
+    }
+
+    #[test]
+    fn struck_at_a_terraces_face_it_stops_at_the_foot_of_it() {
+        // The face is at y = 10, out of reach over the lane's ground.
+        let [(from, low), (to, high)] = struck(Vec2::new(-17.5, 8.5), Vec2::Y, 0.0, 0.5, 3.5).unwrap();
+        assert_eq!((from, low, high), (0.5, 0.0, 0.0));
+        assert!(to < 1.5 && to > 1.5 - LANE_STEP * 1.5, "struck to {to} m along, the face is 1.5 m out");
+    }
+
+    #[test]
+    fn struck_out_over_a_drop_it_stops_at_the_edge() {
+        // The south terrace's north edge is at y = -9, with the square far below it.
+        let [(from, low), (to, high)] = struck(Vec2::new(2.5, -11.0), Vec2::Y, 1.5, 0.5, 3.5).unwrap();
+        assert_eq!((from, low, high), (0.5, 1.5, 1.5));
+        assert!(to < 2.0 && to > 1.0, "struck to {to} m along, the edge is 2 m out");
+        // Struck from just past the edge, nothing on the lane is in reach.
+        assert_eq!(struck(Vec2::new(2.5, -11.0), Vec2::Y, 1.5, 2.2, 3.5), None);
+    }
+
+    #[test]
+    fn struck_up_a_ramp_it_lies_on_the_slope_as_far_as_it_reaches() {
+        // The terrace's west stair rises north from y = 6.25, two thirds of a meter a meter.
+        let [(from, low), (to, high)] = struck(Vec2::new(-9.5, 5.0), Vec2::Y, 0.0, 0.5, 3.5).unwrap();
+        assert!((from - 1.25).abs() <= LANE_STEP, "struck from {from} m along, the ramp's foot is 1.25 m out");
+        assert!(((high - low) / (to - from) - 2.0 / 3.0).abs() < 0.05, "struck at a slope of {}", (high - low) / (to - from));
+        assert!(high <= REACH_UP && high > REACH_UP - 0.2, "struck up to {high} m, it reaches {REACH_UP} m");
+    }
+
+    #[test]
+    fn struck_over_a_crate_it_meets_the_crate_top() {
+        // The lane runs onto the lowest of the stack, a crate high, across most of the lane.
+        let [(from, low), (to, high)] = struck(Vec2::new(15.5, 0.0), Vec2::Y, 0.0, 0.5, 2.0).unwrap();
+        assert_eq!((low, high, to), (CRATE, CRATE, 2.0));
+        assert!(from > 0.6 && from < 1.0, "struck the crate from {from} m along, its edge is 1 m out");
+    }
+
+    #[test]
+    fn struck_off_a_high_place_it_strikes_only_air() {
+        // West off the watchtower's top, far over the ground.
+        assert_eq!(struck(Vec2::new(-11.5, -9.0), Vec2::NEG_X, 6.0, 1.0, 3.0), None);
+    }
+
+    #[test]
+    fn the_longest_straight_piece_of_a_run_is_kept() {
+        let mut best = None;
+        // Flat, then a long even rise, then a short flat top.
+        let heights = [0.0, 0.0, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.6];
+        straight(&heights, 3, &mut best);
+        assert_eq!(best, Some((5, 11, 0.0, 0.6)));
+        // Two even halves: the nearer one.
+        let mut best = None;
+        straight(&[0.0, 0.0, 0.0, 0.5, 0.5, 0.5], 0, &mut best);
+        assert_eq!(best.map(|(a, b, ..)| (a, b)), Some((0, 2)));
+    }
+}

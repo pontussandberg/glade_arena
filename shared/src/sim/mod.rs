@@ -413,8 +413,8 @@ mod tests {
         assert!(!projectile_hits(at, &proj, 3, at, SHOT_HEIGHT + 0.5), "jumped over it");
     }
 
-    /// Walks the yard toward each of `targets` in turn (jumping when on the ground and stuck,
-    /// if `hop`), as far as it gets in `ticks` each: where it ends up, and how high.
+    /// Walks the yard toward each of `targets` in turn (jumping when on the ground and stuck
+    /// short of it, if `hop`), as far as it gets in `ticks` each: where it ends up, and how high.
     fn climb(from: Vec2, targets: &[Vec2], hop: bool, ticks: u32) -> (Vec2, f32) {
         let yard = crate::map::MapId::Yard.map();
         let (mut pos, mut motion, mut tick, mut was) = (from, Motion::default(), 0u32, from);
@@ -423,7 +423,7 @@ mod tests {
                 tick += 1;
                 let walk = (target - pos).normalize_or_zero();
                 let grounded = motion.height <= yard.floor_at(pos, motion.height) + 1e-3;
-                let stuck = pos.distance(was) < 0.01;
+                let stuck = pos.distance(was) < 0.01 && pos.distance(target) > 0.3;
                 was = pos;
                 let input = PlayerInput { walk, jump: hop && grounded && stuck, ..default() };
                 pos = move_player(yard, pos, &input, fighter(), &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick);
@@ -437,19 +437,21 @@ mod tests {
         let yard = crate::map::MapId::Yard.map();
         let house = yard.houses.iter().find(|house| house.covers(IVec2::new(13, 3))).unwrap();
         let ridge = yard.height_at(house.center()) + house.ridge();
-        // From the lane beside the stack, hopping up it a crate at a time, onto the eaves and up
-        // the roof's slope to the ridge.
-        let steps = [Vec2::new(15.5, 2.2), Vec2::new(14.5, 2.2), Vec2::new(13.5, 2.2), Vec2::new(13.5, 4.0), Vec2::new(13.5, house.center().y)];
-        let (at, height) = climb(Vec2::new(15.5, 1.2), &steps, true, 90);
+        // From the lane beside the stack, hopping up it a crate at a time along their middles,
+        // onto the eaves and up the roof's slope to the ridge.
+        let (from, stack) = crate_stack(yard);
+        let top = Map::center(stack[2].0);
+        let steps = [Map::center(stack[0].0), Map::center(stack[1].0), top, Vec2::new(top.x, house.lo.y as f32 + 1.0), Vec2::new(top.x, house.center().y)];
+        let (at, height) = climb(from, &steps, true, 90);
         assert!(house.covers(Map::tile_of(at)), "never got onto the roof: at {at}, {height} m up");
         let under = yard.floor_at(at, height);
         assert!((under - ridge).abs() < 0.1, "not over the ridge: over {under} m, the ridge at {ridge} m");
         // Out along the ridge and down the slope to the eaves' edge, it's still up on the roof;
         // a step past them, it falls.
         let eaves = house.lo.as_vec2().y - crate::map::House::EAVES;
-        let (at, height) = climb(Vec2::new(15.5, 1.2), &[steps[0], steps[1], steps[2], steps[3], steps[4], Vec2::new(11.5, eaves + 0.3)], true, 90);
+        let (at, height) = climb(from, &[steps[0], steps[1], steps[2], steps[3], steps[4], Vec2::new(11.5, eaves + 0.3)], true, 90);
         assert!(at.y < house.lo.y as f32 && height > 2.0, "not out on the eaves: at {at}, {height} m up");
-        let (_, height) = climb(Vec2::new(15.5, 1.2), &[steps[0], steps[1], steps[2], steps[3], steps[4], Vec2::new(11.5, eaves - 1.0)], false, 90);
+        let (_, height) = climb(from, &[steps[0], steps[1], steps[2], steps[3], steps[4], Vec2::new(11.5, eaves - 1.0)], false, 90);
         assert!(height < 1e-3, "never fell off past the eaves: {height} m up");
         // Walking, never jumping, it's kept out of the house and stays on the ground.
         let (at, height) = climb(Vec2::new(12.0, 1.0), &[house.center()], false, 120);
@@ -458,6 +460,108 @@ mod tests {
         // Nor jumping at its wall from the ground.
         let (at, _) = climb(Vec2::new(12.0, 1.0), &[house.center()], true, 120);
         assert!(at.y < 3.0 - 0.25, "jumped through the house's wall: {at}");
+    }
+
+    /// The yard's crate stack, lowest first (tile, how many high), and where on the lane beside
+    /// it a climb up it starts.
+    fn crate_stack(yard: &Map) -> (Vec2, Vec<(IVec2, u8)>) {
+        let mut stack = yard.crates.clone();
+        stack.sort_by_key(|&(_, high)| high);
+        (Map::center(stack[0].0) - Vec2::Y * 1.3, stack)
+    }
+
+    #[test]
+    fn the_crates_are_hopped_up_one_at_a_time_along_their_middles() {
+        use crate::map::CRATE;
+        let yard = crate::map::MapId::Yard.map();
+        let (from, stack) = crate_stack(yard);
+        let steps: Vec<Vec2> = stack.iter().map(|&(t, _)| Map::center(t)).collect();
+        for k in 1..=stack.len() {
+            let (t, high) = stack[k - 1];
+            let (at, height) = climb(from, &steps[..k], true, 90);
+            assert!(at.distance(Map::center(t)) < 0.3, "never got to the middle of the crates at {t}: at {at}");
+            assert!((height - CRATE * high as f32).abs() < 1e-3, "not standing on the {high} crates at {t}: {height} m up");
+        }
+        // Not two at once: from the ground, a jump at the second stack doesn't get up it.
+        let (at, height) = climb(steps[1] - Vec2::Y * 1.3, &[steps[1]], true, 90);
+        assert!(height < CRATE + 1e-3 && at.distance(steps[1]) > 0.5, "jumped straight up two crates: at {at}, {height} m up");
+    }
+
+    /// Walks the yard from `from` toward `target` for `ticks`, never jumping: where it is and how
+    /// it's moving after each tick.
+    fn walk_yard(from: Vec2, keys: &[(Vec2, u32)]) -> Vec<(Vec2, Motion)> {
+        let yard = crate::map::MapId::Yard.map();
+        let (mut pos, mut motion, mut tick, mut out) = (from, Motion::default(), 0u32, Vec::new());
+        for &(walk, ticks) in keys {
+            for _ in 0..ticks {
+                tick += 1;
+                let input = PlayerInput { walk, ..default() };
+                pos = move_player(yard, pos, &input, fighter(), &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick);
+                out.push((pos, motion));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn walking_turns_and_stops_without_skating() {
+        let top = fighter().def().move_speed;
+        // Down the open lane west of the village, then turning north.
+        let from = Vec2::new(-34.5, -0.5);
+        let ticks = TICK_HZ as u32;
+        let run = walk_yard(from, &[(Vec2::X, ticks), (Vec2::Y, ticks)]);
+        assert!((run[ticks as usize - 1].1.along.x - top).abs() < top * 0.02, "not running east at full speed");
+        // A quarter of a second after turning, nearly nothing of the old way is left, and it's
+        // well on its way the new one.
+        let turned = run[(ticks + ticks / 4) as usize].1.along;
+        assert!(turned.x.abs() < top * 0.1, "still skating east at {} m/s a quarter of a second after turning", turned.x);
+        assert!(turned.y > top * 0.9, "only going north at {} m/s", turned.y);
+        // Let go, it slides only a little, and comes to rest within a quarter of a second.
+        let stop = walk_yard(from, &[(Vec2::X, ticks), (Vec2::ZERO, ticks)]);
+        let slid = stop.last().unwrap().0.x - stop[ticks as usize - 1].0.x;
+        assert!(slid > 0.02 && slid < 0.4, "slid {slid} m to a stop");
+        assert_eq!(stop[(ticks + ticks / 4) as usize].1.along, Vec2::ZERO, "still sliding a quarter of a second after letting go");
+    }
+
+    #[test]
+    fn holding_jump_jumps_again_each_time_it_lands_and_never_in_the_air() {
+        let yard = crate::map::MapId::Yard.map();
+        let (mut pos, mut motion, mut takeoffs) = (Vec2::new(-34.5, -0.5), Motion::default(), 0);
+        for tick in 1..=4 * TICK_HZ as u32 {
+            let before = motion;
+            let grounded = before.height <= yard.floor_at(pos, before.height) + 1e-3;
+            pos = move_player(yard, pos, &PlayerInput { jump: true, ..default() }, fighter(), &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick);
+            // A jump's kick: going up, from standing or falling (landing only stops the fall).
+            if motion.rise > 0.0 && before.rise <= 0.0 {
+                assert!(grounded, "jumped in the air on tick {tick}, {} m up", before.height);
+                takeoffs += 1;
+            }
+        }
+        assert!(takeoffs >= 3, "held for four seconds, jumped {takeoffs} times");
+    }
+
+    /// Coming at a terrace's face at a slant, sliding along it, or round its corner, no part of
+    /// the body's square gets over it, as walking straight at it doesn't.
+    #[test]
+    fn walking_at_a_terraces_face_at_a_slant_keeps_the_body_out_of_it() {
+        use crate::map::{CLIMB, NAV_RADIUS};
+        let yard = crate::map::MapId::Yard.map();
+        // The upper village's south face is at y = 10, sheer, between its stairs; it turns north
+        // at its west end, x = -22.
+        for (from, to) in [(Vec2::new(-17.5, 7.5), Vec2::new(-12.5, 12.5)), (Vec2::new(-20.5, 9.0), Vec2::new(-13.5, 10.5)), (Vec2::new(-14.0, 7.5), Vec2::new(-20.0, 12.0))] {
+            let walk = (to - from).normalize();
+            for (tick, (at, motion)) in walk_yard(from, &[(walk, 3 * TICK_HZ as u32)]).into_iter().enumerate() {
+                assert_eq!(motion.height, 0.0, "{from} -> {to}: got up the face");
+                // All over the body's square, finer than the walk looks.
+                for i in 0..=8 {
+                    for j in 0..=8 {
+                        let o = (Vec2::new(i as f32, j as f32) / 4.0 - Vec2::ONE) * NAV_RADIUS;
+                        let over = yard.height_at(at + o) - motion.height;
+                        assert!(over <= CLIMB * o.length() + 1e-3, "{from} -> {to}: on tick {tick} at {at}, the body's edge at {} is over the face, {over} m up", at + o);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

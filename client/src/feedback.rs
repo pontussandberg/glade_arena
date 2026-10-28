@@ -107,6 +107,20 @@ fn number_scale(amount: i32) -> f32 {
     (NUMBER_SIZE.0 + (NUMBER_SIZE.1 - NUMBER_SIZE.0) * heft) / NUMBER_SIZE.1
 }
 
+/// How the number for the hit `seq` is thrown (pixels a second, right and up): a little to one
+/// side of straight up (`NUMBER_TILT`), which and how far picked from the hit.
+fn number_throw(seq: u32) -> Vec2 {
+    let r = |k: u32| crate::swish::noise(seq, k);
+    let tilt = (NUMBER_TILT.0 + (NUMBER_TILT.1 - NUMBER_TILT.0) * r(1)) * if r(2) < 0.5 { -1.0 } else { 1.0 };
+    Vec2::new(tilt.sin(), tilt.cos()) * NUMBER_THROW
+}
+
+/// How far (pixels, right and up) a number thrown at `throw` has flown `age` seconds on: up and
+/// a little aside, slowing, then falling (`NUMBER_GRAVITY`).
+fn number_flown(throw: Vec2, age: f32) -> Vec2 {
+    throw * age - Vec2::Y * NUMBER_GRAVITY * age * age / 2.0
+}
+
 /// A fighter's bars: the health bar (this entity) and its parts.
 #[derive(Component)]
 struct Bars {
@@ -469,7 +483,7 @@ fn hide_the_dead(
 
 /// A number for each new hit in a fighter's `RecentHits` (server-confirmed). The hits already
 /// there when we first see a fighter are only noted. Each is as big as the blow
-/// (`number_size`), thrown off a little to a side picked at random. Damage to us is in our
+/// (`number_scale`), thrown off a little to a side picked at random (`number_throw`). Damage to us is in our
 /// enemies' red; a crit is bigger, flame-gold, and ends in "!". A heal is a green "+".
 fn spawn_damage_numbers(
     mut commands: Commands,
@@ -534,10 +548,7 @@ fn spawn_damage_numbers(
                 (HitKind::Damage, true) => (hit.amount.to_string(), palette::ENEMY),
                 (HitKind::Damage, false) => (hit.amount.to_string(), palette::SUN),
             };
-            // A little to one side of straight up, which and how far picked from the hit.
-            let r = |k: u32| crate::swish::noise(hit.seq, k);
-            let tilt = (NUMBER_TILT.0 + (NUMBER_TILT.1 - NUMBER_TILT.0) * r(1)) * if r(2) < 0.5 { -1.0 } else { 1.0 };
-            let throw = Vec2::new(tilt.sin(), tilt.cos()) * NUMBER_THROW;
+            let throw = number_throw(hit.seq);
             // Alternate sides from the second on, so numbers landing together don't overlap.
             let side = if i % 2 == 0 { 1.0 } else { -1.0 };
             let lasts = if crit { CRIT_NUMBER_SECONDS } else { NUMBER_SECONDS };
@@ -583,14 +594,66 @@ fn float_damage_numbers(
             node.left = left;
             node.top = top;
         }
-        // Thrown: up and a little aside, slowing, then falling.
-        let flown = info.throw * age - Vec2::Y * NUMBER_GRAVITY * age * age / 2.0;
+        let flown = number_flown(info.throw, age);
         let pop = if info.crit { 1.0 + CRIT_POP * (1.0 - t / CRIT_POP_PART).max(0.0).powi(2) } else { 1.0 };
         let next = UiTransform { translation: Val2::px(flown.x, -flown.y), scale: Vec2::splat(info.scale * pop), ..default() };
         transform.set_if_neq(next);
         let alpha = ((1.0 - t) / NUMBER_FADE_PART).min(1.0);
         if color.0.alpha() != alpha {
             color.0.set_alpha(alpha);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_number_grows_with_the_damage_up_to_full_size_at_full_damage() {
+        let scales: Vec<f32> = (0..=200).map(number_scale).collect();
+        assert!((scales[0] - NUMBER_SIZE.0 / NUMBER_SIZE.1).abs() < 1e-6, "nothing's number isn't the smallest");
+        for amount in 1..=NUMBER_FULL_DAMAGE as usize {
+            assert!(scales[amount] > scales[amount - 1], "{amount} damage's number is no bigger than {}'s", amount - 1);
+        }
+        for amount in NUMBER_FULL_DAMAGE as usize..=200 {
+            assert_eq!(scales[amount], 1.0, "{amount} damage's number isn't full size");
+        }
+        // Small blows still read: a tenth of full damage is well over the smallest.
+        assert!(scales[8] - scales[0] > (1.0 - scales[0]) * 0.15);
+    }
+
+    #[test]
+    fn numbers_are_thrown_a_little_off_straight_up_to_either_side() {
+        let throws: Vec<Vec2> = (0..2000).map(number_throw).collect();
+        for (seq, throw) in throws.iter().enumerate() {
+            assert!((throw.length() - NUMBER_THROW).abs() < 1e-3, "hit {seq}: thrown at {} px/s", throw.length());
+            let tilt = throw.x.atan2(throw.y).abs();
+            assert!(tilt >= NUMBER_TILT.0 - 1e-5 && tilt <= NUMBER_TILT.1 + 1e-5, "hit {seq}: thrown {} degrees off straight up", tilt.to_degrees());
+        }
+        // Either side about as often, and not the same side hit after hit.
+        let right = throws.iter().filter(|throw| throw.x > 0.0).count();
+        assert!((800..=1200).contains(&right), "{right} of 2000 thrown right");
+        let swaps = throws.windows(2).filter(|w| (w[0].x > 0.0) != (w[1].x > 0.0)).count();
+        assert!(swaps > 700, "only {swaps} changes of side in 2000 hits");
+        // How far off straight up differs from hit to hit.
+        let (least, most) = throws.iter().map(|throw| throw.x.abs()).fold((f32::INFINITY, 0.0f32), |(lo, hi), x| (lo.min(x), hi.max(x)));
+        assert!(most - least > (NUMBER_TILT.1 - NUMBER_TILT.0).sin() * NUMBER_THROW * 0.8);
+    }
+
+    #[test]
+    fn a_number_flies_up_slows_and_falls_back_before_it_is_gone() {
+        for seq in 0..50 {
+            let throw = number_throw(seq);
+            let path: Vec<Vec2> = (0..=90).map(|i| number_flown(throw, NUMBER_SECONDS * i as f32 / 90.0)).collect();
+            let top = path.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
+            // Up well clear of the bar, then back down to it while it still shows.
+            assert!(top > NUMBER_SIZE.1, "hit {seq}: thrown only {top} px up");
+            let peak = path.iter().position(|p| p.y == top).unwrap();
+            assert!(path[..=peak].windows(2).all(|w| w[1].y >= w[0].y) && path[peak..].windows(2).all(|w| w[1].y <= w[0].y), "hit {seq}: doesn't rise and then fall");
+            assert!(path.last().unwrap().y < 0.0, "hit {seq}: never falls back past the bar");
+            // Drifting to its side all the way, never back across.
+            assert!(path[1..].iter().all(|p| p.x.signum() == throw.x.signum()));
         }
     }
 }

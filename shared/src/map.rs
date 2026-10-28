@@ -43,7 +43,7 @@ mod yard;
 /// Player clearance used when checking straight-line movement against walls. Smaller than the
 /// drawn pawn (0.48 m), so a fighter can brush a wall corner slightly; it must stay below 0.5 so
 /// that from any tile center the next path step is always in a clear line.
-const NAV_RADIUS: f32 = 0.3;
+pub(crate) const NAV_RADIUS: f32 = 0.3;
 
 /// How fast a fighter walks through marsh, as a share of its speed.
 pub const MARSH_SPEED: f32 = 0.6;
@@ -652,9 +652,10 @@ impl Map {
     /// `line_walkable` for a body with its feet `feet` high, on the ground or up in the air:
     /// water, chasms, trees and the forest block it at any height; anything else is a collider,
     /// in its way only below its top (`colliders_block`), and stood on over it. Where it ends up
-    /// may be no higher over its feet than `CLIMB` lets it step, and its leading edge is kept
-    /// off ground rising sheer ahead (a terrace's face). A body already reaching into a blocked
-    /// tile may move out of it, never further in.
+    /// may be no higher over its feet than `CLIMB` lets it step, and the edge of its square
+    /// comes over no ground rising more steeply than that either: come at a terrace's face
+    /// straight, at a slant or round its corner, the body stops at it, not in it. A body already
+    /// reaching into a blocked tile may move out of it, never further in.
     pub fn line_walkable_at(&self, a: Vec2, b: Vec2, feet: f32) -> bool {
         let blocks = |t: IVec2| {
             let tile = self.get(t);
@@ -666,10 +667,13 @@ impl Map {
             void || self.colliders_on(t).any(|collider| collider.blocks(a, b, feet))
         };
         let length = (b - a).length();
-        let ahead = b + (b - a).normalize_or_zero() * NAV_RADIUS;
+        // Whether the point `o` off the body's middle at `p`, `length` along, is over ground too
+        // steep to have climbed to: checked round the edge of its square, its corners and the
+        // middles of its sides, for any newly there.
+        let sheer = |p: Vec2, o: Vec2, length: f32| self.height_at(p + o) - feet > CLIMB * (length + o.length()) + 1e-4;
         self.line_blocker_by(a, b, blocks).is_none()
             && self.floor_at(b, feet) - feet <= CLIMB * length + 1e-4
-            && self.height_at(ahead) - feet <= CLIMB * (length + NAV_RADIUS) + 1e-4
+            && !STEPS.iter().map(|d| d.as_vec2() * NAV_RADIUS).any(|o| sheer(b, o, length) && !sheer(a, o, 0.0))
     }
 
     /// True if a body of radius `NAV_RADIUS` can move in a straight line from `a` to `b`: nothing

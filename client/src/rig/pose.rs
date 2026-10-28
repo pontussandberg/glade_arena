@@ -402,18 +402,19 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
     }
 }
 
-/// How high over its feet (meters) a blade's lowest point is when it starts meeting the ground
-/// where it is rather than where level ground would be (`onto_ground`), fully once it's down.
+/// How high over its feet (meters) a blade's lowest point is when it starts reaching on down
+/// where the ground falls away (`onto_ground`), fully once it's down.
 const GROUND_BAND: f32 = 0.5;
 
 /// A blade coming down meets the ground where it is (`swish::struck_surface`), not where level
-/// ground at its striker's feet would be: up a slope or onto a step ahead it stops short on it,
-/// down one or out over a drop it reaches on down (as far as `swish::REACH_DOWN`, past that it
-/// cuts the air). The weapon arm swings it there (Newton's method), keeping it as deep in the
-/// ground as it goes into level ground, as far as its lowest point (`ends`: its point, its
-/// edge's corner, in its own space) comes near the ground, and `striking` of the way (a carried
-/// blade is kept on the ground by `Moves::rests`). `pose` puts the rig together from its angles;
-/// it stands at `at`, its feet `feet` high, drawn `size` times its figure's size.
+/// ground at its striker's feet would be: up a slope or onto a step ahead it stops on it (as
+/// deep in it as it goes into level ground), never in it; down one or out over a drop it reaches
+/// on down as it comes near the ground (`GROUND_BAND`), `striking` of the way (as far as
+/// `swish::REACH_DOWN`, past that it cuts the air). The weapon arm swings its lowest point
+/// (`ends`: its point, its edge's corner, in its own space) there (the secant method). A carried
+/// blade (`striking` nothing) is kept on the ground by `Moves::rests`. `pose` puts the rig
+/// together from its angles; it stands at `at`, its feet `feet` high, drawn `size` times its
+/// figure's size.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn onto_ground(map: &arena_shared::map::Map, at: Vec2, feet: f32, size: f32, ends: [Vec3; 2], striking: f32, angles: &Angles, pose: impl Fn(&Angles) -> Posed) -> Posed {
     use crate::swish::{REACH_DOWN, REACH_UP, struck_surface};
@@ -422,17 +423,17 @@ pub(crate) fn onto_ground(map: &arena_shared::map::Map, at: Vec2, feet: f32, siz
         if p.y < q.y { p } else { q }
     };
     let level = pose(angles);
-    let deep = lowest(&level).y;
-    let near = (1.0 - deep / GROUND_BAND).clamp(0.0, 1.0) * striking;
-    if near <= 0.0 {
+    if striking <= 0.0 {
         return level;
     }
+    let deep = lowest(&level).y;
     let swung = |by: f32| pose(&Angles { weapon_arm: angles.weapon_arm + by, ..*angles });
-    // How far its lowest point `low` is over where it should be: as deep as in level ground,
-    // under the ground where it is now.
+    // How far its lowest point `low` is over where it should be, by the ground under it now:
+    // stopped on what rises over it, the lower ground followed as it comes near it.
     let over = |low: Vec3| {
-        let ground = struck_surface(map, at + arena::to_gameplay(low), feet) - feet;
-        low.y - deep - near * ground.clamp(-REACH_DOWN, REACH_UP)
+        let ground = (struck_surface(map, at + arena::to_gameplay(low), feet) - feet).clamp(-REACH_DOWN, REACH_UP);
+        let met = if ground > 0.0 { deep.max(ground + deep.min(0.0)) } else { deep + ground * (1.0 - deep / GROUND_BAND).clamp(0.0, 1.0) * striking };
+        low.y - met
     };
     // The secant method: how fast the lowest point drops as the arm swings, from the try before
     // (the first time, from a nudge).
@@ -580,3 +581,78 @@ fn strike_at(ticks: f32, strike_ticks: f32, contact: f32, heavy: bool, throws: b
     (strike, whole - strike_ticks)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::swish::REACH_DOWN;
+    use arena_shared::map::{CRATE, Map, MapId};
+
+    /// The revenant's slam in `phase`, the revenant standing at `at` on the yard facing `look`:
+    /// where its blade's lowest point is (meters, in the world, from where it stands), posed for
+    /// level ground and as `onto_ground` poses it.
+    fn slammed(phase: Phase, at: Vec2, look: Vec2) -> [Vec3; 2] {
+        let map = MapId::Yard.map();
+        let class = ClassId::all().find(|class| class.def().figure() == "revenant").unwrap();
+        let moves = moves("revenant");
+        let size = drawn_size(class, false);
+        let (_, length) = arena::blade_span("revenant");
+        let ends = [Vec3::Y * length, arena::glaive_edge(1.0)];
+        let angles = targets(moves, phase, Vec2::ZERO, 0.0);
+        let free = 1.0 - phase.braced();
+        let pose = |angles: &Angles| assemble(moves, angles, angles, look, 0.0, 0.0, moves.stretch, 1.0, free);
+        let feet = map.height_at(at);
+        let lowest = |posed: &Posed| ends.map(|end| posed.held_on_body.transform_point(end) * size).into_iter().min_by(|p, q| p.y.total_cmp(&q.y)).unwrap();
+        [lowest(&pose(&angles)), lowest(&onto_ground(map, at, feet, size, ends, 1.0 - free, &angles, &pose))].map(|low| low + Vec3::Y * feet)
+    }
+
+    /// Fully struck: the slam's blade as low as it comes.
+    const STRUCK: Phase = Phase { draw: 0.0, throw: 1.0, dashing: 0.0, second: 1.0 };
+
+    /// Where to stand, facing north, for the struck blade's lowest point to come down at `p`.
+    fn standing_to_strike(p: Vec2) -> Vec2 {
+        let [level, _] = slammed(STRUCK, Vec2::new(-34.5, -0.5), Vec2::Y);
+        p - arena::to_gameplay(level)
+    }
+
+    #[test]
+    fn on_level_ground_the_blade_is_struck_as_it_is_posed() {
+        let at = Vec2::new(-34.5, -0.5);
+        let [level, struck] = slammed(STRUCK, at, Vec2::Y);
+        // Near the ground, so `onto_ground` has something to do where the ground isn't level.
+        assert!(level.y < GROUND_BAND * 0.5, "the slam only comes down to {} m", level.y);
+        assert!(level.distance(struck) < 1e-4, "moved from {level} to {struck} on level ground");
+    }
+
+    #[test]
+    fn struck_onto_a_crate_the_blade_stops_on_it() {
+        let yard = MapId::Yard.map();
+        let (t, _) = *yard.crates.iter().find(|&&(_, high)| high == 1).unwrap();
+        let at = standing_to_strike(Map::center(t));
+        assert!(yard.height_at(at) == 0.0 && yard.floor_at(at, 0.0) == 0.0, "standing at {at} isn't on the ground beside the crate");
+        let [level, struck] = slammed(STRUCK, at, Vec2::Y);
+        // On it, as deep in it as in level ground (if it goes in).
+        let on = CRATE + level.y.min(0.0);
+        assert!((struck.y - on).abs() < 0.03, "struck down to {} m, the crate's top is {CRATE} m; {} m in level ground", struck.y, level.y);
+        // Coming down on it, and in the follow-through, never in it or whatever else it's over.
+        for throw in [0.3, 0.6, 0.8, 0.9] {
+            let [level, coming] = slammed(Phase { throw, second: throw, ..STRUCK }, at, Vec2::Y);
+            let under = crate::swish::struck_surface(yard, at + arena::to_gameplay(coming), 0.0);
+            assert!(coming.y > under + level.y.min(0.0) - 0.03, "{throw} of the way down: at {} m over {under} m, posed for level ground at {} m", coming.y, level.y);
+        }
+    }
+
+    #[test]
+    fn struck_out_over_a_drop_the_blade_reaches_on_down_as_far_as_it_reaches() {
+        // Off the south terrace's north edge (y = -9), over the square far below.
+        let yard = MapId::Yard.map();
+        let at = standing_to_strike(Vec2::new(2.5, -8.5));
+        assert!(yard.height_at(at) == 1.5 && at.y < -9.3, "standing at {at} isn't on the terrace");
+        let [level, struck] = slammed(STRUCK, at, Vec2::Y);
+        // On down, about as far as it's near the ground, never past its reach.
+        let reached = level.y - struck.y;
+        assert!(reached > REACH_DOWN * (1.0 - (level.y - 1.5) / GROUND_BAND) - 0.03 && reached < REACH_DOWN + 0.03, "struck down to {} m, posed for level ground to {} m", struck.y, level.y);
+        // Drawn back, the blade is up over the striker's head, left as it's posed.
+        let [level, drawn] = slammed(Phase { draw: 1.0, throw: 0.0, dashing: 0.0, second: 0.0 }, at, Vec2::Y);
+        assert!(level.y > yard.height_at(at) + GROUND_BAND && level.distance(drawn) < 1e-4);
+    }
+}
