@@ -248,6 +248,14 @@ pub struct Map {
     pub shop_faces: Vec2,
     /// The tiles of the shopkeeper's counter, behind them (walls), drawn as their stall.
     pub counter: Vec<IVec2>,
+    /// Houses: wall tiles under each, drawn as a house (`House`).
+    pub houses: Vec<House>,
+    /// Fences (from, to): decoration, walked through.
+    pub fences: Vec<(Vec2, Vec2)>,
+    /// A village well (a rock tile, drawn as the well).
+    pub well: Option<Vec2>,
+    /// Flower beds (tile centers): decoration.
+    pub gardens: Vec<Vec2>,
     /// Meters inside the playable area's edge (negative outside). Continuous, for terrain and
     /// decoration.
     edge: fn(Vec2) -> f32,
@@ -263,6 +271,30 @@ pub struct Map {
 /// Flat ground: most maps' `relief`.
 pub fn flat(_: Vec2) -> f32 {
     0.0
+}
+
+/// A house: its footprint of tiles (`lo` inclusive to `hi` exclusive), walls to the sim, and
+/// which way its door faces (a unit direction on the grid).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct House {
+    pub lo: IVec2,
+    pub hi: IVec2,
+    pub door: IVec2,
+}
+
+impl House {
+    pub fn covers(&self, t: IVec2) -> bool {
+        t.x >= self.lo.x && t.y >= self.lo.y && t.x < self.hi.x && t.y < self.hi.y
+    }
+
+    /// Its middle, and its size (meters), on the gameplay plane.
+    pub fn center(&self) -> Vec2 {
+        (self.lo + self.hi).as_vec2() / 2.0
+    }
+
+    pub fn size(&self) -> Vec2 {
+        (self.hi - self.lo).as_vec2()
+    }
 }
 
 /// How much the ground may rise per meter walked (a tangent): steeper is a cliff, walked down
@@ -303,6 +335,10 @@ impl Map {
             shop: None,
             shop_faces: Vec2::NEG_Y,
             counter: Vec::new(),
+            houses: Vec::new(),
+            fences: Vec::new(),
+            well: None,
+            gardens: Vec::new(),
             edge,
             relief: flat,
             beyond,
@@ -340,6 +376,32 @@ impl Map {
     fn set(&mut self, p: Vec2, tile: Tile) {
         if let Some(i) = self.index(Map::tile_of(p)) {
             self.tiles[i] = tile;
+        }
+    }
+
+    /// A house with its lower-left tile at `lo`, `size` tiles, its door facing `door`: walls
+    /// under it (no mirror).
+    fn house(&mut self, lo: IVec2, size: IVec2, door: IVec2) {
+        let house = House { lo, hi: lo + size, door };
+        for y in lo.y..house.hi.y {
+            for x in lo.x..house.hi.x {
+                if let Some(i) = self.index(IVec2::new(x, y)) {
+                    self.tiles[i] = Tile::Wall;
+                }
+            }
+        }
+        self.houses.push(house);
+    }
+
+    /// Every tile in the rectangle from `lo` to `hi` (tile centers, both inclusive), no mirror.
+    fn fill(&mut self, lo: Vec2, hi: Vec2, tile: Tile) {
+        let (a, b) = (Map::tile_of(lo), Map::tile_of(hi));
+        for y in a.y.min(b.y)..=a.y.max(b.y) {
+            for x in a.x.min(b.x)..=a.x.max(b.x) {
+                if let Some(i) = self.index(IVec2::new(x, y)) {
+                    self.tiles[i] = tile;
+                }
+            }
         }
     }
 
@@ -991,7 +1053,7 @@ mod tests {
     #[test]
     fn the_yards_high_ground_is_climbed_by_its_ramp_not_its_sides() {
         let m = MapId::Yard.map();
-        let (middle, radius, top) = (Vec2::new(-18.0, 9.0), 6.0, 4.0);
+        let (middle, radius, top) = (Vec2::new(-10.0, 20.0), 5.0, 4.0);
         assert!((m.height_at(middle) - top).abs() < 1e-5, "the plateau's top");
         // Up its sheer east side is no way; down it is.
         let (foot, brink) = (middle + Vec2::X * (radius + 0.7), middle + Vec2::X * (radius - 0.2));
