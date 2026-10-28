@@ -21,9 +21,10 @@ pub enum Attack {
 /// One tick of the auto-attack. A click (`input.fire`) with no attack in progress, or once the
 /// last one is done (`Swing::ready_at`), starts one: the aim locks. Any other click is dropped,
 /// not queued. When its windup is over the attack goes off (returned here) from wherever the
-/// player stands then (winding up roots it, but a dash mid-windup still moves it); after that
-/// it may walk away while the attack timer runs out. An attack started while `quick_until` is
-/// armed is quick (`follow_up`), and uses it up as it goes off: cancelled first, the next is.
+/// player stands then (winding up roots it, but a dash mid-windup still moves it), or a shot
+/// with its button still held (`input.draw`) once that's let go; after that it may walk away
+/// while the attack timer runs out. An attack started while `quick_until` is armed is quick
+/// (`follow_up`), and uses it up as it goes off: cancelled first, the next is.
 pub fn step_attack(
     tick: u32,
     owner: PeerId,
@@ -32,15 +33,25 @@ pub fn step_attack(
     input: &PlayerInput,
     state: AttackState,
 ) -> (AttackState, Option<Attack>) {
-    let (state, released) = release_attack(tick, owner, class, pos, state);
+    let (state, released) = release_attack(tick, owner, class, pos, input.draw, state);
     (start_attack(tick, class, input, state), released)
 }
 
 /// `step_attack`'s first half: the windup going off, if it's over, and the attack done, if its
-/// timer has run out. The server resolves the swing (and arms `quick_until` if it landed) before
-/// the second half, `start_attack`, so an attack started on the same tick is quickened by it.
-pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, mut state: AttackState) -> (AttackState, Option<Attack>) {
+/// timer has run out. A shot drawn is held so while its button is (`held`: `PlayerInput::draw`)
+/// and goes off the tick it's let go, its backswing from then (`Swing::held`); a swing isn't.
+/// The server resolves the swing (and arms `quick_until` if it landed) before the second half,
+/// `start_attack`, so an attack started on the same tick is quickened by it.
+pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, held: bool, mut state: AttackState) -> (AttackState, Option<Attack>) {
     let mut released = None;
+    let drawn = state.winding_up().is_some_and(|swing| tick >= swing.releases_at(&class.def().attack));
+    if drawn
+        && held
+        && shoots(class)
+        && let Some(swing) = state.swing.as_mut()
+    {
+        swing.held += 1;
+    }
     if let Some(Swing { dir, quick, .. }) = state.winding_up().filter(|swing| tick >= swing.releases_at(&class.def().attack)) {
         state.released_at = Some(tick);
         // An attack going off uses up the `follow_up` (one cancelled first doesn't), and a
@@ -78,9 +89,21 @@ pub fn start_attack_hasted(tick: u32, class: ClassId, input: &PlayerInput, mut s
     {
         let primed = state.primed.is_some();
         let haste = haste + state.primed.map_or(0.0, |(_, speed)| speed);
-        state.swing = Some(Swing { started_at: tick, dir, quick: state.quick_at(tick as f32), hastened: false, haste, primed });
+        state.swing = Some(Swing { started_at: tick, dir, quick: state.quick_at(tick as f32), hastened: false, haste, primed, held: 0 });
     }
     state
+}
+
+/// Whether `class`'s auto-attack is a shot (`AttackKind::Projectile`): one held drawn while its
+/// button is (`release_attack`), walking slower meanwhile (`draw_speed`).
+pub fn shoots(class: ClassId) -> bool {
+    matches!(class.def().attack.kind, AttackKind::Projectile { .. })
+}
+
+/// How fast (a share of its walking speed) `class` walks by `input` just now: slower holding its
+/// shot drawn (`DRAW_SPEED`), else as fast as it walks.
+pub fn draw_speed(class: ClassId, input: &PlayerInput) -> f32 {
+    if input.draw && shoots(class) { crate::config::DRAW_SPEED } else { 1.0 }
 }
 
 /// An order to move cancels an attack still winding up: it never goes off, and the next may

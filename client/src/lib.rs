@@ -150,6 +150,19 @@ pub struct SentWalks(pub VecDeque<(u32, Vec2)>);
 /// How many sent walks are kept for replaying.
 const SENT_WALKS_KEPT: usize = 64;
 
+/// Which tick each `PlayerCommand::Draw` we sent was for, and whether the attack button was
+/// held, oldest first: what our own fighter's prediction walks slower by (`render::glide`), and
+/// whether our shot is held drawn at a tick before the server says so (`rig`).
+#[derive(Resource, Default)]
+pub struct SentDraws(pub VecDeque<(u32, bool)>);
+
+impl SentDraws {
+    /// Whether the attack button was held at `tick`, as sent.
+    pub fn held_at(&self, tick: u32) -> bool {
+        self.0.iter().rev().find(|(t, _)| *t <= tick).is_some_and(|(_, held)| *held)
+    }
+}
+
 /// The server tick the next walk we send is for: the newest tick our fighter's prediction steps
 /// (`render::glide` sets it each frame); 0 without the action camera, for at once.
 #[derive(Resource, Default)]
@@ -192,6 +205,7 @@ impl Plugin for ClientNetPlugin {
         app.configure_sets(Update, SendCommands.after(PlayerControls));
         app.init_resource::<WalkWhenOrdered>();
         app.init_resource::<SentWalks>();
+        app.init_resource::<SentDraws>();
         app.init_resource::<WalkSchedule>();
         app.add_systems(Update, (forget_walk_on_attack, send_commands).chain().in_set(SendCommands));
         app.add_systems(Update, fake_latency.run_if(resource_changed::<FakeLatency>));
@@ -250,8 +264,9 @@ struct Sent {
     walk: Vec2,
     aim: Vec2,
     climb: f32,
-    /// Whether Space was held, as last sent.
+    /// Whether Space was held, and the attack button, as last sent.
     jump: bool,
+    draw: bool,
     /// When the attack, walk or aim was last sent (`Time<Real>`), to send changes at most once a
     /// tick.
     attack_at: Duration,
@@ -272,12 +287,13 @@ fn send_commands(
     mut client: Query<&mut MessageSender<PlayerCommand>, (With<Client>, With<Connected>)>,
     mut sent: Local<Sent>,
     #[cfg(feature = "render")] mode: Option<Res<crate::camera::CameraMode>>,
-    mut sent_walks: ResMut<SentWalks>,
+    (mut sent_walks, mut sent_draws): (ResMut<SentWalks>, ResMut<SentDraws>),
     schedule: Res<WalkSchedule>,
 ) {
     let (Ok(mut sender), Ok(attack)) = (client.single_mut(), me.single()) else {
         *sent = Sent::default();
         sent_walks.0.clear();
+        sent_draws.0.clear();
         // Nothing carries over to our next fighter: not a destination, not a click.
         desired.0 = PlayerInput { aim: desired.0.aim, ..default() };
         stop.0 = false;
@@ -340,6 +356,15 @@ fn send_commands(
     if input.jump != sent.jump {
         send(PlayerCommand::Jump(input.jump));
         sent.jump = input.jump;
+    }
+    // The attack button, for the tick a walk would be (`PlayerCommand::Draw`).
+    if input.draw != sent.draw {
+        send(PlayerCommand::Draw(input.draw, schedule.0));
+        sent.draw = input.draw;
+        sent_draws.0.push_back((schedule.0, input.draw));
+        while sent_draws.0.len() > SENT_WALKS_KEPT {
+            sent_draws.0.pop_front();
+        }
     }
 }
 

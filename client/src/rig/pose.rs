@@ -467,7 +467,8 @@ fn soft_min(a: f32, b: f32) -> f32 {
 /// The attack as the joints' targets see it at `now`: as far ahead of its own clock as the
 /// joints lag behind their targets on their springs (`Moves::stiffness`), so they're where the
 /// attack is when it is, the strike reaching its contact pose as the attack goes off, not a tick
-/// or two after. A windup that will have gone off by then has (`windup` and `released` as for
+/// or two after. A windup that will have gone off by then has, unless it's a shot held drawn
+/// (`Swing::held`), whose going off is the server's word (`windup` and `released` as for
 /// `strike_phase`).
 pub(crate) fn ahead_of_springs(class: ClassId, moves: &Moves, windup: Option<Swing>, released: Option<f32>, now: f32) -> (Option<Swing>, Option<f32>, f32) {
     let attack = &class.def().attack;
@@ -476,7 +477,7 @@ pub(crate) fn ahead_of_springs(class: ClassId, moves: &Moves, windup: Option<Swi
     let lead = if moves.throws { 0.0 } else { crate::spring::Spring::lag(moves.stiffness, moves.damping) * TICK_HZ as f32 };
     let ahead = now + lead;
     match windup {
-        Some(swing) if ahead >= swing.releases_at(attack) as f32 => (None, Some((ahead - swing.releases_at(attack) as f32) * swing.speed(attack)), ahead),
+        Some(swing) if swing.held == 0 && ahead >= swing.releases_at(attack) as f32 => (None, Some((ahead - swing.releases_at(attack) as f32) * swing.speed(attack)), ahead),
         _ => (windup, released.map(|since| since + lead), ahead),
     }
 }
@@ -485,8 +486,9 @@ pub(crate) fn ahead_of_springs(class: ClassId, moves: &Moves, windup: Option<Swi
 /// (draw, throw, smear, second) for its `windup` in progress (if any), or the attack that went
 /// off `released` ticks ago (at normal attack speed). Draw: drawing back (0..1), most of it by
 /// `Moves::draw_end` and the rest creeping on through the hold (`COIL`), then striking during
-/// the windup, up to the contact pose as the attack goes off; then the rest of the strike, and
-/// the follow-through easing back to carrying. Smear: how far the weapon is stretched out
+/// the windup, up to the contact pose as the attack goes off (a shot held drawn, `Swing::held`,
+/// stays drawn till then, and strikes as it goes); then the rest of the strike, and the
+/// follow-through easing back to carrying. Smear: how far the weapon is stretched out
 /// (0..1), longest as the strike is done. Second: the off hand's cut, for a figure that cuts
 /// twice, whipping through as the server's second cut lands (`Phase::second`).
 pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, windup: Option<Swing>, released: Option<f32>, now: f32) -> (f32, f32, f32, f32) {
@@ -521,9 +523,11 @@ pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, 
     };
     match (windup, released) {
         (Some(windup), _) => {
-            let progress = windup.windup_progress(now, &def.attack);
             let windup_ticks = windup.windup_ticks(&def.attack) as f32;
             let striking = strike_ticks(&windup);
+            // Held drawn, no further than the strike's start.
+            let progress = windup.windup_progress(now, &def.attack);
+            let progress = if windup.held > 0 { progress.min(1.0 - striking / windup_ticks) } else { progress };
             let (strike, _) = strike_at(striking - (1.0 - progress) * windup_ticks, striking, moves.contact, moves.heavy, moves.throws);
             // What's left of the strike eases out over the draw, and how much the pose
             // carries only ever shrinks, from what it was when the windup began.

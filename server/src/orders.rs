@@ -14,12 +14,12 @@ use crate::rooms::{InRoom, Lobby};
 #[derive(Component)]
 pub struct ActionMode;
 
-/// Server-only: walks ordered for ticks still to come (`PlayerCommand::Walk`'s tick), oldest
-/// first, each with the tick it arrived on; and the arrival tick of the walk being stepped now
-/// (told back in `Walking`).
+/// Server-only: walks and the attack button's holds ordered for ticks still to come
+/// (`PlayerCommand::Walk`'s and `Draw`'s tick), oldest first, each with the tick it arrived on;
+/// and the arrival tick of the walk being stepped now (told back in `Walking`).
 #[derive(Component, Default)]
 pub struct WalkOrders {
-    pending: std::collections::VecDeque<(u32, Vec2, u32)>,
+    pending: std::collections::VecDeque<(u32, PlayerCommand, u32)>,
     received: u32,
 }
 
@@ -37,8 +37,9 @@ pub(super) fn apply_commands(
         let Ok(mut receiver) = links.get_mut(controlled_by.owner) else { continue };
         for command in receiver.receive() {
             match command {
-                // A walk for a tick to come waits for it (`move_players`).
-                PlayerCommand::Walk(dir, tick) if tick > now => orders.pending.push_back((tick, dir, now)),
+                // A walk (or the attack button's hold) for a tick to come waits for it
+                // (`move_players`).
+                PlayerCommand::Walk(_, tick) | PlayerCommand::Draw(_, tick) if tick > now => orders.pending.push_back((tick, command, now)),
                 PlayerCommand::Walk(..) => {
                     orders.received = now;
                     command.apply(&mut input);
@@ -75,14 +76,16 @@ pub(super) fn move_players(
 ) {
     let now = timeline.tick().0;
     for (id, mut pos, class, mut input, (attack, action), mut dashing, chilled, hasted, room, frenzy, sluggish, (mut walking, mut orders), mut motion) in &mut players {
-        // Walks ordered for this tick (or one gone by) take now.
-        while let Some(&(tick, dir, received)) = orders.pending.front() {
+        // Walks (and the attack button's holds) ordered for this tick (or one gone by) take now.
+        while let Some(&(tick, command, received)) = orders.pending.front() {
             if tick > now {
                 break;
             }
             orders.pending.pop_front();
-            orders.received = received;
-            PlayerCommand::Walk(dir, tick).apply(&mut input);
+            if let PlayerCommand::Walk(..) = command {
+                orders.received = received;
+            }
+            command.apply(&mut input);
         }
         let map = lobby.map(room);
         let mut next = *dashing;

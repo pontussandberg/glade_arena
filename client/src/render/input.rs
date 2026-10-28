@@ -168,6 +168,9 @@ pub(super) fn read_local_input(
     let board = keys.pressed(KeyCode::Tab);
     let attacking = if mode.free { mouse.pressed(MouseButton::Left) && attack_ready && !board } else { mouse.just_pressed(MouseButton::Left) };
     let fire = desired.0.fire || (attacking && aiming.0.is_none() && !*held_click);
+    // Held down to attack (not for a control, nor to cast): a shot drawn is held so until it's
+    // let go, walking slower meanwhile (`PlayerInput::draw`).
+    let draw = mouse.pressed(MouseButton::Left) && aiming.0.is_none() && !*held_click && !board;
     // With the action camera, WASD walks relative to it, dropping any destination; otherwise S
     // stops: drops the destination (as in LoL).
     let walk = if mode.free {
@@ -188,7 +191,7 @@ pub(super) fn read_local_input(
     // tap is held for a frame at least. `casts` and `fire` are kept until they've been sent
     // (`send_commands` clears them), so a short click isn't missed.
     let jump = mode.free && (keys.pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Space)) && !board;
-    desired.0 = PlayerInput { move_to, walk, aim, climb, fire, jump, casts: casts.casts, ..default() };
+    desired.0 = PlayerInput { move_to, walk, aim, climb, fire, draw, jump, casts: casts.casts, ..default() };
 }
 
 /// What a cast of `kind` by our fighter at `me` is aimed with, aiming `aim`: in action mode a

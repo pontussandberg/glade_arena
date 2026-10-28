@@ -196,6 +196,61 @@ mod tests {
         }
     }
 
+    /// Runs `class`'s attack from a click at tick 10, its button held down (`PlayerInput::draw`)
+    /// through `held` ticks from the click: the ticks it went off at, and its state on each tick.
+    fn draw_ticks(class: ClassId, held: u32, ticks: u32) -> (Vec<u32>, Vec<AttackState>) {
+        let (mut state, mut released, mut states) = (AttackState::default(), Vec::new(), Vec::new());
+        for tick in 10..10 + ticks {
+            let input = PlayerInput { aim: Vec2::X, fire: tick == 10, draw: tick < 10 + held, ..default() };
+            let (next, attack) = step_attack(tick, PeerId::Netcode(1), class, Vec2::ZERO, &input, state);
+            state = next;
+            states.push(state);
+            if attack.is_some() {
+                released.push(tick);
+            }
+        }
+        (released, states)
+    }
+
+    #[test]
+    fn a_shot_held_drawn_goes_off_when_let_go_and_its_backswing_runs_from_then() {
+        for class in ClassId::all().filter(|&class| shoots(class)) {
+            let (period, windup) = timers(class);
+            let attack = &class.def().attack;
+            // Held a good while past its windup, then let go: it goes off on that tick, not before.
+            let held = windup + 40;
+            let (released, states) = draw_ticks(class, held, held + period + 1);
+            assert_eq!(released, vec![10 + held], "{}: held drawn, it went off at {released:?}", class.def().id);
+            // All the while it's held, it's drawn all the way, going off no sooner than the next tick.
+            for (k, state) in states.iter().enumerate().take(held as usize).skip(windup as usize) {
+                let tick = 10 + k as u32;
+                let swing = state.winding_up().unwrap_or_else(|| panic!("{}: not drawn at {tick}", class.def().id));
+                assert_eq!(swing.windup_progress(tick as f32, attack), 1.0);
+                assert_eq!(swing.releases_at(attack), tick + 1, "{}: held at {tick}", class.def().id);
+            }
+            // Its backswing runs on from the tick it went off: the next may start a backswing later.
+            let gone = states[held as usize];
+            assert_eq!(gone.released_at, Some(10 + held));
+            assert_eq!(gone.swing.map(|swing| swing.ready_at(attack)), Some(10 + held + period - windup), "{}: ready again", class.def().id);
+            assert!(states.last().unwrap().swing.is_none(), "{}: still attacking after its backswing", class.def().id);
+        }
+    }
+
+    #[test]
+    fn a_shot_let_go_before_its_windup_is_over_goes_off_then_and_a_swing_is_never_held() {
+        for class in ClassId::all() {
+            let (period, windup) = timers(class);
+            // Let go halfway through the windup: it goes off as it would have.
+            let (released, _) = draw_ticks(class, windup / 2, period);
+            assert_eq!(released, vec![10 + windup], "{}: tapped", class.def().id);
+            // A swing goes off at its time however long its button is held.
+            if !shoots(class) {
+                let (released, _) = draw_ticks(class, period * 3, period);
+                assert_eq!(released, vec![10 + windup], "{}: a swing held back", class.def().id);
+            }
+        }
+    }
+
     #[test]
     fn clicks_before_the_timer_is_up_are_dropped() {
         for class in ClassId::all() {
@@ -263,7 +318,7 @@ mod tests {
         let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some()) else { return };
         let attack = quickened(class);
         let (period, windup) = (attack.period_ticks(1.0), attack.windup_ticks(1.0));
-        let mut swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false };
+        let mut swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0 };
         assert_eq!(swing.ready_at(&attack), 10 + period);
         // As the server does when the swing lands.
         swing.hastened = true;
@@ -385,6 +440,87 @@ mod tests {
             }
         }
         out
+    }
+
+    /// A way to walk from `from` with open ground for `meters` along it.
+    fn open_way(from: Vec2, meters: f32) -> Vec2 {
+        [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y].into_iter().find(|&way| map().line_walkable(from, from + way * meters)).expect("open ground somewhere")
+    }
+
+    /// `class` walked from `from` the way `way`, `run` ticks and then `drawn` more with its attack
+    /// button held (`PlayerInput::draw`), jumping on the tick it's first held if `jump`: where it
+    /// is and how it moves, tick by tick.
+    fn walk_drawn(class: ClassId, (from, way): (Vec2, Vec2), (run, drawn): (u32, u32), jump: bool) -> Vec<(Vec2, Motion)> {
+        let (mut pos, mut motion, mut out) = (from, Motion::default(), Vec::new());
+        for tick in 1..=run + drawn {
+            let input = PlayerInput { walk: way, draw: tick > run, jump: jump && tick == run + 1, ..default() };
+            pos = move_player(map(), pos, &input, class, &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick);
+            out.push((pos, motion));
+        }
+        out
+    }
+
+    #[test]
+    fn holding_a_shot_drawn_slows_the_walk_toward_its_draw_speed_not_at_once() {
+        use crate::config::DRAW_SPEED;
+        let (class, from) = (shooter(), spawns()[0]);
+        let top = class.def().move_speed;
+        let way = open_way(from, 12.0);
+        let (run, drawn) = (60, 60);
+        let walked = walk_drawn(class, (from, way), (run, drawn), false);
+        let speed = |i: u32| walked[i as usize - 1].1.along.length();
+        assert!((speed(run) - top).abs() < top * 0.02, "walking at {} of {top} m/s before drawing", speed(run));
+        // Its speed isn't cut: it slows on the ground, a step at a time, to its draw speed.
+        assert!(speed(run + 1) > top * DRAW_SPEED + 0.1 && speed(run + 1) < speed(run), "slowed at once to {} m/s", speed(run + 1));
+        assert!(speed(run + 2) < speed(run + 1), "not slowing");
+        let held = speed(run + drawn);
+        assert!((held - top * DRAW_SPEED).abs() < top * 0.02, "walking drawn at {held} of {top} m/s");
+        assert!(speed(run + 15) - held < 0.05, "still slowing a quarter second in: {} m/s", speed(run + 15));
+        // A swing's button held doesn't slow it.
+        let striker = fighter();
+        let plain = walk_drawn(striker, (from, way), (run + drawn, 0), false);
+        let held_down = walk_drawn(striker, (from, way), (run, drawn), false);
+        assert_eq!(plain.last().map(|w| w.0), held_down.last().map(|w| w.0), "a swing's button slowed its walk");
+    }
+
+    #[test]
+    fn a_jump_before_drawing_keeps_its_speed_through_the_air() {
+        let (class, from) = (shooter(), spawns()[0]);
+        let way = open_way(from, 12.0);
+        let (run, drawn) = (60, 60);
+        let walked = walk_drawn(class, (from, way), (run, drawn), false);
+        let jumped = walk_drawn(class, (from, way), (run, drawn), true);
+        let off = jumped[run as usize - 1].1.along.length();
+        // In the air it goes on as fast as it took off, drawn or not, till it lands.
+        let airborne: Vec<_> = jumped[run as usize..].iter().take_while(|(_, motion)| motion.height > 0.0).collect();
+        assert!(airborne.len() > 10, "jumped for {} ticks", airborne.len());
+        for (_, motion) in &airborne {
+            assert!((motion.along.length() - off).abs() < off * 0.01, "slowed in the air: {} of {off} m/s", motion.along.length());
+        }
+        // So it gets further, drawn, than one that stayed on the ground.
+        let (ground, air) = ((walked.last().unwrap().0 - from).dot(way), (jumped.last().unwrap().0 - from).dot(way));
+        assert!(air > ground + 0.5, "jumped first it got {air} m, on the ground {ground} m");
+    }
+
+    /// A click-to-walk goes at its speed all the way, not a step and a slide, and stands on the
+    /// point it was sent to, still sent there or not.
+    #[test]
+    fn a_click_walk_goes_at_its_speed_and_stands_on_its_point() {
+        let (class, from) = (fighter(), spawns()[0]);
+        let goal = from + open_way(from, 6.0) * 4.0;
+        let step = class.def().move_speed * map().speed_factor_at(from) * TICK_DT;
+        let ticks = (from.distance(goal) / step).ceil() as u32;
+        let (mut pos, mut motion) = (from, Motion::default());
+        for tick in 1..=ticks + 30 {
+            let input = PlayerInput { move_to: (tick <= ticks + 10).then_some(goal), ..default() };
+            pos = move_player(map(), pos, &input, class, &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick);
+            if tick + 2 == ticks {
+                assert_ne!(pos, goal, "there too soon");
+            }
+            if tick > ticks {
+                assert!(pos == goal && motion.along == Vec2::ZERO, "at tick {tick} of {ticks} it's {} m off, going {}", pos.distance(goal), motion.along);
+            }
+        }
     }
 
     #[test]
@@ -775,7 +911,7 @@ mod tests {
         assert!(swing.primed && swing.windup_ticks(attack) < plain.windup_ticks(attack), "not quicker");
         // Cancelled, it stays ready; gone off, it's used up.
         assert_eq!(cancel_attack(state).primed, primed.primed);
-        let (gone, released) = release_attack(swing.releases_at(attack), PeerId::Netcode(1), class, Vec2::ZERO, state);
+        let (gone, released) = release_attack(swing.releases_at(attack), PeerId::Netcode(1), class, Vec2::ZERO, false, state);
         assert!(released.is_some() && gone.primed.is_none(), "still primed after it went off");
     }
 

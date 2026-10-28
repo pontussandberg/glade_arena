@@ -166,6 +166,9 @@ pub struct Swing {
     pub haste: f32,
     /// Primed (`AttackState::primed`): sure to crit.
     pub primed: bool,
+    /// Ticks its shot has been held drawn past its windup (`PlayerInput::draw`): it goes off that
+    /// much later, and its backswing runs on from then.
+    pub held: u32,
 }
 
 impl Swing {
@@ -187,9 +190,10 @@ impl Swing {
         attack.period_ticks(self.speed(attack))
     }
 
-    /// The tick the attack goes off.
+    /// The tick the attack goes off: when its windup is over, or for a shot held drawn
+    /// (`held`) the tick after the last it's been held, until it's let go.
     pub fn releases_at(&self, attack: &AttackDef) -> u32 {
-        self.started_at + self.windup_ticks(attack)
+        self.started_at + self.windup_ticks(attack) + self.held
     }
 
     /// How many times the normal attack speed its backswing has: hastened, or quick all through.
@@ -648,6 +652,10 @@ pub struct PlayerInput {
     /// Left click: auto-attack toward `aim`, if the last attack is done (else the click is
     /// dropped). Set by `PlayerCommand::Attack`, used up by the next tick.
     pub fire: bool,
+    /// The attack button held down (`PlayerCommand::Draw`). For a class that shoots: its shot,
+    /// once drawn (its windup over), is held so until it's let go (`sim::release_attack`), and
+    /// meanwhile it walks slower (`DRAW_SPEED`).
+    pub draw: bool,
     /// Space: jump, if standing on the ground (else it's dropped: `sim::move_player`): pressed
     /// since the last tick (`PlayerCommand::Jump`), used up by the next one, so a tap let go
     /// before it still jumps; or held (`jump_held`), jumping again each time it lands
@@ -710,6 +718,10 @@ pub enum PlayerCommand {
     /// Space pressed (true) or let go (false): jump, and while it's held again each time it
     /// lands (`PlayerInput::jump`). Sent as it changes.
     Jump(bool),
+    /// The attack button held down (true) or let go, from the tick given, as a walk is (`Walk`),
+    /// so the prediction walks it as the server does: a shot is held drawn while it's down
+    /// (`PlayerInput::draw`). Sent as it changes.
+    Draw(bool, u32),
 }
 
 impl PlayerCommand {
@@ -721,7 +733,7 @@ impl PlayerCommand {
         match *self {
             PlayerCommand::MoveTo(_) | PlayerCommand::Stop => true,
             PlayerCommand::Walk(dir, _) => dir != Vec2::ZERO,
-            PlayerCommand::Attack(_) | PlayerCommand::Cast(..) | PlayerCommand::Aim(..) | PlayerCommand::Jump(_) => false,
+            PlayerCommand::Attack(_) | PlayerCommand::Cast(..) | PlayerCommand::Aim(..) | PlayerCommand::Jump(_) | PlayerCommand::Draw(..) => false,
         }
     }
 
@@ -756,6 +768,7 @@ impl PlayerCommand {
                 input.jump |= held;
                 input.jump_held = held;
             }
+            PlayerCommand::Draw(held, _) => input.draw = held,
         }
     }
 }
@@ -894,6 +907,18 @@ mod tests {
     use super::*;
     use crate::config::{FRENZY_MELEE_TICKS, FRENZY_RANGED_TICKS};
 
+    /// The attack button's hold sets whether it's held, and is no order to move: it cancels no
+    /// windup and drops no click.
+    #[test]
+    fn the_attack_button_held_or_let_go_is_held_or_not() {
+        let mut input = PlayerInput { move_to: Some(Vec2::X), ..default() };
+        PlayerCommand::Attack(Vec2::Y).apply(&mut input);
+        PlayerCommand::Draw(true, 7).apply(&mut input);
+        assert!(input.draw && input.fire && input.move_to.is_some() && !PlayerCommand::Draw(true, 7).moves());
+        PlayerCommand::Draw(false, 9).apply(&mut input);
+        assert!(!input.draw && input.fire, "let go, still held");
+    }
+
     /// Space held jumps on every tick, let go it doesn't on the next, and a tap let go before a
     /// tick sees it still jumps on that one, once (the server uses up a press each tick).
     #[test]
@@ -936,7 +961,7 @@ mod tests {
     #[test]
     fn a_hasted_swing_is_quicker() {
         let attack = &crate::classes::ClassId(0).def().attack;
-        let plain = Swing { started_at: 0, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false };
+        let plain = Swing { started_at: 0, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0 };
         let hasted = Swing { haste: 0.3, ..plain };
         assert!(hasted.windup_ticks(attack) < plain.windup_ticks(attack));
         assert!(hasted.ready_at(attack) < plain.ready_at(attack));

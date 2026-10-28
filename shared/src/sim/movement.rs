@@ -61,11 +61,13 @@ pub fn move_player(
 /// Walking has momentum (`motion`): the keys ask for a speed and a way, and the ground
 /// accelerates the walker toward it (`GROUND_ACCEL`) and slows it when they ask for nothing
 /// (`GROUND_FRICTION`, high: only a short slide to a stop); in the air the keys only steer a little
-/// (`AIR_ACCEL` up to `AIR_CONTROL_SPEED`). Whatever blocks a step stops that part of the
-/// motion. Up and down: on the ground it follows the ground, up a slope and down one (not off a
+/// (`AIR_ACCEL` up to `AIR_CONTROL_SPEED`). Holding a shot drawn (`draw_speed`) lowers the speed
+/// asked for, not the speed it's going: the ground slows it to that in a few steps, the air
+/// hardly at all. Whatever blocks a step stops that part of the motion. Up and down: on the ground it follows the ground, up a slope and down one (not off a
 /// ledge: `STEP_DOWN`); `input.jumping()` on the ground sends it up (`jump_speed`); in the air it
 /// falls (`GRAVITY`) until the ground. A dash or a click-to-walk sets the motion by where it
-/// went, so a dash off a ledge flies on out.
+/// went, so a dash off a ledge flies on out; a click-to-walk goes on at its speed, not sliding
+/// on what it went the tick before, and slides to a stop only once it's dropped.
 #[allow(clippy::too_many_arguments)]
 pub fn move_player_boosted(
     map: &Map,
@@ -85,6 +87,8 @@ pub fn move_player_boosted(
     // Its feet, and what it stands on there (the ground, a roof, crates), by which it walks.
     let feet = motion.height;
     let grounded = feet <= map.floor_at(pos, feet) + 1e-3;
+    // Leaving the ground this tick, it isn't slowed by it: it takes off as fast as it went.
+    let jumps = input.jumping() && grounded && !held && dashing.0.is_none();
     let mut next = pos;
     if held {
         motion.along = Vec2::ZERO;
@@ -97,11 +101,11 @@ pub fn move_player_boosted(
         motion.along = (next - pos) / TICK_DT;
     } else if attack.winding_up().is_some() {
         motion.along = Vec2::ZERO;
-    } else if input.walk != Vec2::ZERO || motion.along != Vec2::ZERO {
-        let wish_speed = class.def().move_speed * speed * boost * map.speed_factor_at(pos);
+    } else if input.walk != Vec2::ZERO || (motion.along != Vec2::ZERO && input.move_to.is_none()) {
+        let wish_speed = class.def().move_speed * speed * boost * draw_speed(class, input) * map.speed_factor_at(pos);
         let wish = input.walk.normalize_or_zero();
         let mut v = motion.along;
-        if grounded {
+        if grounded && !jumps {
             let going = v.length();
             if going > 0.0 {
                 let drop = going.max(STOP_SPEED) * GROUND_FRICTION * TICK_DT;
@@ -126,12 +130,13 @@ pub fn move_player_boosted(
             v = Vec2::ZERO;
         }
         motion.along = v;
-    } else if input.move_to.is_some() {
-        next = step_player(map, pos, input, class.def().move_speed * speed * boost);
-        motion.along = (next - pos) / TICK_DT;
+    } else if let Some(target) = input.move_to {
+        next = step_player(map, pos, input, class.def().move_speed * speed * boost * draw_speed(class, input));
+        // Arrived, it stands there: it doesn't slide on past the point.
+        motion.along = if arrived(map, next, target) { Vec2::ZERO } else { (next - pos) / TICK_DT };
     }
     let under = map.floor_at(next, feet);
-    if input.jumping() && grounded && !held && dashing.0.is_none() {
+    if jumps {
         motion.rise = jump_speed();
     }
     if grounded && motion.rise <= 0.0 && motion.height <= under + STEP_DOWN {

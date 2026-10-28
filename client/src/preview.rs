@@ -442,7 +442,7 @@ fn preview_attacks() {
         let class = ClassId::by_key(key).unwrap();
         let moves = moves(key);
         let length = arena::blade_span(key).1;
-        let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false };
+        let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0 };
         let (windup, period) = (swing.windup_ticks(&class.def().attack) as f32, swing.ticks(&class.def().attack) as f32);
         let release = 10.0 + windup;
         // The moments to show, in ticks.

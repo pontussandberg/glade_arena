@@ -445,6 +445,7 @@ fn pose_rigs(
     // (and it never attacks, so it doesn't need the clock, nor the ground: it stands on a stage).
     clock: Option<AttackClock>,
     map: Option<Res<crate::rooms::CurrentMap>>,
+    draws: Option<Res<crate::SentDraws>>,
     mut rigs: Query<(
         &mut Rig,
         &Facing,
@@ -509,6 +510,13 @@ fn pose_rigs(
         // gets there; until it does, it's still winding up, so the strike plays out in full.
         let windup = SeenThrows::windup(seen, attack)
             .or_else(|| attack.swing.filter(|swing| is_me && attack.released_at.is_some_and(|at| at >= swing.started_at && now < at as f32)));
+        // Ours, a shot the server will hold drawn (the attack button held for the tick its
+        // windup's over, as sent: `sim::release_attack`) is held from the first, before its word
+        // that it is, so it doesn't start its strike only to draw back.
+        let windup = windup.map(|swing| {
+            let holds = is_me && swing.held == 0 && arena_shared::sim::shoots(*class) && draws.as_ref().is_some_and(|draws| draws.held_at(swing.releases_at(&def.attack)));
+            if holds { Swing { held: 1, ..swing } } else { swing }
+        });
         // The last attack's speed scales its backswing like its windup, and a hit that armed its
         // `follow_up` speeds it up (normal once it's done).
         let speed = match attack.swing {
@@ -733,7 +741,7 @@ mod tests {
         let mut heights = Vec::new();
         for fps in [30.0, 60.0, 144.0] {
             for phase in 0..8 {
-                let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false };
+                let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0 };
                 let release = 10 + swing.windup_ticks(&def.attack);
                 let mut joints = Joints::default();
                 let dt = 1.0 / fps;

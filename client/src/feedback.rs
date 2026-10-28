@@ -16,7 +16,7 @@ use lightyear::prelude::*;
 use crate::Me;
 
 use crate::camera::CameraPlaced;
-use crate::arena::palette;
+use crate::arena::{palette, to_gameplay};
 use crate::render::{Relation, set_fill, shown, ui_text};
 use crate::render::GameUi;
 use crate::rooms::Screen;
@@ -266,9 +266,14 @@ fn color_bars(
     }
 }
 
+/// Where a fighter's health bar is, over its head, in the world.
+fn bar_point(body: &Transform, size: f32) -> Vec3 {
+    body.translation + Vec3::Y * BAR_HEIGHT * size.max(0.8)
+}
+
 /// Where a fighter's health bar is centered on screen (`None` off camera).
 fn over_bar(camera: &Camera, camera_transform: &GlobalTransform, body: &Transform, size: f32) -> Option<Vec2> {
-    camera.world_to_viewport(camera_transform, body.translation + Vec3::Y * BAR_HEIGHT * size.max(0.8)).ok()
+    camera.world_to_viewport(camera_transform, bar_point(body, size)).ok()
 }
 
 /// How far behind the latest state from the server our own fighter is drawn, in ticks: enough
@@ -328,12 +333,15 @@ impl AttackClock<'_> {
     }
 }
 
-/// Keep each fighter's bars over it and filled (the cast bar by `AttackClock`). Only writes what
-/// changed, so a still scene doesn't make Bevy lay out the UI again every frame.
+/// Keep each fighter's bars over it and filled (the cast bar by `AttackClock`), hidden while a
+/// wall, a roof or a hill is between the camera and them (`Map::sight_meets`; ours always
+/// shows). Only writes what changed, so a still scene doesn't make Bevy lay out the UI again
+/// every frame.
 fn place_bars(
     mut commands: Commands,
     time: Res<Time>,
     clock: AttackClock,
+    map: Option<Res<crate::rooms::CurrentMap>>,
     camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
     players: Query<(&Transform, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Has<Me>, (Option<&MaxHealth>, Has<Elite>))>,
     mut bars: Query<(Entity, &Bars, &mut HealthTrail, &mut Node, &mut UiTransform, &mut Visibility)>,
@@ -352,7 +360,10 @@ fn place_bars(
         update_trail(&mut trail, health_fraction, crit_at.map(|c| c.0), now, time.delta_secs());
         let alive = health.is_none_or(Health::alive);
         let height = crate::rig::drawn_size(*class, elite);
-        let Some(screen) = over_bar(camera, camera_transform, body, height).filter(|_| alive) else {
+        let eye = camera_transform.translation();
+        let over = bar_point(body, height);
+        let hidden = !is_me && map.as_ref().is_some_and(|map| map.map().sight_meets((to_gameplay(eye), eye.y), (to_gameplay(over), over.y)));
+        let Some(screen) = over_bar(camera, camera_transform, body, height).filter(|_| alive && !hidden) else {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };

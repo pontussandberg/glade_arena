@@ -310,7 +310,7 @@ pub(super) fn attack(
         let primer = state.primed.filter(|_| state.winding_up().is_some_and(|swing| swing.primed)).map(|(slot, _)| slot);
         let primed = primer.is_some();
         // In two halves (`sim::step_attack`): a swing that lands arms a quick attack in between.
-        let (mut next, released) = sim::release_attack(now.0, id.0, *class, pos.0, *state);
+        let (mut next, released) = sim::release_attack(now.0, id.0, *class, pos.0, input.draw, *state);
         // The prime that readied it is used up now: its cooldown starts.
         if released.is_some()
             && let Some(slot) = primer

@@ -367,17 +367,31 @@ impl Map {
     /// wall, a roof, a rock, a crate, a fence: `Collider::cut_by`), a tree or the forest (none of
     /// their own: `Tile::blocks_shots_at`, over the ground there), or the ground (a hillside, a
     /// cliff). One over the top of each clears it.
-    pub fn shot_meets(&self, (a, from): (Vec2, f32), (b, to): (Vec2, f32)) -> bool {
+    pub fn shot_meets(&self, a: (Vec2, f32), b: (Vec2, f32)) -> bool {
+        self.line_meets(a, b, 0.25, true)
+    }
+
+    /// Whether the line from an eye at `a`, `from` high, to `b`, `to` high is hidden by something
+    /// solid on the way: a collider (a wall, a roof, a rock: `Collider::cut_by`) or the ground (a
+    /// hillside). Not by a tree or the forest, seen between. For what's drawn over the scene, as
+    /// a health bar is.
+    pub fn sight_meets(&self, a: (Vec2, f32), b: (Vec2, f32)) -> bool {
+        self.line_meets(a, b, 1.0, false)
+    }
+
+    /// `shot_meets` and `sight_meets`: a collider on the way, or the ground (looked at every
+    /// `step` meters), or (`trees`) a tree or the forest there.
+    fn line_meets(&self, (a, from): (Vec2, f32), (b, to): (Vec2, f32), step: f32, trees: bool) -> bool {
         if self.line_blocker_by(a, b, |t| self.colliders_on(t).any(|collider| collider.cut_by((a, from), (b, to)))).is_some() {
             return true;
         }
-        let steps = (a.distance(b) / 0.25).ceil().max(1.0) as i32;
+        let steps = (a.distance(b) / step).ceil().max(1.0) as i32;
         (0..=steps).any(|s| {
             let k = s as f32 / steps as f32;
             let (p, height) = (a.lerp(b, k), from + (to - from) * k);
             let tile = self.get(Map::tile_of(p));
             let over = height - self.height_at(p);
-            over < 0.0 || (matches!(tile, Tile::Tree | Tile::Forest) && tile.blocks_shots_at(over))
+            over < 0.0 || (trees && matches!(tile, Tile::Tree | Tile::Forest) && tile.blocks_shots_at(over))
         })
     }
 
@@ -394,6 +408,26 @@ mod tests {
 
     fn maps() -> impl Iterator<Item = &'static Map> {
         MapId::ALL.into_iter().map(MapId::map)
+    }
+
+    /// Sight (`sight_meets`) is hidden by a house between, and by the ground, but not by a tree
+    /// it's seen past, though that stops a shot.
+    #[test]
+    fn a_house_hides_what_is_behind_it_and_a_tree_does_not() {
+        let yard = MapId::Yard.map();
+        let at = |p: Vec2, up: f32| (p, yard.height_at(p) + up);
+        for house in &yard.houses {
+            let (c, across) = (house.center(), (house.hi - house.lo).x as f32 / 2.0 + 1.5);
+            let (a, b) = (at(c - Vec2::X * across, 1.5), at(c + Vec2::X * across, 1.5));
+            assert!(yard.sight_meets(a, b) && yard.sight_meets(b, a), "seen through the house at {c}");
+            // From high over it, looking down past its eaves, what's beside it shows.
+            assert!(!yard.sight_meets(at(c, 30.0), b), "the house hides what's beside it from above");
+        }
+        let lone_tree = yard.tiles().map(|(t, _)| t).find(|&t| yard.get(t) == Tile::Tree && [t - IVec2::X, t + IVec2::X].iter().all(|&n| yard.walkable(n))).expect("a tree in the open");
+        let (a, b) = (at(Map::center(lone_tree - IVec2::X), 1.5), at(Map::center(lone_tree + IVec2::X), 1.5));
+        assert!(yard.shot_meets(a, b) && !yard.sight_meets(a, b), "a tree hides what's behind it, or doesn't stop a shot");
+        let (low, beyond) = (at(Map::center(lone_tree - IVec2::X), -0.5), at(Map::center(lone_tree + IVec2::X), -0.5));
+        assert!(yard.sight_meets(low, beyond), "seen through the ground");
     }
 
     /// The same numbers every run, each in -`range`..`range`.
