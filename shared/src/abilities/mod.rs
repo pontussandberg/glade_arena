@@ -21,7 +21,7 @@ use prime::PrimeDef;
 use strike::StrikeDef;
 use throw::Throw;
 
-/// The most abilities a class can have: one per key (Q, W, E, R; the client binds them). Checked
+/// The most abilities a class can have: one per key (1, 2, 3, 4; the client binds them). Checked
 /// as the class files load.
 pub const MAX_ABILITIES: usize = 4;
 

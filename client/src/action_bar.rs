@@ -1,5 +1,5 @@
 //! Your abilities, LoL-style: a row of square icons at the bottom center of your own screen, one
-//! per ability (Q, W, E, R), each with a dark clock-wipe sweeping away clockwise and the seconds
+//! per ability (1, 2, 3, 4), each with a dark clock-wipe sweeping away clockwise and the seconds
 //! left while it cools down (over it, a quicker, paler wipe for the global cooldown, if it's on
 //! it), and your passive (if your class has one) in a smaller square left of them. Left of that,
 //! in a match with zombies, a smaller one still: how many zombies you've killed, and your frenzy

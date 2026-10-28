@@ -697,7 +697,7 @@ pub enum PlayerCommand {
     /// attack is its own click, once the last one is done (the client sends one for each attack
     /// while the button is held).
     Attack(Vec2),
-    /// An ability's key (Q, W, E, R): use the ability in this slot toward this aim.
+    /// An ability's key (1, 2, 3, 4): use the ability in this slot toward this aim.
     Cast(AbilitySlot, Vec2),
     /// Action mode only: the aim as the camera turns (at most once a tick), its direction and
     /// its pitch (`PlayerInput::climb`), so an attack winding up goes off the way the player

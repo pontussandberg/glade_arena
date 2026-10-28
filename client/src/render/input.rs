@@ -11,7 +11,7 @@ use crate::Me;
 use crate::{DesiredInput, StopWalking};
 use crate::action_bar::AbilityIcon;
 use crate::camera::{CameraMode, key_axis};
-use crate::casting::{Aiming, CastMode, ability_key, key_casts};
+use crate::casting::{Aiming, CastMode, ability_key};
 use crate::feedback::AttackClock;
 use crate::arena::{to_gameplay, to_world};
 
@@ -28,7 +28,7 @@ pub(super) struct DestinationMarker;
 pub(super) struct RangeCircle;
 
 /// Mouse -> `DesiredInput`, LoL-style: right click walks to the clicked point, left click
-/// attacks toward the cursor. An ability's key (Q, W, E, R) casts it right away (quick cast) or
+/// attacks toward the cursor. An ability's key (1, 2, 3, 4) casts it right away (quick cast) or
 /// first shows where it will go, cast by the next left click and dropped by a right click
 /// (normal cast); with Shift it's the other one (see `casting.rs`). Clicking an ability's icon is
 /// always a normal cast.
@@ -123,7 +123,7 @@ pub(super) fn read_local_input(
     let mut casts = PlayerInput { casts: desired.0.casts, ..default() };
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     for (slot, ability) in my_class.into_iter().flat_map(|def| def.abilities()) {
-        if !keys.just_pressed(ability_key(slot)) || !key_casts(slot, mode.free) {
+        if !keys.just_pressed(ability_key(slot)) {
             continue;
         }
         // In action mode a strike is always a normal cast: its ring shows where the crosshair is

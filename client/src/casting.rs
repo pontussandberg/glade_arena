@@ -1,4 +1,4 @@
-//! Quick cast and normal cast, LoL-style, for every ability (Q, W, E, R). Quick cast sends an
+//! Quick cast and normal cast, LoL-style, for every ability (1, 2, 3, 4). Quick cast sends an
 //! ability off toward the cursor the moment its key is pressed; normal cast first shows where it
 //! will go (its aim indicator, on the ground at your feet) and casts it on the next left click (a
 //! right click drops it, without walking). The quick cast switch, in the key hints, picks which
@@ -53,7 +53,7 @@ pub(crate) struct Aiming(pub Option<AbilitySlot>);
 /// The key each ability slot is on, and how players read it. As many as a class may have
 /// abilities (`MAX_ABILITIES`, checked as the class files load).
 const ABILITY_KEYS: [(KeyCode, &str); MAX_ABILITIES] =
-    [(KeyCode::KeyQ, "Q"), (KeyCode::KeyW, "W"), (KeyCode::KeyE, "E"), (KeyCode::KeyR, "R")];
+    [(KeyCode::Digit1, "1"), (KeyCode::Digit2, "2"), (KeyCode::Digit3, "3"), (KeyCode::Digit4, "4")];
 
 /// The key the ability in `slot` is on.
 pub(crate) fn ability_key(slot: AbilitySlot) -> KeyCode {
@@ -63,11 +63,6 @@ pub(crate) fn ability_key(slot: AbilitySlot) -> KeyCode {
 /// The key the ability in `slot` is on, as players read it.
 pub(crate) fn key_label(slot: AbilitySlot) -> &'static str {
     ABILITY_KEYS[slot.0 as usize].1
-}
-
-/// Whether the ability in `slot` can be cast with its key: with the free camera, W walks.
-pub(crate) fn key_casts(slot: AbilitySlot, free_camera: bool) -> bool {
-    !(free_camera && ability_key(slot) == KeyCode::KeyW)
 }
 
 /// The quick cast switch and its label, the last row of the key hints

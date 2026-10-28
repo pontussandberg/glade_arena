@@ -7,7 +7,7 @@ use std::fmt::Write;
 
 use crate::Me;
 use crate::camera::CameraMode;
-use crate::casting::{CastMode, key_casts, key_label};
+use crate::casting::{CastMode, key_label};
 use crate::rooms::save_setting;
 use crate::arena::palette;
 
@@ -299,7 +299,6 @@ pub(super) fn update_key_hints(
     let abilities = class
         .iter()
         .flat_map(|class| class.def().abilities())
-        .filter(|(slot, _)| key_casts(*slot, mode.free))
         .map(|(slot, _)| key_label(slot))
         .collect::<Vec<_>>();
     let abilities = (abilities.join(" "), if abilities.len() == 1 { "ability" } else { "abilities" });
