@@ -25,21 +25,17 @@ pub struct WalkOrders {
 
 /// Each client's commands change its own fighter's intent, the moment they arrive. A link only
 /// ever drives the fighter it controls; commands while it has none (still picking a class) are
-/// dropped. An order to move cancels an attack still winding up, right away, so the fighter
-/// walks off this very tick (not in action mode: there it walks through the windup, and the
-/// walking keys never drop a click: `PlayerCommand::apply`).
+/// dropped. Moving never cancels an attack winding up: the fighter walks through it, and the
+/// walking keys never drop a click (`PlayerCommand::apply`); an attack started goes off.
 pub(super) fn apply_commands(
     timeline: Res<LocalTimeline>,
     mut links: Query<&mut MessageReceiver<PlayerCommand>, With<ClientOf>>,
-    mut players: Query<(&ControlledBy, &mut PlayerInput, &mut AttackState, &mut WalkOrders, Has<ActionMode>)>,
+    mut players: Query<(&ControlledBy, &mut PlayerInput, &mut WalkOrders)>,
 ) {
     let now = timeline.tick().0;
-    for (controlled_by, mut input, mut attack, mut orders, action) in &mut players {
+    for (controlled_by, mut input, mut orders) in &mut players {
         let Ok(mut receiver) = links.get_mut(controlled_by.owner) else { continue };
         for command in receiver.receive() {
-            if command.moves() && !action {
-                attack.set_if_neq(sim::cancel_attack(*attack));
-            }
             match command {
                 // A walk for a tick to come waits for it (`move_players`).
                 PlayerCommand::Walk(dir, tick) if tick > now => orders.pending.push_back((tick, dir, now)),
