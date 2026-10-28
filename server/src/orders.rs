@@ -26,7 +26,9 @@ pub struct WalkOrders {
 /// Each client's commands change its own fighter's intent, the moment they arrive. A link only
 /// ever drives the fighter it controls; commands while it has none (still picking a class) are
 /// dropped. An order to move cancels an attack still winding up, right away, so the fighter
-/// walks off this very tick (not in action mode: there it walks through the windup).
+/// walks off this very tick, and drops an attack click not yet gone off (not in action mode:
+/// there it walks through the windup, and the walking keys change with every turn of the
+/// camera, so a click held through them keeps attacking).
 pub(super) fn apply_commands(
     timeline: Res<LocalTimeline>,
     mut links: Query<&mut MessageReceiver<PlayerCommand>, With<ClientOf>>,
@@ -39,6 +41,7 @@ pub(super) fn apply_commands(
             if command.moves() && !action {
                 attack.set_if_neq(sim::cancel_attack(*attack));
             }
+            let fire = input.fire && action;
             match command {
                 // A walk for a tick to come waits for it (`move_players`); the keys' change still
                 // drops a click.
@@ -52,6 +55,7 @@ pub(super) fn apply_commands(
                 }
                 _ => command.apply(&mut input),
             }
+            input.fire |= fire;
         }
     }
 }
@@ -79,7 +83,9 @@ pub(super) fn move_players(
 ) {
     let now = timeline.tick().0;
     for (id, mut pos, class, mut input, (attack, action), mut dashing, chilled, hasted, room, frenzy, sluggish, (mut walking, mut orders)) in &mut players {
-        // Walks ordered for this tick (or one gone by) take now.
+        // Walks ordered for this tick (or one gone by) take now (keeping an attack click in
+        // action mode, as `apply_commands` does).
+        let fire = input.fire && action;
         while let Some(&(tick, dir, received)) = orders.pending.front() {
             if tick > now {
                 break;
@@ -88,6 +94,7 @@ pub(super) fn move_players(
             orders.received = received;
             PlayerCommand::Walk(dir, tick).apply(&mut input);
         }
+        input.fire |= fire;
         let map = lobby.map(room);
         let mut next = *dashing;
         let attack = if action { AttackState { swing: None, ..*attack } } else { *attack };
