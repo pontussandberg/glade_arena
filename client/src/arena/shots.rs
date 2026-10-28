@@ -54,6 +54,12 @@ pub(super) const ALONG_X: Quat = Quat::from_xyzw(0.0, 0.0, -std::f32::consts::FR
 /// the origin, picked by class id: the javelinist throws the very javelin it carries (and its Q
 /// is a plain spectral spear, drawn glowing); the frost mage a frostbolt; the rest round bolts of
 /// the shot's radius.
+/// Whether `class`'s shot (an ability's, or its auto-attack's) is a thrown spear, as `shot_look`
+/// marks it: the javelinist's own throw (a caster borrowing its figure throws bolts).
+pub fn thrown(class: &ClassDef, ability: bool) -> bool {
+    !ability && class.figure() == "javelinist" && class.look.as_ref().and_then(|look| look.bolts).is_none()
+}
+
 pub fn shot_look(class: &ClassDef, shot: Shot, ability: bool) -> ShotLook {
     let plain = |mesh, glow| ShotLook { mesh, glow, thrown: false, aura: None, spin: 0.0 };
     // Casters borrowing another's figure throw their own (`LookDef::bolts`): fire, the void,
