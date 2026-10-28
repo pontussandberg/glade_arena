@@ -666,7 +666,9 @@ pub enum PlayerCommand {
 
 impl PlayerCommand {
     /// Is it an order to move (or stop)? One cancels an attack still winding up, as in League
-    /// (`sim::cancel_attack`), and drops a click no tick has seen yet: the last order wins.
+    /// (`sim::cancel_attack`); a click (`MoveTo`, `Stop`) drops a click no tick has seen yet
+    /// too: the last order wins. The walking keys don't: they're the action camera's, which
+    /// walks through an attack, and they change with every turn of the camera.
     pub fn moves(&self) -> bool {
         match *self {
             PlayerCommand::MoveTo(_) | PlayerCommand::Stop => true,
@@ -677,15 +679,16 @@ impl PlayerCommand {
 
     /// What the command does to a player's intent.
     pub fn apply(self, input: &mut PlayerInput) {
-        if self.moves() {
-            input.fire = false;
-        }
         match self {
             PlayerCommand::MoveTo(point) => {
                 input.move_to = Some(point);
                 input.walk = Vec2::ZERO;
+                input.fire = false;
             }
-            PlayerCommand::Stop => input.move_to = None,
+            PlayerCommand::Stop => {
+                input.move_to = None;
+                input.fire = false;
+            }
             PlayerCommand::Walk(dir, _) => {
                 input.walk = dir;
                 if dir != Vec2::ZERO {
