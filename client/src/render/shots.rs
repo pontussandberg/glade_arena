@@ -6,7 +6,6 @@ use super::*;
 
 use bevy::light::NotShadowCaster;
 
-use arena_shared::config::SHOT_HEIGHT;
 use arena_shared::sim;
 
 use crate::feedback::AttackClock;
@@ -120,9 +119,10 @@ pub(super) fn fly_shots(
     for (projectile, mut transform, mut visibility, thrown, spin) in &mut shots {
         let speed = projectile.class.def().shot(projectile.ability).map_or(0.0, |s| s.speed);
         let at_tick = tick.max(projectile.spawn_tick as f32 - 1.0);
-        // Aimed up or down (the action camera's), it rises or falls as it flies (and a thrown
-        // one drops from the hand on), its nose along its flight.
-        let height = shot_height(thrown.is_some()) + sim::projectile_height(projectile, at_tick) - SHOT_HEIGHT;
+        // Just where the sim has it: aimed up or down (the action camera's), it rises or falls
+        // as it flies (and a thrown one drops from the hand on), its nose along its flight. A
+        // thrown one is let go a little higher than that and comes onto its path (`Thrown`).
+        let height = sim::projectile_height(projectile, at_tick);
         let on_path = to_world(sim::projectile_pos(projectile, at_tick), height);
         let along = Quat::from_rotation_y(projectile.dir.to_angle());
         let tilt = Quat::from_rotation_z(sim::projectile_pitch(projectile, at_tick).atan());
