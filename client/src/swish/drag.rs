@@ -7,11 +7,13 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 
 use crate::arena::FlatMesh;
 
-/// A point dragging on the ground: how low it has to be (meters), how far it goes between scuffs,
-/// how wide a scuff is, how long they last (seconds) and how see-through at most.
+/// A point dragging on the ground: how low over what's under it it has to be (meters), how far it
+/// goes between scuffs, how wide a scuff is and how high over the ground it lies, how long they
+/// last (seconds) and how see-through at most.
 const DRAG_HEIGHT: f32 = 0.06;
 const SCUFF_STEP: f32 = 0.1;
 const SCUFF_WIDTH: f32 = 0.035;
+const SCUFF_LIFT: f32 = 0.012;
 const SCUFF_LIFE: f32 = 1.6;
 pub(super) const SCUFF_ALPHA: f32 = 0.5;
 /// The rasp of spectral sparks a dragging blade gives off: the odds a scuff throws any (one, now
@@ -44,23 +46,28 @@ pub(super) struct Scuff {
     pub(super) started: f32,
 }
 
-/// A blade whose point drags along the ground scuffs it, a short stroke each `SCUFF_STEP` it goes
-/// (not across a jump: a waygate, a respawn).
-pub(super) fn drag_marks(mut commands: Commands, time: Res<Time>, assets: Res<SwishAssets>, mut fighters: Query<&mut Blade>, blades: Query<&GlobalTransform>) {
+/// A blade whose point drags along the ground (or whatever it's on: a crate, a roof) scuffs it, a
+/// short stroke each `SCUFF_STEP` it goes, lying on it (not across a jump, a waygate or a
+/// respawn, nor up or down a step).
+pub(super) fn drag_marks(mut commands: Commands, time: Res<Time>, assets: Res<SwishAssets>, map: Res<crate::rooms::CurrentMap>, mut fighters: Query<&mut Blade>, blades: Query<&GlobalTransform>) {
     let now = time.elapsed_secs();
     for mut blade in &mut fighters {
         let Ok(held) = blades.get(blade.held) else { continue };
-        if blade.lowest(held) > DRAG_HEIGHT {
+        // What's just under its point, up to a little over it.
+        let point = blade.at(held, 1.0);
+        let ground = map.map().surface_under(arena::to_gameplay(point), point.y + DRAG_HEIGHT);
+        if blade.lowest(held) - ground > DRAG_HEIGHT {
             blade.dragged = None;
             continue;
         }
-        let at = blade.at(held, 1.0).with_y(0.012);
+        let at = point.with_y(ground + SCUFF_LIFT);
         let Some(last) = blade.dragged else {
             blade.dragged = Some(at);
             continue;
         };
         let stroke = at - last;
-        if stroke.length() > arena_shared::config::JUMP {
+        let across_a_step = stroke.y.abs() > arena_shared::map::CLIMB * stroke.with_y(0.0).length() + 0.01;
+        if stroke.length() > arena_shared::config::JUMP || across_a_step {
             blade.dragged = Some(at);
         } else if stroke.length() >= SCUFF_STEP {
             let transform = Transform::from_translation(last)
@@ -113,8 +120,8 @@ pub(super) struct Spark {
     pub(super) life: f32,
 }
 
-/// Sparks hop, fall, and wink out.
-pub(super) fn fly_sparks(mut commands: Commands, time: Res<Time>, mut sparks: Query<(Entity, &mut Spark, &mut Transform)>) {
+/// Sparks hop, fall onto whatever's under them, and wink out.
+pub(super) fn fly_sparks(mut commands: Commands, time: Res<Time>, map: Res<crate::rooms::CurrentMap>, mut sparks: Query<(Entity, &mut Spark, &mut Transform)>) {
     let (now, dt) = (time.elapsed_secs(), time.delta_secs().min(0.05));
     for (entity, mut spark, mut transform) in &mut sparks {
         let t = (now - spark.started) / spark.life;
@@ -123,8 +130,9 @@ pub(super) fn fly_sparks(mut commands: Commands, time: Res<Time>, mut sparks: Qu
             continue;
         }
         spark.velocity.y -= GRAVITY * 0.5 * dt;
+        let floor = map.map().surface_under(arena::to_gameplay(transform.translation), transform.translation.y) + 0.01;
         transform.translation += spark.velocity * dt;
-        transform.translation.y = transform.translation.y.max(0.01);
+        transform.translation.y = transform.translation.y.max(floor);
         // A thin streak along its flight, winking out at the end.
         let size = spark.size * (1.0 - t * t);
         transform.rotation = Quat::from_rotation_arc(Vec3::Y, spark.velocity.normalize_or(Vec3::Y));

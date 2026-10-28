@@ -351,7 +351,7 @@ fn preview_impact() {
     use crate::rig::{EMPOWERED_BLADE, EMPOWERED_STRETCH, Phase, assemble, moves, targets};
     use crate::arena::palette;
 
-    use crate::swish::{CORE_THICKNESS, INK_THICKNESS, RIFT_ALPHA, RIM_ALPHA, bleed_mesh, dust_mesh, rift_mesh, rubble_mesh};
+    use crate::swish::{CORE_THICKNESS, INK_THICKNESS, RIFT_ALPHA, RIM_ALPHA, bleed_shape, dust_shape, rift_shape, rubble_shape};
 
     let dir = std::env::var("PREVIEW_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
     let key = "revenant";
@@ -375,11 +375,11 @@ fn preview_impact() {
     let mut effect = Vec::new();
     let at = |p: Vec3, scale: Vec3| Mat4::from_scale_rotation_translation(scale, turn, p);
     // As it settles (the light past its flare, breathing low), the mist half gone.
-    see_through(&bleed_mesh(length, plain_width, 7), at(from - Vec3::Y * 0.006, grown), linear(palette::TATTERS), RIM_ALPHA, &mut effect);
-    see_through(&rubble_mesh(length, plain_width, 7), at(from - Vec3::Y * 0.005, grown), linear(palette::TATTERS), RIM_ALPHA, &mut effect);
-    see_through(&rift_mesh(length, plain_width, 7, INK_THICKNESS), at(from, grown), linear(palette::INK), RIFT_ALPHA, &mut effect);
-    see_through(&rift_mesh(length, plain_width, 7, CORE_THICKNESS), at(from + Vec3::Y * 0.004, grown), linear(palette::WISP) * 1.4, 0.75, &mut effect);
-    see_through(&dust_mesh(), at((from + to) / 2.0 + Vec3::Y * 0.15, Vec3::new(length * grown.x + 0.9, 1.0, width + 0.9) * 0.9), linear(palette::WISP), 0.08, &mut effect);
+    see_through(&bleed_shape(length, plain_width, 7).build(), at(from - Vec3::Y * 0.006, grown), linear(palette::TATTERS), RIM_ALPHA, &mut effect);
+    see_through(&rubble_shape(length, plain_width, 7).build(), at(from - Vec3::Y * 0.005, grown), linear(palette::TATTERS), RIM_ALPHA, &mut effect);
+    see_through(&rift_shape(length, plain_width, 7, INK_THICKNESS).build(), at(from, grown), linear(palette::INK), RIFT_ALPHA, &mut effect);
+    see_through(&rift_shape(length, plain_width, 7, CORE_THICKNESS).build(), at(from + Vec3::Y * 0.004, grown), linear(palette::WISP) * 1.4, 0.75, &mut effect);
+    see_through(&dust_shape().build(), at((from + to) / 2.0 + Vec3::Y * 0.15, Vec3::new(length * grown.x + 0.9, 1.0, width + 0.9) * 0.9), linear(palette::WISP), 0.08, &mut effect);
     for i in 0..10 {
         let t = i as f32 / 9.0;
         let p = from.lerp(to, 0.1 + 0.8 * t) + Vec3::Z * if i % 2 == 0 { 0.3 } else { -0.35 } * (0.5 + t) + Vec3::Y * (0.2 + 0.5 * (i % 3) as f32 * 0.4);

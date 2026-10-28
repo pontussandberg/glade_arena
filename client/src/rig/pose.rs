@@ -431,7 +431,7 @@ pub(crate) fn onto_ground(map: &arena_shared::map::Map, at: Vec2, feet: f32, siz
     // How far its lowest point `low` is over where it should be, by the ground under it now:
     // stopped on what rises over it, the lower ground followed as it comes near it.
     let over = |low: Vec3| {
-        let ground = (struck_surface(map, at + arena::to_gameplay(low), feet) - feet).clamp(-REACH_DOWN, REACH_UP);
+        let ground = (struck_surface(map, at, at + arena::to_gameplay(low), feet) - feet).clamp(-REACH_DOWN, REACH_UP);
         let met = if ground > 0.0 { deep.max(ground + deep.min(0.0)) } else { deep + ground * (1.0 - deep / GROUND_BAND).clamp(0.0, 1.0) * striking };
         low.y - met
     };
@@ -636,7 +636,7 @@ mod tests {
         // Coming down on it, and in the follow-through, never in it or whatever else it's over.
         for throw in [0.3, 0.6, 0.8, 0.9] {
             let [level, coming] = slammed(Phase { throw, second: throw, ..STRUCK }, at, Vec2::Y);
-            let under = crate::swish::struck_surface(yard, at + arena::to_gameplay(coming), 0.0);
+            let under = crate::swish::struck_surface(yard, at, at + arena::to_gameplay(coming), 0.0);
             assert!(coming.y > under + level.y.min(0.0) - 0.03, "{throw} of the way down: at {} m over {under} m, posed for level ground at {} m", coming.y, level.y);
         }
     }

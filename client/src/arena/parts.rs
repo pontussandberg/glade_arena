@@ -341,6 +341,11 @@ impl FlatMesh {
         self.tri([a, c, d], color);
     }
 
+    /// Its triangles as `tri_faded` took them: their corners, and how opaque each is.
+    pub(crate) fn faded_triangles(&self) -> impl Iterator<Item = ([Vec3; 3], [f32; 3])> + '_ {
+        self.positions.as_chunks::<3>().0.iter().zip(self.colors.as_chunks::<3>().0).map(|(p, c)| (p.map(Vec3::from_array), c.map(|c| c[3])))
+    }
+
     pub(crate) fn build(self) -> Mesh {
         Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)

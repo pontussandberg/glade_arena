@@ -286,9 +286,21 @@ impl Map {
     /// The highest of what's at `p` no higher than `up_to`: the ground, or the top of a collider
     /// (`p` over it or `SUPPORT` beyond).
     pub fn surface_at(&self, p: Vec2, up_to: f32) -> f32 {
+        self.surface_within(p, up_to, SUPPORT)
+    }
+
+    /// `surface_at` just under `p`, nothing past the edge of what it's over: where something
+    /// drawn on the surfaces lies (a mark, a scuff), so none of it hangs out in the air.
+    pub fn surface_under(&self, p: Vec2, up_to: f32) -> f32 {
+        self.surface_within(p, up_to, 0.0)
+    }
+
+    /// The highest of what's at `p` no higher than `up_to`: the ground, or the top of a collider
+    /// `p` is over or within `beyond` of.
+    fn surface_within(&self, p: Vec2, up_to: f32, beyond: f32) -> f32 {
         // Every collider within `SUPPORT` of `p` is near its tile: nearer than a body's reach.
         self.colliders_on(Map::tile_of(p))
-            .filter(|collider| collider.reach(p) <= SUPPORT)
+            .filter(|collider| collider.reach(p) <= beyond)
             .map(|collider| collider.top_at(p.clamp(collider.lo, collider.hi)))
             .filter(|&top| top <= up_to)
             .fold(self.height_at(p), f32::max)
@@ -358,6 +370,8 @@ mod tests {
                 assert_eq!(m.colliders_block(a, b, feet), brute, "{:?}: {a} -> {b}, feet {feet}", m.id);
                 let surface = m.colliders().iter().filter(|c| c.reach(a) <= SUPPORT).map(|c| c.top_at(a.clamp(c.lo, c.hi))).filter(|&top| top <= feet).fold(m.height_at(a), f32::max);
                 assert_eq!(m.surface_at(a, feet), surface, "{:?}: the surface at {a} up to {feet}", m.id);
+                let under = m.colliders().iter().filter(|c| c.reach(a) == 0.0).map(|c| c.top_at(a)).filter(|&top| top <= feet).fold(m.height_at(a), f32::max);
+                assert_eq!(m.surface_under(a, feet), under, "{:?}: the surface just under {a} up to {feet}", m.id);
                 let ceiling = m.colliders().iter().filter(|c| c.reach(a) < NAV_RADIUS && c.bottom >= feet + BODY_HEIGHT - 1e-3).map(|c| c.bottom - BODY_HEIGHT).fold(f32::INFINITY, f32::min);
                 assert_eq!(m.ceiling_at(a, feet), ceiling, "{:?}: the ceiling at {a} over {feet}", m.id);
             }

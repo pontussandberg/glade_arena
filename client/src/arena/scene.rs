@@ -441,21 +441,24 @@ impl Props {
             for h in [0.3, 1.5, wall_height - 0.1] {
                 self.block(Vec3::new(length + 0.06, 0.14, width + 0.06), timber, at(c, h));
             }
-            // The roof: two slabs leaning to the ridge, overhanging; the gables stepped up under
-            // them; a chimney at one end.
+            // The roof: two slabs leaning to the ridge, overhanging, lying on the walls with their
+            // tops where the roof is stood on (`House::ridge`); a beam along the ridge; the gables
+            // stepped up under them, each step as wide as it goes in under the slabs; a chimney at
+            // one end.
             let (pitch, rise) = (House::SLOPE.atan(), house.rise());
             let slope = (width / 2.0 + House::EAVES) / pitch.cos();
             for side in [-1.0, 1.0] {
                 // Rolled about the slab's own length (the house's long side), its outer edge down.
                 let roll = Quat::from_rotation_x(if long_x { -side * pitch } else { side * pitch });
                 let mid = c + across * side * (width / 2.0 + House::EAVES) / 2.0;
-                let t = Transform::from_translation(to_world(mid, wall_height + rise / 2.0 + 0.05)).with_rotation(turn * roll);
-                self.block(Vec3::new(length + 2.0 * House::GABLE_EAVES, 0.14, slope), ROOF.mix(&self.theme.bark, rng.range(0.0, 0.3)), t);
+                let middle = wall_height + House::ROOF_THICK / 2.0 + (rise - House::SLOPE * House::EAVES) / 2.0;
+                let t = Transform::from_translation(to_world(mid, middle)).with_rotation(turn * roll);
+                self.block(Vec3::new(length + 2.0 * House::GABLE_EAVES, House::ROOF_THICK * pitch.cos(), slope), ROOF.mix(&self.theme.bark, rng.range(0.0, 0.3)), t);
             }
-            self.block(Vec3::new(length + 0.9, 0.16, 0.2), ROOF.darker(0.15), at(c, wall_height + rise + 0.02));
+            self.block(Vec3::new(length + 0.9, 0.16, 0.2), ROOF.darker(0.15), at(c, house.ridge() - 0.08));
             let steps = 4;
             for k in 0..steps {
-                let w = width * (1.0 - (k as f32 + 0.5) / steps as f32);
+                let w = width * (1.0 - (k as f32 + 1.0) / steps as f32) + House::ROOF_THICK / House::SLOPE;
                 let h = rise / steps as f32;
                 self.block(Vec3::new(length - 0.2, h, w), plaster.darker(0.05), at(c, wall_height + h * (k as f32 + 0.5)));
             }
