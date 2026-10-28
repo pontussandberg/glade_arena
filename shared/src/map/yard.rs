@@ -43,25 +43,25 @@ const STREAM: (i32, i32) = (20, 22);
 const FORD_Y: f32 = -12.5;
 
 /// The terrace the upper village stands on: its box (meters, inclusive), its height, and where
-/// its stairs come down its south face (x, each `RAMP_HALF` wide).
+/// its stairs come down its south face (x, each `RAMP_HALF` wide). Every ramp's middle is a
+/// tile's middle, so its sides are tile edges, where the ground and its stone faces are drawn.
 const TERRACE: (Vec2, Vec2) = (Vec2::new(-22.0, 10.0), Vec2::new(16.0, 27.0));
 const TERRACE_TOP: f32 = 2.5;
-const STAIRS: [f32; 2] = [-10.0, 7.0];
+const STAIRS: [f32; 2] = [-9.5, 7.5];
 /// The lower terrace south of the square, the inn's: its box, its height, its stair up from the
 /// square's south lane (x).
 const SOUTH: (Vec2, Vec2) = (Vec2::new(-4.0, -20.0), Vec2::new(16.0, -9.0));
 const SOUTH_TOP: f32 = 1.5;
-const SOUTH_STAIR: f32 = 4.0;
+const SOUTH_STAIR: f32 = 4.5;
 
 /// The causeway from the terrace's east end over the stream: its strip (y, half-width), how far
 /// east it runs level before sloping down to the ground.
-const CAUSEWAY_Y: f32 = 12.0;
+const CAUSEWAY_Y: f32 = 12.5;
 const CAUSEWAY_END: f32 = 26.0;
 
-/// The watchtower at the square's south-west corner, overlooking it: its middle, its top's
-/// half-width, its height.
-const TOWER: Vec2 = Vec2::new(-11.0, -11.0);
-const TOWER_HALF: f32 = 1.5;
+/// The watchtower at the square's south-west corner, overlooking it: its top's box (tile
+/// edges), and its height.
+const TOWER: (Vec2, Vec2) = (Vec2::new(-12.0, -12.0), Vec2::new(-9.0, -6.0));
 const TOWER_TOP: f32 = 6.0;
 
 /// The houses: lower-left tile, size (tiles), which way the door faces.
@@ -80,6 +80,9 @@ const HOUSES: &[(IVec2, IVec2, IVec2)] = &[
     (IVec2::new(9, 14), IVec2::new(5, 4), IVec2::NEG_X),
 ];
 
+/// Stacks of crates (tile, how many high): steps up to a roof.
+const CRATES: &[(IVec2, u8)] = &[(IVec2::new(15, 2), 1), (IVec2::new(14, 2), 2), (IVec2::new(13, 2), 3)];
+
 /// Fences (from, to), round the yards and along the terrace's edge and the tower's top.
 const FENCES: &[(Vec2, Vec2)] = &[
     (Vec2::new(-18.0, 2.0), Vec2::new(-18.0, 8.0)),
@@ -97,9 +100,9 @@ const FENCES: &[(Vec2, Vec2)] = &[
 const GARDENS: &[Vec2] = &[
     Vec2::new(-16.5, 2.5), Vec2::new(-15.5, 2.5), Vec2::new(-12.5, 2.5),
     Vec2::new(-16.5, -3.5), Vec2::new(-13.5, -3.5),
-    Vec2::new(9.5, 2.5), Vec2::new(14.5, 2.5), Vec2::new(10.5, 7.5), Vec2::new(13.5, 7.5),
+    Vec2::new(9.5, 2.5), Vec2::new(10.5, 7.5), Vec2::new(13.5, 7.5),
     Vec2::new(8.5, -11.5), Vec2::new(8.5, -13.5), Vec2::new(-3.5, -10.5), Vec2::new(5.5, -10.5),
-    Vec2::new(-7.5, -7.5), Vec2::new(-7.5, 7.5), Vec2::new(8.5, -7.5), Vec2::new(8.5, 7.5),
+    Vec2::new(-7.5, 7.5), Vec2::new(8.5, -7.5), Vec2::new(8.5, 7.5),
     Vec2::new(-19.5, 12.5), Vec2::new(-15.5, 12.5), Vec2::new(-5.5, 12.5), Vec2::new(-0.5, 12.5), Vec2::new(3.5, 12.5),
 ];
 
@@ -132,15 +135,15 @@ const DUMMIES: &[Vec2] = &[
     Vec2::new(30.5, 0.5),
     Vec2::new(-14.5, 11.5),
     Vec2::new(12.5, -17.5),
-    Vec2::new(PLATEAU.x + 0.5, PLATEAU.y + 0.5),
-    Vec2::new(TOWER.x + 0.5, TOWER.y + 0.5),
-    Vec2::new(21.5, CAUSEWAY_Y + 0.5),
+    Vec2::new(PLATEAU.x, PLATEAU.y + 0.5),
+    Vec2::new(-10.5, -10.5),
+    Vec2::new(21.5, CAUSEWAY_Y),
     Vec2::new(HILL.x + 0.5, HILL.y + 0.5),
 ];
 
 /// The high ground beyond the terrace: the plateau's middle, height and radius, with the ramp
 /// up its south face from the terrace; the hill's crown, height and reach.
-const PLATEAU: Vec2 = Vec2::new(-10.0, 23.0);
+const PLATEAU: Vec2 = Vec2::new(-9.5, 23.0);
 const PLATEAU_TOP: f32 = 6.0;
 const PLATEAU_RADIUS: f32 = 4.5;
 const HILL: Vec2 = Vec2::new(36.0, 2.0);
@@ -204,22 +207,23 @@ fn relief(p: Vec2) -> f32 {
         let down = (p.x - CAUSEWAY_END) / (TERRACE_TOP * RAMP_RUN);
         h = h.max(TERRACE_TOP * (1.0 - down.clamp(0.0, 1.0)));
     }
-    // The watchtower: its top, and the switchback ramp round its south and east sides.
-    h = h.max(ledge(TOWER_HALF - (p - TOWER).abs().max_element(), TOWER_TOP));
-    let half_way = TOWER_TOP / 2.0;
-    let leg = half_way * RAMP_RUN;
-    // First leg: along the south side, west to east, from the ground up to half way.
-    let south = TOWER.y - TOWER_HALF - RAMP_HALF - 0.2;
-    h = h.max(ramp((p.x - (TOWER.x - TOWER_HALF - leg)) / leg, p.y - south, half_way).min(if p.x <= TOWER.x + TOWER_HALF + RAMP_HALF * 2.0 + 0.4 { half_way } else { 0.0 }));
-    // The landing at the south-east corner, then the second leg north along the east side, up
-    // to the tower's north-east corner.
-    let east = TOWER.x + TOWER_HALF + RAMP_HALF + 0.2;
-    let landing = (p - Vec2::new(east, south)).abs().max_element() <= RAMP_HALF;
-    if landing {
-        h = h.max(half_way);
+    // The watchtower: its top, and the switchback round its south and east sides, each a
+    // ramp's width out from the tower.
+    let (tlo, thi) = TOWER;
+    h = h.max(ledge(inside(p, tlo, thi), TOWER_TOP));
+    let width = 2.0 * RAMP_HALF;
+    // The landing at the south-east corner is as high as the second leg, along the east side's
+    // south half, leaves to climb.
+    let landing = TOWER_TOP - width / RAMP_RUN;
+    // First leg: along the south side, west to east, from the ground up to the landing.
+    if p.y >= tlo.y - width && p.y <= tlo.y && p.x <= thi.x + width {
+        let foot = thi.x - landing * RAMP_RUN;
+        h = h.max(landing * ((p.x - foot) / (landing * RAMP_RUN)).clamp(0.0, 1.0));
     }
-    if p.y > south && p.y <= TOWER.y + TOWER_HALF + RAMP_HALF && (p.x - east).abs() <= RAMP_HALF {
-        h = h.max(half_way + ramp((p.y - south) / leg, p.x - east, half_way));
+    // Second leg: north from the landing along the east side, up to the top, then level beside
+    // the tower's north half, onto it.
+    if p.x >= thi.x && p.x <= thi.x + width && p.y >= tlo.y && p.y <= thi.y {
+        h = h.max(landing + (TOWER_TOP - landing) * ((p.y - tlo.y) / width).clamp(0.0, 1.0));
     }
     // The lane's bridge over the stream: an arch, up from either bank.
     let (west, east_bank) = (STREAM.0 as f32, STREAM.1 as f32);
@@ -259,6 +263,10 @@ pub(super) fn build() -> Map {
     map.fill(Vec2::new(STREAM.0 as f32 + 0.5, FORD_Y), Vec2::new(STREAM.1 as f32 - 0.5, FORD_Y), Tile::Ford);
     for &(lo, size, door) in HOUSES {
         map.house(lo, size, door);
+    }
+    // Crates stacked up the east house's south wall, a step at a time, onto its roof.
+    for &(t, high) in CRATES {
+        map.crates(t, high);
     }
     for &p in TREES {
         map.set(p, Tile::Tree);

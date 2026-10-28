@@ -53,7 +53,6 @@ pub(super) fn read_local_input(
     mut aiming: ResMut<Aiming>,
     mut held_click: Local<bool>,
     mut last_pos: Local<Option<Vec2>>,
-    mut space_down: Local<bool>,
     (mut desired, mut stop): (ResMut<DesiredInput>, ResMut<StopWalking>),
 ) {
     let me = me.single().ok();
@@ -184,12 +183,10 @@ pub(super) fn read_local_input(
         move_to = None;
         stop.0 = true;
     }
-    // Space jumps (action mode): once per press, as it goes down (the browser repeats a held
-    // key's press, which isn't another jump). `casts`, `fire` and `jump` are kept until they've
-    // been sent (`send_commands` clears them), so a short tap isn't missed.
-    let space = keys.pressed(KeyCode::Space);
-    let jump = desired.0.jump || (mode.free && space && !*space_down && !board);
-    *space_down = space;
+    // Space jumps (action mode), and held, jumps again each time it lands (the server jumps
+    // only from the ground). `casts`, `fire` and `jump` are kept until they've been sent
+    // (`send_commands` clears them), so a short tap isn't missed.
+    let jump = desired.0.jump || (mode.free && keys.pressed(KeyCode::Space) && !board);
     desired.0 = PlayerInput { move_to, walk, aim, climb, fire, jump, casts: casts.casts };
 }
 

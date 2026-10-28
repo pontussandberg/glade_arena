@@ -256,6 +256,8 @@ pub struct Map {
     pub well: Option<Vec2>,
     /// Flower beds (tile centers): decoration.
     pub gardens: Vec<Vec2>,
+    /// Stacks of crates (tile, how many high): wall tiles under each, stood on (`CRATE`).
+    pub crates: Vec<(IVec2, u8)>,
     /// Meters inside the playable area's edge (negative outside). Continuous, for terrain and
     /// decoration.
     edge: fn(Vec2) -> f32,
@@ -295,7 +297,37 @@ impl House {
     pub fn size(&self) -> Vec2 {
         (self.hi - self.lo).as_vec2()
     }
+
+    /// How high its walls stand, to the eaves (meters over its ground).
+    pub const WALLS: f32 = 2.7;
+    /// How steeply its roof rises from the eaves to the ridge (radians).
+    pub const PITCH: f32 = 0.62;
+    /// How thick the roof lies over its slope.
+    pub const ROOF_THICK: f32 = 0.12;
+
+    /// Whether its ridge runs along x: along its long side.
+    pub fn long_x(&self) -> bool {
+        let size = self.size();
+        size.x >= size.y
+    }
+
+    /// How high the top of its roof is (meters over the house's ground) at `p`: up from the
+    /// eaves along its long sides to the ridge down its middle.
+    pub fn roof_at(&self, p: Vec2) -> f32 {
+        let (size, c) = (self.size(), self.center());
+        let (half, off) = if self.long_x() { (size.y / 2.0, (p.y - c.y).abs()) } else { (size.x / 2.0, (p.x - c.x).abs()) };
+        let rise = half * Self::PITCH.tan();
+        Self::WALLS + Self::ROOF_THICK + rise * (1.0 - (off / half).min(1.0))
+    }
 }
+
+/// How tall one crate is (meters): a stack of them (`Map::crates`) is a step up to a roof.
+pub const CRATE: f32 = 0.9;
+
+/// How far above a body's feet the top of something solid may be for it to count as under the
+/// body, not in its way (`Map::line_walkable_at`): enough for a body's edge reaching onto a
+/// roof's rising slope, short of a crate.
+pub const STEP_UP: f32 = 0.45;
 
 /// How much the ground may rise per meter walked (a tangent): steeper is a cliff, walked down
 /// off but not up (`Map::line_walkable`, `Map::steps`).
@@ -339,6 +371,7 @@ impl Map {
             fences: Vec::new(),
             well: None,
             gardens: Vec::new(),
+            crates: Vec::new(),
             edge,
             relief: flat,
             beyond,
@@ -391,6 +424,14 @@ impl Map {
             }
         }
         self.houses.push(house);
+    }
+
+    /// A stack of `high` crates on tile `t`: a wall tile, stood on (`solid_top`).
+    fn crates(&mut self, t: IVec2, high: u8) {
+        if let Some(i) = self.index(t) {
+            self.tiles[i] = Tile::Wall;
+        }
+        self.crates.push((t, high));
     }
 
     /// Every tile in the rectangle from `lo` to `hi` (tile centers, both inclusive), no mirror.
@@ -534,6 +575,57 @@ impl Map {
         }
     }
 
+    /// How high (meters) the top of what blocks walking on tile `t` is at `p`: a house's roof, a
+    /// stack of crates, a wall or a rock (`Tile::top`); nothing stands on a tree, in water or a
+    /// chasm (infinitely high). Open ground blocks nothing (`None`).
+    pub fn solid_top(&self, t: IVec2, p: Vec2) -> Option<f32> {
+        let tile = self.get(t);
+        if tile.walkable() {
+            return None;
+        }
+        let ground = self.height_at(Map::center(t));
+        if let Some(&(_, high)) = self.crates.iter().find(|(at, _)| *at == t) {
+            return Some(ground + CRATE * high as f32);
+        }
+        if let Some(house) = self.houses.iter().find(|house| house.covers(t)) {
+            return Some(self.height_at(house.center()) + house.roof_at(p));
+        }
+        Some(match tile {
+            Tile::Wall | Tile::Rock => ground + tile.top(),
+            _ => f32::INFINITY,
+        })
+    }
+
+    /// What a body with its feet `feet` high stands on at `p`: the top of what's on the tile
+    /// there, if that's no more than `STEP_UP` over its feet, or else the ground.
+    pub fn floor_at(&self, p: Vec2, feet: f32) -> f32 {
+        match self.solid_top(Map::tile_of(p), p) {
+            Some(top) if top <= feet + STEP_UP => top,
+            _ => self.height_at(p),
+        }
+    }
+
+    /// `line_walkable` for a body with its feet `feet` high, on the ground or up in the air:
+    /// what blocks walking blocks it only below the top of it (`solid_top`), and over that it
+    /// walks or lands on it; where it ends up may be no higher over its feet than `CLIMB` lets
+    /// it step. A body already reaching into something (it came down beside it) may move out
+    /// of it, never further in.
+    pub fn line_walkable_at(&self, a: Vec2, b: Vec2, feet: f32) -> bool {
+        let half = Vec2::splat(0.5 + NAV_RADIUS);
+        let blocks = |t: IVec2| {
+            let c = Map::center(t);
+            let square = (c - Vec2::splat(0.5), c + Vec2::splat(0.5));
+            let over = self.solid_top(t, b.clamp(square.0, square.1)).is_none_or(|top| top <= feet + STEP_UP);
+            if over || !segment_hits_box(a, b, c - half, c + half) {
+                return false;
+            }
+            let reach = |p: Vec2| p.distance(p.clamp(square.0, square.1));
+            let inside = (a - c).abs().cmple(half).all();
+            !(inside && reach(b) >= reach(a))
+        };
+        self.line_blocker_by(a, b, blocks).is_none() && self.floor_at(b, feet) - feet <= CLIMB * (b - a).length() + 1e-4
+    }
+
     /// True if a body of radius `NAV_RADIUS` can move in a straight line from `a` to `b`: nothing
     /// blocked in the way, and the ground not rising too steeply (`climbable`).
     ///
@@ -547,6 +639,11 @@ impl Map {
     /// does). Looks from `a`'s end, so it finds an obstacle near `a` first: where a walker is,
     /// and usually what hides the rest of its path too.
     fn line_blocker(&self, a: Vec2, b: Vec2) -> Option<IVec2> {
+        self.line_blocker_by(a, b, |t| self.blocks_line(t, a, b))
+    }
+
+    /// `line_blocker`, with what keeps a tile in the way: `blocks`.
+    fn line_blocker_by(&self, a: Vec2, b: Vec2, blocks: impl Fn(IVec2) -> bool) -> Option<IVec2> {
         let half = Vec2::splat(0.5 + NAV_RADIUS);
         // Only visit tiles the grown segment can reach: per row, the x-span of the part of the
         // segment inside that row's band (padded a hair so rounding never skips a real hit).
@@ -575,7 +672,7 @@ impl Map {
             let (mut right, mut left) = ((first..=last), (first..=last).rev());
             let columns: &mut dyn Iterator<Item = i32> = if d.x >= 0.0 { &mut right } else { &mut left };
             for i in columns {
-                if self.blocks_line(IVec2::new(i, j), a, b) {
+                if blocks(IVec2::new(i, j)) {
                     return Some(IVec2::new(i, j));
                 }
             }
@@ -1056,7 +1153,7 @@ mod tests {
     #[test]
     fn the_yards_high_ground_is_climbed_by_its_ramp_not_its_sides() {
         let m = MapId::Yard.map();
-        let (middle, radius, top) = (Vec2::new(-10.0, 23.0), 4.5, 6.0);
+        let (middle, radius, top) = (Vec2::new(-9.5, 23.0), 4.5, 6.0);
         assert!((m.height_at(middle) - top).abs() < 1e-5, "the plateau's top");
         // Up its sheer east side is no way; down it is.
         let (foot, brink) = (middle + Vec2::X * (radius + 0.7), middle + Vec2::X * (radius - 0.2));
@@ -1064,13 +1161,21 @@ mod tests {
         assert!(m.line_walkable(brink, foot), "couldn't step down off it");
         // Up the stairs from the square onto the terrace, and on up the ramp onto the plateau, a
         // walker's step at a time.
-        let mut p = Vec2::new(-10.0, 5.0);
+        let mut p = Vec2::new(-9.5, 5.0);
         while p.y < 12.0 {
             let next = p + Vec2::Y * 0.12;
             assert!(m.line_walkable(p, next), "the stairs aren't walkable at {p}");
             p = next;
         }
         assert!((m.height_at(p) - 2.5).abs() < 1e-5, "the stairs didn't come out on the terrace");
+        // Nor up the stairs' sides, where they're drawn: a stair's side is a tile edge, sheer
+        // from just past it to the stair.
+        for y in [7.5, 8.5, 9.5] {
+            let (beside, on) = (Vec2::new(-7.9, y), Vec2::new(-8.1, y));
+            assert!(m.height_at(beside) < 1e-5, "the ground beside the stair is raised at {beside}");
+            assert!(m.height_at(on) > 0.5, "the stair doesn't reach its drawn side at {on}");
+            assert!(!m.line_walkable(beside, on), "walked up the stair's side at {on}");
+        }
         let mut p = Vec2::new(middle.x, 12.0);
         while p.y < middle.y {
             let next = p + Vec2::Y * 0.12;
@@ -1078,23 +1183,27 @@ mod tests {
             p = next;
         }
         assert!((m.height_at(p) - top).abs() < 1e-5, "the ramp didn't come out on top");
-        // Up the tower's switchback onto its top.
-        let tower = Vec2::new(-11.0, -11.0);
-        let mut p = Vec2::new(tower.x - 1.5 - 4.5 - 0.5, tower.y - 1.5 - 1.5 - 0.2);
-        while p.x < tower.x + 1.5 + 1.5 + 0.2 {
+        // Up the tower's switchback onto its top: east along its south side, north along its
+        // east side, and west onto it.
+        let mut p = Vec2::new(-16.0, -13.5);
+        while p.x < -7.5 {
             let next = p + Vec2::X * 0.12;
             assert!(m.line_walkable(p, next), "the tower's first leg isn't walkable at {p}");
             p = next;
         }
-        while p.y < tower.y {
+        while p.y < -7.5 {
             let next = p + Vec2::Y * 0.12;
             assert!(m.line_walkable(p, next), "the tower's second leg isn't walkable at {p}");
             p = next;
         }
-        p = Vec2::new(tower.x, p.y);
+        while p.x > -10.5 {
+            let next = p - Vec2::X * 0.12;
+            assert!(m.line_walkable(p, next), "couldn't step onto the tower at {p}");
+            p = next;
+        }
         assert!((m.height_at(p) - 6.0).abs() < 1e-5, "the tower's ramp didn't come out on top: {} at {p}", m.height_at(p));
         // Up the south stair onto the inn's terrace.
-        let mut p = Vec2::new(4.0, -5.0);
+        let mut p = Vec2::new(4.5, -5.0);
         while p.y > -10.0 {
             let next = p - Vec2::Y * 0.12;
             assert!(m.line_walkable(p, next), "the south stair isn't walkable at {p}");

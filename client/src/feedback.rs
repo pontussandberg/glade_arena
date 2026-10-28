@@ -16,7 +16,7 @@ use lightyear::prelude::*;
 use crate::Me;
 
 use crate::camera::CameraPlaced;
-use crate::arena::{palette, to_world};
+use crate::arena::palette;
 use crate::render::{Relation, set_fill, shown, ui_text};
 use crate::render::GameUi;
 use crate::rooms::Screen;
@@ -246,8 +246,8 @@ fn color_bars(
 }
 
 /// Where a fighter's health bar is centered on screen (`None` off camera).
-fn over_bar(camera: &Camera, camera_transform: &GlobalTransform, pos: &Pos, size: f32) -> Option<Vec2> {
-    camera.world_to_viewport(camera_transform, to_world(pos.0, BAR_HEIGHT * size.max(0.8))).ok()
+fn over_bar(camera: &Camera, camera_transform: &GlobalTransform, body: &Transform, size: f32) -> Option<Vec2> {
+    camera.world_to_viewport(camera_transform, body.translation + Vec3::Y * BAR_HEIGHT * size.max(0.8)).ok()
 }
 
 /// How far behind the latest state from the server our own fighter is drawn, in ticks: enough
@@ -314,7 +314,7 @@ fn place_bars(
     time: Res<Time>,
     clock: AttackClock,
     camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
-    players: Query<(&Pos, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Has<Me>, (Option<&MaxHealth>, Has<Elite>))>,
+    players: Query<(&Transform, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Has<Me>, (Option<&MaxHealth>, Has<Elite>))>,
     mut bars: Query<(Entity, &Bars, &mut HealthTrail, &mut Node, &mut UiTransform, &mut Visibility)>,
     mut parts: Query<(&mut Node, &mut Visibility), Without<Bars>>,
     mut colors: Query<&mut BackgroundColor>,
@@ -322,7 +322,7 @@ fn place_bars(
     let (camera, camera_transform) = *camera;
     let now = time.elapsed_secs();
     for (bar, ids, mut trail, mut node, mut transform, mut visibility) in &mut bars {
-        let Ok((pos, class, health, crit_at, attack, is_me, (max, elite))) = players.get(ids.player) else {
+        let Ok((body, class, health, crit_at, attack, is_me, (max, elite))) = players.get(ids.player) else {
             commands.entity(bar).despawn();
             continue;
         };
@@ -331,7 +331,7 @@ fn place_bars(
         update_trail(&mut trail, health_fraction, crit_at.map(|c| c.0), now, time.delta_secs());
         let alive = health.is_none_or(Health::alive);
         let height = crate::rig::drawn_size(*class, elite);
-        let Some(screen) = over_bar(camera, camera_transform, pos, height).filter(|_| alive) else {
+        let Some(screen) = over_bar(camera, camera_transform, body, height).filter(|_| alive) else {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
@@ -576,17 +576,17 @@ fn float_damage_numbers(
     mut commands: Commands,
     time: Res<Time>,
     camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
-    players: Query<&Pos>,
+    players: Query<&Transform, With<PlayerId>>,
     mut numbers: Query<(Entity, &DamageNumber, &ComputedNode, &mut Node, &mut UiTransform, &mut TextColor, &mut Visibility)>,
 ) {
     let (camera, camera_transform) = *camera;
     for (number, info, computed, mut node, mut transform, mut color, mut visibility) in &mut numbers {
         let t = (time.elapsed_secs() - info.born) / info.lasts;
-        let (Ok(pos), true) = (players.get(info.player), t < 1.0) else {
+        let (Ok(body), true) = (players.get(info.player), t < 1.0) else {
             commands.entity(number).despawn();
             continue;
         };
-        let screen = over_bar(camera, camera_transform, pos, 1.0);
+        let screen = over_bar(camera, camera_transform, body, 1.0);
         visibility.set_if_neq(shown(screen.is_some()));
         let Some(screen) = screen else { continue };
         let size = computed.size() * computed.inverse_scale_factor();

@@ -60,8 +60,9 @@ impl Dash {
     /// dasher is after it. It takes as many ticks as its length at that pace would, but eased
     /// out: the way covered by each tick falls off (quadratically) toward the end, so it sets
     /// out fast and comes to rest softly. Counted whether or not a wall (or water's edge,
-    /// anything unwalkable) stops it.
-    pub fn step(&mut self, map: &Map, pos: Vec2, pace: f32, tick: u32) -> Vec2 {
+    /// anything unwalkable) stops it; one whose top is under the dasher's `feet` doesn't
+    /// (`Map::line_walkable_at`).
+    pub fn step(&mut self, map: &Map, pos: Vec2, pace: f32, tick: u32, feet: f32) -> Vec2 {
         let ticks = (self.length / pace.max(1e-6)).ceil().max(1.0);
         // Stepped first the tick after it started.
         let stepped = tick.saturating_sub(self.started_at + 1) as f32;
@@ -69,7 +70,7 @@ impl Dash {
         let step = (self.length * (along(stepped + 1.0) - along(stepped))).min(self.left);
         self.left -= step;
         let next = pos + self.dir * step;
-        if map.line_walkable(pos, next) { next } else { pos }
+        if map.line_walkable_at(pos, next, feet) { next } else { pos }
     }
 
     /// Whether it has gone its whole length. Not quite zero: rounding leaves a sliver after the

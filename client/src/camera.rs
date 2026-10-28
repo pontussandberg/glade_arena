@@ -301,6 +301,11 @@ pub(crate) fn wheel_notches(scroll: &AccumulatedMouseScroll) -> f32 {
     }
 }
 
+/// How many light tiles the view is cut into, and in how many slices of depth: tiles times the
+/// most point lights a scene has stays under WebGL's limit on the tiles' light lists.
+const LIGHT_TILES: u32 = 512;
+const LIGHT_SLICES: u32 = 8;
+
 fn spawn_camera(mut commands: Commands) {
     use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection};
     commands.spawn((
@@ -319,6 +324,16 @@ fn spawn_camera(mut commands: Commands) {
         },
         Transform::from_translation(OFFSET * ZOOM_RANGE.1).looking_at(Vec3::ZERO, Vec3::Y),
         arena::haze(),
+        // Coarse light tiles, few enough that the list of which torch lights which tile can
+        // never fill (WebGL's is a fixed size). Bevy's default has thousands of tiles, and with
+        // the camera low behind a fighter, a torch nearby covers so many that the list ran out:
+        // every tile after that, a band to the screen's bottom right, lost its torchlight.
+        bevy::light::cluster::ClusterConfig::FixedZ {
+            total: LIGHT_TILES,
+            z_slices: LIGHT_SLICES,
+            z_config: bevy::light::cluster::ClusterZConfig::default(),
+            dynamic_resizing: true,
+        },
         CameraRig { focus: Vec3::ZERO, zoom: ZOOM_RANGE.1 },
     ));
 }

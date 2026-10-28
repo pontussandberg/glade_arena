@@ -413,6 +413,44 @@ mod tests {
         assert!(!projectile_hits(at, &proj, 3, at, SHOT_HEIGHT + 0.5), "jumped over it");
     }
 
+    /// Walks the yard toward each of `targets` in turn (jumping whenever on the ground, if
+    /// `hop`), as far as it gets in `ticks` each: where it ends up, and how high.
+    fn climb(from: Vec2, targets: &[Vec2], hop: bool, ticks: u32) -> (Vec2, f32) {
+        let yard = crate::map::MapId::Yard.map();
+        let (mut pos, mut motion, mut tick) = (from, Motion::default(), 0u32);
+        for &target in targets {
+            for _ in 0..ticks {
+                tick += 1;
+                let walk = (target - pos).normalize_or_zero();
+                let grounded = motion.height <= yard.floor_at(pos, motion.height) + 1e-3;
+                let input = PlayerInput { walk, jump: hop && grounded, ..default() };
+                pos = move_player(yard, pos, &input, fighter(), &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick);
+            }
+        }
+        (pos, motion.height)
+    }
+
+    #[test]
+    fn up_the_crates_onto_a_roof_and_up_it_but_not_through_its_walls() {
+        let yard = crate::map::MapId::Yard.map();
+        let house = yard.houses.iter().find(|house| house.covers(IVec2::new(13, 3))).unwrap();
+        let ridge = yard.height_at(house.center()) + house.roof_at(house.center());
+        // From the ground beside the stack, hopping up it a crate at a time, onto the eaves and
+        // up the roof's slope to the ridge.
+        let steps = [Vec2::new(15.5, 2.5), Vec2::new(14.5, 2.5), Vec2::new(13.5, 2.5), Vec2::new(13.5, 4.0), Vec2::new(13.5, house.center().y)];
+        let (at, height) = climb(Vec2::new(17.5, 2.5), &steps, true, 90);
+        assert!(house.covers(Map::tile_of(at)), "never got onto the roof: at {at}, {height} m up");
+        let under = yard.floor_at(at, height);
+        assert!((under - ridge).abs() < 0.1, "not over the ridge: over {under} m, the ridge at {ridge} m");
+        // Walking, never jumping, it's kept out of the house and stays on the ground.
+        let (at, height) = climb(Vec2::new(12.0, 1.0), &[house.center()], false, 120);
+        assert!(!house.covers(Map::tile_of(at)) && at.y < 3.0 - 0.25, "walked into the house: {at}");
+        assert_eq!(height, 0.0);
+        // Nor jumping at its wall from the ground.
+        let (at, _) = climb(Vec2::new(12.0, 1.0), &[house.center()], true, 120);
+        assert!(at.y < 3.0 - 0.25, "jumped through the house's wall: {at}");
+    }
+
     #[test]
     fn a_shot_over_the_top_of_a_wall_clears_it() {
         let wall = map().tiles().find(|(_, t)| *t == crate::map::Tile::Wall).unwrap().0;

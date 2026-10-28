@@ -82,7 +82,9 @@ pub fn move_player_boosted(
 ) -> Vec2 {
     let speed = chilled.speed_factor(tick) * hasted.speed_factor(tick);
     let held = chilled.rooted_at(tick) || chilled.lifted_at(tick);
-    let grounded = motion.height <= map.height_at(pos) + 1e-3;
+    // Its feet, and what it stands on there (the ground, a roof, crates), by which it walks.
+    let feet = motion.height;
+    let grounded = feet <= map.floor_at(pos, feet) + 1e-3;
     let mut next = pos;
     if held {
         motion.along = Vec2::ZERO;
@@ -91,7 +93,7 @@ pub fn move_player_boosted(
             Some(AbilityKind::Dash(def)) => def.pace(),
             _ => 0.0,
         };
-        next = dash.step(map, pos, pace * speed, tick);
+        next = dash.step(map, pos, pace * speed, tick, feet);
         motion.along = (next - pos) / TICK_DT;
     } else if attack.winding_up().is_some() {
         motion.along = Vec2::ZERO;
@@ -112,12 +114,12 @@ pub fn move_player_boosted(
         }
         // The step, or each axis of it that's open; a blocked axis stops that part of the motion.
         let step = v * TICK_DT;
-        if map.line_walkable(pos, pos + step) {
+        if map.line_walkable_at(pos, pos + step, feet) {
             next = pos + step;
-        } else if map.line_walkable(pos, pos + step.with_y(0.0)) {
+        } else if map.line_walkable_at(pos, pos + step.with_y(0.0), feet) {
             next = pos + step.with_y(0.0);
             v.y = 0.0;
-        } else if map.line_walkable(pos, pos + step.with_x(0.0)) {
+        } else if map.line_walkable_at(pos, pos + step.with_x(0.0), feet) {
             next = pos + step.with_x(0.0);
             v.x = 0.0;
         } else {
@@ -128,7 +130,7 @@ pub fn move_player_boosted(
         next = step_player(map, pos, input, class.def().move_speed * speed * boost);
         motion.along = (next - pos) / TICK_DT;
     }
-    let under = map.height_at(next);
+    let under = map.floor_at(next, feet);
     if input.jump && grounded && !held && dashing.0.is_none() {
         motion.rise = jump_speed();
     }

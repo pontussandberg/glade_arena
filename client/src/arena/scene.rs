@@ -3,7 +3,7 @@
 
 use super::*;
 
-use arena_shared::map::{Map, Tile};
+use arena_shared::map::{CRATE, House, Map, Tile};
 use bevy::color::Mix;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
 use bevy::pbr::{DistanceFog, FogFalloff};
@@ -210,6 +210,7 @@ fn build_arena(
     let wall_tops = props.walls(m, &mut rng);
     props.stall(m);
     props.houses(m, &mut rng);
+    props.crates(m, &mut rng);
     props.fences(m);
     props.well(m);
     props.gardens(m, &mut rng);
@@ -403,7 +404,7 @@ impl Props {
         for (t, tile) in m.tiles() {
             // The merchant's counter is their stall's (`stall`), and a house's walls are its
             // (`houses`), not ruins.
-            if tile != Tile::Wall || m.counter.contains(&t) || m.houses.iter().any(|house| house.covers(t)) {
+            if tile != Tile::Wall || m.counter.contains(&t) || m.houses.iter().any(|house| house.covers(t)) || m.crates.iter().any(|(at, _)| *at == t) {
                 continue;
             }
             let c = Map::center(t);
@@ -438,12 +439,12 @@ impl Props {
         for house in &m.houses {
             let (c, size) = (house.center(), house.size());
             // Its long side runs along `along`; the roof slopes down to either side of it.
-            let long_x = size.x >= size.y;
+            let long_x = house.long_x();
             let (along, across) = if long_x { (Vec2::X, Vec2::Y) } else { (Vec2::Y, Vec2::X) };
             let (length, width) = if long_x { (size.x, size.y) } else { (size.y, size.x) };
             let turn = if long_x { Quat::IDENTITY } else { Quat::from_rotation_y(std::f32::consts::FRAC_PI_2) };
             let at = |p: Vec2, h: f32| Transform::from_translation(to_world(p, h)).with_rotation(turn);
-            let wall_height = 2.7;
+            let wall_height = House::WALLS;
             let plaster = PLASTER.mix(&self.theme.stone, rng.range(0.0, 0.2));
             let timber = self.theme.bark.darker(0.08);
             // Footing, walls, and the timber frame: corner posts, a sill beam and a top beam.
@@ -460,7 +461,7 @@ impl Props {
             }
             // The roof: two slabs leaning to the ridge, overhanging; the gables stepped up under
             // them; a chimney at one end.
-            let pitch: f32 = 0.62;
+            let pitch = House::PITCH;
             let rise = width / 2.0 * pitch.tan();
             let slope = (width / 2.0 + 0.5) / pitch.cos();
             for side in [-1.0, 1.0] {
@@ -498,6 +499,21 @@ impl Props {
                     self.block(Vec3::new(0.7, 0.06, 0.12), timber, at(p + d * 0.02, 1.86));
                     self.block(Vec3::new(0.06, 0.7, 0.12), timber, at(p + d * 0.02, 1.5));
                 }
+            }
+        }
+    }
+
+    /// Stacks of crates (`Map::crates`), stood on: plank boxes, each a crate high, a band of
+    /// darker boards round each.
+    pub(super) fn crates(&mut self, m: &Map, rng: &mut Lcg) {
+        for &(t, high) in &m.crates {
+            let c = Map::center(t);
+            let wood = self.theme.bark.mix(&PLASTER, 0.25);
+            for k in 0..high {
+                let wood = wood.mix(&self.theme.bark, rng.range(0.0, 0.3));
+                let mid = CRATE * (k as f32 + 0.5);
+                self.block(Vec3::new(0.94, CRATE - 0.04, 0.94), wood, Transform::from_translation(to_world(c, mid)));
+                self.block(Vec3::new(0.98, 0.12, 0.98), wood.darker(0.12), Transform::from_translation(to_world(c, mid)));
             }
         }
     }
