@@ -1079,19 +1079,28 @@ mod tests {
         }
         assert!((m.height_at(p) - top).abs() < 1e-5, "the ramp didn't come out on top");
         // Up the tower's switchback onto its top.
-        let mut p = Vec2::new(-34.0 - 1.5 - 4.5 - 0.5, -8.0 - 1.5 - 1.5 - 0.2);
-        while p.x < -34.0 + 1.5 + 1.5 + 0.2 {
+        let tower = Vec2::new(-11.0, -11.0);
+        let mut p = Vec2::new(tower.x - 1.5 - 4.5 - 0.5, tower.y - 1.5 - 1.5 - 0.2);
+        while p.x < tower.x + 1.5 + 1.5 + 0.2 {
             let next = p + Vec2::X * 0.12;
             assert!(m.line_walkable(p, next), "the tower's first leg isn't walkable at {p}");
             p = next;
         }
-        while p.y < -8.0 {
+        while p.y < tower.y {
             let next = p + Vec2::Y * 0.12;
             assert!(m.line_walkable(p, next), "the tower's second leg isn't walkable at {p}");
             p = next;
         }
-        p = Vec2::new(-34.0, p.y);
+        p = Vec2::new(tower.x, p.y);
         assert!((m.height_at(p) - 6.0).abs() < 1e-5, "the tower's ramp didn't come out on top: {} at {p}", m.height_at(p));
+        // Up the south stair onto the inn's terrace.
+        let mut p = Vec2::new(4.0, -5.0);
+        while p.y > -10.0 {
+            let next = p - Vec2::Y * 0.12;
+            assert!(m.line_walkable(p, next), "the south stair isn't walkable at {p}");
+            p = next;
+        }
+        assert!((m.height_at(p) - 1.5).abs() < 1e-5, "the south stair didn't come out on the inn's terrace");
     }
 
     /// `next_waypoint`'s shortcuts (the remembered path, trying the last obstacle first) must

@@ -47,25 +47,31 @@ const FORD_Y: f32 = -12.5;
 const TERRACE: (Vec2, Vec2) = (Vec2::new(-22.0, 10.0), Vec2::new(16.0, 27.0));
 const TERRACE_TOP: f32 = 2.5;
 const STAIRS: [f32; 2] = [-10.0, 7.0];
+/// The lower terrace south of the square, the inn's: its box, its height, its stair up from the
+/// square's south lane (x).
+const SOUTH: (Vec2, Vec2) = (Vec2::new(-4.0, -20.0), Vec2::new(16.0, -9.0));
+const SOUTH_TOP: f32 = 1.5;
+const SOUTH_STAIR: f32 = 4.0;
 
 /// The causeway from the terrace's east end over the stream: its strip (y, half-width), how far
 /// east it runs level before sloping down to the ground.
 const CAUSEWAY_Y: f32 = 12.0;
 const CAUSEWAY_END: f32 = 26.0;
 
-/// The watchtower by the gate: its middle, its top's half-width, its height.
-const TOWER: Vec2 = Vec2::new(-34.0, -8.0);
+/// The watchtower at the square's south-west corner, overlooking it: its middle, its top's
+/// half-width, its height.
+const TOWER: Vec2 = Vec2::new(-11.0, -11.0);
 const TOWER_HALF: f32 = 1.5;
 const TOWER_TOP: f32 = 6.0;
 
 /// The houses: lower-left tile, size (tiles), which way the door faces.
 const HOUSES: &[(IVec2, IVec2, IVec2)] = &[
     (IVec2::new(-17, 3), IVec2::new(5, 4), IVec2::NEG_Y),
-    (IVec2::new(-15, -8), IVec2::new(4, 4), IVec2::Y),
+    (IVec2::new(-17, -8), IVec2::new(4, 4), IVec2::Y),
     (IVec2::new(9, 3), IVec2::new(6, 4), IVec2::NEG_Y),
-    (IVec2::new(10, -9), IVec2::new(4, 5), IVec2::Y),
-    (IVec2::new(-24, -15), IVec2::new(4, 4), IVec2::X),
-    (IVec2::new(1, -14), IVec2::new(7, 5), IVec2::Y),
+    (IVec2::new(10, -14), IVec2::new(4, 5), IVec2::NEG_X),
+    (IVec2::new(-26, -15), IVec2::new(4, 4), IVec2::X),
+    (IVec2::new(-2, -16), IVec2::new(7, 5), IVec2::Y),
     (IVec2::new(-28, 5), IVec2::new(4, 3), IVec2::NEG_Y),
     // Up on the terrace.
     (IVec2::new(-20, 13), IVec2::new(5, 4), IVec2::NEG_Y),
@@ -77,11 +83,10 @@ const HOUSES: &[(IVec2, IVec2, IVec2)] = &[
 /// Fences (from, to), round the yards and along the terrace's edge and the tower's top.
 const FENCES: &[(Vec2, Vec2)] = &[
     (Vec2::new(-18.0, 2.0), Vec2::new(-18.0, 8.0)),
-    (Vec2::new(-16.0, -9.0), Vec2::new(-10.0, -9.0)),
-    (Vec2::new(-10.0, -9.0), Vec2::new(-10.0, -3.0)),
+    (Vec2::new(-18.0, -9.0), Vec2::new(-13.0, -9.0)),
     (Vec2::new(16.0, 8.0), Vec2::new(16.0, 2.0)),
-    (Vec2::new(9.0, -10.0), Vec2::new(15.0, -10.0)),
-    (Vec2::new(15.0, -10.0), Vec2::new(15.0, -3.0)),
+    (Vec2::new(-4.0, -8.7), Vec2::new(2.0, -8.7)),
+    (Vec2::new(6.0, -8.7), Vec2::new(16.0, -8.7)),
     (Vec2::new(-22.0, 10.3), Vec2::new(-13.0, 10.3)),
     (Vec2::new(-7.0, 10.3), Vec2::new(5.0, 10.3)),
     (Vec2::new(9.0, 10.3), Vec2::new(16.0, 10.3)),
@@ -91,16 +96,16 @@ const FENCES: &[(Vec2, Vec2)] = &[
 /// Flower beds (tile centers).
 const GARDENS: &[Vec2] = &[
     Vec2::new(-16.5, 2.5), Vec2::new(-15.5, 2.5), Vec2::new(-12.5, 2.5),
-    Vec2::new(-14.5, -3.5), Vec2::new(-11.5, -3.5),
+    Vec2::new(-16.5, -3.5), Vec2::new(-13.5, -3.5),
     Vec2::new(9.5, 2.5), Vec2::new(14.5, 2.5), Vec2::new(10.5, 7.5), Vec2::new(13.5, 7.5),
-    Vec2::new(10.5, -3.5), Vec2::new(13.5, -3.5),
+    Vec2::new(8.5, -11.5), Vec2::new(8.5, -13.5), Vec2::new(-3.5, -10.5), Vec2::new(5.5, -10.5),
     Vec2::new(-7.5, -7.5), Vec2::new(-7.5, 7.5), Vec2::new(8.5, -7.5), Vec2::new(8.5, 7.5),
     Vec2::new(-19.5, 12.5), Vec2::new(-15.5, 12.5), Vec2::new(-5.5, 12.5), Vec2::new(-0.5, 12.5), Vec2::new(3.5, 12.5),
 ];
 
 /// Trees, here and there.
 const TREES: &[Vec2] = &[
-    Vec2::new(-30.5, -4.5), Vec2::new(-33.5, 9.5), Vec2::new(-20.5, -20.5),
+    Vec2::new(-30.5, -4.5), Vec2::new(-33.5, 9.5), Vec2::new(-20.5, -20.5), Vec2::new(-34.5, -9.5),
     Vec2::new(-8.5, -19.5), Vec2::new(12.5, -18.5), Vec2::new(17.5, 22.5), Vec2::new(6.5, 20.5),
     Vec2::new(-35.5, -16.5), Vec2::new(25.5, -8.5), Vec2::new(27.5, 18.5), Vec2::new(38.5, -14.5),
     Vec2::new(-26.5, 22.5), Vec2::new(-12.5, 24.5), Vec2::new(10.5, 24.5),
@@ -114,9 +119,9 @@ const LANTERNS: &[Vec2] = &[
     Vec2::new(-5.5, -5.5), Vec2::new(6.5, -5.5), Vec2::new(-5.5, 6.5), Vec2::new(6.5, 6.5),
     Vec2::new(-36.5, 2.5), Vec2::new(-36.5, -1.5),
     Vec2::new(18.5, 2.5), Vec2::new(18.5, -1.5),
-    Vec2::new(-6.5, -14.5), Vec2::new(-18.5, 1.5),
+    Vec2::new(-18.5, 1.5),
     Vec2::new(-12.5, 8.5), Vec2::new(9.5, 8.5),
-    Vec2::new(-35.5, -9.5),
+    Vec2::new(2.5, -7.5), Vec2::new(5.5, -7.5),
 ];
 
 /// The dummies: two in the square, one far down the lane, and one on each high place (the
@@ -126,6 +131,7 @@ const DUMMIES: &[Vec2] = &[
     Vec2::new(-3.5, 4.5),
     Vec2::new(30.5, 0.5),
     Vec2::new(-14.5, 11.5),
+    Vec2::new(12.5, -17.5),
     Vec2::new(PLATEAU.x + 0.5, PLATEAU.y + 0.5),
     Vec2::new(TOWER.x + 0.5, TOWER.y + 0.5),
     Vec2::new(21.5, CAUSEWAY_Y + 0.5),
@@ -172,6 +178,12 @@ fn ramp(along: f32, across: f32, height: f32) -> f32 {
 /// How high the yard's ground is at `p`: flat but for its levels.
 fn relief(p: Vec2) -> f32 {
     let mut h: f32 = 0.0;
+    // The south terrace, the inn's, with its stair up from the square's south lane.
+    let (slo, shi) = SOUTH;
+    h = h.max(ledge(inside(p, slo, shi), SOUTH_TOP));
+    if p.y > shi.y {
+        h = h.max(ramp(((shi.y + SOUTH_TOP * RAMP_RUN) - p.y) / (SOUTH_TOP * RAMP_RUN), p.x - SOUTH_STAIR, SOUTH_TOP));
+    }
     // The terrace, with its two stairs down the south face.
     let (lo, hi) = TERRACE;
     h = h.max(ledge(inside(p, lo, hi), TERRACE_TOP));
@@ -206,7 +218,7 @@ fn relief(p: Vec2) -> f32 {
     if landing {
         h = h.max(half_way);
     }
-    if p.y > south && p.y <= TOWER.y + TOWER_HALF + RAMP_HALF {
+    if p.y > south && p.y <= TOWER.y + TOWER_HALF + RAMP_HALF && (p.x - east).abs() <= RAMP_HALF {
         h = h.max(half_way + ramp((p.y - south) / leg, p.x - east, half_way));
     }
     // The lane's bridge over the stream: an arch, up from either bank.
@@ -229,7 +241,8 @@ pub(super) fn build() -> Map {
     // the inn; the terrace's own lane and its stairs; the causeway.
     map.fill(Vec2::new(-42.5, -1.5), Vec2::new(42.5, 1.5), Tile::Path);
     map.fill(SQUARE - Vec2::splat(PAVING), SQUARE + Vec2::splat(PAVING - 1.0), Tile::Path);
-    map.fill(Vec2::new(3.5, -8.5), Vec2::new(5.5, -6.5), Tile::Path);
+    map.fill(Vec2::new(SOUTH_STAIR - 1.0, -11.5), Vec2::new(SOUTH_STAIR + 1.0, -6.5), Tile::Path);
+    map.fill(Vec2::new(-3.5, -10.5), Vec2::new(15.5, -9.5), Tile::Path);
     map.fill(Vec2::new(-14.5, -3.5), Vec2::new(-13.5, -2.5), Tile::Path);
     map.fill(Vec2::new(-14.5, 1.5), Vec2::new(-13.5, 2.5), Tile::Path);
     map.fill(Vec2::new(11.5, 1.5), Vec2::new(12.5, 2.5), Tile::Path);
