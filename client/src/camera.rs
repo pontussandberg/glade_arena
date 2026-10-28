@@ -15,8 +15,8 @@
 //!   close. Tab moves it on to the next fighter (and back to you), to watch them play.
 
 use arena_shared::classes::ClassId;
-use arena_shared::config::{BODY_HEIGHT, GRAVITY, PLAYER_RADIUS, SHOT_HEIGHT};
-use arena_shared::protocol::{PlayerId, Pos};
+use arena_shared::config::{GRAVITY, PLAYER_RADIUS, SHOT_HEIGHT};
+use arena_shared::protocol::{Jumping, PlayerId, Pos};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
@@ -42,6 +42,7 @@ const PAN_SPEED: f32 = 26.0;
 /// how far the mouse must move (pixels) before holding the right button hides the cursor.
 const FREE_DISTANCE: (f32, f32) = (1.2, 24.0);
 const FREE_PITCH: (f32, f32) = (-0.35, 1.1);
+/// At the usual sensitivity (`Settings::sensitivity` scales it).
 const FREE_TURN_SPEED: f32 = 0.005;
 const FREE_KEY_TURN: f32 = 2.0;
 const FREE_KEY_ZOOM: f32 = 4.0;
@@ -63,10 +64,6 @@ const WALL_MARGIN: f32 = 0.45;
 /// there the crosshair is exact; nearer, the aim passes a little under it, farther a little
 /// over, by as much as the camera stands above the hand.
 const AIM_CONVERGE: f32 = 12.0;
-/// How near the camera's line of sight (meters) a fighter's body (head to foot) draws the
-/// crossing to its own distance fully, and how far off it the pull is gone, so the crosshair is
-/// exact on anyone it's at or just beside, with no jump between the two (`aim_of`).
-const AIM_PULL: (f32, f32) = (0.6, 1.8);
 /// How fast the camera eases back out once a wall no longer holds it in (per second,
 /// exponential); coming in it snaps, so it's never inside the wall.
 const WALL_EASE_OUT: f32 = 5.0;
@@ -146,11 +143,14 @@ pub struct CameraMode {
     dragged: f32,
     /// Where the cursor was when the right button went down, to put it back after a drag.
     grabbed_at: Option<Vec2>,
+    /// Whether the browser has been seen holding the pointer since the cursor was last taken
+    /// (`locked`): only then does an unlocked pointer mean the browser let it go.
+    lock_seen: bool,
 }
 
 impl Default for CameraMode {
     fn default() -> Self {
-        CameraMode { free: true, locked: false, just_locked: false, just_unlocked: false, uncapped: false, unlocked: false, orbit: Orbit { yaw: 0.0, pitch: ACTION_PITCH, distance: ACTION_DISTANCE }, held_at: ACTION_DISTANCE, aim: Vec2::Y, climb: 0.0, ground: None, watching: None, dragged: 0.0, grabbed_at: None }
+        CameraMode { free: true, locked: false, just_locked: false, just_unlocked: false, uncapped: false, unlocked: false, orbit: Orbit { yaw: 0.0, pitch: ACTION_PITCH, distance: ACTION_DISTANCE }, held_at: ACTION_DISTANCE, aim: Vec2::Y, climb: 0.0, ground: None, watching: None, dragged: 0.0, grabbed_at: None, lock_seen: false }
     }
 }
 
@@ -376,9 +376,11 @@ fn follow_camera(
         Or<(With<crate::render::HudButton>, With<crate::minimap::Minimap>, With<crate::action_bar::AbilityIcon>)>,
     >,
     mut mode: ResMut<CameraMode>,
+    settings: Res<crate::settings::Settings>,
+    clock: Option<crate::feedback::AttackClock>,
     // Its own transform, set this frame (`GlobalTransform` lags a frame and would jitter).
-    me: Query<(Entity, &Transform, &ClassId), (With<Me>, With<PlayerId>, Without<CameraRig>)>,
-    fighters: Query<(Entity, &Transform, &ClassId), (With<PlayerId>, Without<CameraRig>)>,
+    me: Query<(Entity, &Transform, &ClassId, Option<&Jumping>), (With<Me>, With<PlayerId>, Without<CameraRig>)>,
+    fighters: Query<(Entity, &Transform, &ClassId, Option<&Jumping>), (With<PlayerId>, Without<CameraRig>)>,
     mut camera: Single<&mut Transform, With<CameraRig>>,
     window: Single<(&mut Window, &mut CursorOptions)>,
 ) {
@@ -386,6 +388,20 @@ fn follow_camera(
     let on_hud = window.physical_cursor_position().is_some_and(|at| hud.iter().any(|(node, place, visible)| visible.get() && node.contains_point(*place, at)));
     mode.just_locked = false;
     mode.just_unlocked = false;
+    // The browser lets the pointer go on its own (the window left for another, its own ESC):
+    // then the mouse is free, seen, and the next click takes it again. Only once it has been
+    // seen holding it: it takes a moment to, and a headless browser never does.
+    #[cfg(target_family = "wasm")]
+    if mode.locked {
+        let held = web_sys::window().and_then(|w| w.document()).is_some_and(|document| document.pointer_lock_element().is_some());
+        if held {
+            mode.lock_seen = true;
+        } else if mode.lock_seen {
+            mode.locked = false;
+            mode.just_unlocked = true;
+            release_cursor(&mut cursor);
+        }
+    }
     if mode.locked && keys.just_pressed(KeyCode::Escape) {
         mode.locked = false;
         mode.just_unlocked = true;
@@ -394,6 +410,7 @@ fn follow_camera(
         mode.locked = true;
         mode.just_locked = true;
         mode.dragged = 0.0;
+        mode.lock_seen = false;
         cursor.visible = false;
         cursor.grab_mode = CursorGrabMode::Locked;
     }
@@ -406,9 +423,10 @@ fn follow_camera(
         cursor.visible = false;
         cursor.grab_mode = CursorGrabMode::Locked;
     }
+    let turn = FREE_TURN_SPEED * settings.sensitivity;
     if mode.locked {
         if motion.delta != Vec2::ZERO && !keys.pressed(KeyCode::Tab) {
-            mode.orbit.turn(motion.delta * FREE_TURN_SPEED, FREE_PITCH);
+            mode.orbit.turn(motion.delta * turn, FREE_PITCH);
         }
     } else if mouse.just_pressed(MouseButton::Right) {
         mode.dragged = 0.0;
@@ -422,7 +440,7 @@ fn follow_camera(
                 cursor.visible = false;
                 cursor.grab_mode = CursorGrabMode::Locked;
             }
-            mode.orbit.turn(motion.delta * FREE_TURN_SPEED, FREE_PITCH);
+            mode.orbit.turn(motion.delta * turn, FREE_PITCH);
         }
     }
     if !mode.locked && mouse.just_released(MouseButton::Right) && mode.turning() {
@@ -452,8 +470,9 @@ fn follow_camera(
     if watched.is_none() && mode.watching.is_some() {
         mode.watching = None;
     }
-    let Some((target, at, class)) = watched.or(me.single().ok()) else { return };
-    // Follow its feet (not its posed, leaning body).
+    let Some((_, at, class, jumping)) = watched.or(me.single().ok()) else { return };
+    // Follow its feet (not its posed, leaning body), up and down with its jump.
+    let lift = jumping.and_then(|jumping| jumping.0).zip(clock.as_ref()).map_or(0.0, |(jump, clock)| jump.height_at(clock.now(mode.watching.is_none())));
     let (forward, right) = mode.ground_axes();
     let pivot = arena::to_gameplay(at.translation);
     let shoulder = pivot + right * ACTION_SHOULDER;
@@ -473,31 +492,28 @@ fn follow_camera(
     let ease = 1.0 - (-WALL_EASE_OUT * time.delta_secs()).exp();
     mode.held_at = if distance < mode.held_at { distance } else { mode.held_at + (distance - mode.held_at) * ease };
     let orbit = Orbit { distance: mode.held_at, ..mode.orbit };
-    camera.set_if_neq(orbit.transform(arena::to_world(shoulder, ACTION_LOOK_HEIGHT)));
-    // The others' bodies (their middle; `aim_of` reckons with their height) pull the aim's
-    // crossing to them; with none near, a shot's crosses at its range, where it starts to fall.
-    let bodies = fighters.iter().filter(|(who, ..)| *who != target).map(|(_, at, _)| at.translation.with_y(BODY_HEIGHT / 2.0));
+    camera.set_if_neq(orbit.transform(arena::to_world(shoulder, ACTION_LOOK_HEIGHT + lift)));
+    // A shot's aim crosses the camera's line at its range (the ground, when nearer): the same
+    // whatever the crosshair is on.
     let shot = class.def().attack.kind.shot();
     let converge = shot.map_or(AIM_CONVERGE, |shot| shot.range);
     // A thrown shot is zeroed on the point: pitched up by what gravity takes from it on the way.
     let drop = shot.filter(|shot| shot.falls).map_or(0.0, |shot| GRAVITY / (2.0 * shot.speed * shot.speed));
-    (mode.aim, mode.climb, mode.ground) = aim_of(&camera, pivot, forward, converge, drop, bodies);
+    (mode.aim, mode.climb, mode.ground) = aim_of(&camera, pivot, forward, converge, drop, SHOT_HEIGHT + lift);
 }
 
-/// The aim: its direction along the ground from the fighter at `pivot`, how much it rises per
-/// meter ahead, as a tangent, from their hand (at `SHOT_HEIGHT`) to a point ahead on the
-/// camera's line of sight, and the ground under that point when a body draws it, else where the
-/// line meets the ground, if it does. The point is
-/// `converge` ahead, or where the line meets the ground when that's nearer (so the crosshair is
-/// exact on the ground), drawn to the distance of the `bodies` near the line (`AIM_PULL`), the
-/// nearer to it the more. The camera's angle alone, whatever is in the way: the crosshair moved
-/// sideways at one height keeps the shot at that height, and beside a body as at it. `forward`
-/// is the camera's, along the ground, for when the point is right over the fighter. A shot
-/// that falls is pitched up over the straight line to the point by `drop` times the distance
-/// to it (gravity over twice its speed squared: what it falls per meter flown, per meter), so
-/// it comes down on the point itself, rising to it from under the line of sight, never over it
-/// (the camera stands well above the hand); past the point it drops away, as a throw does.
-fn aim_of(camera: &Transform, pivot: Vec2, forward: Vec2, converge: f32, drop: f32, bodies: impl Iterator<Item = Vec3>) -> (Vec2, f32, Option<Vec2>) {
+/// The aim from the camera's angle: the direction (on the gameplay plane) from `pivot` (the
+/// fighter) to the point on the camera's line of sight the shot is sent through, how much a
+/// shot rises per meter to get there from `hand` high, and where the line meets the ground, if
+/// it does. The point is `converge` ahead, or where the line meets the ground when that's
+/// nearer (so the crosshair is exact on the ground): the camera's angle alone, whatever (and
+/// whoever) is in the way, so the crosshair always means the same thing. `forward` is the
+/// camera's, along the ground, for when the point is right over the fighter. A shot that falls
+/// is pitched up over the straight line to the point by `drop` times the distance to it
+/// (gravity over twice its speed squared: what it falls per meter flown, per meter), so it comes
+/// down on the point itself, rising to it from under the line of sight, never over it (the
+/// camera stands well above the hand); past the point it drops away, as a throw does.
+fn aim_of(camera: &Transform, pivot: Vec2, forward: Vec2, converge: f32, drop: f32, hand: f32) -> (Vec2, f32, Option<Vec2>) {
     let (from, look) = (camera.translation, *camera.forward());
     let along = arena::to_gameplay(look);
     let flat = along.length().max(1e-6);
@@ -505,32 +521,16 @@ fn aim_of(camera: &Transform, pivot: Vec2, forward: Vec2, converge: f32, drop: f
     // past it; and to the ground, looking down.
     let past = (pivot - arena::to_gameplay(from)).dot(along) / flat;
     let ground = (look.y < -1e-4).then(|| -from.y / look.y);
-    let (mut pull, mut drawn) = (0.0, 0.0);
-    for body in bodies {
-        let to = body - from;
-        let at = to.dot(look);
-        // Only bodies ahead of the fighter pull, by how near the line they are.
-        if at * flat <= past + PLAYER_RADIUS {
-            continue;
-        }
-        // Off the line: across, and above its top or below its feet (not along its height).
-        let off = to - look * at;
-        let off = Vec2::new(off.xz().length(), (off.y.abs() - BODY_HEIGHT / 2.0).max(0.0)).length();
-        let weight = 1.0 - ((off - AIM_PULL.0) / (AIM_PULL.1 - AIM_PULL.0)).clamp(0.0, 1.0);
-        pull += weight;
-        drawn += weight * at;
-    }
     let mut at = (past + converge) / flat;
     // Ground ahead of the fighter (not at their feet or behind them) nearer than that.
     if let Some(ground) = ground.filter(|ground| ground * flat > past + PLAYER_RADIUS) {
         at = at.min(ground);
     }
-    let at = if pull > 0.0 { at.lerp(drawn / pull, pull.min(1.0)) } else { at };
     let on = from + look * at;
     let ahead = arena::to_gameplay(on) - pivot;
-    let ground = if pull > 0.0 { Some(arena::to_gameplay(on)) } else { ground.map(|ground| arena::to_gameplay(from + look * ground)) };
+    let ground = ground.map(|ground| arena::to_gameplay(from + look * ground));
     let dist = ahead.length().max(PLAYER_RADIUS);
-    (ahead.try_normalize().unwrap_or(forward), (on.y - SHOT_HEIGHT) / dist + drop * dist, ground)
+    (ahead.try_normalize().unwrap_or(forward), (on.y - hand) / dist + drop * dist, ground)
 }
 
 /// Y in the arena locks or unlocks the MOBA camera (the lock by the minimap does too).
