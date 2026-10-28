@@ -8,7 +8,7 @@ use arena_shared::abilities::AbilityKind;
 use crate::Me;
 use crate::abilities::SeenCasts;
 use crate::feedback::AttackClock;
-use crate::arena::{self, palette, to_world};
+use crate::arena::{self, to_world};
 
 /// A nova: its shockwave races out to the edge in `NOVA_WAVE_SECONDS`, raising shards as it
 /// passes (each takes `NOVA_GROW_SECONDS` to burst up); the frost on the ground and the shards
@@ -56,11 +56,11 @@ pub(super) fn show_novas(
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     art: Res<crate::fx::FxArt>,
-    mut casters: Query<(&PlayerId, &ClassId, &Pos, &Cooldowns, &mut SeenCasts), Changed<Cooldowns>>,
+    mut casters: Query<(&ClassId, &Pos, &Cooldowns, &mut SeenCasts), (With<PlayerId>, Changed<Cooldowns>)>,
     me: Query<&Pos, With<crate::Me>>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
 ) {
-    for (id, class, pos, cooldowns, mut seen) in &mut casters {
+    for (class, pos, cooldowns, mut seen) in &mut casters {
         for slot in seen.new_casts(cooldowns) {
             let Some(AbilityKind::Nova(def)) = class.def().ability(slot).map(|ability| ability.kind) else { continue };
             let Some(nova) = visuals.novas.get(&(*class, slot)).cloned() else { continue };
@@ -77,25 +77,24 @@ pub(super) fn show_novas(
             if crate::fx::cast_nova(&mut commands, &art, time.elapsed_secs(), class.def().figure(), pos.0, def.radius, seed) {
                 continue;
             }
-            burst_nova(&mut commands, &time, &mut visuals, &mut materials, id.0, pos.0, def.radius, nova);
+            burst_nova(&mut commands, &time, &mut visuals, &mut materials, pos.0, def.radius, nova);
         }
     }
 }
 
-/// One nova's burst of ice, `radius` around `at`, cast by `owner`.
+/// One nova's burst of ice, `radius` around `at`.
 #[allow(clippy::too_many_arguments)]
 fn burst_nova(
     commands: &mut Commands,
     time: &Time,
     visuals: &mut Visuals,
     materials: &mut Assets<StandardMaterial>,
-    owner: PeerId,
     at: Vec2,
     radius: f32,
     nova: arena::NovaMeshes<Handle<Mesh>>,
 ) {
-    let frost = visuals.material(materials, owner, Look::Frost);
-    let wave = visuals.material(materials, owner, Look::Spirit);
+    let frost = visuals.material(materials, Look::Frost);
+    let wave = visuals.material(materials, Look::Spirit);
     let now = time.elapsed_secs();
     // Each piece starts at nothing and only grows from there (`grow_bursts`); `until` is how
     // long it stays.
@@ -137,19 +136,21 @@ pub(super) fn grow_bursts(time: Res<Time>, mut bursts: Query<(&Burst, &Fleeting,
     }
 }
 
-/// Frost on every fighter: slowed, its colors take a cold blue cast and frost turns slowly under
-/// its feet; rooted, ice locks its feet instead. `Chilled` comes from the server; its spans are
+/// Frost on every fighter: slowed, its colors take a cold blue cast (its body, rig and cloth go
+/// over to its class's frosted material, `Visuals::body`) and frost turns slowly under its
+/// feet; rooted, ice locks its feet instead. `Chilled` comes from the server; its spans are
 /// compared with the timeline each fighter is shown on, so others'
 /// frost comes and goes in step with their (delayed) bodies.
 pub(super) fn show_frost(
     clock: AttackClock,
     time: Res<Time>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut fighters: Query<(&Chilled, &MeshMaterial3d<StandardMaterial>, &mut Frost, Has<Me>, Option<&super::Tint>)>,
+    (mut visuals, mut materials): (ResMut<Visuals>, ResMut<Assets<StandardMaterial>>),
+    mut fighters: Query<(Entity, &Chilled, &ClassId, &mut Frost, Has<Me>)>,
     mut parts: Query<(&mut Visibility, &mut WorldAligned)>,
+    (children, mut worn): (Query<&Children>, Query<&mut MeshMaterial3d<StandardMaterial>>),
 ) {
     let turn = Quat::from_rotation_y(time.elapsed_secs() * RUNE_TURN_RATE);
-    for (chilled, material, mut frost, is_me, tint) in &mut fighters {
+    for (fighter, chilled, class, mut frost, is_me) in &mut fighters {
         let now = clock.now(is_me);
         let (slowed, rooted) = (chilled.slowed.covers(now), chilled.rooted.covers(now));
         if slowed && !rooted
@@ -161,10 +162,14 @@ pub(super) fn show_frost(
             continue;
         }
         frost.shown = (slowed, rooted);
-        if let Some(mut m) = materials.get_mut(&material.0) {
-            let own = tint.map_or(Color::WHITE, |t| t.0).to_linear();
-            let cast = if slowed || rooted { palette::FROSTBITE.to_linear() } else { LinearRgba::WHITE };
-            m.base_color = Color::from(LinearRgba::rgb(own.red * cast.red, own.green * cast.green, own.blue * cast.blue));
+        let frosted = slowed || rooted;
+        let (was, now) = (visuals.body(&mut materials, *class, !frosted), visuals.body(&mut materials, *class, frosted));
+        for part in std::iter::once(fighter).chain(children.iter_descendants(fighter)) {
+            if let Ok(mut material) = worn.get_mut(part)
+                && material.0 == was
+            {
+                material.0 = now.clone();
+            }
         }
         for (part, visible) in [(frost.prison, rooted), (frost.rune, slowed && !rooted)] {
             if let Ok((mut visibility, _)) = parts.get_mut(part) {

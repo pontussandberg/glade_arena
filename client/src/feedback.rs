@@ -17,7 +17,7 @@ use crate::Me;
 
 use crate::camera::CameraPlaced;
 use crate::arena::{palette, to_gameplay};
-use crate::render::{Relation, set_fill, shown, ui_text};
+use crate::render::{Relation, shown, ui_text};
 use crate::render::GameUi;
 use crate::rooms::Screen;
 
@@ -60,8 +60,9 @@ const BAR_HEIGHT: f32 = 2.3;
 const CAST_BAR_HEIGHT: f32 = 6.0;
 /// A mark across the health bar every this much health, for scale.
 const HP_PER_TICK: i32 = 25;
-/// The most marks a bar has.
+/// About the most marks a bar has, and how close together (pixels) they may be.
 const MOST_TICKS: i32 = 12;
+const TICK_GAP: f32 = 5.0;
 /// Health just lost stays on the bar as a pale chunk: white at the hit, paling to `SUN` over
 /// `TRAIL_HOLD` seconds (each new hit starts it over, so a combo adds up), then draining to the
 /// health left, closing `TRAIL_DRAIN` of the gap a second (eased: fast, then settling).
@@ -211,8 +212,7 @@ fn spawn_bars(
         let health_fill = commands.spawn(fill(Relation::of(is_me, false).color())).id();
         // Over the fill (spawned after it), at every `HP_PER_TICK` of the fighter's health.
         let max_hp = max.map_or(class.def().max_hp, |m| m.0);
-        // A tough one's marks further apart, so they don't run together.
-        let per_tick = HP_PER_TICK * (max_hp / (HP_PER_TICK * MOST_TICKS)).max(1);
+        let per_tick = tick_every(max_hp, size.x);
         let ticks: Vec<Entity> = (1..)
             .map(|n| n * per_tick)
             .take_while(|&hp| hp < max_hp)
@@ -264,6 +264,23 @@ fn color_bars(
             fill.set_if_neq(BackgroundColor(relation.color()));
         }
     }
+}
+
+/// How much health a bar's marks are apart: every `HP_PER_TICK`, or for a tough one (or on a
+/// small bar) every so many of them, so the marks don't run together: about `MOST_TICKS` of
+/// them at most, and none closer than `TICK_GAP` pixels on a bar `width` wide.
+fn tick_every(max_hp: i32, width: f32) -> i32 {
+    let tough = max_hp / (HP_PER_TICK * MOST_TICKS);
+    let close = (TICK_GAP * max_hp as f32 / (width * HP_PER_TICK as f32)).ceil() as i32;
+    HP_PER_TICK * tough.max(close).max(1)
+}
+
+/// A bar's fill (its health, the health just lost, the attack timer) at `fraction` of its
+/// width from its left, by its `UiTransform`: a fill that changes every frame then doesn't make
+/// Bevy lay the UI out again.
+fn set_fill(transform: &mut Mut<UiTransform>, fraction: f32) {
+    let fraction = fraction.clamp(0.0, 1.0);
+    transform.set_if_neq(UiTransform { translation: Val2::percent(-(1.0 - fraction) * 50.0, 0.0), scale: Vec2::new(fraction, 1.0), ..default() });
 }
 
 /// Where a fighter's health bar is, over its head, in the world.
@@ -335,8 +352,9 @@ impl AttackClock<'_> {
 
 /// Keep each fighter's bars over it and filled (the cast bar by `AttackClock`), hidden while a
 /// wall, a roof or a hill is between the camera and them (`Map::sight_meets`; ours always
-/// shows). Only writes what changed, so a still scene doesn't make Bevy lay out the UI again
-/// every frame.
+/// shows). A bar is moved by its `UiTransform`, which Bevy applies after laying the UI out, so
+/// a crowd on the move doesn't make it lay everything out again every frame; and only what
+/// changed is written.
 fn place_bars(
     mut commands: Commands,
     time: Res<Time>,
@@ -344,13 +362,13 @@ fn place_bars(
     map: Option<Res<crate::rooms::CurrentMap>>,
     camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
     players: Query<(&Transform, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Has<Me>, (Option<&MaxHealth>, Has<Elite>))>,
-    mut bars: Query<(Entity, &Bars, &mut HealthTrail, &mut Node, &mut UiTransform, &mut Visibility)>,
-    mut parts: Query<(&mut Node, &mut Visibility), Without<Bars>>,
+    mut bars: Query<(Entity, &Bars, &mut HealthTrail, &mut UiTransform, &mut Visibility)>,
+    mut parts: Query<(&mut UiTransform, &mut Visibility), Without<Bars>>,
     mut colors: Query<&mut BackgroundColor>,
 ) {
     let (camera, camera_transform) = *camera;
     let now = time.elapsed_secs();
-    for (bar, ids, mut trail, mut node, mut transform, mut visibility) in &mut bars {
+    for (bar, ids, mut trail, mut transform, mut visibility) in &mut bars {
         let Ok((body, class, health, crit_at, attack, is_me, (max, elite))) = players.get(ids.player) else {
             commands.entity(bar).despawn();
             continue;
@@ -369,11 +387,7 @@ fn place_bars(
         };
         visibility.set_if_neq(Visibility::Inherited);
         let size = bar_size(*class, elite);
-        let (left, top) = (px(screen.x - size.x / 2.0), px(screen.y - size.y / 2.0));
-        if node.left != left || node.top != top {
-            node.left = left;
-            node.top = top;
-        }
+        let at = Val2::px(screen.x - size.x / 2.0, screen.y - size.y / 2.0);
 
         let mut fill_to = |part: Entity, fraction: f32| {
             if let Ok((mut fill, _)) = parts.get_mut(part) {
@@ -388,7 +402,7 @@ fn place_bars(
             color.set_if_neq(BackgroundColor(start.mix(&palette::SUN, pale)));
         }
         let pop = 1.0 + CRIT_BAR_POP * (1.0 - (now - trail.crit_at) / CRIT_BAR_POP_SECONDS).max(0.0).powi(2);
-        transform.set_if_neq(UiTransform { scale: Vec2::splat(pop), ..default() });
+        transform.set_if_neq(UiTransform { translation: at, scale: Vec2::splat(pop), ..default() });
         // The attack timer, once the attack has gone off (the windup only shows in the fighter,
         // and a cancelled one shows nothing): full as it goes off, draining from the right until
         // the next attack may start.
@@ -577,18 +591,18 @@ fn spawn_damage_numbers(
 }
 
 /// Damage numbers follow their fighter's health bar, thrown up off it a little to one side,
-/// slowing and falling back as they fade out; a crit pops in big and settles. The throw, the
-/// size and the pop are `UiTransform`s, which don't make Bevy lay out the UI again, and like
-/// `place_bars` only what changed is written.
+/// slowing and falling back as they fade out; a crit pops in big and settles. Where it is, the
+/// throw, the size and the pop are its `UiTransform`, which doesn't make Bevy lay out the UI
+/// again, and like `place_bars` only what changed is written.
 fn float_damage_numbers(
     mut commands: Commands,
     time: Res<Time>,
     camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
     players: Query<&Transform, With<PlayerId>>,
-    mut numbers: Query<(Entity, &DamageNumber, &ComputedNode, &mut Node, &mut UiTransform, &mut TextColor, &mut Visibility)>,
+    mut numbers: Query<(Entity, &DamageNumber, &ComputedNode, &mut UiTransform, &mut TextColor, &mut Visibility)>,
 ) {
     let (camera, camera_transform) = *camera;
-    for (number, info, computed, mut node, mut transform, mut color, mut visibility) in &mut numbers {
+    for (number, info, computed, mut transform, mut color, mut visibility) in &mut numbers {
         let age = time.elapsed_secs() - info.born;
         let t = age / info.lasts;
         let (Ok(body), true) = (players.get(info.player), t < 1.0) else {
@@ -599,15 +613,11 @@ fn float_damage_numbers(
         visibility.set_if_neq(shown(screen.is_some()));
         let Some(screen) = screen else { continue };
         let size = computed.size() * computed.inverse_scale_factor();
-        // Its bottom on the bar, as big as it's drawn (scaled about its middle).
-        let (left, top) = (px(screen.x + info.dx - size.x / 2.0), px(screen.y - BAR_SIZE.y - size.y * (1.0 + info.scale) / 2.0));
-        if node.left != left || node.top != top {
-            node.left = left;
-            node.top = top;
-        }
+        // Its bottom on the bar, as big as it's drawn (scaled about its middle), and thrown off it.
+        let at = Vec2::new(screen.x + info.dx - size.x / 2.0, screen.y - BAR_SIZE.y - size.y * (1.0 + info.scale) / 2.0);
         let flown = number_flown(info.throw, age);
         let pop = if info.crit { 1.0 + CRIT_POP * (1.0 - t / CRIT_POP_PART).max(0.0).powi(2) } else { 1.0 };
-        let next = UiTransform { translation: Val2::px(flown.x, -flown.y), scale: Vec2::splat(info.scale * pop), ..default() };
+        let next = UiTransform { translation: Val2::px(at.x + flown.x, at.y - flown.y), scale: Vec2::splat(info.scale * pop), ..default() };
         transform.set_if_neq(next);
         let alpha = ((1.0 - t) / NUMBER_FADE_PART).min(1.0);
         if color.0.alpha() != alpha {

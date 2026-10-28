@@ -18,6 +18,7 @@ use crate::camera::CameraPlaced;
 use crate::rooms::load_setting;
 use crate::arena::{self, palette, to_world};
 
+mod bounds;
 mod shots;
 pub(crate) use shots::*;
 mod effects;
@@ -36,8 +37,8 @@ pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(forget_body);
         app.add_observer(strike_home);
+        app.add_plugins(bounds::plugin);
         app.add_plugins((
             arena::ArenaPlugin,
             crate::camera::CameraPlugin,
@@ -80,18 +81,6 @@ impl Plugin for RenderPlugin {
                 (mark_relations, light_buttons),
             ),
         );
-    }
-}
-
-/// What a fighter's figure's colors are multiplied by: its class's tint (`ClassDef::tint`), white
-/// for most.
-#[derive(Component, Clone, Copy)]
-pub(crate) struct Tint(pub(crate) Color);
-
-impl Tint {
-    pub(crate) fn of(class: ClassId) -> Tint {
-        let (r, g, b) = class.def().tint();
-        Tint(Color::linear_rgb(r, g, b))
     }
 }
 
@@ -138,8 +127,9 @@ impl Relation {
     }
 }
 
-/// Meshes shared by every player and projectile (one figure, one range circle per class),
-/// and materials per player, so attacking doesn't create and upload new GPU assets.
+/// Meshes and materials shared by every player and projectile (one figure, one range circle,
+/// one body material per class), so attacking doesn't create and upload new GPU assets, and a
+/// crowd of one kind draws in a few batches.
 #[derive(Resource)]
 pub(crate) struct Visuals {
     fighters: HashMap<ClassId, Handle<Mesh>>,
@@ -164,14 +154,14 @@ pub(crate) struct Visuals {
     spear_shadow: Handle<Mesh>,
     /// A bit of a spear's impact: its flash, a splinter.
     impact: Handle<Mesh>,
-    /// Per owner (`None` for looks that are the same for everyone: all but bodies, so a tint
-    /// or a chill takes just that fighter) and look.
-    materials: HashMap<(Option<PeerId>, Look), Handle<StandardMaterial>>,
+    /// Per look, the same for everyone.
+    materials: HashMap<Look, Handle<StandardMaterial>>,
+    /// Bodies' (and their rigs' and cloth's), per class and whether frosted (`body`).
+    bodies: HashMap<(ClassId, bool), Handle<StandardMaterial>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Look {
-    Body,
     /// Projectiles glow, so a shot in flight is the easiest thing to spot: round bolts glow pale.
     Shot,
     /// Glowing ice in its mesh's colors: frostbolts.
@@ -208,19 +198,26 @@ impl Visuals {
         self.fighters[&class].clone()
     }
 
-    pub(crate) fn material(
-        &mut self,
-        materials: &mut Assets<StandardMaterial>,
-        owner: PeerId,
-        look: Look,
-    ) -> Handle<StandardMaterial> {
+    /// The material of a fighter of `class`'s body, its rig and its cloth: its figure's own
+    /// colors (in the mesh) times its class's tint (`ClassDef::tint`, white for most), with a
+    /// cold cast while it's `frosted` (`effects::show_frost`). Who it is to you shows in its
+    /// health bar.
+    pub(crate) fn body(&mut self, materials: &mut Assets<StandardMaterial>, class: ClassId, frosted: bool) -> Handle<StandardMaterial> {
+        self.bodies
+            .entry((class, frosted))
+            .or_insert_with(|| {
+                let (r, g, b) = class.def().tint();
+                let cast = if frosted { palette::FROSTBITE.to_linear() } else { LinearRgba::WHITE };
+                materials.add(arena::matte(Color::from(LinearRgba::rgb(r * cast.red, g * cast.green, b * cast.blue))))
+            })
+            .clone()
+    }
+
+    pub(crate) fn material(&mut self, materials: &mut Assets<StandardMaterial>, look: Look) -> Handle<StandardMaterial> {
         self.materials
-            .entry(((look == Look::Body).then_some(owner), look))
+            .entry(look)
             .or_insert_with(|| {
                 materials.add(match look {
-                    // Fighters wear their own colors (in the mesh); who they are to you shows in
-                    // their health bars.
-                    Look::Body => arena::matte(Color::WHITE),
                     Look::Shot => arena::glow(palette::SILVER, 4.0),
                     Look::Ice => arena::glow(Color::WHITE, 4.0),
                     Look::Aura => arena::translucent(palette::FROST_GLOW, 0.35, 2.0),
@@ -239,14 +236,6 @@ impl Visuals {
                 })
             })
             .clone()
-    }
-}
-
-/// A fighter gone: its body's material goes from `Visuals` too (fighters no client controls, such
-/// as zombies, come and go with new ids all match long). One still in use stays alive in its user.
-fn forget_body(trigger: On<Remove, PlayerId>, players: Query<&PlayerId>, mut visuals: ResMut<Visuals>) {
-    if let Ok(id) = players.get(trigger.entity) {
-        visuals.materials.remove(&(Some(id.0), Look::Body));
     }
 }
 
@@ -309,6 +298,7 @@ fn setup_scene(
         spear_shadow: meshes.add(arena::spear_shadow_mesh()),
         impact: meshes.add(Sphere::new(1.0).mesh().ico(1).unwrap()),
         materials: HashMap::default(),
+        bodies: HashMap::default(),
     });
     spawn_crosshair(&mut commands);
     commands
@@ -352,12 +342,7 @@ fn add_visuals(
     let Ok(me) = me.single() else { return };
     for (entity, id, class, pos, elite, cooldowns) in &players {
         let is_me = id.0 == me.0;
-        let material = visuals.material(&mut materials, id.0, Look::Body);
-        // A borrowed figure in its own colors.
-        let tint = Tint::of(*class);
-        if let Some(mut m) = materials.get_mut(&material) {
-            m.base_color = tint.0;
-        }
+        let material = visuals.body(&mut materials, *class, false);
         // An elite stands in a ring of its twist's color.
         if let Some(elite) = elite {
             let ring = visuals.elite_rings.entry(elite.0).or_insert_with(|| materials.add(arena::translucent(affix_color(elite.0), 0.55, 3.0))).clone();
@@ -371,7 +356,7 @@ fn add_visuals(
         let prison = commands
             .spawn((
                 Mesh3d(visuals.ice_prison.clone()),
-                MeshMaterial3d(visuals.material(&mut materials, id.0, Look::Frost)),
+                MeshMaterial3d(visuals.material(&mut materials, Look::Frost)),
                 WorldAligned(Quat::IDENTITY, 0.0),
                 Visibility::Hidden,
             ))
@@ -379,7 +364,7 @@ fn add_visuals(
         let rune = commands
             .spawn((
                 Mesh3d(visuals.frost_rune.clone()),
-                MeshMaterial3d(visuals.material(&mut materials, id.0, Look::Chill)),
+                MeshMaterial3d(visuals.material(&mut materials, Look::Chill)),
                 WorldAligned(Quat::IDENTITY, 0.04),
                 Visibility::Hidden,
             ))
@@ -392,13 +377,12 @@ fn add_visuals(
                 Transform::from_translation(to_world(pos.0, 0.0)),
                 SeenCasts::seen(cooldowns),
                 Frost { prison, rune, shown: (false, false) },
-                tint,
             ))
             .add_children(&[prison, rune]);
         if is_me && let Some([circle, _]) = visuals.range_circles.get(class).cloned() {
             commands.entity(entity).with_child((
                 Mesh3d(circle),
-                MeshMaterial3d(visuals.material(&mut materials, id.0, Look::Range)),
+                MeshMaterial3d(visuals.material(&mut materials, Look::Range)),
                 WorldAligned(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2), 0.03),
                 RangeCircle,
                 Visibility::Hidden,
@@ -421,7 +405,7 @@ fn add_visuals(
             arena::ShotGlow::Void => Look::Void,
             arena::ShotGlow::Storm => Look::Storm,
         };
-        let body = visuals.material(&mut materials, projectile.owner, look);
+        let body = visuals.material(&mut materials, look);
         let mut shot = commands.entity(entity);
         shot.insert((
             Mesh3d(mesh),
@@ -434,25 +418,25 @@ fn add_visuals(
         }
         // A real weapon, in its own colors, gets a white glow on its point.
         if glow == arena::ShotGlow::Weapon {
-            let spark = visuals.material(&mut materials, projectile.owner, Look::Spark);
+            let spark = visuals.material(&mut materials, Look::Spark);
             shot.with_child((Mesh3d(visuals.shot_tip.clone()), MeshMaterial3d(spark), NotShadowCaster));
         }
         if let Some(aura) = aura {
-            let material = visuals.material(&mut materials, projectile.owner, Look::Aura);
+            let material = visuals.material(&mut materials, Look::Aura);
             shot.with_child((Mesh3d(aura), MeshMaterial3d(material)));
         }
         // A primed javelin (Deadeye's sure crit) flies lit as it was held, dripping its light.
         if thrown && projectile.crit {
-            let light = visuals.material(&mut materials, projectile.owner, Look::Deadeye);
+            let light = visuals.material(&mut materials, Look::Deadeye);
             shot.insert(crate::rig::ShotDrips::default()).with_child((Mesh3d(visuals.primed_aura.clone()), MeshMaterial3d(light), NotShadowCaster));
         }
         if thrown {
-            let wake = visuals.material(&mut materials, projectile.owner, Look::Wind);
+            let wake = visuals.material(&mut materials, Look::Wind);
             shot.insert(Thrown { launch: None, wake, wake_at: None });
             // Its only shadow is the one straight under it, on its line: where it really is (the
             // sun's would fall meters off to the side), so none of it casts one, its point's spark
             // and its wind neither.
-            let shadow = visuals.material(&mut materials, projectile.owner, Look::Shadow);
+            let shadow = visuals.material(&mut materials, Look::Shadow);
             let flat = Quat::from_rotation_y(projectile.dir.to_angle());
             shot.insert(NotShadowCaster).with_child((Mesh3d(visuals.spear_shadow.clone()), MeshMaterial3d(shadow), WorldAligned(flat, 0.03), NotShadowCaster));
         }

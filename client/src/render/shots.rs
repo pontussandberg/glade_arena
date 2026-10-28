@@ -284,7 +284,7 @@ pub(super) fn strike_home(
     if thrown.launch.is_none() || (spent && !shot.falls) {
         return;
     }
-    let light = visuals.material(&mut materials, projectile.owner, Look::Spark);
+    let light = visuals.material(&mut materials, Look::Spark);
     let bit = || (Mesh3d(visuals.impact.clone()), MeshMaterial3d(light.clone()), Transform::from_translation(point).with_scale(Vec3::ZERO), NotShadowCaster);
     commands.spawn((Impact { started: now, life: FLASH_SECONDS, size: FLASH_SIZE, velocity: None }, bit()));
     let back = -(transform.rotation * Vec3::X).with_y(0.0).normalize_or(Vec3::X);
