@@ -206,10 +206,16 @@ pub(super) fn predict_me(
         let next = at.floor() as u32 + 1;
         schedule.0 = if schedule.0 > next + 4 { next } else { schedule.0.max(next) };
         // The server's step for one tick of ours: walking (never rooted by a windup, in action
-        // mode; faster in a frenzy, as the server walks it), or a dash running on.
+        // mode; faster in a frenzy, as the server walks it), or a dash running on. A dash that
+        // has gone its length is dropped before the tick's move, as the server drops it
+        // (`abilities::step`), so the walk goes on from where it ended instead of waiting for
+        // the server to say so.
         let (chilled, hasted, frenzy) = (chilled.copied().unwrap_or_default(), hasted.copied().unwrap_or_default(), frenzy.copied().unwrap_or_default());
         let step = |mut dashing: Dashing| {
             move |from: Vec2, walk: Vec2, tick: u32| {
+                if dashing.0.is_some_and(|dash| dash.over()) {
+                    dashing.0 = None;
+                }
                 let input = PlayerInput { walk, aim: Vec2::X, ..default() };
                 let boost = 1.0 + frenzy.at(tick as f32);
                 sim::move_player_boosted(map, from, &input, *class, &AttackState::default(), &mut dashing, &chilled, &hasted, tick, boost)
