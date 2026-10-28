@@ -135,7 +135,7 @@ const DUMMIES: &[Vec2] = &[
     Vec2::new(30.5, 0.5),
     Vec2::new(-14.5, 11.5),
     Vec2::new(12.5, -17.5),
-    Vec2::new(PLATEAU.x, PLATEAU.y + 0.5),
+    Vec2::new(STAIRS[0], 23.5),
     Vec2::new(-10.5, -10.5),
     Vec2::new(21.5, CAUSEWAY_Y),
     Vec2::new(HILL.x + 0.5, HILL.y + 0.5),
@@ -143,9 +143,8 @@ const DUMMIES: &[Vec2] = &[
 
 /// The high ground beyond the terrace: the plateau's middle, height and radius, with the ramp
 /// up its south face from the terrace; the hill's crown, height and reach.
-const PLATEAU: Vec2 = Vec2::new(-9.5, 23.0);
+const PLATEAU: (Vec2, Vec2) = (Vec2::new(-13.0, 20.0), Vec2::new(-6.0, 27.0));
 const PLATEAU_TOP: f32 = 6.0;
-const PLATEAU_RADIUS: f32 = 4.5;
 const HILL: Vec2 = Vec2::new(36.0, 2.0);
 const HILL_TOP: f32 = 5.0;
 const HILL_REACH: f32 = 12.0;
@@ -153,8 +152,6 @@ const HILL_REACH: f32 = 12.0;
 /// a slope a fighter walks up (under `map::CLIMB`).
 const RAMP_HALF: f32 = 1.5;
 const RAMP_RUN: f32 = 1.5;
-/// Over how many meters a sheer side drops: a cliff, not walked up.
-const SHEER: f32 = 0.5;
 
 /// 0 to 1 smoothly as `t` goes 0 to 1.
 fn smooth(t: f32) -> f32 {
@@ -167,9 +164,10 @@ fn inside(p: Vec2, lo: Vec2, hi: Vec2) -> f32 {
     (p.x - lo.x).min(hi.x - p.x).min(p.y - lo.y).min(hi.y - p.y)
 }
 
-/// A flat top `height` high over `inside` (meters inside its edge), sheer just outside it.
+/// A flat top `height` high over `inside` (meters inside its edge), sheer at the edge itself:
+/// every box is on tile edges, so the drop is where the ground tiles and stone faces are drawn.
 fn ledge(inside: f32, height: f32) -> f32 {
-    height * (1.0 - (-inside / SHEER).clamp(0.0, 1.0))
+    if inside >= 0.0 { height } else { 0.0 }
 }
 
 /// A ramp rising to `height` along `along` (0 at its foot, 1 at the top), `across` from its
@@ -196,10 +194,12 @@ fn relief(p: Vec2) -> f32 {
         }
     }
     // The plateau behind it, its ramp up from the terrace.
-    h = h.max(ledge(PLATEAU_RADIUS - p.distance(PLATEAU), PLATEAU_TOP));
+    let (plo, phi) = PLATEAU;
+    h = h.max(ledge(inside(p, plo, phi), PLATEAU_TOP));
     let run = (PLATEAU_TOP - TERRACE_TOP) * RAMP_RUN;
-    let foot = PLATEAU.y - PLATEAU_RADIUS - run;
-    if (p.x - PLATEAU.x).abs() <= RAMP_HALF && p.y >= foot && p.y < PLATEAU.y {
+    let foot = plo.y - run;
+    // Up from under the west stair's head, in line with it.
+    if (p.x - STAIRS[0]).abs() <= RAMP_HALF && p.y >= foot && p.y < plo.y {
         h = h.max(TERRACE_TOP + (PLATEAU_TOP - TERRACE_TOP) * ((p.y - foot) / run).clamp(0.0, 1.0));
     }
     // The causeway from the terrace's east end over the stream, sloping down past it.

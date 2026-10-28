@@ -131,15 +131,15 @@ impl MapId {
     pub const PVP: [MapId; 3] = [MapId::Crossing, MapId::Keep, MapId::Gorge];
 
     pub fn map(self) -> &'static Map {
-        static CROSSING: LazyLock<Map> = LazyLock::new(crossing::build);
-        static KEEP: LazyLock<Map> = LazyLock::new(keep::build);
-        static GORGE: LazyLock<Map> = LazyLock::new(gorge::build);
-        static WILDS: LazyLock<Map> = LazyLock::new(wilds::build);
-        static BASTION: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion, 0));
-        static BASTION2: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion2, 1));
-        static BASTION3: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion3, 2));
-        static BASTION4: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion4, 3));
-        static YARD: LazyLock<Map> = LazyLock::new(yard::build);
+        static CROSSING: LazyLock<Map> = LazyLock::new(|| crossing::build().finished());
+        static KEEP: LazyLock<Map> = LazyLock::new(|| keep::build().finished());
+        static GORGE: LazyLock<Map> = LazyLock::new(|| gorge::build().finished());
+        static WILDS: LazyLock<Map> = LazyLock::new(|| wilds::build().finished());
+        static BASTION: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion, 0).finished());
+        static BASTION2: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion2, 1).finished());
+        static BASTION3: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion3, 2).finished());
+        static BASTION4: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion4, 3).finished());
+        static YARD: LazyLock<Map> = LazyLock::new(|| yard::build().finished());
         match self {
             MapId::Crossing => &CROSSING,
             MapId::Keep => &KEEP,
@@ -258,6 +258,8 @@ pub struct Map {
     pub gardens: Vec<Vec2>,
     /// Stacks of crates (tile, how many high): wall tiles under each, stood on (`CRATE`).
     pub crates: Vec<(IVec2, u8)>,
+    /// What else stands in the way, thin: fences, parapets, posts, chimneys (`finished`).
+    pub barriers: Vec<Barrier>,
     /// Meters inside the playable area's edge (negative outside). Continuous, for terrain and
     /// decoration.
     edge: fn(Vec2) -> f32,
@@ -304,6 +306,30 @@ impl House {
     pub const PITCH: f32 = 0.62;
     /// How thick the roof lies over its slope.
     pub const ROOF_THICK: f32 = 0.12;
+    /// How far the roof reaches out past its walls: down its sloping sides, and past its
+    /// gable ends.
+    pub const EAVES: f32 = 0.5;
+    pub const GABLE_EAVES: f32 = 0.4;
+
+    /// Where its chimney stands, on the roof near one gable end.
+    pub fn chimney(&self) -> Vec2 {
+        let (size, c) = (self.size(), self.center());
+        let (along, across, length) = if self.long_x() { (Vec2::X, Vec2::Y, size.x) } else { (Vec2::Y, Vec2::X, size.y) };
+        c + along * (length / 2.0 - 0.7) + across * 0.3
+    }
+
+    /// How high its ridge is over the walls.
+    pub fn rise(&self) -> f32 {
+        let size = self.size();
+        size.x.min(size.y) / 2.0 * Self::PITCH.tan()
+    }
+
+    /// Whether `p` is under its roof, out to the eaves.
+    pub fn roofed(&self, p: Vec2) -> bool {
+        let reach = if self.long_x() { Vec2::new(Self::GABLE_EAVES, Self::EAVES) } else { Vec2::new(Self::EAVES, Self::GABLE_EAVES) };
+        let (lo, hi) = (self.lo.as_vec2() - reach, self.hi.as_vec2() + reach);
+        p.x >= lo.x && p.y >= lo.y && p.x <= hi.x && p.y <= hi.y
+    }
 
     /// Whether its ridge runs along x: along its long side.
     pub fn long_x(&self) -> bool {
@@ -311,15 +337,70 @@ impl House {
         size.x >= size.y
     }
 
-    /// How high the top of its roof is (meters over the house's ground) at `p`: up from the
-    /// eaves along its long sides to the ridge down its middle.
+    /// How high the top of its roof is (meters over the house's ground) at `p`: up from over
+    /// the walls along its long sides to the ridge down its middle, and on down past the walls
+    /// out to the eaves.
     pub fn roof_at(&self, p: Vec2) -> f32 {
         let (size, c) = (self.size(), self.center());
         let (half, off) = if self.long_x() { (size.y / 2.0, (p.y - c.y).abs()) } else { (size.x / 2.0, (p.x - c.x).abs()) };
-        let rise = half * Self::PITCH.tan();
-        Self::WALLS + Self::ROOF_THICK + rise * (1.0 - (off / half).min(1.0))
+        Self::WALLS + Self::ROOF_THICK + (half - off) * Self::PITCH.tan()
     }
 }
+
+/// Something thin standing in the way of a body up to its top (meters, on the gameplay
+/// plane's height): a fence, a parapet along a drop, a torch's post, a chimney. Along `a` to
+/// `b` (the same point for a post), `half_width` either side of that line (`Map::barriers`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Barrier {
+    pub a: Vec2,
+    pub b: Vec2,
+    pub half_width: f32,
+    pub top: f32,
+}
+
+impl Barrier {
+    /// Whether it keeps a body with its feet `feet` high from moving straight from `p` to `q`:
+    /// the move comes within the body's reach of it, unless the body is over it (its top no
+    /// more than `STEP_UP` over its feet) or already within reach and not getting closer.
+    fn blocks(&self, p: Vec2, q: Vec2, feet: f32) -> bool {
+        if self.top <= feet + STEP_UP {
+            return false;
+        }
+        let reach = self.half_width + NAV_RADIUS;
+        let near = |x: Vec2| point_segment_distance(x, self.a, self.b);
+        if segment_distance(p, q, self.a, self.b) >= reach {
+            return false;
+        }
+        !(near(p) < reach && near(q) >= near(p))
+    }
+}
+
+/// How far `p` is from the segment `a`-`b`.
+fn point_segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let d = b - a;
+    let t = if d.length_squared() > 0.0 { ((p - a).dot(d) / d.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+    p.distance(a + d * t)
+}
+
+/// How near the segments `p`-`q` and `a`-`b` come: nothing if they cross.
+fn segment_distance(p: Vec2, q: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let side = |o: Vec2, x: Vec2, y: Vec2| (x - o).perp_dot(y - o);
+    let crosses = side(p, q, a) * side(p, q, b) < 0.0 && side(a, b, p) * side(a, b, q) < 0.0;
+    if crosses {
+        return 0.0;
+    }
+    point_segment_distance(p, a, b).min(point_segment_distance(q, a, b)).min(point_segment_distance(a, p, q)).min(point_segment_distance(b, p, q))
+}
+
+/// How high a fence's top rail is, a parapet over the drop it runs along, and a standing
+/// torch's post (meters); how thick a parapet is, how far in from a tile's edge its middle,
+/// and the least drop that has one.
+pub const FENCE_TOP: f32 = 0.92;
+pub const PARAPET_HEIGHT: f32 = 0.5;
+pub const PARAPET_THICK: f32 = 0.36;
+pub const PARAPET_IN: f32 = 0.15;
+pub const PARAPET_DROP: f32 = 0.9;
+pub const TORCH_POST: f32 = 2.2;
 
 /// How tall one crate is (meters): a stack of them (`Map::crates`) is a step up to a roof.
 pub const CRATE: f32 = 0.9;
@@ -372,6 +453,7 @@ impl Map {
             well: None,
             gardens: Vec::new(),
             crates: Vec::new(),
+            barriers: Vec::new(),
             edge,
             relief: flat,
             beyond,
@@ -424,6 +506,43 @@ impl Map {
             }
         }
         self.houses.push(house);
+    }
+
+    /// The map with its `barriers` worked out from what's on it: its fences, a parapet along
+    /// every drop of `PARAPET_DROP` or more (on the high side's edge), the posts of the torches
+    /// standing on the ground, and its houses' chimneys.
+    fn finished(mut self) -> Map {
+        let mut barriers = Vec::new();
+        for &(a, b) in &self.fences {
+            barriers.push(Barrier { a, b, half_width: 0.08, top: self.height_at(a).max(self.height_at(b)) + FENCE_TOP });
+        }
+        let sides = [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y];
+        for (t, tile) in self.tiles() {
+            if tile == Tile::Forest {
+                continue;
+            }
+            let c = Map::center(t);
+            let here = self.height_at(c);
+            for d in sides {
+                if here - self.height_at(Map::center(t + d)) < PARAPET_DROP || self.scene_tile(t + d) == Tile::Forest {
+                    continue;
+                }
+                let mid = c + d.as_vec2() * (0.5 - PARAPET_IN);
+                let along = d.as_vec2().perp() * 0.5;
+                barriers.push(Barrier { a: mid - along, b: mid + along, half_width: PARAPET_THICK / 2.0, top: here + PARAPET_HEIGHT });
+            }
+        }
+        for &p in &self.torches {
+            if self.walkable_at(p) {
+                barriers.push(Barrier { a: p, b: p, half_width: 0.07, top: self.height_at(p) + TORCH_POST });
+            }
+        }
+        for house in &self.houses {
+            let top = self.height_at(house.center()) + House::WALLS + house.rise() + 0.45;
+            barriers.push(Barrier { a: house.chimney(), b: house.chimney(), half_width: 0.28, top });
+        }
+        self.barriers = barriers;
+        self
     }
 
     /// A stack of `high` crates on tile `t`: a wall tile, stood on (`solid_top`).
@@ -597,12 +716,19 @@ impl Map {
     }
 
     /// What a body with its feet `feet` high stands on at `p`: the top of what's on the tile
-    /// there, if that's no more than `STEP_UP` over its feet, or else the ground.
+    /// there, if that's no more than `STEP_UP` over its feet, or else the ground; or, up at a
+    /// roof's height, its eaves reaching out over the ground (walked under, down there).
     pub fn floor_at(&self, p: Vec2, feet: f32) -> f32 {
-        match self.solid_top(Map::tile_of(p), p) {
+        let floor = match self.solid_top(Map::tile_of(p), p) {
             Some(top) if top <= feet + STEP_UP => top,
             _ => self.height_at(p),
-        }
+        };
+        self.houses
+            .iter()
+            .filter(|house| house.roofed(p))
+            .map(|house| self.height_at(house.center()) + house.roof_at(p))
+            .filter(|&top| top <= feet + STEP_UP && top >= feet - STEP_UP)
+            .fold(floor, f32::max)
     }
 
     /// `line_walkable` for a body with its feet `feet` high, on the ground or up in the air:
@@ -623,7 +749,14 @@ impl Map {
             let inside = (a - c).abs().cmple(half).all();
             !(inside && reach(b) >= reach(a))
         };
-        self.line_blocker_by(a, b, blocks).is_none() && self.floor_at(b, feet) - feet <= CLIMB * (b - a).length() + 1e-4
+        // Its leading edge, too, kept off ground rising sheer ahead: its body doesn't reach
+        // into a terrace's face.
+        let length = (b - a).length();
+        let ahead = b + (b - a).normalize_or_zero() * NAV_RADIUS;
+        self.line_blocker_by(a, b, blocks).is_none()
+            && !self.barriers.iter().any(|barrier| barrier.blocks(a, b, feet))
+            && self.floor_at(b, feet) - feet <= CLIMB * length + 1e-4
+            && self.height_at(ahead) - feet <= CLIMB * (length + NAV_RADIUS) + 1e-4
     }
 
     /// True if a body of radius `NAV_RADIUS` can move in a straight line from `a` to `b`: nothing
@@ -1153,7 +1286,7 @@ mod tests {
     #[test]
     fn the_yards_high_ground_is_climbed_by_its_ramp_not_its_sides() {
         let m = MapId::Yard.map();
-        let (middle, radius, top) = (Vec2::new(-9.5, 23.0), 4.5, 6.0);
+        let (middle, radius, top) = (Vec2::new(-9.5, 23.5), 3.5, 6.0);
         assert!((m.height_at(middle) - top).abs() < 1e-5, "the plateau's top");
         // Up its sheer east side is no way; down it is.
         let (foot, brink) = (middle + Vec2::X * (radius + 0.7), middle + Vec2::X * (radius - 0.2));
