@@ -45,6 +45,9 @@ const FREE_DISTANCE: (f32, f32) = (1.2, 24.0);
 const FREE_PITCH: (f32, f32) = (-0.35, 1.1);
 /// At the usual sensitivity (`Settings::sensitivity` scales it).
 const FREE_TURN_SPEED: f32 = 0.005;
+/// A mouse movement bigger than this in one frame (pixels) is no hand's: the browser's pointer
+/// lock throws one now and then on a fast swing, and taking it would spin the camera round.
+const MOUSE_GLITCH_PX: f32 = 300.0;
 /// How far out (meters) the aim looks for the ground along the camera's line, and in what steps
 /// (`ground_along`).
 const AIM_REACH: f32 = 160.0;
@@ -431,9 +434,10 @@ fn follow_camera(
         cursor.grab_mode = CursorGrabMode::Locked;
     }
     let turn = FREE_TURN_SPEED * settings.sensitivity;
+    let delta = if motion.delta.length() > MOUSE_GLITCH_PX { Vec2::ZERO } else { motion.delta };
     if mode.locked {
-        if motion.delta != Vec2::ZERO && !keys.pressed(KeyCode::Tab) {
-            mode.orbit.turn(motion.delta * turn, FREE_PITCH);
+        if delta != Vec2::ZERO && !keys.pressed(KeyCode::Tab) {
+            mode.orbit.turn(delta * turn, FREE_PITCH);
         }
     } else if mouse.just_pressed(MouseButton::Right) {
         mode.dragged = 0.0;
