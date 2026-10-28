@@ -8,8 +8,9 @@
 //! An attack is timed to the server's: the draw and the strike fill its windup, and the
 //! strike is `Moves::contact` of the way through as it goes off (the spear leaving the hand, the
 //! blade's tip just reaching the target). The rest of the strike and the follow-through are the
-//! backswing, which walking cuts short (`CUT_RATE`). Nothing on screen says when the attack has
-//! gone off but the fighter itself. A quicker attack (`follow_up`) plays all of it faster.
+//! backswing, played out in full as the fighter walks on; only a dash cuts it short
+//! (`CUT_RATE`). Nothing on screen says when the attack has gone off but the fighter itself. A
+//! quicker attack (`follow_up`) plays all of it faster.
 //!
 //! The javelinist always carries the javelin cocked over the shoulder, ready to throw. The
 //! windup: twist the throwing shoulder far back, lean well back and sink into a wide stance, lead arm
@@ -115,8 +116,8 @@ pub(crate) fn drawn_size(class: ClassId, elite: bool) -> f32 {
 pub(crate) const EMPOWERED_BLADE: f32 = 1.5;
 const EMPOWER_RATE: f32 = 12.0;
 pub(crate) const EMPOWERED_STRETCH: f32 = 0.05;
-/// How quickly walking off cuts the backswing short (per second, exponential): the
-/// follow-through blends out into the walk.
+/// How quickly dashing off cuts the backswing short (per second, exponential): the
+/// follow-through blends out into the dash.
 const CUT_RATE: f32 = 30.0;
 /// A thrown Q's flick: ticks after the throw until the arm starts and finishes coming back.
 const FLICK: (f32, f32) = (0.5, 5.0);
@@ -490,7 +491,7 @@ fn pose_rigs(
 
         // Where in the strike we are: drawing (0..1), holding, then striking during the windup,
         // up to its contact pose as the attack goes off; then the rest of the strike, and the
-        // follow-through easing back to carrying, unless walking cuts it short. A thrown Q
+        // follow-through easing back to carrying, unless a dash cuts it short. A thrown Q
         // flicks through it.
         let def = class.def();
         let now = clock.as_ref().map_or(0.0, |clock| clock.now(is_me));
@@ -528,13 +529,14 @@ fn pose_rigs(
         let stretch = moves.stretch + if empowering { EMPOWERED_STRETCH } else { 0.0 };
         let (posed_windup, posed_released, ahead) = ahead_of_springs(*class, moves, windup, released, now);
         let (mut draw, mut throw, mut smear, mut second) = strike_phase(*class, moves, attack, posed_windup, posed_released, ahead);
-        // Walking off (or dashing off, after it went off) once the attack has gone off cuts its
-        // backswing short, for good: the follow-through blends out quickly into the walk.
+        // Dashing off once the attack has gone off cuts its backswing short, for good: the
+        // follow-through blends out quickly into the dash. Walking doesn't: the swing or throw
+        // plays out over the walk.
         let cut = match (windup, attack.released_at) {
             (None, Some(at)) if released.is_some() => {
                 let cut = rig.cut.filter(|(of, _)| *of == at).map_or(0.0, |(_, cut)| cut);
                 let dashed_off = dashing.0.is_some_and(|dash| dash.started_at > at);
-                let cut = if cut > 0.0 || is_walking > 0.0 || dashed_off { cut + (1.0 - cut) * rate(&time, CUT_RATE) } else { 0.0 };
+                let cut = if cut > 0.0 || dashed_off { cut + (1.0 - cut) * rate(&time, CUT_RATE) } else { 0.0 };
                 rig.cut = Some((at, cut));
                 cut
             }
