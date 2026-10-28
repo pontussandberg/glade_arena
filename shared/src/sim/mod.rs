@@ -647,10 +647,11 @@ mod tests {
         assert!((step(101) - normal * HASTE_FACTOR).abs() < 1e-5);
         assert!((step(100 + HASTE_TICKS) - normal * HASTE_FACTOR).abs() < 1e-5);
         assert!((step(101 + HASTE_TICKS) - normal).abs() < 1e-5, "still hasted after it wore off");
-        // Dashes are sped up just as much.
-        let (kit, _) = step_kit(101, class, from, &press_q(Vec2::X), &warm, default());
-        let dash = |hasted: &Hasted| move_player(map(), from, &walk, class, &attack, &mut { kit.dashing }, &warm, hasted, 102).distance(from);
-        assert!((dash(&hasted) - dash(&default()) * HASTE_FACTOR).abs() < 1e-5);
+        // Dashes are sped up just as much: over in as many fewer ticks.
+        let mut early = Hasted::default();
+        early.start(0);
+        let (normal, quick) = (dash_run(from, Vec2::X, &warm, &default()).1, dash_run(from, Vec2::X, &warm, &early).1);
+        assert_eq!(quick, (normal as f32 / HASTE_FACTOR).ceil() as u32, "a hasted dash of {normal} ticks took {quick}");
         assert!(touches_pickup(from, from + Vec2::X * PICKUP_RADIUS));
         assert!(!touches_pickup(from, from + Vec2::X * (PICKUP_RADIUS + 0.01)));
         // 15% of 95, rounded up.
@@ -784,7 +785,9 @@ mod tests {
         let mut dashing = Dashing(Some(dash_def().start(Q, Vec2::X, Vec2::X * 100.0, 10)));
         let warm = Chilled::default();
         let moved = move_player(keep, from, &PlayerInput::default(), class, &AttackState::default(), &mut dashing, &warm, &default(), 11);
-        assert!((moved.distance(from) - distance / ticks as f32).abs() < 1e-4);
+        // Its first tick, the longest of an eased-out dash.
+        let first = distance * (1.0 - (1.0 - 1.0 / ticks as f32).powi(2));
+        assert!((moved.distance(from) - first).abs() < 1e-4, "moved {} the first tick, not {first}", moved.distance(from));
     }
 
     #[test]

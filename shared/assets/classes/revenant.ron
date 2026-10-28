@@ -27,7 +27,7 @@
             name: "Rift Step",
             description: "Dash up to {ability_reach}. Enemies you pass through take {ability_damage} damage.",
             cooldown_ticks: 256,
-            kind: Dash(distance: 6.0, min_distance: Some(1.0), ticks: 5, damage: 18),
+            kind: Dash(distance: 12.0, min_distance: Some(1.0), ticks: 10, damage: 18),
         ),
     ],
     passive: Some(

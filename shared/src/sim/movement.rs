@@ -76,7 +76,7 @@ pub fn move_player_boosted(
             Some(AbilityKind::Dash(def)) => def.pace(),
             _ => 0.0,
         };
-        dash.step(map, pos, pace * speed)
+        dash.step(map, pos, pace * speed, tick)
     } else if attack.winding_up().is_some() {
         pos
     } else {
