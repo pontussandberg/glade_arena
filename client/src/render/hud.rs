@@ -310,8 +310,10 @@ pub(super) fn update_key_hints(
             ("WASD", "move"),
             ("Hold left click", "attack"),
             (&abilities.0, abilities.1),
+            ("Space", "jump"),
             ("Wheel, + -", "zoom"),
-            ("Tab", "watch next fighter"),
+            ("Hold Tab", "scoreboard"),
+            ("F1", "watch next fighter"),
             ("Esc", "free the mouse"),
         ]
     } else {

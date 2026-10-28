@@ -348,7 +348,7 @@ fn next_fighter(
     mut mode: ResMut<CameraMode>,
     fighters: Query<(Entity, &PlayerId, Has<Me>), With<Mesh3d>>,
 ) {
-    if !mode.free || !keys.just_pressed(KeyCode::Tab) {
+    if !mode.free || !keys.just_pressed(KeyCode::F1) {
         return;
     }
     let mut all: Vec<_> = fighters.iter().collect();
@@ -397,8 +397,17 @@ fn follow_camera(
         cursor.visible = false;
         cursor.grab_mode = CursorGrabMode::Locked;
     }
+    // While the scoreboard is held up (Tab) the mouse is free, to point at it, and the camera
+    // holds still; let go, the mouse is captured again.
+    if mode.locked && keys.just_pressed(KeyCode::Tab) {
+        release_cursor(&mut cursor);
+    }
+    if mode.locked && keys.just_released(KeyCode::Tab) {
+        cursor.visible = false;
+        cursor.grab_mode = CursorGrabMode::Locked;
+    }
     if mode.locked {
-        if motion.delta != Vec2::ZERO {
+        if motion.delta != Vec2::ZERO && !keys.pressed(KeyCode::Tab) {
             mode.orbit.turn(motion.delta * FREE_TURN_SPEED, FREE_PITCH);
         }
     } else if mouse.just_pressed(MouseButton::Right) {
