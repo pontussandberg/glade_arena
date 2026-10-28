@@ -504,9 +504,10 @@ impl Props {
 
     /// Stone faces wherever the ground drops sheer (`Map::height_at`): a terrace's edge, a
     /// tower's sides, a plateau's cliff, so a level reads as built, not heaped. Each tile's
-    /// sides are looked at: any drop to the next tile gets a face of blocks along that side,
-    /// from the lower ground up to the higher, set into the higher tile so its face is the
-    /// edge, where walking stops; a drop of a step or more gets a battlement's worth over it.
+    /// sides are looked at: where the ground breaks off at one, down to the next tile (not just
+    /// sloping on down a ramp), it gets a face of blocks along that side, from the lower ground
+    /// up to the higher, set into the higher tile so its face is the edge, where walking stops;
+    /// a drop of a step or more gets a battlement's worth over it.
     pub(super) fn retaining(&mut self, m: &Map, rng: &mut Lcg) {
         for (t, tile) in m.tiles() {
             if tile == Tile::Forest {
@@ -516,8 +517,13 @@ impl Props {
             let here = m.height_at(c);
             for d in SIDES {
                 let there = Map::center(t + d);
-                let drop = here - m.height_at(there);
-                if drop < 0.05 || m.scene_tile(t + d) == Tile::Forest {
+                // How far the ground breaks off along the side, from just inside it to just past.
+                let side = |s: f32| c + d.as_vec2() * 0.5 + d.as_vec2().perp() * s;
+                let sheer = [-0.45, -0.2, 0.0, 0.2, 0.45]
+                    .map(|s| m.height_at(side(s) - d.as_vec2() * 0.002) - m.height_at(side(s) + d.as_vec2() * 0.002))
+                    .into_iter()
+                    .fold(f32::NEG_INFINITY, f32::max);
+                if sheer < 0.05 || m.scene_tile(t + d) == Tile::Forest {
                     continue;
                 }
                 // The wall stands just inside the side's edge, its foot on the ground past it.

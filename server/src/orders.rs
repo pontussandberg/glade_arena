@@ -49,9 +49,10 @@ pub(super) fn apply_commands(
     }
 }
 
-/// After a tick: an attack click and the abilities' keys pressed have been seen, used or not
-/// (one before the last attack is done, or while an ability cools down, is dropped, not kept for
-/// later). Every fighter's, in play or not: a key pressed while dead doesn't go off on respawn.
+/// After a tick: an attack click, Space and the abilities' keys pressed have been seen, used or
+/// not (one before the last attack is done, or while an ability cools down, is dropped, not kept
+/// for later). Every fighter's, in play or not: a key pressed while dead doesn't go off on
+/// respawn (Space held still jumps: `PlayerInput::jumping`).
 pub(super) fn use_up_clicks(mut players: Query<&mut PlayerInput>) {
     for mut input in &mut players {
         if input.fire || input.jump || input.casts().next().is_some() {
@@ -93,7 +94,7 @@ pub(super) fn move_players(
         pos.set_if_neq(Pos(sim::move_player_boosted(map, pos.0, &input, *class, &attack, &mut next, &mut moving, chilled, hasted, now, boost)));
         dashing.set_if_neq(next);
         motion.set_if_neq(moving);
-        // The jump has been taken, or dropped.
+        // The press has been taken, or dropped (held, Space jumps again: `PlayerInput::jumping`).
         input.jump = false;
         walking.set_if_neq(Walking(input.walk, orders.received));
         if input.move_to.is_some_and(|point| sim::arrived(map, pos.0, point)) {

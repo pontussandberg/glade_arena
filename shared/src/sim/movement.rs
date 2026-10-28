@@ -63,7 +63,7 @@ pub fn move_player(
 /// (`GROUND_FRICTION`, high: only a short slide to a stop); in the air the keys only steer a little
 /// (`AIR_ACCEL` up to `AIR_CONTROL_SPEED`). Whatever blocks a step stops that part of the
 /// motion. Up and down: on the ground it follows the ground, up a slope and down one (not off a
-/// ledge: `STEP_DOWN`); `input.jump` on the ground sends it up (`jump_speed`); in the air it
+/// ledge: `STEP_DOWN`); `input.jumping()` on the ground sends it up (`jump_speed`); in the air it
 /// falls (`GRAVITY`) until the ground. A dash or a click-to-walk sets the motion by where it
 /// went, so a dash off a ledge flies on out.
 #[allow(clippy::too_many_arguments)]
@@ -131,7 +131,7 @@ pub fn move_player_boosted(
         motion.along = (next - pos) / TICK_DT;
     }
     let under = map.floor_at(next, feet);
-    if input.jump && grounded && !held && dashing.0.is_none() {
+    if input.jumping() && grounded && !held && dashing.0.is_none() {
         motion.rise = jump_speed();
     }
     if grounded && motion.rise <= 0.0 && motion.height <= under + STEP_DOWN {

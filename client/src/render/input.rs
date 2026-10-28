@@ -184,10 +184,11 @@ pub(super) fn read_local_input(
         stop.0 = true;
     }
     // Space jumps (action mode), and held, jumps again each time it lands (the server jumps
-    // only from the ground). `casts`, `fire` and `jump` are kept until they've been sent
-    // (`send_commands` clears them), so a short tap isn't missed.
-    let jump = desired.0.jump || (mode.free && keys.pressed(KeyCode::Space) && !board);
-    desired.0 = PlayerInput { move_to, walk, aim, climb, fire, jump, casts: casts.casts };
+    // only from the ground): whether it's held, sent as that changes (`send_commands`), so a
+    // tap is held for a frame at least. `casts` and `fire` are kept until they've been sent
+    // (`send_commands` clears them), so a short click isn't missed.
+    let jump = mode.free && (keys.pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Space)) && !board;
+    desired.0 = PlayerInput { move_to, walk, aim, climb, fire, jump, casts: casts.casts, ..default() };
 }
 
 /// What a cast of `kind` by our fighter at `me` is aimed with, aiming `aim`: in action mode a

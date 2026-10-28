@@ -648,9 +648,13 @@ pub struct PlayerInput {
     /// Left click: auto-attack toward `aim`, if the last attack is done (else the click is
     /// dropped). Set by `PlayerCommand::Attack`, used up by the next tick.
     pub fire: bool,
-    /// Space: jump, if standing on the ground (else it's dropped: `sim::move_player`). Set by
-    /// `PlayerCommand::Jump`, used up by the next tick.
+    /// Space: jump, if standing on the ground (else it's dropped: `sim::move_player`): pressed
+    /// since the last tick (`PlayerCommand::Jump`), used up by the next one, so a tap let go
+    /// before it still jumps; or held (`jump_held`), jumping again each time it lands
+    /// (`jumping`). The client's own is the key itself, held or not.
     pub jump: bool,
+    /// Space held, as the client last said (`PlayerCommand::Jump`): the server's.
+    pub jump_held: bool,
     /// Abilities' keys pressed since the last tick, in order (`order_cast`), each used toward its
     /// own aim. Set by `PlayerCommand::Cast`, used up by the next tick, whether or not they could
     /// be used (as in League).
@@ -672,6 +676,11 @@ impl PlayerInput {
     /// The abilities ordered used, in order.
     pub fn casts(&self) -> impl Iterator<Item = CastOrder> + '_ {
         self.casts.iter().flatten().copied()
+    }
+
+    /// Whether it jumps this tick, if it can: Space pressed since the last, or held.
+    pub fn jumping(&self) -> bool {
+        self.jump || self.jump_held
     }
 }
 
@@ -698,8 +707,9 @@ pub enum PlayerCommand {
     /// its pitch (`PlayerInput::climb`), so an attack winding up goes off the way the player
     /// looks then, not the way they looked when it started.
     Aim(Vec2, f32),
-    /// Space: jump (`Motion`).
-    Jump,
+    /// Space pressed (true) or let go (false): jump, and while it's held again each time it
+    /// lands (`PlayerInput::jump`). Sent as it changes.
+    Jump(bool),
 }
 
 impl PlayerCommand {
@@ -711,7 +721,7 @@ impl PlayerCommand {
         match *self {
             PlayerCommand::MoveTo(_) | PlayerCommand::Stop => true,
             PlayerCommand::Walk(dir, _) => dir != Vec2::ZERO,
-            PlayerCommand::Attack(_) | PlayerCommand::Cast(..) | PlayerCommand::Aim(..) | PlayerCommand::Jump => false,
+            PlayerCommand::Attack(_) | PlayerCommand::Cast(..) | PlayerCommand::Aim(..) | PlayerCommand::Jump(_) => false,
         }
     }
 
@@ -742,7 +752,10 @@ impl PlayerCommand {
                 input.aim = aim;
                 input.climb = climb;
             }
-            PlayerCommand::Jump => input.jump = true,
+            PlayerCommand::Jump(held) => {
+                input.jump |= held;
+                input.jump_held = held;
+            }
         }
     }
 }
@@ -880,6 +893,21 @@ impl Plugin for ProtocolPlugin {
 mod tests {
     use super::*;
     use crate::config::{FRENZY_MELEE_TICKS, FRENZY_RANGED_TICKS};
+
+    /// Space held jumps on every tick, let go it doesn't on the next, and a tap let go before a
+    /// tick sees it still jumps on that one, once (the server uses up a press each tick).
+    #[test]
+    fn space_held_jumps_every_tick_and_a_tap_once() {
+        let tick = |input: &mut PlayerInput| std::mem::take(&mut input.jump) || input.jump_held;
+        let mut input = PlayerInput::default();
+        PlayerCommand::Jump(true).apply(&mut input);
+        assert!(tick(&mut input) && tick(&mut input) && tick(&mut input), "held, but not jumping");
+        PlayerCommand::Jump(false).apply(&mut input);
+        assert!(!tick(&mut input), "let go, still jumping");
+        PlayerCommand::Jump(true).apply(&mut input);
+        PlayerCommand::Jump(false).apply(&mut input);
+        assert!(tick(&mut input) && !tick(&mut input), "a tap doesn't jump just once");
+    }
 
     #[test]
     fn frenzy_grows_with_kills_and_fades() {

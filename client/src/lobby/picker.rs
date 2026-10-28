@@ -98,10 +98,9 @@ pub(super) fn show_fighter(mut commands: Commands, mut lobby: ResMut<Lobby>, vis
         commands.entity(fighter).despawn();
     }
     // Rigged and posed like any fighter (`rig::add_rigs` picks it up by its mesh), but not a
-    // player: nothing else in the game sees it.
+    // player: nothing else in the game sees it. On the lift, it goes with the lobby's parts.
     let fighter = commands
         .spawn((
-            LobbyPart,
             selected,
             Pos(STAGE),
             AttackState::default(),
