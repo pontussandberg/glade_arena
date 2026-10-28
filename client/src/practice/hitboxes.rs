@@ -180,6 +180,31 @@ fn draw_hitboxes_3d(
             gizmos.line_gradient(at + side, at + side + Vec3::Y * BODY_HEIGHT, floor, top);
         }
     }
+    // What stands in the way (`map::Collider`): each box's edges, colored by how high its top
+    // is; a roof's top slopes down from its ridge to its eaves.
+    for collider in map.map().colliders() {
+        let color = height_color(collider.top);
+        let (lo, hi) = (collider.lo, collider.hi);
+        let corners = [lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)];
+        let top = |p: Vec2| to_world(p, collider.top_at(p));
+        for k in 0..4 {
+            let (p, q) = (corners[k], corners[(k + 1) % 4]);
+            gizmos.line(to_world(p, collider.bottom), to_world(q, collider.bottom), color);
+            gizmos.line(top(p), top(q), color);
+            gizmos.line(to_world(p, collider.bottom), top(p), color);
+        }
+        if let Some(roof) = collider.roof {
+            let ridge = if roof.along_x { [Vec2::new(lo.x, roof.ridge), Vec2::new(hi.x, roof.ridge)] } else { [Vec2::new(roof.ridge, lo.y), Vec2::new(roof.ridge, hi.y)] };
+            gizmos.line(top(ridge[0]), top(ridge[1]), color);
+            // Up from the gable ends' eaves to the ridge.
+            for (end, eaves) in [(ridge[0], [corners[0], corners[3]]), (ridge[1], [corners[1], corners[2]])] {
+                for e in eaves {
+                    let e = if roof.along_x { Vec2::new(end.x, e.y) } else { Vec2::new(e.x, end.y) };
+                    gizmos.line(top(e), top(end), color);
+                }
+            }
+        }
+    }
     // Only one that's shown: a thrown spear still in the hand isn't anywhere yet.
     for (shot, transform, _) in shots.iter().filter(|(_, _, shown)| shown.get()) {
         let radius = shot.class.def().shot(shot.ability).unwrap_or_default().radius;

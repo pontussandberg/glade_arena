@@ -3,7 +3,7 @@
 
 use super::*;
 
-use arena_shared::map::{CRATE, FENCE_TOP, House, Map, PARAPET_DROP, PARAPET_HEIGHT, PARAPET_IN, PARAPET_THICK, TORCH_POST, Tile};
+use arena_shared::map::{CRATE, FENCE_TOP, House, Map, PARAPET_DROP, PARAPET_HEIGHT, PARAPET_IN, PARAPET_THICK, TORCH_POST, Tile, WELL_HEIGHT, WELL_RING};
 use bevy::color::Mix;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
 use bevy::pbr::{DistanceFog, FogFalloff};
@@ -226,7 +226,7 @@ fn build_arena(
         match tile {
             Tile::Rock if m.well.is_some_and(|well| Map::tile_of(well) == t) => {}
             Tile::Rock if theme.wilds == Wilds::Highlands => props.sandstone(&mut rng, c),
-            Tile::Rock => props.boulder(&mut rng, c),
+            Tile::Rock => props.boulder(t, c),
             Tile::Grass if theme.wilds == Wilds::Fen => props.fen_grass(&mut rng, c),
             Tile::Grass => props.floor_detail(m, &mut rng, t, c),
             Tile::Path if rng.next() < 0.12 => props.pebbles(&mut rng, c),
@@ -343,7 +343,7 @@ impl Props {
         Props {
             theme,
             ground,
-            rock: faceted(Sphere::new(0.6).mesh().ico(0).unwrap()),
+            rock: faceted(Sphere::new(arena_shared::map::ROCK_RADIUS).mesh().ico(0).unwrap()),
             trunk: faceted(Cylinder::new(0.22, 1.2).mesh().resolution(5).build()),
             cones: [0, 1, 2].map(|k| faceted(Cone::new(1.5 - k as f32 * 0.35, 1.7).mesh().resolution(7).build())),
             flower: gem_mesh(0.14),
@@ -408,19 +408,14 @@ impl Props {
                 continue;
             }
             let c = Map::center(t);
-            // Head height and over: a ruin you can't see across, not a garden wall.
-            let h = rng.range(1.9, 2.8);
+            // As high as its collider (`map::ruin`), the block on top of some square to it.
+            let ruin = arena_shared::map::ruin(t);
             let color = self.theme.wall.mix(&self.theme.stone, rng.range(0.0, 0.25));
-            self.block(Vec3::new(1.0, h, 1.0), color, Transform::from_translation(to_world(c, h / 2.0)));
-            let mut top = h;
-            if rng.next() < 0.45 {
-                let s = rng.range(0.5, 0.8);
-                let off = Vec2::new(rng.range(-0.2, 0.2), rng.range(-0.2, 0.2));
-                let turn = Quat::from_rotation_y(rng.range(-0.3, 0.3));
-                self.block(Vec3::splat(s), color, Transform::from_translation(to_world(c + off, h + s / 2.0)).with_rotation(turn));
-                top += s;
+            self.block(Vec3::new(1.0, ruin.height, 1.0), color, Transform::from_translation(to_world(c, ruin.height / 2.0)));
+            if let Some((s, off)) = ruin.cap {
+                self.block(Vec3::splat(s), color, Transform::from_translation(to_world(c + off, ruin.height + s / 2.0)));
             }
-            tops.insert(t, top);
+            tops.insert(t, ruin.top());
             // Rubble at the foot, below knee height, on dry ground only.
             for _ in 0..2 {
                 let p = c + Vec2::new(rng.range(-0.9, 0.9), rng.range(-0.9, 0.9));
@@ -586,9 +581,9 @@ impl Props {
         let stones = 10;
         for i in 0..stones {
             let a = std::f32::consts::TAU * i as f32 / stones as f32;
-            let p = c + Vec2::from_angle(a) * 0.62;
-            let t = Transform::from_translation(to_world(p, 0.45)).with_rotation(Quat::from_rotation_y(-a));
-            self.block(Vec3::new(0.42, 0.9, 0.3), self.theme.stone.mix(&self.theme.slate, (i % 3) as f32 * 0.2), t);
+            let p = c + Vec2::from_angle(a) * (WELL_RING - 0.15);
+            let t = Transform::from_translation(to_world(p, WELL_HEIGHT / 2.0)).with_rotation(Quat::from_rotation_y(-a));
+            self.block(Vec3::new(0.42, WELL_HEIGHT, 0.3), self.theme.stone.mix(&self.theme.slate, (i % 3) as f32 * 0.2), t);
         }
         self.add(Shape::Puddle, self.theme.pond.darker(0.3), Transform::from_translation(to_world(c, 0.2)).with_scale(Vec3::new(0.5, 1.0, 0.5)));
         for s in [-1.0, 1.0] {
@@ -843,12 +838,12 @@ impl Props {
         }
     }
 
-    fn boulder(&mut self, rng: &mut Lcg, c: Vec2) {
-        // Taller than a fighter, and not much wider than its tile: bulk goes up, not out over
-        // the ground beside it.
-        let size = Vec3::new(rng.range(1.5, 1.9), rng.range(1.6, 2.2), rng.range(1.5, 1.9));
-        let t = Transform::from_translation(to_world(c, 0.3 * size.y))
-            .with_rotation(Quat::from_euler(EulerRot::XYZ, rng.range(0.0, 3.0), rng.range(0.0, 3.0), 0.0))
+    /// A boulder on tile `t`, as big as its collider (`map::boulder`), only turned about the up
+    /// axis so it stays in it.
+    fn boulder(&mut self, t: IVec2, c: Vec2) {
+        let (size, yaw) = arena_shared::map::boulder(t);
+        let t = Transform::from_translation(to_world(c, arena_shared::map::ROCK_LIFT * size.y))
+            .with_rotation(Quat::from_rotation_y(yaw))
             .with_scale(size);
         self.add(Shape::Rock, self.theme.slate, t);
     }

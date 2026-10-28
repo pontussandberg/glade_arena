@@ -30,7 +30,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::protocol::PickupKind;
 
+pub use colliders::{COUNTER_TOP, Collider, ROCK_LIFT, ROCK_RADIUS, Roof, Ruin, WELL_HEIGHT, WELL_RING, boulder, jitter, ruin};
+
 mod bastion;
+mod colliders;
 mod crossing;
 mod gorge;
 mod keep;
@@ -258,8 +261,12 @@ pub struct Map {
     pub gardens: Vec<Vec2>,
     /// Stacks of crates (tile, how many high): wall tiles under each, stood on (`CRATE`).
     pub crates: Vec<(IVec2, u8)>,
-    /// What else stands in the way, thin: fences, parapets, posts, chimneys (`finished`).
-    pub barriers: Vec<Barrier>,
+    /// Everything that stands in the way, as boxes (`colliders`, worked out in `finished`), the
+    /// ones near each tile (by tile index), and the tiles a body can't stand in the middle of
+    /// for something on the ground there.
+    colliders: Vec<Collider>,
+    near: Vec<Vec<u16>>,
+    crowded: Vec<bool>,
     /// Meters inside the playable area's edge (negative outside). Continuous, for terrain and
     /// decoration.
     edge: fn(Vec2) -> f32,
@@ -347,51 +354,6 @@ impl House {
     }
 }
 
-/// Something thin standing in the way of a body up to its top (meters, on the gameplay
-/// plane's height): a fence, a parapet along a drop, a torch's post, a chimney. Along `a` to
-/// `b` (the same point for a post), `half_width` either side of that line (`Map::barriers`).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Barrier {
-    pub a: Vec2,
-    pub b: Vec2,
-    pub half_width: f32,
-    pub top: f32,
-}
-
-impl Barrier {
-    /// Whether it keeps a body with its feet `feet` high from moving straight from `p` to `q`:
-    /// the move comes within the body's reach of it, unless the body is over it (its top no
-    /// more than `STEP_UP` over its feet) or already within reach and not getting closer.
-    fn blocks(&self, p: Vec2, q: Vec2, feet: f32) -> bool {
-        if self.top <= feet + STEP_UP {
-            return false;
-        }
-        let reach = self.half_width + NAV_RADIUS;
-        let near = |x: Vec2| point_segment_distance(x, self.a, self.b);
-        if segment_distance(p, q, self.a, self.b) >= reach {
-            return false;
-        }
-        !(near(p) < reach && near(q) >= near(p))
-    }
-}
-
-/// How far `p` is from the segment `a`-`b`.
-fn point_segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
-    let d = b - a;
-    let t = if d.length_squared() > 0.0 { ((p - a).dot(d) / d.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
-    p.distance(a + d * t)
-}
-
-/// How near the segments `p`-`q` and `a`-`b` come: nothing if they cross.
-fn segment_distance(p: Vec2, q: Vec2, a: Vec2, b: Vec2) -> f32 {
-    let side = |o: Vec2, x: Vec2, y: Vec2| (x - o).perp_dot(y - o);
-    let crosses = side(p, q, a) * side(p, q, b) < 0.0 && side(a, b, p) * side(a, b, q) < 0.0;
-    if crosses {
-        return 0.0;
-    }
-    point_segment_distance(p, a, b).min(point_segment_distance(q, a, b)).min(point_segment_distance(a, p, q)).min(point_segment_distance(b, p, q))
-}
-
 /// How high a fence's top rail is, a parapet over the drop it runs along, and a standing
 /// torch's post (meters); how thick a parapet is, how far in from a tile's edge its middle,
 /// and the least drop that has one.
@@ -453,7 +415,9 @@ impl Map {
             well: None,
             gardens: Vec::new(),
             crates: Vec::new(),
-            barriers: Vec::new(),
+            colliders: Vec::new(),
+            near: Vec::new(),
+            crowded: Vec::new(),
             edge,
             relief: flat,
             beyond,
@@ -508,40 +472,12 @@ impl Map {
         self.houses.push(house);
     }
 
-    /// The map with its `barriers` worked out from what's on it: its fences, a parapet along
-    /// every drop of `PARAPET_DROP` or more (on the high side's edge), the posts of the torches
-    /// standing on the ground, and its houses' chimneys.
+    /// The map with its colliders worked out from what's on it (`colliders::build`): its walls,
+    /// rocks, houses and roofs, crates, fences, a parapet along every drop of `PARAPET_DROP` or
+    /// more, torch posts and chimneys.
     fn finished(mut self) -> Map {
-        let mut barriers = Vec::new();
-        for &(a, b) in &self.fences {
-            barriers.push(Barrier { a, b, half_width: 0.08, top: self.height_at(a).max(self.height_at(b)) + FENCE_TOP });
-        }
-        let sides = [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y];
-        for (t, tile) in self.tiles() {
-            if tile == Tile::Forest {
-                continue;
-            }
-            let c = Map::center(t);
-            let here = self.height_at(c);
-            for d in sides {
-                if here - self.height_at(Map::center(t + d)) < PARAPET_DROP || self.scene_tile(t + d) == Tile::Forest {
-                    continue;
-                }
-                let mid = c + d.as_vec2() * (0.5 - PARAPET_IN);
-                let along = d.as_vec2().perp() * 0.5;
-                barriers.push(Barrier { a: mid - along, b: mid + along, half_width: PARAPET_THICK / 2.0, top: here + PARAPET_HEIGHT });
-            }
-        }
-        for &p in &self.torches {
-            if self.walkable_at(p) {
-                barriers.push(Barrier { a: p, b: p, half_width: 0.07, top: self.height_at(p) + TORCH_POST });
-            }
-        }
-        for house in &self.houses {
-            let top = self.height_at(house.center()) + House::WALLS + house.rise() + 0.45;
-            barriers.push(Barrier { a: house.chimney(), b: house.chimney(), half_width: 0.28, top });
-        }
-        self.barriers = barriers;
+        self.colliders = colliders::build(&self);
+        self.index_colliders();
         self
     }
 
@@ -587,7 +523,8 @@ impl Map {
             let diagonal = dx != 0 && dy != 0;
             let clear = self.walkable(next)
                 && (!diagonal || (self.walkable(here + IVec2::new(dx, 0)) && self.walkable(here + IVec2::new(0, dy))))
-                && self.climbable(Map::center(here), Map::center(next));
+                && self.climbable(Map::center(here), Map::center(next))
+                && !self.colliders_block(Map::center(here), Map::center(next), self.height_at(Map::center(here)));
             clear.then_some((next, if diagonal { 14 } else { 10 }))
         })
     }
@@ -642,8 +579,10 @@ impl Map {
         self.index(t).map_or(Tile::Forest, |i| self.tiles[i])
     }
 
+    /// Whether a walker can stand on tile `t`, in its middle: open ground, nothing on it there
+    /// (a post, a parapet, a fence's rail: `index_colliders`).
     pub fn walkable(&self, t: IVec2) -> bool {
-        self.get(t).walkable()
+        self.get(t).walkable() && !self.index(t).is_some_and(|i| self.crowded.get(i) == Some(&true))
     }
 
     pub fn walkable_at(&self, p: Vec2) -> bool {
@@ -694,67 +633,31 @@ impl Map {
         }
     }
 
-    /// How high (meters) the top of what blocks walking on tile `t` is at `p`: a house's roof, a
-    /// stack of crates, a wall or a rock (`Tile::top`); nothing stands on a tree, in water or a
-    /// chasm (infinitely high). Open ground blocks nothing (`None`).
-    pub fn solid_top(&self, t: IVec2, p: Vec2) -> Option<f32> {
-        let tile = self.get(t);
-        if tile.walkable() {
-            return None;
-        }
-        let ground = self.height_at(Map::center(t));
-        if let Some(&(_, high)) = self.crates.iter().find(|(at, _)| *at == t) {
-            return Some(ground + CRATE * high as f32);
-        }
-        if let Some(house) = self.houses.iter().find(|house| house.covers(t)) {
-            return Some(self.height_at(house.center()) + house.roof_at(p));
-        }
-        Some(match tile {
-            Tile::Wall | Tile::Rock => ground + tile.top(),
-            _ => f32::INFINITY,
-        })
-    }
-
-    /// What a body with its feet `feet` high stands on at `p`: the top of what's on the tile
-    /// there, if that's no more than `STEP_UP` over its feet, or else the ground; or, up at a
-    /// roof's height, its eaves reaching out over the ground (walked under, down there).
-    pub fn floor_at(&self, p: Vec2, feet: f32) -> f32 {
-        let floor = match self.solid_top(Map::tile_of(p), p) {
-            Some(top) if top <= feet + STEP_UP => top,
-            _ => self.height_at(p),
-        };
-        self.houses
-            .iter()
-            .filter(|house| house.roofed(p))
-            .map(|house| self.height_at(house.center()) + house.roof_at(p))
-            .filter(|&top| top <= feet + STEP_UP && top >= feet - STEP_UP)
-            .fold(floor, f32::max)
-    }
-
     /// `line_walkable` for a body with its feet `feet` high, on the ground or up in the air:
-    /// what blocks walking blocks it only below the top of it (`solid_top`), and over that it
-    /// walks or lands on it; where it ends up may be no higher over its feet than `CLIMB` lets
-    /// it step. A body already reaching into something (it came down beside it) may move out
-    /// of it, never further in.
+    /// water, chasms, trees and the forest block it at any height; anything else is a collider,
+    /// in its way only below its top (`colliders_block`), and stood on over it. Where it ends up
+    /// may be no higher over its feet than `CLIMB` lets it step, and its leading edge is kept
+    /// off ground rising sheer ahead (a terrace's face). A body already reaching into a blocked
+    /// tile may move out of it, never further in.
     pub fn line_walkable_at(&self, a: Vec2, b: Vec2, feet: f32) -> bool {
         let half = Vec2::splat(0.5 + NAV_RADIUS);
         let blocks = |t: IVec2| {
-            let c = Map::center(t);
-            let square = (c - Vec2::splat(0.5), c + Vec2::splat(0.5));
-            let over = self.solid_top(t, b.clamp(square.0, square.1)).is_none_or(|top| top <= feet + STEP_UP);
-            if over || !segment_hits_box(a, b, c - half, c + half) {
+            let tile = self.get(t);
+            if tile.walkable() || matches!(tile, Tile::Wall | Tile::Rock) {
                 return false;
             }
+            let c = Map::center(t);
+            if !segment_hits_box(a, b, c - half, c + half) {
+                return false;
+            }
+            let square = (c - Vec2::splat(0.5), c + Vec2::splat(0.5));
             let reach = |p: Vec2| p.distance(p.clamp(square.0, square.1));
-            let inside = (a - c).abs().cmple(half).all();
-            !(inside && reach(b) >= reach(a))
+            !(reach(a) < NAV_RADIUS && reach(b) >= reach(a))
         };
-        // Its leading edge, too, kept off ground rising sheer ahead: its body doesn't reach
-        // into a terrace's face.
         let length = (b - a).length();
         let ahead = b + (b - a).normalize_or_zero() * NAV_RADIUS;
         self.line_blocker_by(a, b, blocks).is_none()
-            && !self.barriers.iter().any(|barrier| barrier.blocks(a, b, feet))
+            && !self.colliders_block(a, b, feet)
             && self.floor_at(b, feet) - feet <= CLIMB * length + 1e-4
             && self.height_at(ahead) - feet <= CLIMB * (length + NAV_RADIUS) + 1e-4
     }
@@ -765,7 +668,7 @@ impl Map {
     /// Exact (segment against blocked tiles grown by the radius), not sampled, so every piece
     /// of a walkable line is walkable too: following a line never turns it unwalkable halfway.
     pub fn line_walkable(&self, a: Vec2, b: Vec2) -> bool {
-        self.line_blocker(a, b).is_none() && self.climbable(a, b)
+        self.line_blocker(a, b).is_none() && self.climbable(a, b) && !self.colliders_block(a, b, self.height_at(a))
     }
 
     /// A blocked tile that keeps a body from moving straight from `a` to `b` (`None`: nothing
@@ -948,7 +851,7 @@ impl Map {
                     blocker = Some(t);
                     false
                 }
-                None => self.climbable(pos, p),
+                None => self.climbable(pos, p) && !self.colliders_block(pos, p, self.height_at(pos)),
             }
         });
         // Nothing visible (we're hugging a wall, e.g. after a server teleport): go to our own
@@ -1134,7 +1037,7 @@ mod tests {
                 }
             }
             for (t, tile) in m.tiles() {
-                assert!(!tile.walkable() || seen.contains(&t), "{:?}: {t} ({tile:?}) can't be reached", m.id);
+                assert!(!m.walkable(t) || seen.contains(&t), "{:?}: {t} ({tile:?}) can't be reached", m.id);
             }
         }
     }
@@ -1261,7 +1164,7 @@ mod tests {
         for m in maps() {
             let half = Vec2::splat(0.5 + NAV_RADIUS);
             let brute = |a: Vec2, b: Vec2| {
-                m.tiles().all(|(t, tile)| tile.walkable() || !segment_hits_box(a, b, Map::center(t) - half, Map::center(t) + half))
+                m.tiles().all(|(t, _)| m.walkable(t) || !segment_hits_box(a, b, Map::center(t) - half, Map::center(t) + half))
             };
             let mut seed = 12345u64;
             let mut rand = |range: f32| {
@@ -1288,10 +1191,11 @@ mod tests {
         let m = MapId::Yard.map();
         let (middle, radius, top) = (Vec2::new(-9.5, 23.5), 3.5, 6.0);
         assert!((m.height_at(middle) - top).abs() < 1e-5, "the plateau's top");
-        // Up its sheer east side is no way; down it is.
-        let (foot, brink) = (middle + Vec2::X * (radius + 0.7), middle + Vec2::X * (radius - 0.2));
+        // Up its sheer east side is no way; down it is, hopping its parapet.
+        let (foot, brink) = (middle + Vec2::X * (radius + 0.7), middle + Vec2::X * (radius - 0.9));
         assert!(!m.line_walkable(foot, brink), "walked up a cliff");
-        assert!(m.line_walkable(brink, foot), "couldn't step down off it");
+        assert!(!m.line_walkable(brink, foot), "walked through the parapet");
+        assert!(m.line_walkable_at(brink, foot, top + 0.3), "couldn't hop down off it");
         // Up the stairs from the square onto the terrace, and on up the ramp onto the plateau, a
         // walker's step at a time.
         let mut p = Vec2::new(-9.5, 5.0);

@@ -124,7 +124,7 @@ const LANTERNS: &[Vec2] = &[
     Vec2::new(18.5, 2.5), Vec2::new(18.5, -1.5),
     Vec2::new(-18.5, 1.5),
     Vec2::new(-12.5, 8.5), Vec2::new(9.5, 8.5),
-    Vec2::new(2.5, -7.5), Vec2::new(5.5, -7.5),
+    Vec2::new(2.5, -6.5), Vec2::new(6.5, -6.5),
 ];
 
 /// The dummies: two in the square, one far down the lane, and one on each high place (the

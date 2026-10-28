@@ -141,6 +141,12 @@ pub fn move_player_boosted(
     } else {
         motion.rise -= GRAVITY * TICK_DT;
         motion.height += motion.rise * TICK_DT;
+        // Its head meeting the underside of something over it (eaves): no higher.
+        let ceiling = map.ceiling_at(next, feet);
+        if motion.height > ceiling {
+            motion.height = ceiling.max(under);
+            motion.rise = motion.rise.min(0.0);
+        }
         if motion.height <= under {
             motion.height = under;
             motion.rise = 0.0;

@@ -437,19 +437,19 @@ mod tests {
         let yard = crate::map::MapId::Yard.map();
         let house = yard.houses.iter().find(|house| house.covers(IVec2::new(13, 3))).unwrap();
         let ridge = yard.height_at(house.center()) + house.roof_at(house.center());
-        // From the ground beside the stack, hopping up it a crate at a time, onto the eaves and
-        // up the roof's slope to the ridge.
+        // From the lane beside the stack, hopping up it a crate at a time, onto the eaves and up
+        // the roof's slope to the ridge.
         let steps = [Vec2::new(15.5, 2.5), Vec2::new(14.5, 2.5), Vec2::new(13.5, 2.5), Vec2::new(13.5, 4.0), Vec2::new(13.5, house.center().y)];
-        let (at, height) = climb(Vec2::new(17.5, 2.5), &steps, true, 90);
+        let (at, height) = climb(Vec2::new(15.5, 1.2), &steps, true, 90);
         assert!(house.covers(Map::tile_of(at)), "never got onto the roof: at {at}, {height} m up");
         let under = yard.floor_at(at, height);
         assert!((under - ridge).abs() < 0.1, "not over the ridge: over {under} m, the ridge at {ridge} m");
         // Out along the ridge and down the slope to the eaves' edge, it's still up on the roof;
         // a step past them, it falls.
         let eaves = house.lo.as_vec2().y - crate::map::House::EAVES;
-        let (at, height) = climb(Vec2::new(17.5, 2.5), &[steps[0], steps[1], steps[2], steps[3], steps[4], Vec2::new(11.5, eaves + 0.3)], true, 90);
+        let (at, height) = climb(Vec2::new(15.5, 1.2), &[steps[0], steps[1], steps[2], steps[3], steps[4], Vec2::new(11.5, eaves + 0.3)], true, 90);
         assert!(at.y < house.lo.y as f32 && height > 2.0, "not out on the eaves: at {at}, {height} m up");
-        let (_, height) = climb(Vec2::new(17.5, 2.5), &[steps[0], steps[1], steps[2], steps[3], steps[4], Vec2::new(11.5, eaves - 1.0)], false, 90);
+        let (_, height) = climb(Vec2::new(15.5, 1.2), &[steps[0], steps[1], steps[2], steps[3], steps[4], Vec2::new(11.5, eaves - 1.0)], false, 90);
         assert!(height < 1e-3, "never fell off past the eaves: {height} m up");
         // Walking, never jumping, it's kept out of the house and stays on the ground.
         let (at, height) = climb(Vec2::new(12.0, 1.0), &[house.center()], false, 120);
@@ -475,6 +475,18 @@ mod tests {
         assert!(at.x < -18.3, "walked through the fence: {at}");
         let (at, _) = climb(Vec2::new(-20.0, 5.0), &[Vec2::new(-17.5, 5.0)], true, 120);
         assert!(at.x > -18.0, "didn't jump the fence: {at}");
+    }
+
+    #[test]
+    fn a_fence_is_stood_on_and_eaves_are_walked_under() {
+        let yard = crate::map::MapId::Yard.map();
+        // Hopping up onto the fence down the west house's west side, and stopping on its rail.
+        let (at, height) = climb(Vec2::new(-20.0, 5.0), &[Vec2::new(-18.0, 5.0)], true, 120);
+        let under = yard.floor_at(at, height);
+        assert!((under - crate::map::FENCE_TOP).abs() < 0.05, "not up on the fence: over {under} m at {at}");
+        // Along the west house's south wall, under its eaves, never touching them.
+        let (at, height) = climb(Vec2::new(-16.5, 2.75), &[Vec2::new(-12.5, 2.75)], false, 120);
+        assert!(at.x > -13.0 && height == 0.0, "the eaves stopped it: {at}, {height} m up");
     }
 
     #[test]
