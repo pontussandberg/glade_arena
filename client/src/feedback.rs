@@ -1,6 +1,6 @@
 //! Combat feedback: a health bar over every fighter with a cast bar under it while it winds up
 //! an attack, the health lost lingering on the bar a moment before it drains (gold, longer, and
-//! with the bar popping on a crit), a white flash and a damage number when one takes damage (a crit's bigger and
+//! with the bar popping on a crit), a faint flush and a damage number when one takes damage (a crit's bigger and
 //! golden), a green number when one is healed, and dead fighters disappearing until they
 //! respawn.
 
@@ -63,7 +63,7 @@ const CAST_BAR_HEIGHT: f32 = 6.0;
 const HP_PER_TICK: i32 = 25;
 /// The most marks a bar has.
 const MOST_TICKS: i32 = 12;
-const FLASH_SECONDS: f32 = 0.12;
+const FLASH_SECONDS: f32 = 0.08;
 /// Health just lost stays on the bar as a pale chunk: white at the hit, paling to `SUN` over
 /// `TRAIL_HOLD` seconds (each new hit starts it over, so a combo adds up), then draining to the
 /// health left, closing `TRAIL_DRAIN` of the gap a second (eased: fast, then settling).
@@ -74,8 +74,9 @@ const TRAIL_DRAIN: f32 = 10.0;
 const CRIT_TRAIL_HOLD: f32 = 0.6;
 const CRIT_BAR_POP: f32 = 0.15;
 const CRIT_BAR_POP_SECONDS: f32 = 0.15;
-/// How bright the flash is (emissive white on the fighter's own material).
-const FLASH_GLOW: f32 = 3.0;
+/// How bright the flash is (emissive on the fighter's own material): a faint flush over the
+/// figure, not a white-out; the flinch of the body (`rig::HitSquash`) carries the hit.
+const FLASH_GLOW: f32 = 0.35;
 /// Damage under this doesn't flinch the body (`rig::HitSquash`) or spark: a damage-over-time
 /// pulse flashes and counts, but only a real blow rocks the figure.
 const SQUASH_DAMAGE: i32 = 4;
@@ -127,7 +128,7 @@ struct CritAt(f32);
 #[derive(Component)]
 struct ShownHealth(i32);
 
-/// A fighter flashing white after a hit, until `until`.
+/// A fighter flushed bright after a hit, until `until`.
 #[derive(Component)]
 struct HitFlash {
     until: f32,
@@ -397,7 +398,7 @@ fn update_trail(trail: &mut HealthTrail, health: f32, crit_at: Option<f32>, now:
     }
 }
 
-/// Flash white when health drops. `Health` is server-authoritative, so this shows confirmed
+/// Flush bright when health drops. `Health` is server-authoritative, so this shows confirmed
 /// hits only, about one round trip after the swing or shot. The fighter's material is its own
 /// (one per player), so the flash brightens it in place. Also run when a fighter first gets its
 /// body, to note its health then: it arrives before the body does, so waiting for the next
