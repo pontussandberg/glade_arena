@@ -248,11 +248,12 @@ struct Sent {
     walk: Vec2,
     aim: Vec2,
     climb: f32,
-    /// When the attack, walk or aim was last sent (`Time<Real>`), to send changes at most once a
-    /// tick.
+    /// When the attack, walk, aim or jump was last sent (`Time<Real>`), to send changes at most
+    /// once a tick (Space held asks for a jump every frame).
     attack_at: Duration,
     walk_at: Duration,
     aim_at: Duration,
+    jump_at: Duration,
 }
 
 /// Sends the server what changed in `DesiredInput`: a new destination, a stop, walking keys, an
@@ -330,8 +331,9 @@ fn send_commands(
         desired.0.casts = default();
         walk_when_ordered.0 = input.move_to;
     }
-    if input.jump {
+    if input.jump && due(sent.jump_at) {
         send(PlayerCommand::Jump);
+        sent.jump_at = now;
         desired.0.jump = false;
     }
 }

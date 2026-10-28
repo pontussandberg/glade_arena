@@ -197,11 +197,9 @@ fn draw_hitboxes_3d(
             let ridge = if roof.along_x { [Vec2::new(lo.x, roof.ridge), Vec2::new(hi.x, roof.ridge)] } else { [Vec2::new(roof.ridge, lo.y), Vec2::new(roof.ridge, hi.y)] };
             gizmos.line(top(ridge[0]), top(ridge[1]), color);
             // Up from the gable ends' eaves to the ridge.
-            for (end, eaves) in [(ridge[0], [corners[0], corners[3]]), (ridge[1], [corners[1], corners[2]])] {
-                for e in eaves {
-                    let e = if roof.along_x { Vec2::new(end.x, e.y) } else { Vec2::new(e.x, end.y) };
-                    gizmos.line(top(e), top(end), color);
-                }
+            for p in corners {
+                let end = if roof.along_x { Vec2::new(p.x, roof.ridge) } else { Vec2::new(roof.ridge, p.y) };
+                gizmos.line(top(p), top(end), color);
             }
         }
     }

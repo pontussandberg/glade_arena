@@ -3,11 +3,10 @@
 
 use super::*;
 
-use arena_shared::map::{CRATE, FENCE_TOP, House, Map, PARAPET_DROP, PARAPET_HEIGHT, PARAPET_IN, PARAPET_THICK, TORCH_POST, Tile, WELL_HEIGHT, WELL_RING};
+use arena_shared::map::{COUNTER_TOP, CRATE, FENCE_TOP, House, Map, PARAPET_HEIGHT, ROCK_LIFT, ROCK_RADIUS, SIDES, Tile, WELL_HEIGHT, WELL_RING, WELL_ROOF, boulder};
 use bevy::color::Mix;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
 use bevy::pbr::{DistanceFog, FogFalloff};
-use bevy::platform::collections::HashMap;
 use super::palette::*;
 
 use crate::rooms::CurrentMap;
@@ -207,7 +206,7 @@ fn build_arena(
     }
 
     let mut props = Props::new(theme, m.relief());
-    let wall_tops = props.walls(m, &mut rng);
+    props.walls(m, &mut rng);
     props.stall(m);
     props.houses(m, &mut rng);
     props.crates(m, &mut rng);
@@ -256,9 +255,8 @@ fn build_arena(
     let flame = meshes.add(faceted(Cone::new(0.16, 0.42).mesh().resolution(5).build()));
     let flame_mat = materials.add(glow(TORCH_FLAME, 8.0));
     for (i, &p) in m.torches.iter().enumerate() {
-        let base = wall_tops.get(&Map::tile_of(p)).copied().unwrap_or(0.0);
         // A standing torch is a brazier post, taller than anyone; one on a wall is a short stake.
-        let post_height = if base > 0.0 { 0.6 } else { TORCH_POST };
+        let (base, post_height) = m.torch_post(p);
         props.block(Vec3::new(0.14, post_height, 0.14), theme.bark, Transform::from_translation(to_world(p, base + post_height / 2.0)));
         commands
             .spawn((
@@ -300,9 +298,6 @@ impl SceneTiles {
     }
 }
 
-/// The four directions, in tiles.
-const SIDES: [IVec2; 4] = [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y];
-
 /// Water or a chasm: what bridges cross, and banks or cliffs drop into.
 fn is_gap(tile: Tile) -> bool {
     matches!(tile, Tile::Water | Tile::Ford | Tile::Chasm)
@@ -343,7 +338,7 @@ impl Props {
         Props {
             theme,
             ground,
-            rock: faceted(Sphere::new(arena_shared::map::ROCK_RADIUS).mesh().ico(0).unwrap()),
+            rock: faceted(Sphere::new(ROCK_RADIUS).mesh().ico(0).unwrap()),
             trunk: faceted(Cylinder::new(0.22, 1.2).mesh().resolution(5).build()),
             cones: [0, 1, 2].map(|k| faceted(Cone::new(1.5 - k as f32 * 0.35, 1.7).mesh().resolution(7).build())),
             flower: gem_mesh(0.14),
@@ -397,25 +392,18 @@ impl Props {
         self.out.expect("the arena has props")
     }
 
-    /// Ruined walls: stacked stone blocks of uneven height, some with a block on top. Returns the
-    /// top height per wall tile, so torches can stand on them.
-    pub(super) fn walls(&mut self, m: &Map, rng: &mut Lcg) -> HashMap<IVec2, f32> {
-        let mut tops = HashMap::default();
-        for (t, tile) in m.tiles() {
-            // The merchant's counter is their stall's (`stall`), and a house's walls are its
-            // (`houses`), not ruins.
-            if tile != Tile::Wall || m.counter.contains(&t) || m.houses.iter().any(|house| house.covers(t)) || m.crates.iter().any(|(at, _)| *at == t) {
-                continue;
-            }
+    /// Ruined walls (`Map::ruin_at`): stacked stone blocks of uneven height, some with a block on
+    /// top.
+    pub(super) fn walls(&mut self, m: &Map, rng: &mut Lcg) {
+        for (t, _) in m.tiles() {
+            // As high as its collider, the block on top of some square to it.
+            let Some(ruin) = m.ruin_at(t) else { continue };
             let c = Map::center(t);
-            // As high as its collider (`map::ruin`), the block on top of some square to it.
-            let ruin = arena_shared::map::ruin(t);
             let color = self.theme.wall.mix(&self.theme.stone, rng.range(0.0, 0.25));
             self.block(Vec3::new(1.0, ruin.height, 1.0), color, Transform::from_translation(to_world(c, ruin.height / 2.0)));
             if let Some((s, off)) = ruin.cap {
                 self.block(Vec3::splat(s), color, Transform::from_translation(to_world(c + off, ruin.height + s / 2.0)));
             }
-            tops.insert(t, ruin.top());
             // Rubble at the foot, below knee height, on dry ground only.
             for _ in 0..2 {
                 let p = c + Vec2::new(rng.range(-0.9, 0.9), rng.range(-0.9, 0.9));
@@ -424,7 +412,6 @@ impl Props {
                 }
             }
         }
-        tops
     }
 
     /// The village's houses (`Map::houses`): timber-framed, plastered walls on a stone footing,
@@ -456,8 +443,7 @@ impl Props {
             }
             // The roof: two slabs leaning to the ridge, overhanging; the gables stepped up under
             // them; a chimney at one end.
-            let pitch = House::PITCH;
-            let rise = width / 2.0 * pitch.tan();
+            let (pitch, rise) = (House::SLOPE.atan(), house.rise());
             let slope = (width / 2.0 + House::EAVES) / pitch.cos();
             for side in [-1.0, 1.0] {
                 // Rolled about the slab's own length (the house's long side), its outer edge down.
@@ -474,7 +460,7 @@ impl Props {
                 self.block(Vec3::new(length - 0.2, h, w), plaster.darker(0.05), at(c, wall_height + h * (k as f32 + 0.5)));
             }
             let chimney = house.chimney();
-            self.block(Vec3::new(0.55, 1.3, 0.55), self.theme.stone, at(chimney, wall_height + rise - 0.2));
+            self.block(Vec3::new(House::CHIMNEY, 1.3, House::CHIMNEY), self.theme.stone, at(chimney, wall_height + rise + House::CHIMNEY_TOP - 1.3 / 2.0));
             // The door, out on its side; windows, lit, on the other sides.
             let door = house.door.as_vec2();
             let on_door_side = |d: Vec2| d.dot(door) > 0.5;
@@ -519,7 +505,6 @@ impl Props {
     /// from the lower ground up to the higher, set into the higher tile so its face is the
     /// edge, where walking stops; a drop of a step or more gets a battlement's worth over it.
     pub(super) fn retaining(&mut self, m: &Map, rng: &mut Lcg) {
-        let (any, step) = (0.05, PARAPET_DROP);
         for (t, tile) in m.tiles() {
             if tile == Tile::Forest {
                 continue;
@@ -529,7 +514,7 @@ impl Props {
             for d in SIDES {
                 let there = Map::center(t + d);
                 let drop = here - m.height_at(there);
-                if drop < any || m.scene_tile(t + d) == Tile::Forest {
+                if drop < 0.05 || m.scene_tile(t + d) == Tile::Forest {
                     continue;
                 }
                 // The wall stands just inside the side's edge, its foot on the ground past it.
@@ -539,16 +524,13 @@ impl Props {
                 let color = self.theme.stone.mix(&self.theme.wall, rng.range(0.0, 0.4));
                 let size = if d.x == 0 { Vec3::new(1.02, height, 0.3) } else { Vec3::new(0.3, height, 1.02) };
                 // Placed as if the ground were flat here: the block's own height is absolute.
-                let t = Transform::from_translation(to_world(edge, foot + height / 2.0 - (self.ground)(edge)));
-                self.block(size, color, t);
-                if drop < step {
-                    continue;
-                }
-                // A low parapet along the top.
-                let parapet = if d.x == 0 { Vec3::new(1.02, PARAPET_HEIGHT, PARAPET_THICK) } else { Vec3::new(PARAPET_THICK, PARAPET_HEIGHT, 1.02) };
-                let on = c + d.as_vec2() * (0.5 - PARAPET_IN);
-                let t = Transform::from_translation(to_world(on, here + PARAPET_HEIGHT / 2.0 - (self.ground)(on)));
-                self.block(parapet, color.darker(0.05), t);
+                let face = Transform::from_translation(to_world(edge, foot + height / 2.0 - (self.ground)(edge)));
+                self.block(size, color, face);
+                // A low parapet along the top (`Map::parapet`), a hair longer so they meet.
+                let Some(parapet) = m.parapet(t, d) else { continue };
+                let (on, size) = ((parapet.lo + parapet.hi) / 2.0, parapet.hi - parapet.lo + d.as_vec2().perp().abs() * 0.02);
+                let top = Transform::from_translation(to_world(on, parapet.bottom + PARAPET_HEIGHT / 2.0 - (self.ground)(on)));
+                self.block(Vec3::new(size.x, PARAPET_HEIGHT, size.y), color.darker(0.05), top);
             }
         }
     }
@@ -587,11 +569,11 @@ impl Props {
         }
         self.add(Shape::Puddle, self.theme.pond.darker(0.3), Transform::from_translation(to_world(c, 0.2)).with_scale(Vec3::new(0.5, 1.0, 0.5)));
         for s in [-1.0, 1.0] {
-            self.block(Vec3::new(0.14, 2.2, 0.14), self.theme.bark, Transform::from_translation(to_world(c + Vec2::X * s * 0.75, 1.1)));
+            self.block(Vec3::new(0.14, WELL_ROOF.1, 0.14), self.theme.bark, Transform::from_translation(to_world(c + Vec2::X * s * 0.75, WELL_ROOF.1 / 2.0)));
         }
         self.block(Vec3::new(1.7, 0.1, 0.1), self.theme.bark, Transform::from_translation(to_world(c, 1.65)));
         for side in [-1.0, 1.0] {
-            let t = Transform::from_translation(to_world(c + Vec2::Y * side * 0.4, 2.45)).with_rotation(Quat::from_rotation_x(-side * 0.6));
+            let t = Transform::from_translation(to_world(c + Vec2::Y * side * 0.4, (WELL_ROOF.1 + WELL_ROOF.2) / 2.0)).with_rotation(Quat::from_rotation_x(-side * 0.6));
             self.block(Vec3::new(2.0, 0.1, 1.0), ROOF.darker(0.1), t);
         }
         self.add(Shape::Ball, self.theme.bark.darker(0.2), Transform::from_translation(to_world(c, 1.2)).with_scale(Vec3::new(0.16, 0.2, 0.16)));
@@ -632,7 +614,7 @@ impl Props {
 
         // The counter, its top overhanging, a striped cloth down its front.
         self.block(Vec3::new(len, 1.0, 0.85), wood.darker(0.1), at(c, 0.5));
-        self.block(Vec3::new(len + 0.25, 0.08, 1.0), plank, at(c, 1.04));
+        self.block(Vec3::new(len + 0.25, 0.08, 1.0), plank, at(c, COUNTER_TOP - 0.04));
         let stripes = 7;
         for i in 0..stripes {
             let x = -half + 0.1 + (len - 0.2) * (i as f32 + 0.5) / stripes as f32;
@@ -841,8 +823,8 @@ impl Props {
     /// A boulder on tile `t`, as big as its collider (`map::boulder`), only turned about the up
     /// axis so it stays in it.
     fn boulder(&mut self, t: IVec2, c: Vec2) {
-        let (size, yaw) = arena_shared::map::boulder(t);
-        let t = Transform::from_translation(to_world(c, arena_shared::map::ROCK_LIFT * size.y))
+        let (size, yaw) = boulder(t);
+        let t = Transform::from_translation(to_world(c, ROCK_LIFT * size.y))
             .with_rotation(Quat::from_rotation_y(yaw))
             .with_scale(size);
         self.add(Shape::Rock, self.theme.slate, t);

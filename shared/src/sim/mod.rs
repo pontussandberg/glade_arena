@@ -436,7 +436,7 @@ mod tests {
     fn up_the_crates_onto_a_roof_and_up_it_but_not_through_its_walls() {
         let yard = crate::map::MapId::Yard.map();
         let house = yard.houses.iter().find(|house| house.covers(IVec2::new(13, 3))).unwrap();
-        let ridge = yard.height_at(house.center()) + house.roof_at(house.center());
+        let ridge = yard.height_at(house.center()) + house.ridge();
         // From the lane beside the stack, hopping up it a crate at a time, onto the eaves and up
         // the roof's slope to the ridge.
         let steps = [Vec2::new(15.5, 2.2), Vec2::new(14.5, 2.2), Vec2::new(13.5, 2.2), Vec2::new(13.5, 4.0), Vec2::new(13.5, house.center().y)];

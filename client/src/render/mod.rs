@@ -164,8 +164,8 @@ pub(crate) struct Visuals {
     spear_shadow: Handle<Mesh>,
     /// A bit of a spear's impact: its flash, a splinter.
     impact: Handle<Mesh>,
-    /// Per owner (`None` for looks that are the same for everyone: all but bodies, so a hit
-    /// flashes just that fighter) and look.
+    /// Per owner (`None` for looks that are the same for everyone: all but bodies, so a tint
+    /// or a chill takes just that fighter) and look.
     materials: HashMap<(Option<PeerId>, Look), Handle<StandardMaterial>>,
 }
 

@@ -159,15 +159,10 @@ fn smooth(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// How far inside a box `p` is (meters; negative outside).
-fn inside(p: Vec2, lo: Vec2, hi: Vec2) -> f32 {
-    (p.x - lo.x).min(hi.x - p.x).min(p.y - lo.y).min(hi.y - p.y)
-}
-
-/// A flat top `height` high over `inside` (meters inside its edge), sheer at the edge itself:
-/// every box is on tile edges, so the drop is where the ground tiles and stone faces are drawn.
-fn ledge(inside: f32, height: f32) -> f32 {
-    if inside >= 0.0 { height } else { 0.0 }
+/// A flat top `height` high over the box `lo` to `hi`, sheer at its edge: every box is on tile
+/// edges, so the drop is where the ground tiles and stone faces are drawn.
+fn level(p: Vec2, (lo, hi): (Vec2, Vec2), height: f32) -> f32 {
+    if p.cmpge(lo).all() && p.cmple(hi).all() { height } else { 0.0 }
 }
 
 /// A ramp rising to `height` along `along` (0 at its foot, 1 at the top), `across` from its
@@ -180,22 +175,22 @@ fn ramp(along: f32, across: f32, height: f32) -> f32 {
 fn relief(p: Vec2) -> f32 {
     let mut h: f32 = 0.0;
     // The south terrace, the inn's, with its stair up from the square's south lane.
-    let (slo, shi) = SOUTH;
-    h = h.max(ledge(inside(p, slo, shi), SOUTH_TOP));
+    let shi = SOUTH.1;
+    h = h.max(level(p, SOUTH, SOUTH_TOP));
     if p.y > shi.y {
         h = h.max(ramp(((shi.y + SOUTH_TOP * RAMP_RUN) - p.y) / (SOUTH_TOP * RAMP_RUN), p.x - SOUTH_STAIR, SOUTH_TOP));
     }
     // The terrace, with its two stairs down the south face.
     let (lo, hi) = TERRACE;
-    h = h.max(ledge(inside(p, lo, hi), TERRACE_TOP));
+    h = h.max(level(p, TERRACE, TERRACE_TOP));
     for stair in STAIRS {
         if p.y < lo.y {
             h = h.max(ramp((p.y - (lo.y - TERRACE_TOP * RAMP_RUN)) / (TERRACE_TOP * RAMP_RUN), p.x - stair, TERRACE_TOP));
         }
     }
     // The plateau behind it, its ramp up from the terrace.
-    let (plo, phi) = PLATEAU;
-    h = h.max(ledge(inside(p, plo, phi), PLATEAU_TOP));
+    let plo = PLATEAU.0;
+    h = h.max(level(p, PLATEAU, PLATEAU_TOP));
     let run = (PLATEAU_TOP - TERRACE_TOP) * RAMP_RUN;
     let foot = plo.y - run;
     // Up from under the west stair's head, in line with it.
@@ -210,15 +205,15 @@ fn relief(p: Vec2) -> f32 {
     // The watchtower: its top, and the switchback round its south and east sides, each a
     // ramp's width out from the tower.
     let (tlo, thi) = TOWER;
-    h = h.max(ledge(inside(p, tlo, thi), TOWER_TOP));
+    h = h.max(level(p, TOWER, TOWER_TOP));
     let width = 2.0 * RAMP_HALF;
     // The landing at the south-east corner is as high as the second leg, along the east side's
     // south half, leaves to climb.
     let landing = TOWER_TOP - width / RAMP_RUN;
     // First leg: along the south side, west to east, from the ground up to the landing.
-    if p.y >= tlo.y - width && p.y <= tlo.y && p.x <= thi.x + width {
+    if p.x <= thi.x + width {
         let foot = thi.x - landing * RAMP_RUN;
-        h = h.max(landing * ((p.x - foot) / (landing * RAMP_RUN)).clamp(0.0, 1.0));
+        h = h.max(ramp((p.x - foot) / (landing * RAMP_RUN), p.y - (tlo.y - RAMP_HALF), landing));
     }
     // Second leg: north from the landing along the east side, up to the top, then level beside
     // the tower's north half, onto it.

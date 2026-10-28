@@ -253,7 +253,7 @@ impl Hanging {
     }
 }
 
-/// Hangs a class's cloth on `fighter`, in its own `material` (so it flashes and chills with it).
+/// Hangs a class's cloth on `fighter`, in its own `material` (so it's tinted and chills with it).
 pub(crate) fn dress(commands: &mut Commands, fighter: Entity, (legs, knees, arm): ([Entity; 2], [Entity; 2], Entity), material: &Handle<StandardMaterial>, wardrobe: &WardrobeAssets) {
     let mut hangings = Vec::new();
     for drape in &wardrobe.drapes {

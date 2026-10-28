@@ -100,12 +100,12 @@ pub(super) fn show_marks(
             continue;
         }
         blade.shown = swing.tick;
-        // The ground breaks over its hitbox at once, as the hit is dealt (`strike_ground`): it
-        // shows where the strike hit, cut short or not.
-        blade.striking = true;
         let dir = swing.dir.normalize_or(Vec2::X);
         let feet = crate::render::shown_height(map.map(), motion, predicted, pos.0);
-        let lane = class.def().attack.lane_grown(swing.empowered, swing.grown).and_then(|(near, far, width)| Some((struck_stretch(map.map(), pos.0, dir, feet, near, far)?, width)));
+        let lane = class.def().attack.lane_grown(swing.empowered, swing.grown).and_then(|(near, far, width)| struck_stretch(map.map(), pos.0, dir, feet, near, far).map(|stretch| (stretch, width)));
+        // The ground breaks over its hitbox at once, as the hit is dealt (`strike_ground`): it
+        // shows where the strike hit, cut short or not.
+        (blade.striking, blade.struck) = (true, lane.map(|(stretch, _)| stretch));
         let mark = match lane {
             Some(([(near, low), (far, high)], _)) => Mark { started: now, from: to_world(pos.0 + dir * near, low + MARK_HEIGHT), to: to_world(pos.0 + dir * far, high + MARK_HEIGHT) },
             None => {

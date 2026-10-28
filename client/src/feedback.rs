@@ -77,7 +77,7 @@ const CRIT_BAR_POP_SECONDS: f32 = 0.15;
 const SQUASH_DAMAGE: i32 = 4;
 
 /// Damage numbers: text size in pixels, from the smallest blow's up to the size of one of
-/// `NUMBER_FULL_DAMAGE` or more (a crit's bigger again by `CRIT_NUMBER_GROWTH`, and popping in
+/// `NUMBER_FULL_DAMAGE` or more (`number_scale`; a crit's bigger again by `CRIT_NUMBER_GROWTH`, and popping in
 /// bigger still by `CRIT_POP`, settling over the first `CRIT_POP_PART` of its life), how long
 /// one shows (fading out over the last `NUMBER_FADE_PART`), and how far apart numbers landing
 /// together spread sideways. Each is thrown up off the health bar (`NUMBER_THROW`, pixels a
@@ -99,10 +99,12 @@ const NUMBER_THROW: f32 = 290.0;
 const NUMBER_TILT: (f32, f32) = (0.05, 0.1);
 const NUMBER_GRAVITY: f32 = 800.0;
 
-/// How big (pixels) a number for `amount` is, a crit's or not.
-fn number_size(amount: i32, crit: bool) -> f32 {
+/// How big a number for `amount` is, as a share of the biggest (`NUMBER_SIZE`): its text is laid
+/// out at that size and scaled down, so there are only ever a couple of font sizes (each one
+/// costs a font atlas of its own).
+fn number_scale(amount: i32) -> f32 {
     let heft = (amount as f32 / NUMBER_FULL_DAMAGE).clamp(0.0, 1.0).powf(0.7);
-    (NUMBER_SIZE.0 + (NUMBER_SIZE.1 - NUMBER_SIZE.0) * heft) * if crit { CRIT_NUMBER_GROWTH } else { 1.0 }
+    (NUMBER_SIZE.0 + (NUMBER_SIZE.1 - NUMBER_SIZE.0) * heft) / NUMBER_SIZE.1
 }
 
 /// A fighter's bars: the health bar (this entity) and its parts.
@@ -148,8 +150,10 @@ struct DamageNumber {
     crit: bool,
     /// Sideways from the bar's center, in pixels.
     dx: f32,
-    /// How far off straight up it's thrown (radians, + to the right).
-    tilt: f32,
+    /// How fast it's thrown (pixels a second, right and up), a little off straight up.
+    throw: Vec2,
+    /// How big it's drawn, as a share of its text's size (`number_scale`).
+    scale: f32,
     /// For plain damage, how much it shows, for more landing on it (`NUMBER_MERGE_SECONDS`).
     merges: Option<i32>,
 }
@@ -403,9 +407,8 @@ fn update_trail(trail: &mut HealthTrail, health: f32, crit_at: Option<f32>, now:
 
 /// A hit when health drops: the camera stirred and a thud for a blow we take, a slap for one
 /// landing near us, the body flinching. `Health` is server-authoritative, so this shows
-/// confirmed hits only, about one round trip after the swing or shot. Also run when a fighter
-/// first gets its body, to note its health then: it arrives before the body does, so waiting
-/// for the next change would spend the first hit on noting it.
+/// confirmed hits only, about one round trip after the swing or shot. A fighter's health is only
+/// noted when it's first seen, so the first hit isn't spent on noting it.
 fn react_to_hits(
     mut commands: Commands,
     time: Res<Time>,
@@ -414,7 +417,7 @@ fn react_to_hits(
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     mut players: Query<
         (Entity, &Health, &Pos, Option<&mut ShownHealth>, Has<Me>),
-        Or<(Changed<Health>, Added<MeshMaterial3d<StandardMaterial>>)>,
+        Changed<Health>,
     >,
     // When a Hit and a Hurt last sounded.
     mut heard: Local<(f32, f32)>,
@@ -476,7 +479,7 @@ fn spawn_damage_numbers(
     mut shake: ResMut<crate::camera::Shake>,
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     mut players: Query<(Entity, &RecentHits, &Pos, Option<&mut ShownHits>, Has<Me>), Changed<RecentHits>>,
-    mut numbers: Query<(&mut DamageNumber, &mut Text, &mut TextFont)>,
+    mut numbers: Query<(&mut DamageNumber, &mut Text)>,
     mut chimed: Local<f32>,
 ) {
     let now = time.elapsed_secs();
@@ -490,13 +493,13 @@ fn spawn_damage_numbers(
         let new: Vec<_> = recent.0.iter().filter(|hit| hit.seq > last).copied().collect();
         let plain: i32 = new.iter().filter(|hit| hit.kind == HitKind::Damage).map(|hit| hit.amount).sum();
         let merged = plain > 0
-            && numbers.iter_mut().filter(|(n, _, _)| n.player == player && n.merges.is_some() && now - n.born < NUMBER_MERGE_SECONDS).last().is_some_and(|(mut number, mut text, mut font)| {
+            && numbers.iter_mut().filter(|(n, _)| n.player == player && n.merges.is_some() && now - n.born < NUMBER_MERGE_SECONDS).last().is_some_and(|(mut number, mut text)| {
                 let total = number.merges.unwrap_or(0) + plain;
                 number.merges = Some(total);
                 // Kept up a moment longer, growing with what it adds up to.
                 number.lasts += now - number.born;
                 text.0 = total.to_string();
-                font.font_size = FontSize::Px(number_size(total, false));
+                number.scale = number_scale(total);
                 true
             });
         let mut plain_shown = merged;
@@ -514,7 +517,7 @@ fn spawn_damage_numbers(
                 let near = me.single().map_or(1.0, |me| crate::audio::earshot(pos.0.distance(me.0), 24.0));
                 sounds.push(crate::audio::Sfx::Crit, 0.4 + 0.5 * near);
                 // A nudge of shake for a crit landing on someone else (ours, nearly always,
-                // when it's this close); a crit on us already shakes through flash_on_hit.
+                // when it's this close); a crit on us already shakes through react_to_hits.
                 if !is_me {
                     shake.add(0.045 + 0.055 * near);
                 }
@@ -525,7 +528,6 @@ fn spawn_damage_numbers(
                 *chimed = now;
                 sounds.push(crate::audio::Sfx::Heal, 0.5);
             }
-            let size = number_size(hit.amount, crit);
             let (text, color) = match (hit.kind, is_me) {
                 (HitKind::Heal, _) => (format!("+{}", hit.amount), palette::HEAL),
                 (HitKind::Crit, _) => (format!("{}!", hit.amount), palette::TORCH_FLAME),
@@ -533,15 +535,16 @@ fn spawn_damage_numbers(
                 (HitKind::Damage, false) => (hit.amount.to_string(), palette::SUN),
             };
             // A little to one side of straight up, which and how far picked from the hit.
-            let r = |k: u32| (hit.seq.wrapping_mul(2_654_435_761).wrapping_add(k.wrapping_mul(40_503)).rotate_left(13).wrapping_mul(2_246_822_519) >> 8) as f32 / (1u32 << 24) as f32;
+            let r = |k: u32| crate::swish::noise(hit.seq, k);
             let tilt = (NUMBER_TILT.0 + (NUMBER_TILT.1 - NUMBER_TILT.0) * r(1)) * if r(2) < 0.5 { -1.0 } else { 1.0 };
+            let throw = Vec2::new(tilt.sin(), tilt.cos()) * NUMBER_THROW;
             // Alternate sides from the second on, so numbers landing together don't overlap.
             let side = if i % 2 == 0 { 1.0 } else { -1.0 };
             let lasts = if crit { CRIT_NUMBER_SECONDS } else { NUMBER_SECONDS };
             commands.spawn((
-                DamageNumber { player, born: now, lasts, crit, dx: side * NUMBER_SPREAD * i.div_ceil(2) as f32, tilt, merges: (hit.kind == HitKind::Damage).then_some(hit.amount) },
+                DamageNumber { player, born: now, lasts, crit, dx: side * NUMBER_SPREAD * i.div_ceil(2) as f32, throw, scale: number_scale(hit.amount), merges: (hit.kind == HitKind::Damage).then_some(hit.amount) },
                 ChildOf(*world_ui),
-                ui_text(text, size, color),
+                ui_text(text, NUMBER_SIZE.1 * if crit { CRIT_NUMBER_GROWTH } else { 1.0 }, color),
                 TextShadow { offset: Vec2::splat(2.0), color: palette::ui::PANEL },
                 Node { position_type: PositionType::Absolute, ..default() },
                 GlobalZIndex(5),
@@ -552,8 +555,9 @@ fn spawn_damage_numbers(
 }
 
 /// Damage numbers follow their fighter's health bar, thrown up off it a little to one side,
-/// slowing and falling back as they fade out; a crit pops in big and settles. The rise and pop are `UiTransform`s, which don't make Bevy lay
-/// out the UI again, and like `place_bars` only what changed is written.
+/// slowing and falling back as they fade out; a crit pops in big and settles. The throw, the
+/// size and the pop are `UiTransform`s, which don't make Bevy lay out the UI again, and like
+/// `place_bars` only what changed is written.
 fn float_damage_numbers(
     mut commands: Commands,
     time: Res<Time>,
@@ -573,16 +577,16 @@ fn float_damage_numbers(
         visibility.set_if_neq(shown(screen.is_some()));
         let Some(screen) = screen else { continue };
         let size = computed.size() * computed.inverse_scale_factor();
-        let (left, top) = (px(screen.x + info.dx - size.x / 2.0), px(screen.y - BAR_SIZE.y - size.y));
+        // Its bottom on the bar, as big as it's drawn (scaled about its middle).
+        let (left, top) = (px(screen.x + info.dx - size.x / 2.0), px(screen.y - BAR_SIZE.y - size.y * (1.0 + info.scale) / 2.0));
         if node.left != left || node.top != top {
             node.left = left;
             node.top = top;
         }
         // Thrown: up and a little aside, slowing, then falling.
-        let rise = NUMBER_THROW * info.tilt.cos() * age - NUMBER_GRAVITY * age * age / 2.0;
-        let aside = NUMBER_THROW * info.tilt.sin() * age;
+        let flown = info.throw * age - Vec2::Y * NUMBER_GRAVITY * age * age / 2.0;
         let pop = if info.crit { 1.0 + CRIT_POP * (1.0 - t / CRIT_POP_PART).max(0.0).powi(2) } else { 1.0 };
-        let next = UiTransform { translation: Val2::px(aside, -rise), scale: Vec2::splat(pop), ..default() };
+        let next = UiTransform { translation: Val2::px(flown.x, -flown.y), scale: Vec2::splat(info.scale * pop), ..default() };
         transform.set_if_neq(next);
         let alpha = ((1.0 - t) / NUMBER_FADE_PART).min(1.0);
         if color.0.alpha() != alpha {

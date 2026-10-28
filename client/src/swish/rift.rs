@@ -222,17 +222,15 @@ pub(super) struct Chunk {
 /// dealt: the hit area, shown, lying on the ground the blade meets along it (`struck_stretch`:
 /// up a slope or a step, only as far down one or over a drop as it reaches, none at all struck
 /// out over a drop).
-#[allow(clippy::type_complexity)]
 pub(super) fn strike_ground(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<SwishAssets>,
-    map: Res<crate::rooms::CurrentMap>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut fighters: Query<(Entity, &mut Blade, &LastSwing, &Pos, &ClassId, (&PlayerId, Option<&Team>), Option<&mut TornRifts>, (Option<&Motion>, Option<&crate::render::PredictedWalk>))>,
+    mut fighters: Query<(Entity, &mut Blade, &LastSwing, &Pos, &ClassId, (&PlayerId, Option<&Team>), Option<&mut TornRifts>)>,
 ) {
     let now = time.elapsed_secs();
-    for (entity, mut blade, swing, pos, class, (id, team), torn, (motion, predicted)) in &mut fighters {
+    for (entity, mut blade, swing, pos, class, (id, team), torn) in &mut fighters {
         if !std::mem::take(&mut blade.striking) {
             continue;
         }
@@ -260,11 +258,9 @@ pub(super) fn strike_ground(
         // The plain strike's break, and an empowered one's: the same, grown to its lane.
         let (Some((from, range, width)), Some((near_end, far_end, wide))) = (class.def().attack.lane(false), class.def().attack.lane_grown(swing.empowered, swing.grown)) else { continue };
         let dir = swing.dir.normalize_or(Vec2::X);
-        let feet = crate::render::shown_height(map.map(), motion, predicted, pos.0);
-        let lane = far_end - near_end;
-        let Some([(near_end, near_ground), (far_end, far_ground)]) = struck_stretch(map.map(), pos.0, dir, feet, near_end, far_end) else { continue };
         // Its chunks as big as the whole lane's, as many as the stretch it meets has.
-        let (big, kept) = (lane / (range - from), (far_end - near_end) / lane);
+        let big = (far_end - near_end) / (range - from);
+        let Some([(near_end, near_ground), (far_end, far_ground)]) = blade.struck.take() else { continue };
         let (grown, grown_across) = ((far_end - near_end) / (range - from), wide / width);
         // Drawn as long as its rift is open, if it tears one.
         let life = class.def().attack.rift.map_or(RIFT_LIFE, |rift| {
@@ -305,8 +301,7 @@ pub(super) fn strike_ground(
         ));
         // Earth thrown up all over it, out to either side.
         let side = turn * Vec3::Z;
-        // As many as the plain strike throws, each grown.
-        let count = (length * kept * CHUNKS_PER_METER).round() as u32;
+        let count = ((far_end - near_end) / big * CHUNKS_PER_METER).round() as u32;
         for i in 0..count {
             let r = |k: u32| noise(seed, 1000 + i * 8 + k);
             let across = (r(1) - 0.5) * wide;

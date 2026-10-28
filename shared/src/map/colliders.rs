@@ -3,11 +3,12 @@
 //! (`build`) and listed by the tiles they're near, so a move only looks at what's around it.
 //! A box stops a body from the side up to its top, holds it up from above, and lets it under if
 //! the body fits beneath (`Map::colliders_block`, `Map::floor_at`, `Map::ceiling_at`). The scene
-//! draws each from the same numbers (`ruin`, `boulder`), so what's drawn is what's hit.
+//! draws each from the same numbers (`Map::ruin_at`, `boulder`, `Map::parapet`,
+//! `Map::torch_post`, the `House` and well constants), so what's drawn is what's hit.
 
 use bevy::math::{IVec2, Vec2, Vec3};
 
-use super::{CRATE, FENCE_TOP, House, Map, NAV_RADIUS, PARAPET_DROP, PARAPET_HEIGHT, PARAPET_IN, PARAPET_THICK, STEP_UP, TORCH_POST, Tile};
+use super::{CRATE, FENCE_TOP, House, Map, NAV_RADIUS, PARAPET_DROP, PARAPET_HEIGHT, PARAPET_IN, PARAPET_THICK, SIDES, STEP_UP, TORCH_POST, TORCH_STAKE, Tile};
 use crate::config::BODY_HEIGHT;
 
 /// A box standing in the way (on the gameplay plane, `lo` to `hi`; heights in meters), or a
@@ -32,8 +33,9 @@ pub struct Roof {
 }
 
 impl Collider {
-    fn block(lo: Vec2, hi: Vec2, bottom: f32, top: f32) -> Collider {
-        Collider { lo: lo.min(hi), hi: lo.max(hi), bottom, top, roof: None }
+    /// A plain box, from `lo` to `hi` (each the lesser and greater corner).
+    pub(super) fn block(lo: Vec2, hi: Vec2, bottom: f32, top: f32) -> Collider {
+        Collider { lo, hi, bottom, top, roof: None }
     }
 
     /// How high its top is over `p`.
@@ -49,14 +51,20 @@ impl Collider {
         p.distance(p.clamp(self.lo, self.hi))
     }
 
+    /// Whether it stands in the way of a body with its feet `feet` high near `p`: it isn't under
+    /// the body (its top no more than `STEP_UP` over the feet) nor over its head (its bottom no
+    /// lower than `BODY_HEIGHT` over them).
+    fn in_the_way(&self, p: Vec2, feet: f32) -> bool {
+        self.bottom < feet + BODY_HEIGHT && self.top_at(p.clamp(self.lo, self.hi)) > feet + STEP_UP
+    }
+
     /// Whether it keeps a body with its feet `feet` high from moving straight from `a` to `b`:
-    /// the move comes within the body's reach of it, it isn't under the body (its top no more
-    /// than `STEP_UP` over the feet) nor over its head (its bottom no lower than `BODY_HEIGHT`
-    /// over them), and the body isn't already reaching into it and getting no closer (it came
-    /// down beside it: it may always move off).
-    fn blocks(&self, a: Vec2, b: Vec2, feet: f32) -> bool {
+    /// it's in the way there (`in_the_way`), the move comes within the body's reach of it, and
+    /// the body isn't already reaching into it and getting no closer (it came down beside it:
+    /// it may always move off).
+    pub(super) fn blocks(&self, a: Vec2, b: Vec2, feet: f32) -> bool {
         let grown = Vec2::splat(NAV_RADIUS);
-        if self.bottom >= feet + BODY_HEIGHT || self.top_at(b.clamp(self.lo, self.hi)) <= feet + STEP_UP {
+        if !self.in_the_way(b, feet) {
             return false;
         }
         if !super::segment_hits_box(a, b, self.lo - grown, self.hi + grown) {
@@ -72,7 +80,7 @@ const SUPPORT: f32 = 0.15;
 
 /// A number in [0, 1) for tile `t`, the same everywhere (client and server, every run): a
 /// different one for each `salt`.
-pub fn jitter(t: IVec2, salt: u32) -> f32 {
+fn jitter(t: IVec2, salt: u32) -> f32 {
     let mut x = (t.x as u32).wrapping_mul(0x9E37_79B1) ^ (t.y as u32).wrapping_mul(0x85EB_CA77) ^ salt.wrapping_mul(0xC2B2_AE3D);
     x ^= x >> 15;
     x = x.wrapping_mul(0x2C1B_3C6D);
@@ -121,7 +129,7 @@ pub const ROCK_LIFT: f32 = 0.3;
 /// (half its size each way, how high its underside and top are).
 pub const WELL_RING: f32 = 0.77;
 pub const WELL_HEIGHT: f32 = 0.9;
-const WELL_ROOF: (Vec2, f32, f32) = (Vec2::new(1.0, 0.75), 2.2, 2.7);
+pub const WELL_ROOF: (Vec2, f32, f32) = (Vec2::new(1.0, 0.75), 2.2, 2.7);
 
 /// How high the merchant's counter's top is.
 pub const COUNTER_TOP: f32 = 1.08;
@@ -138,18 +146,18 @@ pub(super) fn build(map: &Map) -> Vec<Collider> {
         let g = ground(house.center());
         let (lo, hi) = (house.lo.as_vec2(), house.hi.as_vec2());
         out.push(Collider::block(lo, hi, g, g + House::WALLS));
-        let slope = House::PITCH.tan();
         let reach = if house.long_x() { Vec2::new(House::GABLE_EAVES, House::EAVES) } else { Vec2::new(House::EAVES, House::GABLE_EAVES) };
         let ridge = if house.long_x() { house.center().y } else { house.center().x };
         out.push(Collider {
             lo: lo - reach,
             hi: hi + reach,
-            bottom: g + House::WALLS - House::EAVES * slope - 0.05,
-            top: g + house.roof_at(house.center()),
-            roof: Some(Roof { along_x: house.long_x(), ridge, slope }),
+            bottom: g + House::WALLS - House::EAVES * House::SLOPE - 0.05,
+            top: g + house.ridge(),
+            roof: Some(Roof { along_x: house.long_x(), ridge, slope: House::SLOPE }),
         });
         let chimney = house.chimney();
-        out.push(Collider::block(chimney - Vec2::splat(0.28), chimney + Vec2::splat(0.28), g + House::WALLS, g + House::WALLS + house.rise() + 0.45));
+        let half = Vec2::splat(House::CHIMNEY / 2.0);
+        out.push(Collider::block(chimney - half, chimney + half, g + House::WALLS, g + House::WALLS + house.rise() + House::CHIMNEY_TOP));
     }
     for &(t, high) in &map.crates {
         let g = ground(Map::center(t));
@@ -165,23 +173,18 @@ pub(super) fn build(map: &Map) -> Vec<Collider> {
         let (half, under, top) = WELL_ROOF;
         out.push(Collider::block(well - half, well + half, g + under, g + top));
     }
-    let taken = |t: IVec2| {
-        map.houses.iter().any(|house| house.covers(t)) || map.crates.iter().any(|(at, _)| *at == t) || map.counter.contains(&t) || map.well.is_some_and(|well| Map::tile_of(well) == t)
-    };
     for (t, tile) in map.tiles() {
-        if taken(t) {
-            continue;
-        }
         let c = Map::center(t);
         let g = ground(c);
-        match tile {
-            Tile::Wall => {
-                let ruin = ruin(t);
-                out.push(tile_box(t, g, g + ruin.height));
-                if let Some((size, off)) = ruin.cap {
-                    out.push(Collider::block(c + off - Vec2::splat(size / 2.0), c + off + Vec2::splat(size / 2.0), g + ruin.height, g + ruin.height + size));
-                }
+        if let Some(ruin) = map.ruin_at(t) {
+            out.push(tile_box(t, g, g + ruin.height));
+            if let Some((size, off)) = ruin.cap {
+                out.push(Collider::block(c + off - Vec2::splat(size / 2.0), c + off + Vec2::splat(size / 2.0), g + ruin.height, g + ruin.height + size));
             }
+        }
+        match tile {
+            // The well's stones are its own.
+            Tile::Rock if map.well.is_some_and(|well| Map::tile_of(well) == t) => {}
             Tile::Rock => {
                 let (size, _) = boulder(t);
                 let half = Vec2::new(size.x, size.z) * ROCK_RADIUS * 0.85;
@@ -200,25 +203,11 @@ pub(super) fn build(map: &Map) -> Vec<Collider> {
             out.push(Collider::block(p.min(q) - Vec2::splat(0.08), p.max(q) + Vec2::splat(0.08), ground(p).min(ground(q)), top));
         }
     }
-    let sides = [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y];
-    for (t, tile) in map.tiles() {
-        if tile == Tile::Forest {
-            continue;
-        }
-        let c = Map::center(t);
-        let here = ground(c);
-        for d in sides {
-            if here - ground(Map::center(t + d)) < PARAPET_DROP || map.scene_tile(t + d) == Tile::Forest {
-                continue;
-            }
-            let mid = c + d.as_vec2() * (0.5 - PARAPET_IN);
-            let half = d.as_vec2().abs() * (PARAPET_THICK / 2.0) + d.as_vec2().perp().abs() * 0.5;
-            out.push(Collider::block(mid - half, mid + half, here, here + PARAPET_HEIGHT));
-        }
+    for (t, _) in map.tiles() {
+        out.extend(SIDES.into_iter().filter_map(|d| map.parapet(t, d)));
     }
     for &p in &map.torches {
-        let t = Map::tile_of(p);
-        let (base, post) = if map.get(t) == Tile::Wall && !taken(t) { (ruin(t).top(), 0.6) } else { (0.0, TORCH_POST) };
+        let (base, post) = map.torch_post(p);
         let g = ground(p) + base;
         out.push(Collider::block(p - Vec2::splat(0.07), p + Vec2::splat(0.07), g, g + post));
     }
@@ -226,20 +215,35 @@ pub(super) fn build(map: &Map) -> Vec<Collider> {
 }
 
 impl Map {
-    /// The colliders near the stretch from `lo` to `hi` (on the plane), each once.
-    fn colliders_near(&self, lo: Vec2, hi: Vec2) -> Vec<&Collider> {
-        let (a, b) = (Map::tile_of(lo), Map::tile_of(hi));
-        let mut found: Vec<u16> = Vec::new();
-        for y in a.y..=b.y {
-            for x in a.x..=b.x {
-                if let Some(i) = self.index(IVec2::new(x, y)) {
-                    found.extend(self.near.get(i).map_or(&[][..], |near| &near[..]));
-                }
-            }
+    /// The ruined wall on tile `t`, if there is one (`ruin`): a wall tile that isn't a house's,
+    /// a stack of crates or the merchant's counter.
+    pub fn ruin_at(&self, t: IVec2) -> Option<Ruin> {
+        let taken = self.houses.iter().any(|house| house.covers(t)) || self.crates.iter().any(|(at, _)| *at == t) || self.counter.contains(&t);
+        (self.get(t) == Tile::Wall && !taken).then(|| ruin(t))
+    }
+
+    /// How high over the ground at `p` a torch there stands its post, and how tall the post is:
+    /// a short stake on top of a ruin, a brazier's post taller than anyone on the ground.
+    pub fn torch_post(&self, p: Vec2) -> (f32, f32) {
+        self.ruin_at(Map::tile_of(p)).map_or((0.0, TORCH_POST), |ruin| (ruin.top(), TORCH_STAKE))
+    }
+
+    /// The parapet along side `d` (`SIDES`) of tile `t`, if the ground drops `PARAPET_DROP` or more
+    /// past it (but not into the forest): the side's length, on the high tile's edge.
+    pub fn parapet(&self, t: IVec2, d: IVec2) -> Option<Collider> {
+        let c = Map::center(t);
+        let here = self.height_at(c);
+        if self.get(t) == Tile::Forest || here - self.height_at(Map::center(t + d)) < PARAPET_DROP || self.scene_tile(t + d) == Tile::Forest {
+            return None;
         }
-        found.sort_unstable();
-        found.dedup();
-        found.into_iter().map(|i| &self.colliders[i as usize]).collect()
+        let mid = c + d.as_vec2() * (0.5 - PARAPET_IN);
+        let half = d.as_vec2().abs() * (PARAPET_THICK / 2.0) + d.as_vec2().perp().abs() * 0.5;
+        Some(Collider::block(mid - half, mid + half, here, here + PARAPET_HEIGHT))
+    }
+
+    /// The colliders near tile `t`: those reaching within a body's reach of it (`index_colliders`).
+    pub(super) fn colliders_on(&self, t: IVec2) -> impl Iterator<Item = &Collider> + '_ {
+        self.index(t).and_then(|i| self.near.get(i)).into_iter().flatten().map(|&i| &self.colliders[i as usize])
     }
 
     /// Lists each collider on the tiles it reaches onto, grown by a body's reach, and marks the
@@ -257,9 +261,7 @@ impl Map {
                     let Some(k) = self.index(t) else { continue };
                     near[k].push(i as u16);
                     let c = Map::center(t);
-                    let g = self.height_at(c);
-                    let on_ground = collider.bottom < g + BODY_HEIGHT && collider.top_at(c) > g + STEP_UP;
-                    if on_ground && collider.reach(c) < NAV_RADIUS {
+                    if collider.reach(c) < NAV_RADIUS && collider.in_the_way(c, self.height_at(c)) {
                         crowded[k] = true;
                     }
                 }
@@ -270,31 +272,32 @@ impl Map {
     }
 
     /// Whether a collider keeps a body with its feet `feet` high from moving straight from `a`
-    /// to `b` (`Collider::blocks`).
+    /// to `b` (`Collider::blocks`): any one near a tile along the way.
     pub fn colliders_block(&self, a: Vec2, b: Vec2, feet: f32) -> bool {
-        let grown = Vec2::splat(NAV_RADIUS);
-        self.colliders_near(a.min(b) - grown, a.max(b) + grown).iter().any(|collider| collider.blocks(a, b, feet))
+        self.line_blocker_by(a, b, |t| self.colliders_on(t).any(|collider| collider.blocks(a, b, feet))).is_some()
     }
 
-    /// What a body with its feet `feet` high stands on at `p`: the ground, or the top of a
-    /// collider under it (no more than `STEP_UP` over its feet, its middle over it or `SUPPORT`
-    /// beyond), whichever is highest.
+    /// What a body with its feet `feet` high stands on at `p`: what's there up to `STEP_UP`
+    /// over its feet (`surface_at`).
     pub fn floor_at(&self, p: Vec2, feet: f32) -> f32 {
-        let grown = Vec2::splat(SUPPORT);
-        self.colliders_near(p - grown, p + grown)
-            .iter()
+        self.surface_at(p, feet + STEP_UP)
+    }
+
+    /// The highest of what's at `p` no higher than `up_to`: the ground, or the top of a collider
+    /// (`p` over it or `SUPPORT` beyond).
+    pub fn surface_at(&self, p: Vec2, up_to: f32) -> f32 {
+        // Every collider within `SUPPORT` of `p` is near its tile: nearer than a body's reach.
+        self.colliders_on(Map::tile_of(p))
             .filter(|collider| collider.reach(p) <= SUPPORT)
             .map(|collider| collider.top_at(p.clamp(collider.lo, collider.hi)))
-            .filter(|&top| top <= feet + STEP_UP)
+            .filter(|&top| top <= up_to)
             .fold(self.height_at(p), f32::max)
     }
 
     /// How high a body with its feet `feet` high at `p` may rise before its head meets the
     /// underside of something over it (`f32::INFINITY`: nothing is).
     pub fn ceiling_at(&self, p: Vec2, feet: f32) -> f32 {
-        let grown = Vec2::splat(NAV_RADIUS);
-        self.colliders_near(p - grown, p + grown)
-            .iter()
+        self.colliders_on(Map::tile_of(p))
             .filter(|collider| collider.reach(p) < NAV_RADIUS && collider.bottom >= feet + BODY_HEIGHT - 1e-3)
             .map(|collider| collider.bottom - BODY_HEIGHT)
             .fold(f32::INFINITY, f32::min)

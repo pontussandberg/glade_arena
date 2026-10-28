@@ -417,7 +417,10 @@ const GROUND_BAND: f32 = 0.5;
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn onto_ground(map: &arena_shared::map::Map, at: Vec2, feet: f32, size: f32, ends: [Vec3; 2], striking: f32, angles: &Angles, pose: impl Fn(&Angles) -> Posed) -> Posed {
     use crate::swish::{REACH_DOWN, REACH_UP, struck_surface};
-    let lowest = |posed: &Posed| ends.map(|end| posed.held_on_body.transform_point(end) * size).into_iter().min_by(|a, b| a.y.total_cmp(&b.y)).unwrap_or_default();
+    let lowest = |posed: &Posed| {
+        let [p, q] = ends.map(|end| posed.held_on_body.transform_point(end) * size);
+        if p.y < q.y { p } else { q }
+    };
     let level = pose(angles);
     let deep = lowest(&level).y;
     let near = (1.0 - deep / GROUND_BAND).clamp(0.0, 1.0) * striking;
@@ -425,23 +428,27 @@ pub(crate) fn onto_ground(map: &arena_shared::map::Map, at: Vec2, feet: f32, siz
         return level;
     }
     let swung = |by: f32| pose(&Angles { weapon_arm: angles.weapon_arm + by, ..*angles });
-    // How far it is over where it should be, swung by `by`: as deep as in level ground, under
-    // the ground where it is now.
-    let over = |posed: &Posed| {
-        let low = lowest(posed);
+    // How far its lowest point `low` is over where it should be: as deep as in level ground,
+    // under the ground where it is now.
+    let over = |low: Vec3| {
         let ground = struck_surface(map, at + arena::to_gameplay(low), feet) - feet;
         low.y - deep - near * ground.clamp(-REACH_DOWN, REACH_UP)
     };
-    let (mut by, mut posed) = (0.0, level);
+    // The secant method: how fast the lowest point drops as the arm swings, from the try before
+    // (the first time, from a nudge).
+    let (mut by, mut posed, mut tried) = (0.0, level, None);
     for _ in 0..3 {
-        let off = over(&posed);
+        let low = lowest(&posed);
+        let off = over(low);
         if off.abs() < 0.01 {
             break;
         }
-        let slope = (lowest(&swung(by + 0.02)).y - lowest(&posed).y) / 0.02;
-        if slope.abs() < 1e-3 {
+        let (was, was_low) = tried.unwrap_or_else(|| (by + 0.02, lowest(&swung(by + 0.02)).y));
+        let slope = (was_low - low.y) / (was - by);
+        if !(slope.abs() >= 1e-3) {
             break;
         }
+        tried = Some((by, low.y));
         by = (by - (off / slope).clamp(-0.4, 0.4)).clamp(-1.0, 1.0);
         posed = swung(by);
     }

@@ -158,7 +158,7 @@ const AURA_GLOW: f32 = 9.0;
 
 /// Rig meshes for each class, and its glow (crystals: the same for everyone of a class), and the
 /// cold white everyone's eyes burn with. Every other part is drawn in the fighter's own material
-/// (colors in the vertices), so a hit flashes all of it.
+/// (colors in the vertices), so a tint or a chill takes all of it.
 #[derive(Resource)]
 struct RigAssets {
     meshes: HashMap<ClassId, RigHandles>,
@@ -361,7 +361,7 @@ fn add_rigs(
             // A glaive's broad edge reaches the ground at its corner before its point; a plain
             // blade's lowest point is its point.
             let corner = if figure == "revenant" { arena::glaive_edge(1.0) } else { Vec3::Y * length };
-            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length, from: from / length, shown: 0, quickened: false, striking: false, dragged: None, corner, rasp: 0, embers: (0.0, 0), vivid, linger });
+            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length, from: from / length, shown: 0, quickened: false, striking: false, struck: None, dragged: None, corner, rasp: 0, embers: (0.0, 0), vivid, linger });
         }
         // A blade on the other hand too (the shade's), on its lead forearm, which hangs from
         // its lead elbow.
@@ -460,13 +460,14 @@ fn pose_rigs(
         Option<&Chilled>,
         Option<&arena_shared::protocol::Motion>,
         Option<&crate::render::PredictedWalk>,
+        Option<&crate::swish::Blade>,
     )>,
     mut parts: Query<(&mut Transform, &mut Visibility), Without<Rig>>,
 ) {
     let ease_walk = rate(&time, WALK_RATE);
     let dt = time.delta_secs().min(0.1);
     let wall_clock = time.elapsed_secs();
-    for (mut rig, facing, mut body, mut held_at, class, attack, (cooldowns, dashing), seen, is_me, squash, mut footfalls, chilled, motion, predicted) in &mut rigs {
+    for (mut rig, facing, mut body, mut held_at, class, attack, (cooldowns, dashing), seen, is_me, squash, mut footfalls, chilled, motion, predicted, edged) in &mut rigs {
         let rig = &mut *rig;
         // Dashing, it glides along in its pose without a stride, thrown into a lunge.
         let gliding = dashing.0.is_some();
@@ -623,12 +624,8 @@ fn pose_rigs(
         let height = map.as_ref().map_or(0.0, |map| crate::render::shown_height(map.map(), motion, predicted, at));
         let pose = |angles: &Angles| assemble(moves, angles, &aimed, facing.look, stride, walk, stretch * smear, blade, free);
         // A blade striking meets the ground where it is.
-        let posed = match (&map, matches!(moves.held, Held::Gripped { .. } | Held::Swept { .. })) {
-            (Some(map), true) if free < 1.0 => {
-                let figure = def.figure();
-                let corner = if figure == "revenant" { arena::glaive_edge(1.0) } else { Vec3::Y * arena::blade_span(figure).1 };
-                onto_ground(map.map(), at, height, rig.size, [Vec3::Y * arena::blade_span(figure).1, corner], 1.0 - free, &angles, pose)
-            }
+        let posed = match (&map, edged) {
+            (Some(map), Some(edged)) if free < 1.0 => onto_ground(map.map(), at, height, rig.size, [Vec3::Y * edged.length, edged.corner], 1.0 - free, &angles, pose),
             _ => pose(&angles),
         };
         // Just hit, the whole figure flinches: squashed wide and short, springing back over
