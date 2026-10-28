@@ -113,6 +113,11 @@ pub(super) struct PredictedWalk {
     lead: Option<f32>,
     /// Which way the server last said it stepped us (`Walking`), to catch each change.
     server_walk: Vec2,
+    /// The dash the last prediction was stepped with (none, mostly): what the server's news
+    /// moves the prediction by is reckoned from the same dash, else a dash just ended would be
+    /// stepped from the old base without its last step and the fighter drawn a step back for a
+    /// frame.
+    dashing: Dashing,
     /// How far (meters) the last correction worth noticing moved the prediction (shown in the
     /// status line, to see what a glide was).
     last_fix: f32,
@@ -222,6 +227,10 @@ pub(super) fn predict_me(
             }
         };
         let dashing = dashing.copied().unwrap_or_default();
+        // A dash just started is news to take at once (the dash itself isn't predicted), not
+        // shown away: it's stepped from the old base too.
+        let was_dashing = if predicted.dashing.0.is_some() { predicted.dashing } else { dashing };
+        predicted.dashing = dashing;
         let fresh = pos.0 != predicted.drawn;
         let newer = predicted.base.is_none_or(|(tick, _)| tick < latest);
         // What the server's news (or the lead's change) moves the prediction by goes into the
@@ -229,7 +238,7 @@ pub(super) fn predict_me(
         if fresh || newer {
             let base = (latest, if fresh { pos.0 } else { predicted.base.map_or(pos.0, |(_, p)| p) });
             if let Some(old) = predicted.base {
-                let was = predict(sends, old, at_before, step(dashing));
+                let was = predict(sends, old, at_before, step(was_dashing));
                 let is = predict(sends, base, at, step(dashing));
                 predicted.error += was - is;
                 if (was - is).length() >= 0.02 {
