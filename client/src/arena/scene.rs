@@ -9,6 +9,7 @@ use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
 use bevy::pbr::{DistanceFog, FogFalloff};
 use super::palette::*;
 
+use crate::plain::PlainMaterial;
 use crate::rooms::CurrentMap;
 use crate::sculpt::bevel_box;
 
@@ -185,7 +186,7 @@ struct ArenaScene;
 fn build_arena(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
     current: Res<CurrentMap>,
     old: Query<Entity, With<ArenaScene>>,
 ) {
@@ -201,7 +202,7 @@ fn build_arena(
     commands.spawn((ArenaScene, Mesh3d(meshes.add(terrain_mesh(m, &scene, theme, &mut rng))), MeshMaterial3d(vertex_colored.clone())));
     commands.spawn((ArenaScene, Mesh3d(meshes.add(ground_mesh(m, theme, &mut rng))), MeshMaterial3d(vertex_colored.clone())));
     if let Some(water) = water_mesh(&scene, theme.wilds == Wilds::Fen) {
-        let material = StandardMaterial { perceptual_roughness: 0.18, reflectance: 0.6, ..matte(theme.pond) };
+        let material = PlainMaterial { perceptual_roughness: 0.18, reflectance: 0.6, ..matte(theme.pond) };
         commands.spawn((ArenaScene, Mesh3d(meshes.add(water)), MeshMaterial3d(materials.add(material))));
     }
 

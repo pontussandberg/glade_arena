@@ -17,6 +17,7 @@ use crate::arena::palette::ui::ACCENT;
 use crate::arena::{self, palette, to_world};
 use crate::feedback::AttackClock;
 use crate::item_icons::{ICON_PIXELS, ItemIcons, load_item_icons};
+use crate::plain::PlainMaterial;
 use crate::render::{GameUi, HudButton, button, clicked, set_fill, shown, ui_text};
 use crate::rooms::{CurrentRoom, request};
 use crate::tooltip::{Side, hover_shows, tip, tip_note, tip_text, tip_title};
@@ -88,7 +89,7 @@ struct ShopOpen(bool);
 fn spawn_hud(mut commands: Commands) {
     commands.init_resource::<ShopOpen>();
     let top_center = |top: Val| Node { position_type: PositionType::Absolute, width: percent(100.0), top, justify_content: JustifyContent::Center, ..default() };
-    commands.spawn((GameUi, top_center(px(8.0)), Pickable::IGNORE)).with_child((
+    commands.spawn((GameUi, top_center(px(8.0)))).with_child((
         Banner,
         HudButton,
         Node {
@@ -106,10 +107,7 @@ fn spawn_hud(mut commands: Commands) {
     let mut name = None;
     let mut fill = None;
     let boss = commands
-        .spawn((
-            Node { display: Display::None, flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: px(3.0), ..default() },
-            Pickable::IGNORE,
-        ))
+        .spawn(Node { display: Display::None, flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: px(3.0), ..default() })
         .with_children(|boss| {
             name = Some(boss.spawn(ui_text("", 15.0, palette::TORCH_FLAME)).id());
             boss.spawn((
@@ -123,8 +121,8 @@ fn spawn_hud(mut commands: Commands) {
         })
         .id();
     commands.entity(boss).insert(BossBar { name: name.expect("spawned"), fill: fill.expect("spawned") });
-    commands.spawn((GameUi, top_center(px(92.0)), Pickable::IGNORE)).add_child(boss);
-    commands.spawn((GameUi, top_center(percent(26.0)), Pickable::IGNORE)).with_child((
+    commands.spawn((GameUi, top_center(px(92.0)))).add_child(boss);
+    commands.spawn((GameUi, top_center(percent(26.0)))).with_child((
         OverBanner,
         Node {
             display: Display::None,
@@ -139,7 +137,6 @@ fn spawn_hud(mut commands: Commands) {
     commands.spawn((
         GameUi,
         Node { position_type: PositionType::Absolute, width: percent(100.0), bottom: px(100.0), justify_content: JustifyContent::Center, ..default() },
-        Pickable::IGNORE,
     ))
     .with_child((SatchelBar, HudButton, Node { display: Display::None, column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::all(px(5.0)), ..default() }, BackgroundColor(palette::ui::PANEL.with_alpha(0.8))));
     commands.spawn((
@@ -352,13 +349,12 @@ fn item_tile(parent: &mut ChildSpawnerCommands, icons: &ItemIcons, item: Item, l
         ))
         .with_children(|tile| {
             let side = px(pixel * ICON_PIXELS as f32);
-            tile.spawn((Node { width: side, height: side, ..default() }, ImageNode::new(icons.of(item)), Pickable::IGNORE));
+            tile.spawn((Node { width: side, height: side, ..default() }, ImageNode::new(icons.of(item))));
             if level > 0 {
                 tile.spawn((
                     Node { position_type: PositionType::Absolute, right: px(1.0), bottom: px(-2.0), ..default() },
                     ui_text("*".repeat(level as usize), (size * 0.26).max(8.0), palette::GOLD),
                     TextShadow { offset: Vec2::splat(1.0), color: palette::ui::PANEL },
-                    Pickable::IGNORE,
                 ));
             }
         })
@@ -602,7 +598,6 @@ fn name_in_world(
             NameOver { of: entity, height },
             Node { position_type: PositionType::Absolute, left: px(0.0), top: px(0.0), ..default() },
             ui_text(text, 11.0, color),
-            Pickable::IGNORE,
             Visibility::Hidden,
         ));
     }
@@ -663,11 +658,11 @@ fn circle_wisps(
     art: Res<crate::fx::FxArt>,
     mut wake_at: Local<f32>,
     looks: Res<FxLooks>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
     fighters: Query<(Entity, &Pos, &Satchel, Option<&Health>, Option<&Wisps>, Has<Me>)>,
     mut transforms: Query<&mut Transform, Without<Satchel>>,
     strays: Query<(Entity, &WispOf)>,
-    mut material: Local<Option<Handle<StandardMaterial>>>,
+    mut material: Local<Option<Handle<PlainMaterial>>>,
 ) {
     for (wisp, of) in &strays {
         if !fighters.contains(of.0) {

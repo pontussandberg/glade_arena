@@ -9,6 +9,7 @@ use crate::Me;
 use crate::abilities::SeenCasts;
 use crate::feedback::AttackClock;
 use crate::arena::{self, to_world};
+use crate::plain::PlainMaterial;
 
 /// A nova: its shockwave races out to the edge in `NOVA_WAVE_SECONDS`, raising shards as it
 /// passes (each takes `NOVA_GROW_SECONDS` to burst up); the frost on the ground and the shards
@@ -54,7 +55,7 @@ pub(super) fn show_novas(
     mut commands: Commands,
     time: Res<Time>,
     mut visuals: ResMut<Visuals>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
     art: Res<crate::fx::FxArt>,
     mut casters: Query<(&ClassId, &Pos, &Cooldowns, &mut SeenCasts), (With<PlayerId>, Changed<Cooldowns>)>,
     me: Query<&Pos, With<crate::Me>>,
@@ -88,7 +89,7 @@ fn burst_nova(
     commands: &mut Commands,
     time: &Time,
     visuals: &mut Visuals,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<PlainMaterial>,
     at: Vec2,
     radius: f32,
     nova: arena::NovaMeshes<Handle<Mesh>>,
@@ -98,7 +99,7 @@ fn burst_nova(
     let now = time.elapsed_secs();
     // Each piece starts at nothing and only grows from there (`grow_bursts`); `until` is how
     // long it stays.
-    let mut burst = |mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>, place: Vec3, dir: Vec2, until: f32, burst: Burst| {
+    let mut burst = |mesh: &Handle<Mesh>, material: &Handle<PlainMaterial>, place: Vec3, dir: Vec2, until: f32, burst: Burst| {
         let placed = Transform::from_translation(place).with_rotation(Quat::from_rotation_y(dir.to_angle()));
         commands.spawn((
             Fleeting { until: now + until },
@@ -144,10 +145,10 @@ pub(super) fn grow_bursts(time: Res<Time>, mut bursts: Query<(&Burst, &Fleeting,
 pub(super) fn show_frost(
     clock: AttackClock,
     time: Res<Time>,
-    (mut visuals, mut materials): (ResMut<Visuals>, ResMut<Assets<StandardMaterial>>),
+    (mut visuals, mut materials): (ResMut<Visuals>, ResMut<Assets<PlainMaterial>>),
     mut fighters: Query<(Entity, &Chilled, &ClassId, &mut Frost, Has<Me>)>,
     mut parts: Query<(&mut Visibility, &mut WorldAligned)>,
-    (children, mut worn): (Query<&Children>, Query<&mut MeshMaterial3d<StandardMaterial>>),
+    (children, mut worn): (Query<&Children>, Query<&mut MeshMaterial3d<PlainMaterial>>),
 ) {
     let turn = Quat::from_rotation_y(time.elapsed_secs() * RUNE_TURN_RATE);
     for (fighter, chilled, class, mut frost, is_me) in &mut fighters {

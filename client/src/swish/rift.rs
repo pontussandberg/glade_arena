@@ -10,6 +10,7 @@ use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 
 use crate::arena::{FlatMesh, to_world};
+use crate::plain::PlainMaterial;
 
 /// A strike's impact: how long the rift lasts and when it starts fading (seconds), how long the
 /// dust takes to burst out, how far out (meters) past the blade, and how see-through the rift's
@@ -285,7 +286,7 @@ pub(super) fn strike_ground(
         let seed = swing.tick;
         // Its layers, from the void up, each laid on what's under it as it opens, flares and
         // closes (`drive_impacts`).
-        let mut layer = |shapes: Vec<FlatMesh>, lift: f32, edge: f32, material: &Handle<StandardMaterial>| {
+        let mut layer = |shapes: Vec<FlatMesh>, lift: f32, edge: f32, material: &Handle<PlainMaterial>| {
             let laid = Laid::new(&mut meshes, shapes, lift, edge);
             let drawn = commands.spawn((Mesh3d(laid.mesh.clone()), MeshMaterial3d(material.clone()), Transform::IDENTITY, NoFrustumCulling, NotShadowCaster, NotShadowReceiver));
             (drawn.id(), laid)
@@ -324,7 +325,7 @@ pub(super) fn strike_ground(
 }
 
 /// Shows `part` in the step of `fades` for `t` (0 to 1) of the way faded out.
-fn fade_part(parts: &mut Query<(&mut Transform, &mut MeshMaterial3d<StandardMaterial>)>, part: Entity, fades: &[Handle<StandardMaterial>], t: f32) {
+fn fade_part(parts: &mut Query<(&mut Transform, &mut MeshMaterial3d<PlainMaterial>)>, part: Entity, fades: &[Handle<PlainMaterial>], t: f32) {
     if let Ok((_, mut material)) = parts.get_mut(part) {
         let to = faded(fades, t);
         if material.0 != *to {
@@ -342,7 +343,7 @@ pub(super) fn drive_impacts(
     assets: Res<SwishAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut impacts: Query<(Entity, &mut Impact)>,
-    mut parts: Query<(&mut Transform, &mut MeshMaterial3d<StandardMaterial>)>,
+    mut parts: Query<(&mut Transform, &mut MeshMaterial3d<PlainMaterial>)>,
 ) {
     let now = time.elapsed_secs();
     for (entity, impact) in &mut impacts {

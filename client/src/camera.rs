@@ -248,7 +248,7 @@ impl Plugin for CameraPlugin {
             Update,
             (CameraMoves.after(crate::rig::Posing), CameraControl.in_set(CameraMoves), CameraPlaced.after(CameraMoves)),
         );
-        app.add_systems(Startup, spawn_camera);
+        app.add_systems(Startup, (spawn_camera, cluster_on_cpu));
         app.add_systems(Update, place_camera.after(CameraMoves).before(CameraPlaced));
         app.add_systems(OnEnter(crate::rooms::Screen::InGame), relock_camera);
         app.add_systems(
@@ -305,6 +305,15 @@ pub(crate) fn wheel_notches(scroll: &AccumulatedMouseScroll) -> f32 {
 /// most point lights a scene has stays under WebGL's limit on the tiles' light lists.
 const LIGHT_TILES: u32 = 512;
 const LIGHT_SLICES: u32 = 8;
+
+/// Which light reaches which tile is worked out on the CPU, as WebGL has to anyway: with this few
+/// tiles and lights it's quick there, where Bevy's way on the GPU makes its buffers anew every
+/// frame, a good share of the render world's.
+fn cluster_on_cpu(settings: Option<ResMut<bevy::light::cluster::GlobalClusterSettings>>) {
+    if let Some(mut settings) = settings {
+        settings.gpu_clustering = None;
+    }
+}
 
 fn spawn_camera(mut commands: Commands) {
     use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection};

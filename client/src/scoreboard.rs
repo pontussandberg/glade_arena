@@ -41,7 +41,6 @@ fn spawn_scoreboard(mut commands: Commands) {
         .spawn((
             GameUi,
             Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, display: Display::None, ..default() },
-            Pickable::IGNORE,
         ))
         .with_children(|screen| {
             screen.spawn((
@@ -49,14 +48,12 @@ fn spawn_scoreboard(mut commands: Commands) {
                 Node { flex_direction: FlexDirection::Column, row_gap: px(6.0), padding: UiRect::axes(px(22.0), px(16.0)), border: UiRect::all(px(1.0)), min_width: px(360.0), ..default() },
                 BackgroundColor(palette::ui::BACKDROP.with_alpha(0.92)),
                 BorderColor::all(palette::ui::MUTED.with_alpha(0.6)),
-                Pickable::IGNORE,
             ));
         });
     commands
         .spawn((
             GameUi,
             Node { position_type: PositionType::Absolute, width: percent(100.0), top: px(8.0), justify_content: JustifyContent::Center, ..default() },
-            Pickable::IGNORE,
         ))
         .with_child((
             ScorePanel,
@@ -80,7 +77,6 @@ fn spawn_scoreboard(mut commands: Commands) {
                 justify_content: JustifyContent::Center,
                 ..default()
             },
-            Pickable::IGNORE,
         ))
         .with_child((
             WinnerBanner,

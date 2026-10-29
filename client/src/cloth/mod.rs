@@ -17,6 +17,7 @@ use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::prelude::*;
 
 use crate::arena;
+use crate::plain::PlainMaterial;
 use crate::rig::Posing;
 
 mod skin;
@@ -130,8 +131,8 @@ impl Drape {
 /// A class's cloth, loaded.
 pub(crate) struct WardrobeAssets {
     drapes: Vec<DrapeAssets>,
-    trim: Handle<StandardMaterial>,
-    mote: Handle<StandardMaterial>,
+    trim: Handle<PlainMaterial>,
+    mote: Handle<PlainMaterial>,
     body: Vec<Column>,
     leg_radius: f32,
     arm: Option<(f32, f32)>,
@@ -150,7 +151,7 @@ impl WardrobeAssets {
         wardrobe: Wardrobe,
         meshes: &mut Assets<Mesh>,
         bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
-        materials: &mut Assets<StandardMaterial>,
+        materials: &mut Assets<PlainMaterial>,
     ) -> Self {
         let drapes = wardrobe
             .drapes
@@ -196,7 +197,7 @@ pub(crate) struct Cloth {
     arm_size: Option<(f32, f32)>,
     /// Where the body was in the world last frame (none before the first).
     was: Option<Transform>,
-    mote: Handle<StandardMaterial>,
+    mote: Handle<PlainMaterial>,
     /// Motes owed but not yet given off, and a counter for picking where.
     owed: f32,
     seed: u32,
@@ -254,7 +255,7 @@ impl Hanging {
 }
 
 /// Hangs a class's cloth on `fighter`, in its own `material` (so it's tinted and chills with it).
-pub(crate) fn dress(commands: &mut Commands, fighter: Entity, (legs, knees, arm): ([Entity; 2], [Entity; 2], Entity), material: &Handle<StandardMaterial>, wardrobe: &WardrobeAssets) {
+pub(crate) fn dress(commands: &mut Commands, fighter: Entity, (legs, knees, arm): ([Entity; 2], [Entity; 2], Entity), material: &Handle<PlainMaterial>, wardrobe: &WardrobeAssets) {
     let mut hangings = Vec::new();
     for drape in &wardrobe.drapes {
         let mut joints = vec![commands.spawn(Transform::IDENTITY).id()];

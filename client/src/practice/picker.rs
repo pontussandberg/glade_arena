@@ -11,6 +11,7 @@ use bevy::camera::{ClearColorConfig, RenderTarget};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 
+use crate::plain::PlainMaterial;
 use crate::{ChosenClass, Me};
 use crate::arena::{self, palette};
 use crate::render::{GameUi, HudButton, clicked};
@@ -45,7 +46,7 @@ pub(super) struct PickFrame(ClassId);
 
 /// Builds every face: for each playable class, its head and eyes alone on a render layer of
 /// their own, lit by their own little sun, watched by a camera drawing into the icon's image.
-pub(super) fn load_faces(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>) {
+pub(super) fn load_faces(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<PlainMaterial>>, mut images: ResMut<Assets<Image>>) {
     let body = materials.add(arena::matte(Color::WHITE));
     let eyes_glow = materials.add(arena::glow(palette::SOUL, FACE_EYE_GLOW));
     let mut icons = Vec::new();

@@ -1,20 +1,27 @@
 //! `ARENA_PERF=file` (native only): measures what a frame costs, for finding what's slow.
 //! Vsync goes off (so the frame rate is what the work allows, not the monitor's), every frame's
 //! time is noted, and every second what's in the world is counted (entities, meshes drawn, the
-//! effects' parts, lights, UI nodes). At the end (`ARENA_PERF_SECS` in, 60 by default) it
-//! writes them out, a line a second and a summary (frame times: average, median, 99th
-//! percentile, worst), and quits.
+//! effects' parts, lights, UI nodes), with how long the main world's schedules and the render
+//! world's took a frame (`main`, `render`: they run side by side, so the longer one sets the frame
+//! rate, with the extraction between them, `extract`, on top). At the end (`ARENA_PERF_SECS` in,
+//! 60 by default) it writes them out, a line a second and a summary (frame times: average,
+//! median, 99th percentile, worst), and quits.
 //!
 //! `ARENA_PERF_OFF` (a comma-separated list; `?off=` on the page in local dev) switches parts of
 //! the scene off, to see what each costs: `lights` (the torches' point lights), `shadows` (the
 //! sun's), `fog`, `ui` (all of it), `fx` (effects' parts), `blend` (everything see-through).
 
 use std::fmt::Write as _;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use bevy::prelude::*;
+use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::window::PresentMode;
 
 use crate::fx::Parts as FxParts;
+use crate::plain::PlainMaterial;
 
 pub struct PerfPlugin {
     pub out: std::path::PathBuf,
@@ -26,7 +33,79 @@ impl Plugin for PerfPlugin {
         app.insert_resource(Perf { out: self.out.clone(), secs, frames: Vec::new(), lines: String::new(), next: 1.0, second: Vec::new() });
         app.add_systems(Startup, no_vsync);
         app.add_systems(Last, (measure, census));
+        let busy = Busy::default();
+        app.insert_resource(busy.clone());
+        app.add_systems(First, start_main);
+        app.add_systems(Last, end_main.before(measure));
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            // The extraction between them, timed around Bevy's own: the main thread does it while
+            // both worlds wait, so it's on every frame's length in full.
+            if let Some(mut extract) = render_app.take_extract() {
+                let times = busy.0.clone();
+                render_app.set_extract(move |main_world, render_world| {
+                    let started = Instant::now();
+                    extract(main_world, render_world);
+                    times.extract.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+                    times.extracts.fetch_add(1, Ordering::Relaxed);
+                });
+            }
+            render_app.insert_resource(busy);
+            render_app.add_systems(Render, (start_render.in_set(RenderSystems::ExtractCommands), end_render.in_set(RenderSystems::PostCleanup)));
+        }
     }
+}
+
+/// How long the main world's schedules (from `First` to `Last`), the render world's, and the
+/// extraction took, added up over this second's frames, in microseconds, with how many there were;
+/// shared by both worlds.
+#[derive(Resource, Clone, Default)]
+struct Busy(Arc<BusyTimes>);
+
+#[derive(Default)]
+struct BusyTimes {
+    main_started: Mutex<Option<Instant>>,
+    render_started: Mutex<Option<Instant>>,
+    main: AtomicU64,
+    mains: AtomicU64,
+    render: AtomicU64,
+    renders: AtomicU64,
+    extract: AtomicU64,
+    extracts: AtomicU64,
+}
+
+impl BusyTimes {
+    fn start(at: &Mutex<Option<Instant>>) {
+        *at.lock().unwrap() = Some(Instant::now());
+    }
+
+    fn end(at: &Mutex<Option<Instant>>, total: &AtomicU64, count: &AtomicU64) {
+        if let Some(started) = at.lock().unwrap().take() {
+            total.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+            count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// The average of `total` over `count` (ms), both taken back to nothing.
+    fn take(total: &AtomicU64, count: &AtomicU64) -> f32 {
+        let (total, count) = (total.swap(0, Ordering::Relaxed), count.swap(0, Ordering::Relaxed));
+        total as f32 / 1000.0 / count.max(1) as f32
+    }
+}
+
+fn start_main(busy: Res<Busy>) {
+    BusyTimes::start(&busy.0.main_started);
+}
+
+fn end_main(busy: Res<Busy>) {
+    BusyTimes::end(&busy.0.main_started, &busy.0.main, &busy.0.mains);
+}
+
+fn start_render(busy: Res<Busy>) {
+    BusyTimes::start(&busy.0.render_started);
+}
+
+fn end_render(busy: Res<Busy>) {
+    BusyTimes::end(&busy.0.render_started, &busy.0.render, &busy.0.renders);
 }
 
 /// Switches parts of the scene off (`ARENA_PERF_OFF`, `?off=`): `off` lists them.
@@ -81,8 +160,8 @@ fn switch_off(
     fog: Query<Entity, With<bevy::pbr::DistanceFog>>,
     mut roots: Query<&mut Node, Without<ChildOf>>,
     mut parts: ResMut<FxParts>,
-    mut drawn: Query<(&MeshMaterial3d<StandardMaterial>, &mut Visibility)>,
-    materials: Res<Assets<StandardMaterial>>,
+    mut drawn: Query<(&MeshMaterial3d<PlainMaterial>, &mut Visibility)>,
+    materials: Res<Assets<PlainMaterial>>,
 ) {
     if off.lights {
         for light in &lights {
@@ -125,11 +204,11 @@ fn census(
     time: Res<Time<Real>>,
     perf: Res<Perf>,
     mut done: Local<bool>,
-    meshes: Query<(Entity, &ViewVisibility, &Mesh3d, Option<&MeshMaterial3d<StandardMaterial>>, Has<bevy::light::NotShadowCaster>)>,
+    meshes: Query<(Entity, &ViewVisibility, &Mesh3d, Option<&MeshMaterial3d<PlainMaterial>>, Has<bevy::light::NotShadowCaster>)>,
     parents: Query<&ChildOf>,
     classes: Query<&arena_shared::classes::ClassId>,
     names: Query<&Name>,
-    materials: Res<Assets<StandardMaterial>>,
+    materials: Res<Assets<PlainMaterial>>,
     entities: Query<EntityRef>,
     components: &bevy::ecs::component::Components,
     nodes: Query<Entity, With<Node>>,
@@ -144,12 +223,12 @@ fn census(
         drawn: usize,
         blended: usize,
         casters: usize,
-        pairs: HashSet<(AssetId<Mesh>, Option<AssetId<StandardMaterial>>)>,
-        mats: HashSet<Option<AssetId<StandardMaterial>>>,
+        pairs: HashSet<(AssetId<Mesh>, Option<AssetId<PlainMaterial>>)>,
+        mats: HashSet<Option<AssetId<PlainMaterial>>>,
         meshes: HashSet<AssetId<Mesh>>,
     }
     let mut kinds: HashMap<String, Kind> = HashMap::new();
-    let mut all_mats: HashMap<Option<AssetId<StandardMaterial>>, usize> = HashMap::new();
+    let mut all_mats: HashMap<Option<AssetId<PlainMaterial>>, usize> = HashMap::new();
     let ours = |entity: Entity| -> String {
         let Ok(entity) = entities.get(entity) else { return String::new() };
         let mut ours: Vec<String> = entity
@@ -245,11 +324,12 @@ fn measure(
     time: Res<Time<Real>>,
     mut perf: ResMut<Perf>,
     all: Query<Entity>,
-    meshes: Query<(&ViewVisibility, &Mesh3d, Option<&MeshMaterial3d<StandardMaterial>>)>,
+    meshes: Query<(&ViewVisibility, &Mesh3d, Option<&MeshMaterial3d<PlainMaterial>>)>,
     parts: (Res<FxParts>, Res<crate::fx::draw::Drawn>),
     lights: Query<(), Or<(With<PointLight>, With<SpotLight>, With<DirectionalLight>)>>,
     nodes: Query<(), With<Node>>,
-    assets: (Res<Assets<Mesh>>, Res<Assets<StandardMaterial>>, Res<Assets<Image>>),
+    assets: (Res<Assets<Mesh>>, Res<Assets<PlainMaterial>>, Res<Assets<Image>>),
+    busy: Res<Busy>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let ms = time.delta_secs() * 1000.0;
@@ -267,8 +347,10 @@ fn measure(
         let drawn = meshes.iter().filter(|(v, ..)| v.get()).count();
         // What's drawn by mesh and material: about what batching leaves as draws.
         let batches = meshes.iter().filter(|(v, ..)| v.get()).map(|(_, mesh, material)| (mesh.id(), material.map(|m| m.id()))).collect::<std::collections::HashSet<_>>().len();
+        let (main, render) = (BusyTimes::take(&busy.0.main, &busy.0.mains), BusyTimes::take(&busy.0.render, &busy.0.renders));
+        let extract = BusyTimes::take(&busy.0.extract, &busy.0.extracts);
         let line = format!(
-            "t={now:5.1}s fps={:5.0} avg={avg:5.2}ms worst={worst:6.2}ms entities={} meshes={} drawn={drawn} batches={batches} fx_parts={} fx_corners={} lights={} ui_nodes={} mesh_assets={} materials={} images={}",
+            "t={now:5.1}s fps={:5.0} avg={avg:5.2}ms worst={worst:6.2}ms main={main:5.2}ms render={render:5.2}ms extract={extract:5.2}ms entities={} meshes={} drawn={drawn} batches={batches} fx_parts={} fx_corners={} lights={} ui_nodes={} mesh_assets={} materials={} images={}",
             second.len(),
             all.iter().count(),
             meshes.iter().count(),

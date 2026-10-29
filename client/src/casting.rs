@@ -9,6 +9,7 @@
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 
+use crate::plain::PlainMaterial;
 use crate::{DesiredInput, Me};
 use crate::arena::{self, palette};
 use crate::render::{HudButton, clicked, shown, ui_text};
@@ -165,7 +166,7 @@ const INDICATOR_HEIGHT: f32 = 0.06;
 fn spawn_indicator(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
     me: Query<&ClassId, Added<Me>>,
     indicators: Query<Entity, With<AimIndicator>>,
 ) {

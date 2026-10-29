@@ -186,7 +186,6 @@ fn spawn_world_ui(mut commands: Commands) {
         WorldUi,
         GameUi,
         Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() },
-        Pickable::IGNORE,
     ));
 }
 
@@ -283,8 +282,8 @@ struct Bar {
     pop: f32,
     health: f32,
     trail: f32,
-    fill_color: Color,
-    trail_color: Color,
+    fill_color: LinearRgba,
+    trail_color: LinearRgba,
     per_tick: i32,
     max_hp: i32,
     cast: Option<f32>,
@@ -342,8 +341,8 @@ fn draw_bars(
             pop: 1.0 + CRIT_BAR_POP * (1.0 - (now - trail.crit_at) / CRIT_BAR_POP_SECONDS).max(0.0).powi(2),
             health: health_fraction,
             trail: trail.fraction,
-            fill_color: relation.copied().unwrap_or(Relation::of(is_me, false)).color(),
-            trail_color: start.mix(&palette::SUN, pale),
+            fill_color: relation.copied().unwrap_or(Relation::of(is_me, false)).color().into(),
+            trail_color: start.mix(&palette::SUN, pale).into(),
             per_tick: tick_every(max_hp, size.x),
             max_hp,
             cast,
@@ -352,30 +351,50 @@ fn draw_bars(
     }
     shown.sort_by(|a, b| b.0.total_cmp(&a.0));
     let scale = camera.target_scaling_factor().unwrap_or(1.0);
+    let inks = BarInks::new();
     for (_, bar) in shown.iter() {
-        draw_bar(&mut rects, bar, scale);
+        draw_bar(&mut rects, bar, &inks, scale);
+    }
+}
+
+/// The colors every bar is drawn in, made linear once for all of them.
+struct BarInks {
+    border: LinearRgba,
+    inside: LinearRgba,
+    mark: LinearRgba,
+    cast: LinearRgba,
+}
+
+impl BarInks {
+    fn new() -> Self {
+        BarInks {
+            border: palette::ui::PANEL.into(),
+            inside: palette::ui::PANEL.with_alpha(0.8).into(),
+            mark: palette::ui::PANEL.with_alpha(0.85).into(),
+            cast: palette::SUN.into(),
+        }
     }
 }
 
 /// `bar`'s rectangles, laid out as the UI would lay out a node of that size with a border, its
 /// fills, marks and cast bar in it: from its top left (`(0, 0)`, in pixels before `scale`) on a
 /// whole pixel, growing from its middle as it pops.
-fn draw_bar(rects: &mut Rects, bar: &Bar, scale: f32) {
+fn draw_bar(rects: &mut Rects, bar: &Bar, inks: &BarInks, scale: f32) {
     let corner = ((bar.middle - bar.size / 2.0) * scale).round();
     let middle = corner + bar.size / 2.0 * scale;
     let at = |p: Vec2| middle + (p - bar.size / 2.0) * bar.pop * scale;
-    let mut rect = |from: Vec2, to: Vec2, color: Color| {
+    let mut rect = |from: Vec2, to: Vec2, color: LinearRgba| {
         let (from, to) = (at(from), at(to));
         rects.push((from.x, from.y), (to.x, to.y), color);
     };
     // A frame: see-through inside, its border solid.
-    fn frame(rect: &mut impl FnMut(Vec2, Vec2, Color), from: Vec2, to: Vec2) {
-        rect(from + 1.0, to - 1.0, palette::ui::PANEL.with_alpha(0.8));
-        rect(from, Vec2::new(to.x, from.y + 1.0), palette::ui::PANEL);
-        rect(Vec2::new(from.x, to.y - 1.0), to, palette::ui::PANEL);
-        rect(Vec2::new(from.x, from.y + 1.0), Vec2::new(from.x + 1.0, to.y - 1.0), palette::ui::PANEL);
-        rect(Vec2::new(to.x - 1.0, from.y + 1.0), Vec2::new(to.x, to.y - 1.0), palette::ui::PANEL);
-    }
+    let frame = |rect: &mut dyn FnMut(Vec2, Vec2, LinearRgba), from: Vec2, to: Vec2| {
+        rect(from + 1.0, to - 1.0, inks.inside);
+        rect(from, Vec2::new(to.x, from.y + 1.0), inks.border);
+        rect(Vec2::new(from.x, to.y - 1.0), to, inks.border);
+        rect(Vec2::new(from.x, from.y + 1.0), Vec2::new(from.x + 1.0, to.y - 1.0), inks.border);
+        rect(Vec2::new(to.x - 1.0, from.y + 1.0), Vec2::new(to.x, to.y - 1.0), inks.border);
+    };
     frame(&mut rect, Vec2::ZERO, bar.size);
     let inside = bar.size - 2.0;
     let filled = |fraction: f32| Vec2::ONE + Vec2::new(inside.x * fraction.clamp(0.0, 1.0), inside.y);
@@ -385,13 +404,13 @@ fn draw_bar(rects: &mut Rects, bar: &Bar, scale: f32) {
     let width = inside.x.round();
     for hp in (1..).map(|n| n * bar.per_tick).take_while(|&hp| hp < bar.max_hp) {
         let x = 1.0 + (width * hp as f32 / bar.max_hp as f32).round();
-        rect(Vec2::new(x, 1.0), Vec2::new(x + 1.0, 1.0 + inside.y), palette::ui::PANEL.with_alpha(0.85));
+        rect(Vec2::new(x, 1.0), Vec2::new(x + 1.0, 1.0 + inside.y), inks.mark);
     }
     // Hanging right under it, as wide; pale, so it never reads as a (colored) health bar.
     if let Some(cast) = bar.cast {
         let top = Vec2::new(0.0, bar.size.y);
         frame(&mut rect, top, top + Vec2::new(bar.size.x, CAST_BAR_HEIGHT));
-        rect(top + 1.0, top + Vec2::new(1.0 + (bar.size.x - 2.0) * cast.clamp(0.0, 1.0), CAST_BAR_HEIGHT - 1.0), palette::SUN);
+        rect(top + 1.0, top + Vec2::new(1.0 + (bar.size.x - 2.0) * cast.clamp(0.0, 1.0), CAST_BAR_HEIGHT - 1.0), inks.cast);
     }
 }
 

@@ -10,6 +10,7 @@ use arena_shared::sim;
 
 use crate::feedback::AttackClock;
 use crate::arena::{self, to_world};
+use crate::plain::PlainMaterial;
 use crate::rig::{HeldAt, MAX_HOLD_TICKS};
 
 /// Shots fly at chest height; fighters stand on the floor (their feet are at the mesh origin).
@@ -46,7 +47,7 @@ const WAKE_AFTER: f32 = 1.0;
 #[derive(Component)]
 pub(super) struct Thrown {
     pub(super) launch: Option<Launch>,
-    pub(super) wake: Handle<StandardMaterial>,
+    pub(super) wake: Handle<PlainMaterial>,
     /// Where its wake came off it last frame, where the next piece of its wake starts.
     pub(super) wake_at: Option<Vec3>,
 }
@@ -261,8 +262,8 @@ pub(super) fn strike_home(
     room: Res<crate::rooms::CurrentRoom>,
     map: Res<crate::rooms::CurrentMap>,
     mut visuals: ResMut<Visuals>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    shots: Query<(&Projectile, &Transform, Option<&Thrown>, &InheritedVisibility, &MeshMaterial3d<StandardMaterial>)>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
+    shots: Query<(&Projectile, &Transform, Option<&Thrown>, &InheritedVisibility, &MeshMaterial3d<PlainMaterial>)>,
 ) {
     let cleared = room.0.as_ref().is_some_and(|view| view.winner.is_some()) || map.is_changed();
     let Ok((projectile, transform, thrown, visible, own_light)) = shots.get(trigger.entity) else { return };
@@ -301,7 +302,7 @@ pub(super) fn strike_home(
 
 /// A bolt bursting at `point` as it's spent, in `light`: its flash, and sparks flung out every
 /// way (up more than down), falling and winking out like a spear's splinters.
-fn burst(commands: &mut Commands, visuals: &Visuals, light: Handle<StandardMaterial>, point: Vec3, now: f32, seed: u32) {
+fn burst(commands: &mut Commands, visuals: &Visuals, light: Handle<PlainMaterial>, point: Vec3, now: f32, seed: u32) {
     let bit = || (Mesh3d(visuals.impact.clone()), MeshMaterial3d(light.clone()), Transform::from_translation(point).with_scale(Vec3::ZERO), NotShadowCaster);
     commands.spawn((Impact { started: now, life: BURST_SECONDS, size: BURST_SIZE, velocity: None }, bit()));
     for k in 0..BURST_SPARKS {

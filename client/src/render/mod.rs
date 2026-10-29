@@ -12,6 +12,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::Me;
+use crate::plain::PlainMaterial;
 
 use crate::abilities::SeenCasts;
 use crate::camera::CameraPlaced;
@@ -56,7 +57,15 @@ impl Plugin for RenderPlugin {
             crate::tooltip::TooltipPlugin,
             crate::practice::PracticePlugin,
         ));
-        app.add_plugins((crate::waygates::WaygatesPlugin, crate::scoreboard::ScoreboardPlugin, crate::waves::WavesPlugin, crate::fx::FxPlugin, crate::prompt::PromptPlugin, crate::audio::AudioPlugin));
+        app.add_plugins((
+            crate::plain::PlainPlugin,
+            crate::waygates::WaygatesPlugin,
+            crate::scoreboard::ScoreboardPlugin,
+            crate::waves::WavesPlugin,
+            crate::fx::FxPlugin,
+            crate::prompt::PromptPlugin,
+            crate::audio::AudioPlugin,
+        ));
         app.insert_resource(ControlsOpen(load_setting(CONTROLS_KEY).as_deref() == Some("open")));
         app.add_systems(Startup, setup_scene);
         // Right after the network's updates are in, before anything this frame reads positions.
@@ -140,7 +149,7 @@ pub(crate) struct Visuals {
     novas: HashMap<(ClassId, AbilitySlot), arena::NovaMeshes<Handle<Mesh>>>,
     /// The ring an elite monster stands in, and its material by its twist.
     elite_ring: Handle<Mesh>,
-    elite_rings: HashMap<Affix, Handle<StandardMaterial>>,
+    elite_rings: HashMap<Affix, Handle<PlainMaterial>>,
     /// The ice around a frozen (rooted) fighter's feet, and the frost under a slowed one's.
     ice_prison: Handle<Mesh>,
     frost_rune: Handle<Mesh>,
@@ -155,9 +164,9 @@ pub(crate) struct Visuals {
     /// A bit of a spear's impact: its flash, a splinter.
     impact: Handle<Mesh>,
     /// Per look, the same for everyone.
-    materials: HashMap<Look, Handle<StandardMaterial>>,
+    materials: HashMap<Look, Handle<PlainMaterial>>,
     /// Bodies' (and their rigs' and cloth's), per class and whether frosted (`body`).
-    bodies: HashMap<(ClassId, bool), Handle<StandardMaterial>>,
+    bodies: HashMap<(ClassId, bool), Handle<PlainMaterial>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -202,7 +211,7 @@ impl Visuals {
     /// colors (in the mesh) times its class's tint (`ClassDef::tint`, white for most), with a
     /// cold cast while it's `frosted` (`effects::show_frost`). Who it is to you shows in its
     /// health bar.
-    pub(crate) fn body(&mut self, materials: &mut Assets<StandardMaterial>, class: ClassId, frosted: bool) -> Handle<StandardMaterial> {
+    pub(crate) fn body(&mut self, materials: &mut Assets<PlainMaterial>, class: ClassId, frosted: bool) -> Handle<PlainMaterial> {
         self.bodies
             .entry((class, frosted))
             .or_insert_with(|| {
@@ -213,7 +222,7 @@ impl Visuals {
             .clone()
     }
 
-    pub(crate) fn material(&mut self, materials: &mut Assets<StandardMaterial>, look: Look) -> Handle<StandardMaterial> {
+    pub(crate) fn material(&mut self, materials: &mut Assets<PlainMaterial>, look: Look) -> Handle<PlainMaterial> {
         self.materials
             .entry(look)
             .or_insert_with(|| {
@@ -248,7 +257,7 @@ pub(crate) struct WorldAligned(pub Quat, pub f32);
 fn setup_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
 ) {
     commands.spawn((
         DestinationMarker,
@@ -333,7 +342,7 @@ fn setup_scene(
 fn add_visuals(
     mut commands: Commands,
     mut visuals: ResMut<Visuals>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
     players: Query<(Entity, &PlayerId, &ClassId, &Pos, Option<&Elite>, Option<&Cooldowns>), Without<Mesh3d>>,
     projectiles: Query<(Entity, &Projectile, &Pos), Without<Mesh3d>>,
     me: Query<&PlayerId, With<Me>>,

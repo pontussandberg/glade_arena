@@ -21,6 +21,7 @@ use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
 use crate::arena::{self, palette};
+use crate::plain::PlainMaterial;
 
 mod trail;
 pub(crate) use trail::*;
@@ -118,28 +119,28 @@ impl Blade {
 struct SwishAssets {
     mark: Handle<Mesh>,
     /// Brightest first.
-    fades: Vec<Handle<StandardMaterial>>,
-    trail: Handle<StandardMaterial>,
+    fades: Vec<Handle<PlainMaterial>>,
+    trail: Handle<PlainMaterial>,
     chunk: Handle<Mesh>,
     wisp: Handle<Mesh>,
     /// The cracks' ink, darkest first; their spectral light, the void under them and the mist,
     /// brightest first.
-    rift_fades: Vec<Handle<StandardMaterial>>,
-    core_fades: Vec<Handle<StandardMaterial>>,
-    rim_fades: Vec<Handle<StandardMaterial>>,
-    dust_fades: Vec<Handle<StandardMaterial>>,
-    wisp_glow: Handle<StandardMaterial>,
+    rift_fades: Vec<Handle<PlainMaterial>>,
+    core_fades: Vec<Handle<PlainMaterial>>,
+    rim_fades: Vec<Handle<PlainMaterial>>,
+    dust_fades: Vec<Handle<PlainMaterial>>,
+    wisp_glow: Handle<PlainMaterial>,
     /// A dark mote of the void, thrown off with the rasp's sparks.
-    void_mote: Handle<StandardMaterial>,
+    void_mote: Handle<PlainMaterial>,
     /// A scuff a dragging point leaves.
     scuff: Handle<Mesh>,
     /// Earth and stone, dark enough for any ground.
-    chunks: [Handle<StandardMaterial>; 2],
+    chunks: [Handle<PlainMaterial>; 2],
     /// Embers flaking off a quickened blade.
-    ember_glow: Handle<StandardMaterial>,
+    ember_glow: Handle<PlainMaterial>,
 }
 
-fn load_swish(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn load_swish(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<PlainMaterial>>) {
     commands.insert_resource(SwishAssets {
         mark: meshes.add(mark_shape().build()),
         fades: fades(&mut materials, AIR, MARK_ALPHA, 2.0),
@@ -160,20 +161,20 @@ fn load_swish(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mate
 }
 
 /// A see-through `color` at `alpha`, fading out in `MARK_FADES` steps (one shared material each).
-fn fades(materials: &mut Assets<StandardMaterial>, color: Color, alpha: f32, glow: f32) -> Vec<Handle<StandardMaterial>> {
+fn fades(materials: &mut Assets<PlainMaterial>, color: Color, alpha: f32, glow: f32) -> Vec<Handle<PlainMaterial>> {
     layered(materials, color, alpha, glow, 0)
 }
 
 /// The step of `fades` (from `fades` or `layered`) for `t` (0 to 1) of the way faded out.
-fn faded(fades: &[Handle<StandardMaterial>], t: f32) -> &Handle<StandardMaterial> {
+fn faded(fades: &[Handle<PlainMaterial>], t: f32) -> &Handle<PlainMaterial> {
     &fades[((t * MARK_FADES as f32) as usize).min(MARK_FADES - 1)]
 }
 
 /// `fades`, drawn over the see-through layers below it in the same place (a higher `layer`):
 /// they'd otherwise sort however their distances happen to fall.
-fn layered(materials: &mut Assets<StandardMaterial>, color: Color, alpha: f32, glow: f32, layer: u8) -> Vec<Handle<StandardMaterial>> {
+fn layered(materials: &mut Assets<PlainMaterial>, color: Color, alpha: f32, glow: f32, layer: u8) -> Vec<Handle<PlainMaterial>> {
     (0..MARK_FADES)
-        .map(|i| materials.add(StandardMaterial { depth_bias: layer as f32, ..arena::translucent(color, alpha * (1.0 - i as f32 / MARK_FADES as f32), glow) }))
+        .map(|i| materials.add(PlainMaterial { depth_bias: layer as f32, ..arena::translucent(color, alpha * (1.0 - i as f32 / MARK_FADES as f32), glow) }))
         .collect()
 }
 

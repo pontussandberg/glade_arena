@@ -9,6 +9,7 @@ use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 
 use crate::arena::{FlatMesh, palette};
+use crate::plain::PlainMaterial;
 
 /// The mark a strike leaves: how long it lasts (seconds; it runs from where the blade starts to
 /// its tip, `Blade::from`), and how many steps it fades in (one shared material each).
@@ -181,7 +182,7 @@ pub(super) fn drive_marks(
     time: Res<Time>,
     assets: Res<SwishAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut marks: Query<(Entity, &mut Mark, &mut Transform, &mut MeshMaterial3d<StandardMaterial>)>,
+    mut marks: Query<(Entity, &mut Mark, &mut Transform, &mut MeshMaterial3d<PlainMaterial>)>,
 ) {
     let now = time.elapsed_secs();
     for (entity, mut mark, mut transform, mut material) in &mut marks {

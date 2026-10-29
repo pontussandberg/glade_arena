@@ -56,6 +56,7 @@ use crate::cloth::WardrobeAssets;
 use crate::feedback::AttackClock;
 use crate::arena::{self, RIG_HIP, RIG_KNEE, RIG_NECK, RIG_SHOULDER};
 use crate::ease::*;
+use crate::plain::PlainMaterial;
 
 mod joints;
 pub(crate) use joints::*;
@@ -162,7 +163,7 @@ const AURA_GLOW: f32 = 9.0;
 #[derive(Resource)]
 struct RigAssets {
     meshes: HashMap<ClassId, RigHandles>,
-    eye_glow: Handle<StandardMaterial>,
+    eye_glow: Handle<PlainMaterial>,
 }
 
 struct RigHandles {
@@ -175,11 +176,11 @@ struct RigHandles {
     shin: Handle<Mesh>,
     held: Handle<Mesh>,
     eyes: Handle<Mesh>,
-    glow: Handle<StandardMaterial>,
+    glow: Handle<PlainMaterial>,
     held_glow: Option<Handle<Mesh>>,
     body_glow: Option<Handle<Mesh>>,
-    held_aura: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
-    held_glint: Option<(Handle<Mesh>, Handle<StandardMaterial>, arena::Edge)>,
+    held_aura: Option<(Handle<Mesh>, Handle<PlainMaterial>)>,
+    held_glint: Option<(Handle<Mesh>, Handle<PlainMaterial>, arena::Edge)>,
     wardrobe: Option<WardrobeAssets>,
 }
 
@@ -239,7 +240,7 @@ pub(crate) struct Rig {
 fn load_rigs(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
 ) {
     let rigs = ClassId::all()
@@ -282,7 +283,7 @@ fn mirrored(right: Vec3) -> Vec3 {
 fn add_rigs(
     mut commands: Commands,
     assets: Res<RigAssets>,
-    new: Query<(Entity, &ClassId, &Pos, &MeshMaterial3d<StandardMaterial>, Option<&Elite>, Has<Shopkeeper>), Added<Mesh3d>>,
+    new: Query<(Entity, &ClassId, &Pos, &MeshMaterial3d<PlainMaterial>, Option<&Elite>, Has<Shopkeeper>), Added<Mesh3d>>,
     map: Res<crate::rooms::CurrentMap>,
 ) {
     for (player, class, pos, body, elite, shopkeeper) in &new {
@@ -291,7 +292,7 @@ fn add_rigs(
         let size = drawn_size(*class, elite.is_some());
         let elbows = [(); 2].map(|_| commands.spawn((Transform::from_translation(class_moves.elbow_at), Visibility::default())).id());
         let knees = [(); 2].map(|_| commands.spawn((Transform::from_translation(RIG_KNEE), Visibility::default())).id());
-        let mut part = |mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>, at: Vec3| {
+        let mut part = |mesh: &Handle<Mesh>, material: &Handle<PlainMaterial>, at: Vec3| {
             let transform = Transform::from_translation(at);
             commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), transform)).id()
         };

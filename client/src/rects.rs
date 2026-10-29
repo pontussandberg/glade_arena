@@ -44,15 +44,16 @@ impl Rects {
         self.runs.push((stack, self.quads.len() as u32));
     }
 
-    /// `color` over `left`..`right`, `top`..`bottom`.
-    pub fn push(&mut self, from: (f32, f32), to: (f32, f32), color: Color) {
+    /// `color` over `left`..`right`, `top`..`bottom`. A color drawn many times a frame is best
+    /// passed linear (a `Color` is made linear at every rectangle).
+    pub fn push(&mut self, from: (f32, f32), to: (f32, f32), color: impl Into<LinearRgba>) {
         self.round(from, to, 0.0, color);
     }
 
     /// `push`, its corners rounded by `radius` (as round as it goes, a circle in a square, at
     /// most).
-    pub fn round(&mut self, (left, top): (f32, f32), (right, bottom): (f32, f32), radius: f32, color: Color) {
-        let [r, g, b, a] = color.to_linear().to_f32_array();
+    pub fn round(&mut self, (left, top): (f32, f32), (right, bottom): (f32, f32), radius: f32, color: impl Into<LinearRgba>) {
+        let [r, g, b, a] = color.into().to_f32_array();
         self.quads.push([left, top, right, bottom, r, g, b, a, radius]);
     }
 }

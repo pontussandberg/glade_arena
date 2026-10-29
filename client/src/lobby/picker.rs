@@ -9,6 +9,7 @@ use crate::ChosenClass;
 use crate::browser::Typing;
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::{self, palette, to_world};
+use crate::plain::PlainMaterial;
 use crate::render::{Visuals, clicked, key_chip, ui_text};
 use crate::stat_frame;
 
@@ -89,7 +90,7 @@ pub(super) fn fold_details(header: Query<Ref<Interaction>, With<DetailsHeader>>,
 }
 
 /// Puts the selected fighter on the stage, when it changes.
-pub(super) fn show_fighter(mut commands: Commands, mut lobby: ResMut<Lobby>, visuals: Res<Visuals>, mut materials: ResMut<Assets<StandardMaterial>>) {
+pub(super) fn show_fighter(mut commands: Commands, mut lobby: ResMut<Lobby>, visuals: Res<Visuals>, mut materials: ResMut<Assets<PlainMaterial>>) {
     let selected = lobby.selected;
     if lobby.shown.is_some_and(|(_, shown)| shown == selected) {
         return;

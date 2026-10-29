@@ -50,6 +50,8 @@ pub mod perf;
 #[cfg(feature = "render")]
 pub mod rects;
 #[cfg(feature = "render")]
+pub mod plain;
+#[cfg(feature = "render")]
 mod item_icons;
 #[cfg(feature = "render")]
 pub mod arena;

@@ -4,6 +4,7 @@
 
 use super::*;
 
+use crate::plain::PlainMaterial;
 use crate::swish::noise;
 
 /// Drops dripping off a primed blade: how many a second, how hard they're pulled down (m/s²), how
@@ -24,10 +25,10 @@ const DRIP_GLOW: f32 = 5.0;
 #[derive(Resource)]
 pub(super) struct DripAssets {
     mesh: Handle<Mesh>,
-    material: Handle<StandardMaterial>,
+    material: Handle<PlainMaterial>,
 }
 
-pub(super) fn load_drips(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+pub(super) fn load_drips(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<PlainMaterial>>) {
     commands.insert_resource(DripAssets {
         mesh: meshes.add(Sphere::new(1.0).mesh().ico(1).unwrap()),
         material: materials.add(arena::glow(arena::palette::DEADEYE, DRIP_GLOW)),

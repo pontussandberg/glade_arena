@@ -11,7 +11,9 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 
 use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
+use bevy::asset::AssetEventSystems;
 use bevy::camera::primitives::{Frustum, Sphere as Ball};
+use bevy::camera::visibility::VisibilitySystems;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::math::Affine3A;
 use bevy::mesh::VertexAttributeValues;
@@ -20,6 +22,7 @@ use bevy::prelude::*;
 
 use crate::arena::{self, palette};
 use crate::feedback::AttackClock;
+use crate::plain::PlainMaterial;
 
 mod death;
 mod downed;
@@ -35,8 +38,11 @@ impl Plugin for FxPlugin {
         draw::plugin(app);
         app.add_systems(Startup, load_art);
         app.add_systems(Update, (recipes::play_new, strike_fx, burning_flames, downed::mark_downed, death::burst_deaths, death::spark_hits));
-        // Sorted from the camera once it has moved for the frame.
-        app.add_systems(PostUpdate, draw_parts.after(TransformSystems::Propagate));
+        // Sorted from the camera once it has moved for the frame, and culled by its view as it is
+        // then: after its frustum's worked out, and before Bevy hands out the frame's mesh asset
+        // news (it reads the meshes, and that news), so it runs alongside the UI's layout instead
+        // of holding up the frustum, and with it the visibility checks, the layout and the rest.
+        app.add_systems(PostUpdate, draw_parts.after(VisibilitySystems::UpdateFrusta).before(AssetEventSystems));
     }
 }
 
@@ -251,7 +257,7 @@ const VARIANTS: u32 = 4;
 #[derive(Resource)]
 pub(crate) struct FxArt {
     /// Each ink's materials, full first, clearing in `FADE_STEPS`.
-    inks: Vec<Vec<Handle<StandardMaterial>>>,
+    inks: Vec<Vec<Handle<PlainMaterial>>>,
     splotch: Vec<Handle<Mesh>>,
     streaks: Vec<Handle<Mesh>>,
     cracks: Vec<Handle<Mesh>>,
@@ -275,13 +281,13 @@ pub(crate) struct FxArt {
 }
 
 impl FxArt {
-    fn ink(&self, ink: Ink, faded: f32) -> &Handle<StandardMaterial> {
+    fn ink(&self, ink: Ink, faded: f32) -> &Handle<PlainMaterial> {
         let steps = &self.inks[ink as usize];
         &steps[((faded * FADE_STEPS as f32) as usize).min(FADE_STEPS - 1)]
     }
 }
 
-fn load_art(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn load_art(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<PlainMaterial>>) {
     let inks = Ink::ALL
         .iter()
         .map(|ink| {
@@ -289,7 +295,7 @@ fn load_art(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materi
             (0..FADE_STEPS)
                 .map(|i| {
                     let faded = alpha * (1.0 - i as f32 / FADE_STEPS as f32);
-                    materials.add(StandardMaterial { depth_bias: layer as f32, cull_mode: None, ..arena::translucent(color, faded, glow) })
+                    materials.add(PlainMaterial { depth_bias: layer as f32, cull_mode: None, ..arena::translucent(color, faded, glow) })
                 })
                 .collect()
         })

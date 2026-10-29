@@ -128,12 +128,11 @@ pub(crate) fn slider(parent: &mut ChildSpawnerCommands, setting: Setting, settin
         });
         row.spawn((Slider(setting), Node { width: percent(100.0), height: px(18.0), padding: UiRect::vertical(px(7.0)), ..default() }))
             .with_children(|track| {
-                track.spawn((Node { width: percent(100.0), height: px(4.0), ..default() }, BackgroundColor(palette::ui::MUTED.with_alpha(0.5)), Pickable::IGNORE));
+                track.spawn((Node { width: percent(100.0), height: px(4.0), ..default() }, BackgroundColor(palette::ui::MUTED.with_alpha(0.5))));
                 track.spawn((
                     Knob(setting),
                     Node { position_type: PositionType::Absolute, left: percent(setting.along(value) * 100.0), top: px(3.0), width: px(12.0), height: px(12.0), margin: UiRect::left(px(-6.0)), border_radius: BorderRadius::all(px(6.0)), ..default() },
                     BackgroundColor(ACCENT),
-                    Pickable::IGNORE,
                 ));
             });
     });

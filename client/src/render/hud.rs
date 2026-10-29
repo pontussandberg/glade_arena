@@ -190,7 +190,7 @@ pub(crate) fn pixel_art(parent: &mut ChildSpawnerCommands, rows: &[&str], pixel:
     let mut image = Image::new(size, TextureDimension::D2, texels, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
     image.sampler = ImageSampler::nearest();
     let node = Node { width: px(width as f32 * pixel), height: px(rows.len() as f32 * pixel), ..default() };
-    let art = parent.spawn((node, Pickable::IGNORE)).id();
+    let art = parent.spawn(node).id();
     parent.commands().queue(move |world: &mut World| {
         let image = world.resource_mut::<Assets<Image>>().add(image);
         if let Ok(mut art) = world.get_entity_mut(art) {
