@@ -168,10 +168,12 @@ pub(crate) enum Ink {
     Haste,
     /// Dust and grit kicked up: pale, see-through.
     Dust,
+    /// The faint line a blade's point scuffs, dragged along the ground (`swish/drag.rs`).
+    Scuff,
 }
 
 impl Ink {
-    const ALL: [Ink; 29] = [
+    const ALL: [Ink; 30] = [
         Ink::Scorch,
         Ink::Smoke,
         Ink::Earth,
@@ -201,6 +203,7 @@ impl Ink {
         Ink::Wisp,
         Ink::Haste,
         Ink::Dust,
+        Ink::Scuff,
     ];
 
     /// (color, opacity at most, glow, layer).
@@ -236,6 +239,7 @@ impl Ink {
             Ink::Wisp => (palette::WISP, 0.85, 6.0, 4),
             Ink::Haste => (palette::HASTE, 0.9, 5.0, 4),
             Ink::Dust => (rgb(0xC6, 0xB6, 0x96), 0.5, 0.4, 4),
+            Ink::Scuff => (palette::INK, 0.5, 0.0, 0),
         }
     }
 }

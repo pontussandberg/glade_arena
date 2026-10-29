@@ -115,12 +115,15 @@ impl SpecializedRenderPipeline for PartsPipeline {
     }
 }
 
-/// The frame's corners and triangles, swapped for the ones already drawn, which `draw_parts`
-/// fills again: nothing's copied, nor made anew.
+/// The frame's corners and triangles, swapped for the ones already drawn, which are cleared for
+/// `draw_parts` to fill again (nothing's copied, nor made anew): a frame it doesn't run, none
+/// are drawn.
 fn take_drawn(mut main: ResMut<MainWorld>, mut buffers: ResMut<Buffers>) {
     let Some(mut drawn) = main.get_resource_mut::<Drawn>() else { return };
     std::mem::swap(buffers.corners.values_mut(), &mut drawn.corners);
     std::mem::swap(buffers.triangles.values_mut(), &mut drawn.triangles);
+    drawn.corners.clear();
+    drawn.triangles.clear();
     buffers.center = drawn.center;
 }
 

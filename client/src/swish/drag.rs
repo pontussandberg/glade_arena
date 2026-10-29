@@ -6,16 +6,16 @@ use super::*;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 
 use crate::arena::FlatMesh;
+use crate::fx::{self, Ink, Part};
 
 /// A point dragging on the ground: how low over what's under it it has to be (meters), how far it
-/// goes between scuffs, how wide a scuff is and how high over the ground it lies, how long they
-/// last (seconds) and how see-through at most.
+/// goes between scuffs, how wide a scuff is and how high over the ground it lies, and how long
+/// they take to fade (seconds).
 const DRAG_HEIGHT: f32 = 0.06;
 const SCUFF_STEP: f32 = 0.1;
 const SCUFF_WIDTH: f32 = 0.035;
 const SCUFF_LIFT: f32 = 0.012;
 const SCUFF_LIFE: f32 = 1.6;
-pub(super) const SCUFF_ALPHA: f32 = 0.5;
 /// The rasp of spectral sparks a dragging blade gives off: the odds a scuff throws any (one, now
 /// and then two), how hard (m/s up, and back), how thin (meters) and how long they are drawn
 /// (times as long as thin), how long they last (seconds), and the odds one is a dark mote of
@@ -40,15 +40,9 @@ pub(super) fn scuff_mesh() -> Mesh {
     b.build()
 }
 
-/// A scuff in the ground, from `started` (seconds).
-#[derive(Component)]
-pub(super) struct Scuff {
-    pub(super) started: f32,
-}
-
 /// A blade whose point drags along the ground (or whatever it's on: a crate, a roof) scuffs it, a
 /// short stroke each `SCUFF_STEP` it goes, lying on it (not across a jump, a waygate or a
-/// respawn, nor up or down a step).
+/// respawn, nor up or down a step), fading out (an effect's part, `fx`: drawn with the rest).
 pub(super) fn drag_marks(mut commands: Commands, time: Res<Time>, assets: Res<SwishAssets>, map: Res<crate::rooms::CurrentMap>, mut fighters: Query<&mut Blade>, blades: Query<&GlobalTransform>) {
     let now = time.elapsed_secs();
     for mut blade in &mut fighters {
@@ -70,18 +64,10 @@ pub(super) fn drag_marks(mut commands: Commands, time: Res<Time>, assets: Res<Sw
         if stroke.length() > arena_shared::config::JUMP || across_a_step {
             blade.dragged = Some(at);
         } else if stroke.length() >= SCUFF_STEP {
-            let transform = Transform::from_translation(last)
-                .with_rotation(Quat::from_rotation_arc(Vec3::X, stroke.normalize()))
-                .with_scale(Vec3::new(stroke.length(), 1.0, SCUFF_WIDTH));
-            commands.spawn((
-                Mesh3d(assets.scuff.clone()),
-                MeshMaterial3d(assets.scuff_fades[0].clone()),
-                transform,
-                GlobalTransform::from(transform),
-                Scuff { started: now },
-                NotShadowCaster,
-                NotShadowReceiver,
-            ));
+            let scuff = Part::new(now, [0.0, 0.0, SCUFF_LIFE], Ink::Scuff, last)
+                .turn(Quat::from_rotation_arc(Vec3::X, stroke.normalize()))
+                .sized(Vec3::new(stroke.length(), 1.0, SCUFF_WIDTH));
+            fx::put(&mut commands, &assets.scuff, scuff);
             // The rasp: now and then a spark or two of spectral light thrown off where it scrapes,
             // hopping up and back the way it came.
             blade.rasp = blade.rasp.wrapping_add(1);
@@ -137,21 +123,5 @@ pub(super) fn fly_sparks(mut commands: Commands, time: Res<Time>, map: Res<crate
         let size = spark.size * (1.0 - t * t);
         transform.rotation = Quat::from_rotation_arc(Vec3::Y, spark.velocity.normalize_or(Vec3::Y));
         transform.scale = Vec3::new(size, size * SPARK_STRETCH, size);
-    }
-}
-
-/// Scuffs fade, and are gone.
-pub(super) fn fade_scuffs(mut commands: Commands, time: Res<Time>, assets: Res<SwishAssets>, mut scuffs: Query<(Entity, &Scuff, &mut MeshMaterial3d<StandardMaterial>)>) {
-    let now = time.elapsed_secs();
-    for (entity, scuff, mut material) in &mut scuffs {
-        let t = (now - scuff.started) / SCUFF_LIFE;
-        if t >= 1.0 {
-            commands.entity(entity).despawn();
-            continue;
-        }
-        let faded = faded(&assets.scuff_fades, t);
-        if material.0 != *faded {
-            material.0 = faded.clone();
-        }
     }
 }

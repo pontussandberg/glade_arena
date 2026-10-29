@@ -6,11 +6,10 @@
 
 use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
-use bevy::asset::RenderAssetUsages;
 use bevy::ecs::system::SystemParam;
-use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::render::sync_world::RenderEntity;
+use bevy::ui::ComputedStackIndex;
 use lightyear::core::time::TickInstant;
 use lightyear::interpolation::timeline::InterpolationTimeline;
 use lightyear::prelude::client::RemoteTimeline;
@@ -21,6 +20,7 @@ use crate::Me;
 use crate::camera::CameraPlaced;
 use crate::arena::{palette, to_gameplay};
 use crate::render::{Relation, shown, ui_text};
+use crate::rects::Rects;
 use crate::render::GameUi;
 use crate::rooms::Screen;
 
@@ -28,12 +28,13 @@ pub struct FeedbackPlugin;
 
 impl Plugin for FeedbackPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(crate::rects::RectsPlugin);
         app.add_systems(Startup, spawn_world_ui);
         app.add_systems(
             Update,
             (
-                (spawn_bars, color_bars).chain(),
-                place_bars.in_set(CameraPlaced).run_if(in_state(Screen::InGame)),
+                add_bars,
+                draw_bars.in_set(CameraPlaced).run_if(in_state(Screen::InGame)),
                 react_to_hits,
                 hide_the_dead,
                 spawn_damage_numbers,
@@ -125,19 +126,10 @@ fn number_flown(throw: Vec2, age: f32) -> Vec2 {
     throw * age - Vec2::Y * NUMBER_GRAVITY * age * age / 2.0
 }
 
-/// A fighter's bars: the health bar (this entity) and its parts.
-#[derive(Component)]
-struct Bars {
-    player: Entity,
-    health_fill: Entity,
-    trail: Entity,
-    cast: Entity,
-    cast_fill: Entity,
-}
-
-/// The health a bar's trail (`Bars::trail`) still shows, as a fraction of the most; the health
-/// it saw last frame, to tell a new hit; when the last hit landed; and when the last crit we
-/// saw (`CritAt`) landed, and whether the trail still shows one (until it has drained).
+/// On a fighter with bars (`draw_bars`): the health its health bar's trail still shows, as a
+/// fraction of the most; the health it saw last frame, to tell a new hit; when the last hit
+/// landed; and when the last crit we saw (`CritAt`) landed, and whether the trail still shows
+/// one (until it has drained).
 #[derive(Component)]
 struct HealthTrail {
     fraction: f32,
@@ -176,8 +168,9 @@ struct DamageNumber {
     merges: Option<i32>,
 }
 
-/// What floats over the fighters (bars, damage numbers): under one screen-filling `GameUi` root,
-/// so it's all hidden outside the arena, where others can still be fighting.
+/// What floats over the fighters: their damage numbers under one screen-filling `GameUi` root,
+/// and their bars drawn just over it (`draw_bars`), so it's all hidden outside the arena, where
+/// others can still be fighting.
 #[derive(Component)]
 struct WorldUi;
 
@@ -190,79 +183,10 @@ fn spawn_world_ui(mut commands: Commands) {
     ));
 }
 
-/// Each fighter gets its bars once it has a body.
-#[allow(clippy::type_complexity)]
-fn spawn_bars(
-    mut commands: Commands,
-    mut images: ResMut<Assets<Image>>,
-    mut strips: Local<TickStrips>,
-    world_ui: Single<Entity, With<WorldUi>>,
-    // The shopkeeper has none: no one can hurt them.
-    new: Query<(Entity, &ClassId, Has<Me>, Option<&MaxHealth>, Has<Elite>), (With<PlayerId>, Added<Mesh3d>, Without<Shopkeeper>)>,
-) {
-    let fill = |color: Color| (Node { width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(color));
-    let frame = |node: Node| {
-        (
-            Node { border: UiRect::all(px(1.0)), position_type: PositionType::Absolute, ..node },
-            BackgroundColor(palette::ui::PANEL.with_alpha(0.8)),
-            BorderColor::all(palette::ui::PANEL),
-        )
-    };
-    for (player, class, is_me, max, elite) in &new {
-        let size = bar_size(*class, elite);
-        // Behind the fill (spawned before it), reaching past it to show health just lost.
-        let trail = commands
-            .spawn((Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(Color::WHITE)))
-            .id();
-        let health_fill = commands.spawn(fill(Relation::of(is_me, false).color())).id();
-        // Over the fill (spawned after it), at every `HP_PER_TICK` of the fighter's health: one
-        // picture of them all (`TickStrips`).
-        let max_hp = max.map_or(class.def().max_hp, |m| m.0);
-        let per_tick = tick_every(max_hp, size.x);
-        let (atlas, rect) = strips.strip(&mut images, (size.x - 2.0).round() as u32, per_tick, max_hp);
-        let marks = ImageNode { image_mode: NodeImageMode::Stretch, rect: Some(rect), ..ImageNode::new(atlas) };
-        let ticks = commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() }, marks)).id();
-        // Pale, so it never reads as a (colored) health bar.
-        let cast_fill = commands.spawn(fill(palette::SUN)).id();
-        // Absolute inside the health bar's border, so shift left by it to line the two up.
-        let cast = commands
-            .spawn((
-                frame(Node { left: px(-1.0), top: px(size.y - 1.0), width: px(size.x), height: px(CAST_BAR_HEIGHT), ..default() }),
-                Visibility::Hidden,
-            ))
-            .add_child(cast_fill)
-            .id();
-        commands
-            .spawn((
-                Bars { player, health_fill, trail, cast, cast_fill },
-                HealthTrail { fraction: 1.0, last: 1.0, hit_at: 0.0, crit_at: 0.0, crit: false },
-                ChildOf(*world_ui),
-                frame(Node { width: px(size.x), height: px(size.y), ..default() }),
-                Visibility::Hidden,
-            ))
-            .add_child(trail)
-            .add_child(health_fill)
-            .add_child(ticks)
-            .add_child(cast);
-    }
-}
-
-/// A health bar is in its fighter's `Relation` color: ours, an ally's, an enemy's or a
-/// monster's.
-fn color_bars(
-    players: Query<&Relation>,
-    changed: Query<(), Changed<Relation>>,
-    new: Query<(), Added<Bars>>,
-    bars: Query<(Entity, &Bars)>,
-    mut fills: Query<&mut BackgroundColor>,
-) {
-    for (bar, ids) in &bars {
-        if !(changed.contains(ids.player) || new.contains(bar)) {
-            continue;
-        }
-        if let (Ok(relation), Ok(mut fill)) = (players.get(ids.player), fills.get_mut(ids.health_fill)) {
-            fill.set_if_neq(BackgroundColor(relation.color()));
-        }
+/// Each fighter gets its bars once it has a body. The shopkeeper has none: no one can hurt them.
+fn add_bars(mut commands: Commands, new: Query<Entity, (With<PlayerId>, Added<Mesh3d>, Without<Shopkeeper>)>) {
+    for fighter in &new {
+        commands.entity(fighter).insert(HealthTrail { fraction: 1.0, last: 1.0, hit_at: 0.0, crit_at: 0.0, crit: false });
     }
 }
 
@@ -273,78 +197,6 @@ fn tick_every(max_hp: i32, width: f32) -> i32 {
     let tough = max_hp / (HP_PER_TICK * MOST_TICKS);
     let close = (TICK_GAP * max_hp as f32 / (width * HP_PER_TICK as f32)).ceil() as i32;
     HP_PER_TICK * tough.max(close).max(1)
-}
-
-/// How many texels a strip of marks has to a pixel of the bar, so a mark a pixel wide stays
-/// sharp stretched over the bar (fewer for a bar too wide for the picture); how wide the picture
-/// of them all is (`TickStrips`); and how many rows each strip takes (the same, so none blurs into
-/// the next).
-const STRIP_TEXELS: u32 = 4;
-const STRIPS_WIDTH: u32 = 512;
-const STRIP_ROWS: u32 = 3;
-
-/// Every bar's marks in one picture, a strip for each way they fall (a bar's width inside its
-/// frame, the health a mark is apart, the most), added as a bar needs one: every bar draws from
-/// the same texture, so they're all drawn together, not a draw for each kind of fighter.
-#[derive(Default)]
-struct TickStrips {
-    image: Option<Handle<Image>>,
-    strips: HashMap<(u32, i32, i32), u32>,
-}
-
-impl TickStrips {
-    /// The picture, and where in it the marks over a bar `width` pixels wide inside its frame
-    /// are, every `per_tick` of `max_hp`: a mark a pixel wide at each, clear between.
-    fn strip(&mut self, images: &mut Assets<Image>, width: u32, per_tick: i32, max_hp: i32) -> (Handle<Image>, Rect) {
-        let per_pixel = STRIP_TEXELS.min(STRIPS_WIDTH / width.max(1)).max(1);
-        let texels = (width * per_pixel).min(STRIPS_WIDTH);
-        let row = |strip: u32| Rect::new(0.0, (strip * STRIP_ROWS + 1) as f32, texels as f32, (strip * STRIP_ROWS + 2) as f32);
-        let image = self.image.get_or_insert_with(|| images.add(blank_strips(8))).clone();
-        if let Some(&strip) = self.strips.get(&(width, per_tick, max_hp)) {
-            return (image, row(strip));
-        }
-        let strip = self.strips.len() as u32;
-        self.strips.insert((width, per_tick, max_hp), strip);
-        let Some(mut picture) = images.get_mut(&image) else { return (image, row(strip)) };
-        // Twice as tall once it's full, the strips so far kept.
-        let rows = picture.height();
-        if (strip + 1) * STRIP_ROWS > rows {
-            let mut taller = blank_strips(rows / STRIP_ROWS * 2);
-            if let (Some(old), Some(new)) = (&picture.data, &mut taller.data) {
-                new[..old.len()].copy_from_slice(old);
-            }
-            *picture = taller;
-        }
-        let mark = (0.85 * 255.0f32).round() as u8;
-        if let Some(pixels) = &mut picture.data {
-            for hp in (1..).map(|n| n * per_tick).take_while(|&hp| hp < max_hp) {
-                let at = (width as f32 * hp as f32 / max_hp as f32).round() as u32 * per_pixel;
-                for y in strip * STRIP_ROWS..(strip + 1) * STRIP_ROWS {
-                    for x in at..(at + per_pixel).min(texels) {
-                        pixels[((y * STRIPS_WIDTH + x) * 4 + 3) as usize] = mark;
-                    }
-                }
-            }
-        }
-        (image, row(strip))
-    }
-}
-
-/// Room for `strips` strips of marks, all clear (in the marks' own color, so the edges they blur
-/// into don't darken).
-fn blank_strips(strips: u32) -> Image {
-    let [r, g, b, _] = palette::ui::PANEL.to_srgba().to_u8_array();
-    let size = Extent3d { width: STRIPS_WIDTH, height: strips * STRIP_ROWS, depth_or_array_layers: 1 };
-    let pixels = (0..size.width * size.height).flat_map(|_| [r, g, b, 0]).collect();
-    Image::new(size, TextureDimension::D2, pixels, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default())
-}
-
-/// A bar's fill (its health, the health just lost, the attack timer) at `fraction` of its
-/// width from its left, by its `UiTransform`: a fill that changes every frame then doesn't make
-/// Bevy lay the UI out again.
-fn set_fill(transform: &mut Mut<UiTransform>, fraction: f32) {
-    let fraction = fraction.clamp(0.0, 1.0);
-    transform.set_if_neq(UiTransform { translation: Val2::percent(-(1.0 - fraction) * 50.0, 0.0), scale: Vec2::new(fraction, 1.0), ..default() });
 }
 
 /// Where a fighter's health bar is, over its head, in the world.
@@ -414,69 +266,117 @@ impl AttackClock<'_> {
     }
 }
 
-/// Keep each fighter's bars over it and filled (the cast bar by `AttackClock`), hidden while a
-/// wall, a roof or a hill is between the camera and them (`Map::sight_meets`; ours always
-/// shows). A bar is moved by its `UiTransform`, which Bevy applies after laying the UI out, so
-/// a crowd on the move doesn't make it lay everything out again every frame; and only what
-/// changed is written.
-fn place_bars(
-    mut commands: Commands,
+/// A fighter's bars as `draw_bars` draws them: where the health bar's middle is on screen and how
+/// big it is (pixels), how much bigger it pops for a crit, how full it is and its trail, in what
+/// colors, its marks (every `per_tick` of `max_hp`), and how full the cast bar under it is while
+/// the attack recovers.
+struct Bar {
+    middle: Vec2,
+    size: Vec2,
+    pop: f32,
+    health: f32,
+    trail: f32,
+    fill_color: Color,
+    trail_color: Color,
+    per_tick: i32,
+    max_hp: i32,
+    cast: Option<f32>,
+}
+
+/// Every fighter's bars drawn over it, the nearest over the rest, just over `WorldUi` (so under
+/// the damage numbers) as flat rectangles (`Rects`), not UI nodes: a crowd's bars as nodes made
+/// Bevy go over every one of them every frame. None while a wall, a roof or a hill is between
+/// the camera and them (`Map::sight_meets`; ours always shows), nor while they're dead, nor
+/// outside the arena (`WorldUi` hidden). The cast bar goes by `AttackClock`.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn draw_bars(
     time: Res<Time>,
     clock: AttackClock,
     map: Option<Res<crate::rooms::CurrentMap>>,
-    camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
-    players: Query<(&Transform, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Has<Me>, (Option<&MaxHealth>, Has<Elite>))>,
-    mut bars: Query<(Entity, &Bars, &mut HealthTrail, &mut UiTransform, &mut Visibility)>,
-    mut parts: Query<(&mut UiTransform, &mut Visibility), Without<Bars>>,
-    mut colors: Query<&mut BackgroundColor>,
+    camera: Single<(&Camera, &GlobalTransform, &RenderEntity), With<crate::camera::CameraRig>>,
+    world_ui: Single<(&ComputedStackIndex, &InheritedVisibility), With<WorldUi>>,
+    mut fighters: Query<(&Transform, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Has<Me>, (Option<&MaxHealth>, Has<Elite>, Option<&Relation>), &mut HealthTrail)>,
+    mut rects: ResMut<Rects>,
+    mut shown: Local<Vec<(f32, Bar)>>,
 ) {
-    let (camera, camera_transform) = *camera;
+    let (camera, camera_transform, render_entity) = *camera;
+    let (stack, world_ui_shown) = *world_ui;
+    (rects.over, rects.camera) = (Some(stack.0), Some(render_entity.id()));
     let now = time.elapsed_secs();
-    for (bar, ids, mut trail, mut transform, mut visibility) in &mut bars {
-        let Ok((body, class, health, crit_at, attack, is_me, (max, elite))) = players.get(ids.player) else {
-            commands.entity(bar).despawn();
-            continue;
-        };
+    let eye = camera_transform.translation();
+    shown.clear();
+    for (body, class, health, crit_at, attack, is_me, (max, elite, relation), mut trail) in &mut fighters {
         let max_hp = max.map_or(class.def().max_hp, |m| m.0);
         let health_fraction = health.map_or(1.0, |h| h.0 as f32 / max_hp as f32);
         update_trail(&mut trail, health_fraction, crit_at.map(|c| c.0), now, time.delta_secs());
         let alive = health.is_none_or(Health::alive);
         let height = crate::rig::drawn_size(*class, elite);
-        let eye = camera_transform.translation();
         let over = bar_point(body, height);
         let hidden = !is_me && map.as_ref().is_some_and(|map| map.map().sight_meets((to_gameplay(eye), eye.y), (to_gameplay(over), over.y)));
-        let Some(screen) = over_bar(camera, camera_transform, body, height).filter(|_| alive && !hidden) else {
-            visibility.set_if_neq(Visibility::Hidden);
-            continue;
-        };
-        visibility.set_if_neq(Visibility::Inherited);
+        let Some(middle) = over_bar(camera, camera_transform, body, height).filter(|_| alive && !hidden && world_ui_shown.get()) else { continue };
         let size = bar_size(*class, elite);
-        let at = Val2::px(screen.x - size.x / 2.0, screen.y - size.y / 2.0);
-
-        let mut fill_to = |part: Entity, fraction: f32| {
-            if let Ok((mut fill, _)) = parts.get_mut(part) {
-                set_fill(&mut fill, fraction);
-            }
-        };
-        fill_to(ids.health_fill, health_fraction);
-        fill_to(ids.trail, trail.fraction);
-        if let Ok(mut color) = colors.get_mut(ids.trail) {
-            let (start, hold) = if trail.crit { (palette::TORCH_FLAME, CRIT_TRAIL_HOLD) } else { (Color::WHITE, TRAIL_HOLD) };
-            let pale = ((now - trail.hit_at) / hold).min(1.0);
-            color.set_if_neq(BackgroundColor(start.mix(&palette::SUN, pale)));
-        }
-        let pop = 1.0 + CRIT_BAR_POP * (1.0 - (now - trail.crit_at) / CRIT_BAR_POP_SECONDS).max(0.0).powi(2);
-        transform.set_if_neq(UiTransform { translation: at, scale: Vec2::splat(pop), ..default() });
+        let (start, hold) = if trail.crit { (palette::TORCH_FLAME, CRIT_TRAIL_HOLD) } else { (Color::WHITE, TRAIL_HOLD) };
+        let pale = ((now - trail.hit_at) / hold).min(1.0);
         // The attack timer, once the attack has gone off (the windup only shows in the fighter,
         // and a cancelled one shows nothing): full as it goes off, draining from the right until
         // the next attack may start.
-        let cooling = attack.swing.filter(|_| attack.released());
-        if let Some(swing) = cooling {
-            fill_to(ids.cast_fill, 1.0 - swing.cooldown_progress(clock.now(is_me), &class.def().attack));
-        }
-        if let Ok((_, mut cast_visibility)) = parts.get_mut(ids.cast) {
-            cast_visibility.set_if_neq(shown(cooling.is_some()));
-        }
+        let cast = attack.swing.filter(|_| attack.released()).map(|swing| 1.0 - swing.cooldown_progress(clock.now(is_me), &class.def().attack));
+        let bar = Bar {
+            middle,
+            size,
+            pop: 1.0 + CRIT_BAR_POP * (1.0 - (now - trail.crit_at) / CRIT_BAR_POP_SECONDS).max(0.0).powi(2),
+            health: health_fraction,
+            trail: trail.fraction,
+            fill_color: relation.copied().unwrap_or(Relation::of(is_me, false)).color(),
+            trail_color: start.mix(&palette::SUN, pale),
+            per_tick: tick_every(max_hp, size.x),
+            max_hp,
+            cast,
+        };
+        shown.push((eye.distance(over), bar));
+    }
+    shown.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let scale = camera.target_scaling_factor().unwrap_or(1.0);
+    for (_, bar) in shown.iter() {
+        draw_bar(&mut rects, bar, scale);
+    }
+}
+
+/// `bar`'s rectangles, laid out as the UI would lay out a node of that size with a border, its
+/// fills, marks and cast bar in it: from its top left (`(0, 0)`, in pixels before `scale`) on a
+/// whole pixel, growing from its middle as it pops.
+fn draw_bar(rects: &mut Rects, bar: &Bar, scale: f32) {
+    let corner = ((bar.middle - bar.size / 2.0) * scale).round();
+    let middle = corner + bar.size / 2.0 * scale;
+    let at = |p: Vec2| middle + (p - bar.size / 2.0) * bar.pop * scale;
+    let mut rect = |from: Vec2, to: Vec2, color: Color| {
+        let (from, to) = (at(from), at(to));
+        rects.push((from.x, from.y), (to.x, to.y), color);
+    };
+    // A frame: see-through inside, its border solid.
+    fn frame(rect: &mut impl FnMut(Vec2, Vec2, Color), from: Vec2, to: Vec2) {
+        rect(from + 1.0, to - 1.0, palette::ui::PANEL.with_alpha(0.8));
+        rect(from, Vec2::new(to.x, from.y + 1.0), palette::ui::PANEL);
+        rect(Vec2::new(from.x, to.y - 1.0), to, palette::ui::PANEL);
+        rect(Vec2::new(from.x, from.y + 1.0), Vec2::new(from.x + 1.0, to.y - 1.0), palette::ui::PANEL);
+        rect(Vec2::new(to.x - 1.0, from.y + 1.0), Vec2::new(to.x, to.y - 1.0), palette::ui::PANEL);
+    }
+    frame(&mut rect, Vec2::ZERO, bar.size);
+    let inside = bar.size - 2.0;
+    let filled = |fraction: f32| Vec2::ONE + Vec2::new(inside.x * fraction.clamp(0.0, 1.0), inside.y);
+    // The health just lost behind the health, then the marks over it, a pixel wide each.
+    rect(Vec2::ONE, filled(bar.trail), bar.trail_color);
+    rect(Vec2::ONE, filled(bar.health), bar.fill_color);
+    let width = inside.x.round();
+    for hp in (1..).map(|n| n * bar.per_tick).take_while(|&hp| hp < bar.max_hp) {
+        let x = 1.0 + (width * hp as f32 / bar.max_hp as f32).round();
+        rect(Vec2::new(x, 1.0), Vec2::new(x + 1.0, 1.0 + inside.y), palette::ui::PANEL.with_alpha(0.85));
+    }
+    // Hanging right under it, as wide; pale, so it never reads as a (colored) health bar.
+    if let Some(cast) = bar.cast {
+        let top = Vec2::new(0.0, bar.size.y);
+        frame(&mut rect, top, top + Vec2::new(bar.size.x, CAST_BAR_HEIGHT));
+        rect(top + 1.0, top + Vec2::new(1.0 + (bar.size.x - 2.0) * cast.clamp(0.0, 1.0), CAST_BAR_HEIGHT - 1.0), palette::SUN);
     }
 }
 

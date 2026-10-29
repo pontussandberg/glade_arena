@@ -42,7 +42,7 @@ impl Plugin for SwishPlugin {
         app.add_systems(Startup, load_swish);
         app.add_systems(Update, (add_trails, drive_marks, drive_impacts, throw_chunks, burn_in_rifts));
         app.add_systems(PostUpdate, (trail_blades, show_marks, strike_ground, drag_marks, shed_embers).chain().after(TransformSystems::Propagate));
-        app.add_systems(Update, (fade_scuffs, fly_sparks, drift_embers));
+        app.add_systems(Update, (fly_sparks, drift_embers));
     }
 }
 
@@ -131,9 +131,8 @@ struct SwishAssets {
     wisp_glow: Handle<StandardMaterial>,
     /// A dark mote of the void, thrown off with the rasp's sparks.
     void_mote: Handle<StandardMaterial>,
-    /// A scuff a dragging point leaves, and its ink fading.
+    /// A scuff a dragging point leaves.
     scuff: Handle<Mesh>,
-    scuff_fades: Vec<Handle<StandardMaterial>>,
     /// Earth and stone, dark enough for any ground.
     chunks: [Handle<StandardMaterial>; 2],
     /// Embers flaking off a quickened blade.
@@ -155,7 +154,6 @@ fn load_swish(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mate
         wisp_glow: materials.add(arena::glow(palette::WISP, CORE_GLOW)),
         void_mote: materials.add(arena::glow(palette::TATTERS, 0.0)),
         scuff: meshes.add(scuff_mesh()),
-        scuff_fades: fades(&mut materials, palette::INK, SCUFF_ALPHA, 0.0),
         chunks: [palette::HUNTER_DARK, palette::ASH].map(|color| materials.add(arena::matte(color))),
         ember_glow: materials.add(arena::glow(palette::SOUL, EMBER_GLOW)),
     });
