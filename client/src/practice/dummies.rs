@@ -16,6 +16,7 @@ use lightyear::prelude::*;
 
 use crate::arena::{self, palette, to_world};
 use crate::camera::CameraPlaced;
+use crate::plain::PlainMaterial;
 use crate::render::{GameUi, HudButton, button, clicked, ground_at, shown, ui_text};
 use crate::rooms::{CurrentMap, Screen, request};
 
@@ -133,11 +134,11 @@ fn place_dummy(
 /// fighter's size, pale where one can stand and red where it can't.
 #[derive(Component)]
 struct Marker {
-    can: Handle<StandardMaterial>,
-    cannot: Handle<StandardMaterial>,
+    can: Handle<PlainMaterial>,
+    cannot: Handle<PlainMaterial>,
 }
 
-fn spawn_marker(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn spawn_marker(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<PlainMaterial>>) {
     let can = materials.add(arena::translucent(palette::SILVER, 0.7, 1.5));
     commands.spawn((
         Marker { can: can.clone(), cannot: materials.add(arena::translucent(palette::ENEMY, 0.7, 1.5)) },
@@ -154,7 +155,7 @@ fn show_marker(
     placing: Res<Placing>,
     window: Single<&Window>,
     camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
-    marker: Single<(&Marker, &mut Transform, &mut MeshMaterial3d<StandardMaterial>, &mut Visibility)>,
+    marker: Single<(&Marker, &mut Transform, &mut MeshMaterial3d<PlainMaterial>, &mut Visibility)>,
     map: Res<CurrentMap>,
 ) {
     let (marker, mut transform, mut material, mut visibility) = marker.into_inner();
@@ -192,7 +193,6 @@ fn show_hint(mut commands: Commands, placing: Res<Placing>, hint: Query<Entity, 
                 justify_content: JustifyContent::Center,
                 ..default()
             },
-            Pickable::IGNORE,
             children![ui_text(format!("Click to place {what}  ·  right-click or ESC to cancel"), 14.0, palette::ui::ACCENT)],
         ));
     }

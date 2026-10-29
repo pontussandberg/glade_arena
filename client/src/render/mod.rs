@@ -12,12 +12,14 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::Me;
+use crate::plain::PlainMaterial;
 
 use crate::abilities::SeenCasts;
 use crate::camera::CameraPlaced;
 use crate::rooms::load_setting;
 use crate::arena::{self, palette, to_world};
 
+mod bounds;
 mod shots;
 pub(crate) use shots::*;
 mod effects;
@@ -27,14 +29,17 @@ pub(crate) use hud::*;
 mod input;
 pub(crate) use input::*;
 mod glide;
+pub(crate) use glide::{PredictedWalk, shown_height};
 use glide::*;
+mod aim;
+use aim::*;
 
 pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(forget_body);
         app.add_observer(strike_home);
+        app.add_plugins(bounds::plugin);
         app.add_plugins((
             arena::ArenaPlugin,
             crate::camera::CameraPlugin,
@@ -42,6 +47,7 @@ impl Plugin for RenderPlugin {
             crate::browser::BrowserPlugin,
             crate::lobby::LobbyPlugin,
             crate::esc_menu::EscMenuPlugin,
+            crate::settings::SettingsPlugin,
             crate::feedback::FeedbackPlugin,
             crate::rig::RigPlugin,
             crate::action_bar::ActionBarPlugin,
@@ -51,14 +57,24 @@ impl Plugin for RenderPlugin {
             crate::tooltip::TooltipPlugin,
             crate::practice::PracticePlugin,
         ));
-        app.add_plugins((crate::waygates::WaygatesPlugin, crate::scoreboard::ScoreboardPlugin, crate::waves::WavesPlugin, crate::fx::FxPlugin, crate::prompt::PromptPlugin, crate::audio::AudioPlugin));
+        app.add_plugins((
+            crate::plain::PlainPlugin,
+            crate::waygates::WaygatesPlugin,
+            crate::scoreboard::ScoreboardPlugin,
+            crate::waves::WavesPlugin,
+            crate::fx::FxPlugin,
+            crate::prompt::PromptPlugin,
+            crate::audio::AudioPlugin,
+        ));
         app.insert_resource(ControlsOpen(load_setting(CONTROLS_KEY).as_deref() == Some("open")));
         app.add_systems(Startup, setup_scene);
         // Right after the network's updates are in, before anything this frame reads positions.
         app.init_resource::<crate::feedback::LatestClock>();
         app.add_systems(
             RunFixedMainLoop,
-            (crate::feedback::advance_latest_clock, glide_me).chain().in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
+            (crate::feedback::advance_latest_clock, glide_me.run_if(|mode: Res<crate::camera::CameraMode>| !mode.free), predict_me.run_if(|mode: Res<crate::camera::CameraMode>| mode.free))
+                .chain()
+                .in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
         );
         app.add_systems(
             Update,
@@ -66,26 +82,17 @@ impl Plugin for RenderPlugin {
                 (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
                 (add_visuals, sync_transforms, lift_fighters).chain().before(crate::rig::Posing),
                 (fly_shots, fade_wakes, fly_impacts, crate::rig::empty_hands).chain().after(crate::rig::Posing),
-                (show_novas, grow_bursts, end_fleeting, show_frost),
+                (show_novas, grow_bursts, end_fleeting),
+                // Once a new fighter's rig and cloth are on it, so they go over to the frosted
+                // material with its body.
+                show_frost.after(crate::rig::Posing),
                 align_to_world.after(crate::rig::Posing).after(fly_shots),
                 toggle_range_circle,
                 fit_range_circle,
-                (update_status, update_key_hints, fold_controls),
+                (update_status, update_key_hints, fold_controls, show_crosshair),
                 (mark_relations, light_buttons),
             ),
         );
-    }
-}
-
-/// What a fighter's figure's colors are multiplied by: its class's tint (`ClassDef::tint`), white
-/// for most.
-#[derive(Component, Clone, Copy)]
-pub(crate) struct Tint(pub(crate) Color);
-
-impl Tint {
-    pub(crate) fn of(class: ClassId) -> Tint {
-        let (r, g, b) = class.def().tint();
-        Tint(Color::linear_rgb(r, g, b))
     }
 }
 
@@ -132,8 +139,9 @@ impl Relation {
     }
 }
 
-/// Meshes shared by every player and projectile (one figure, one range circle per class),
-/// and materials per player, so attacking doesn't create and upload new GPU assets.
+/// Meshes and materials shared by every player and projectile (one figure, one range circle,
+/// one body material per class), so attacking doesn't create and upload new GPU assets, and a
+/// crowd of one kind draws in a few batches.
 #[derive(Resource)]
 pub(crate) struct Visuals {
     fighters: HashMap<ClassId, Handle<Mesh>>,
@@ -144,7 +152,7 @@ pub(crate) struct Visuals {
     novas: HashMap<(ClassId, AbilitySlot), arena::NovaMeshes<Handle<Mesh>>>,
     /// The ring an elite monster stands in, and its material by its twist.
     elite_ring: Handle<Mesh>,
-    elite_rings: HashMap<Affix, Handle<StandardMaterial>>,
+    elite_rings: HashMap<Affix, Handle<PlainMaterial>>,
     /// The ice around a frozen (rooted) fighter's feet, and the frost under a slowed one's.
     ice_prison: Handle<Mesh>,
     frost_rune: Handle<Mesh>,
@@ -158,14 +166,14 @@ pub(crate) struct Visuals {
     spear_shadow: Handle<Mesh>,
     /// A bit of a spear's impact: its flash, a splinter.
     impact: Handle<Mesh>,
-    /// Per owner (`None` for looks that are the same for everyone: all but bodies, so a hit
-    /// flashes just that fighter) and look.
-    materials: HashMap<(Option<PeerId>, Look), Handle<StandardMaterial>>,
+    /// Per look, the same for everyone.
+    materials: HashMap<Look, Handle<PlainMaterial>>,
+    /// Bodies' (and their rigs' and cloth's), per class and whether frosted (`body`).
+    bodies: HashMap<(ClassId, bool), Handle<PlainMaterial>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Look {
-    Body,
     /// Projectiles glow, so a shot in flight is the easiest thing to spot: round bolts glow pale.
     Shot,
     /// Glowing ice in its mesh's colors: frostbolts.
@@ -202,19 +210,26 @@ impl Visuals {
         self.fighters[&class].clone()
     }
 
-    pub(crate) fn material(
-        &mut self,
-        materials: &mut Assets<StandardMaterial>,
-        owner: PeerId,
-        look: Look,
-    ) -> Handle<StandardMaterial> {
+    /// The material of a fighter of `class`'s body, its rig and its cloth: its figure's own
+    /// colors (in the mesh) times its class's tint (`ClassDef::tint`, white for most), with a
+    /// cold cast while it's `frosted` (`effects::show_frost`). Who it is to you shows in its
+    /// health bar.
+    pub(crate) fn body(&mut self, materials: &mut Assets<PlainMaterial>, class: ClassId, frosted: bool) -> Handle<PlainMaterial> {
+        self.bodies
+            .entry((class, frosted))
+            .or_insert_with(|| {
+                let (r, g, b) = class.def().tint();
+                let cast = if frosted { palette::FROSTBITE.to_linear() } else { LinearRgba::WHITE };
+                materials.add(arena::matte(Color::from(LinearRgba::rgb(r * cast.red, g * cast.green, b * cast.blue))))
+            })
+            .clone()
+    }
+
+    pub(crate) fn material(&mut self, materials: &mut Assets<PlainMaterial>, look: Look) -> Handle<PlainMaterial> {
         self.materials
-            .entry(((look == Look::Body).then_some(owner), look))
+            .entry(look)
             .or_insert_with(|| {
                 materials.add(match look {
-                    // Fighters wear their own colors (in the mesh); who they are to you shows in
-                    // their health bars.
-                    Look::Body => arena::matte(Color::WHITE),
                     Look::Shot => arena::glow(palette::SILVER, 4.0),
                     Look::Ice => arena::glow(Color::WHITE, 4.0),
                     Look::Aura => arena::translucent(palette::FROST_GLOW, 0.35, 2.0),
@@ -236,14 +251,6 @@ impl Visuals {
     }
 }
 
-/// A fighter gone: its body's material goes from `Visuals` too (fighters no client controls, such
-/// as zombies, come and go with new ids all match long). One still in use stays alive in its user.
-fn forget_body(trigger: On<Remove, PlayerId>, players: Query<&PlayerId>, mut visuals: ResMut<Visuals>) {
-    if let Ok(id) = players.get(trigger.entity) {
-        visuals.materials.remove(&(Some(id.0), Look::Body));
-    }
-}
-
 /// A child that keeps this orientation and size in the world, this high above the ground,
 /// whatever its parent does (fighters turn, lean, crouch and are drawn bigger, see `rig/`): the range circle and the frost
 /// stay flat on the ground.
@@ -253,7 +260,7 @@ pub(crate) struct WorldAligned(pub Quat, pub f32);
 fn setup_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
 ) {
     commands.spawn((
         DestinationMarker,
@@ -303,7 +310,9 @@ fn setup_scene(
         spear_shadow: meshes.add(arena::spear_shadow_mesh()),
         impact: meshes.add(Sphere::new(1.0).mesh().ico(1).unwrap()),
         materials: HashMap::default(),
+        bodies: HashMap::default(),
     });
+    spawn_crosshair(&mut commands);
     commands
         .spawn(corner_panel(false, 8.0))
         .with_children(|corner| {
@@ -336,7 +345,7 @@ fn setup_scene(
 fn add_visuals(
     mut commands: Commands,
     mut visuals: ResMut<Visuals>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
     players: Query<(Entity, &PlayerId, &ClassId, &Pos, Option<&Elite>, Option<&Cooldowns>), Without<Mesh3d>>,
     projectiles: Query<(Entity, &Projectile, &Pos), Without<Mesh3d>>,
     me: Query<&PlayerId, With<Me>>,
@@ -345,12 +354,7 @@ fn add_visuals(
     let Ok(me) = me.single() else { return };
     for (entity, id, class, pos, elite, cooldowns) in &players {
         let is_me = id.0 == me.0;
-        let material = visuals.material(&mut materials, id.0, Look::Body);
-        // A borrowed figure in its own colors.
-        let tint = Tint::of(*class);
-        if let Some(mut m) = materials.get_mut(&material) {
-            m.base_color = tint.0;
-        }
+        let material = visuals.body(&mut materials, *class, false);
         // An elite stands in a ring of its twist's color.
         if let Some(elite) = elite {
             let ring = visuals.elite_rings.entry(elite.0).or_insert_with(|| materials.add(arena::translucent(affix_color(elite.0), 0.55, 3.0))).clone();
@@ -364,7 +368,7 @@ fn add_visuals(
         let prison = commands
             .spawn((
                 Mesh3d(visuals.ice_prison.clone()),
-                MeshMaterial3d(visuals.material(&mut materials, id.0, Look::Frost)),
+                MeshMaterial3d(visuals.material(&mut materials, Look::Frost)),
                 WorldAligned(Quat::IDENTITY, 0.0),
                 Visibility::Hidden,
             ))
@@ -372,7 +376,7 @@ fn add_visuals(
         let rune = commands
             .spawn((
                 Mesh3d(visuals.frost_rune.clone()),
-                MeshMaterial3d(visuals.material(&mut materials, id.0, Look::Chill)),
+                MeshMaterial3d(visuals.material(&mut materials, Look::Chill)),
                 WorldAligned(Quat::IDENTITY, 0.04),
                 Visibility::Hidden,
             ))
@@ -385,13 +389,12 @@ fn add_visuals(
                 Transform::from_translation(to_world(pos.0, 0.0)),
                 SeenCasts::seen(cooldowns),
                 Frost { prison, rune, shown: (false, false) },
-                tint,
             ))
             .add_children(&[prison, rune]);
         if is_me && let Some([circle, _]) = visuals.range_circles.get(class).cloned() {
             commands.entity(entity).with_child((
                 Mesh3d(circle),
-                MeshMaterial3d(visuals.material(&mut materials, id.0, Look::Range)),
+                MeshMaterial3d(visuals.material(&mut materials, Look::Range)),
                 WorldAligned(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2), 0.03),
                 RangeCircle,
                 Visibility::Hidden,
@@ -414,7 +417,7 @@ fn add_visuals(
             arena::ShotGlow::Void => Look::Void,
             arena::ShotGlow::Storm => Look::Storm,
         };
-        let body = visuals.material(&mut materials, projectile.owner, look);
+        let body = visuals.material(&mut materials, look);
         let mut shot = commands.entity(entity);
         shot.insert((
             Mesh3d(mesh),
@@ -427,25 +430,25 @@ fn add_visuals(
         }
         // A real weapon, in its own colors, gets a white glow on its point.
         if glow == arena::ShotGlow::Weapon {
-            let spark = visuals.material(&mut materials, projectile.owner, Look::Spark);
+            let spark = visuals.material(&mut materials, Look::Spark);
             shot.with_child((Mesh3d(visuals.shot_tip.clone()), MeshMaterial3d(spark), NotShadowCaster));
         }
         if let Some(aura) = aura {
-            let material = visuals.material(&mut materials, projectile.owner, Look::Aura);
+            let material = visuals.material(&mut materials, Look::Aura);
             shot.with_child((Mesh3d(aura), MeshMaterial3d(material)));
         }
         // A primed javelin (Deadeye's sure crit) flies lit as it was held, dripping its light.
         if thrown && projectile.crit {
-            let light = visuals.material(&mut materials, projectile.owner, Look::Deadeye);
+            let light = visuals.material(&mut materials, Look::Deadeye);
             shot.insert(crate::rig::ShotDrips::default()).with_child((Mesh3d(visuals.primed_aura.clone()), MeshMaterial3d(light), NotShadowCaster));
         }
         if thrown {
-            let wake = visuals.material(&mut materials, projectile.owner, Look::Wind);
+            let wake = visuals.material(&mut materials, Look::Wind);
             shot.insert(Thrown { launch: None, wake, wake_at: None });
             // Its only shadow is the one straight under it, on its line: where it really is (the
             // sun's would fall meters off to the side), so none of it casts one, its point's spark
             // and its wind neither.
-            let shadow = visuals.material(&mut materials, projectile.owner, Look::Shadow);
+            let shadow = visuals.material(&mut materials, Look::Shadow);
             let flat = Quat::from_rotation_y(projectile.dir.to_angle());
             shot.insert(NotShadowCaster).with_child((Mesh3d(visuals.spear_shadow.clone()), MeshMaterial3d(shadow), WorldAligned(flat, 0.03), NotShadowCaster));
         }

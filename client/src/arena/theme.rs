@@ -29,6 +29,9 @@ pub struct Theme {
     pub sky_brightness: f32,
     pub sun: Color,
     pub sun_illuminance: f32,
+    /// Where the sun shines from (toward the arena's middle): how low it stands, and from which
+    /// side.
+    pub sun_from: Vec3,
     /// What lies around the clearing, and what its trees are.
     pub wilds: Wilds,
 }
@@ -45,6 +48,9 @@ pub enum Wilds {
     /// Bare highland: dry grass rising in terraces of banded rock, with rock pillars, scrub,
     /// boulders and a few round autumn trees.
     Highlands,
+    /// Open meadow, rising gently and bare out to the haze: nothing grows on it, nothing in the
+    /// way of the view.
+    Field,
 }
 
 impl Theme {
@@ -54,6 +60,7 @@ impl Theme {
             MapId::Keep => &FEN,
             MapId::Gorge => &HIGHLANDS,
             MapId::Wilds => &HOLLOW,
+            MapId::Yard => &YARD,
             _ => &BASTION,
         }
     }
@@ -82,7 +89,22 @@ const GLADE: Theme = Theme {
     sky_brightness: 450.0,
     sun: SUN,
     sun_illuminance: 2_050.0,
+    sun_from: SUN_FROM,
     wilds: Wilds::Forest,
+};
+
+/// Practice Yard: open meadow all around instead of the glade's forest, at sunset: the sun just
+/// over the horizon in the west, orange and long-shadowed, the air warm and the sky's fill
+/// gone violet.
+const YARD: Theme = Theme {
+    wilds: Wilds::Field,
+    haze: Color::srgb_u8(0x9C, 0x66, 0x5C),
+    sky: Color::srgb_u8(0x5E, 0x56, 0x8C),
+    sky_brightness: 400.0,
+    sun: Color::srgb_u8(0xFF, 0xA8, 0x5A),
+    sun_illuminance: 2_600.0,
+    sun_from: Vec3::new(-40.0, 8.0, -10.0),
+    ..GLADE
 };
 
 /// Sunken Keep: a drowned fen in the last grey light. Sea-green tussocks in dark water, dead
@@ -109,6 +131,7 @@ const FEN: Theme = Theme {
     sky_brightness: 420.0,
     sun: Color::srgb_u8(0xC6, 0xD6, 0xF4),
     sun_illuminance: 1_700.0,
+    sun_from: SUN_FROM,
     wilds: Wilds::Fen,
 };
 
@@ -136,6 +159,7 @@ const BASTION: Theme = Theme {
     sky_brightness: 420.0,
     sun: Color::srgb_u8(0xCA, 0xD8, 0xF6),
     sun_illuminance: 1_800.0,
+    sun_from: SUN_FROM,
     wilds: Wilds::Fen,
 };
 
@@ -163,6 +187,7 @@ const HOLLOW: Theme = Theme {
     sky_brightness: 450.0,
     sun: Color::srgb_u8(0xE2, 0xD8, 0xEE),
     sun_illuminance: 2_200.0,
+    sun_from: SUN_FROM,
     wilds: Wilds::Forest,
 };
 
@@ -190,5 +215,6 @@ const HIGHLANDS: Theme = Theme {
     sky_brightness: 420.0,
     sun: Color::srgb_u8(0xF0, 0xD0, 0xA8),
     sun_illuminance: 2_400.0,
+    sun_from: SUN_FROM,
     wilds: Wilds::Highlands,
 };

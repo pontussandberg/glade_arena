@@ -14,11 +14,39 @@ test = false
 
 [features]
 default = ["render"]
-# Window, 3D rendering and keyboard/mouse input. Off for headless test bots.
-render = ["bevy/3d", "bevy/ui"]
+# Window, 3D rendering and keyboard/mouse input. Off for headless test bots. Bevy's 3D and UI,
+# without what the game has no use for (glTF and its animation, scenes, picking, the UI's widgets,
+# post-processing, anti-aliasing): each of those plugins' systems runs every frame regardless.
+render = [
+    "bevy/default_app",
+    "bevy/default_platform",
+    "bevy/bevy_camera",
+    "bevy/bevy_color",
+    "bevy/bevy_gizmos",
+    "bevy/bevy_image",
+    "bevy/bevy_mesh",
+    "bevy/bevy_shader",
+    "bevy/bevy_material",
+    "bevy/bevy_text",
+    "bevy/bevy_window",
+    "bevy/hdr",
+    "bevy/png",
+    "bevy/bevy_light",
+    "bevy/bevy_mikktspace",
+    "bevy/bevy_render",
+    "bevy/bevy_core_pipeline",
+    "bevy/bevy_gizmos_render",
+    "bevy/bevy_pbr",
+    "bevy/bevy_input_focus",
+    "bevy/bevy_ui",
+    "bevy/bevy_ui_render",
+]
 # Every system's time, every frame, into a Chrome trace (trace-*.json, open it in Perfetto or
 # chrome://tracing), for finding what a frame spends its time on. Native only.
 profile = ["bevy/trace_chrome"]
+# The browser build on WebGPU instead of WebGL 2 (it can't fall back): the GPU culls and batches
+# what's drawn, and each draw costs the page far less.
+webgpu = ["bevy/webgpu"]
 
 [dependencies]
 arena-shared.workspace = true
@@ -42,7 +70,7 @@ js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
-    "Window", "Document", "EventTarget", "Storage",
+    "Window", "Document", "Element", "EventTarget", "Storage",
     # Sound: recorded samples fetched from `sfx/`, played and sweetened in the browser (`audio`).
     "Request", "Response",
     "AudioContext", "AudioContextState", "AudioDestinationNode", "AudioNode", "AudioParam",

@@ -11,7 +11,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use arena_shared::abilities::AbilityKind;
-use arena_shared::config::PLAYER_RADIUS;
+use arena_shared::config::{BODY_HEIGHT, PLAYER_RADIUS};
 use arena_shared::protocol::*;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -45,9 +45,8 @@ pub struct ShowHitboxes(pub bool);
 #[derive(Resource, Default, PartialEq)]
 pub struct ShowHitboxes3d(pub bool);
 
-/// How tall a fighter's body is drawn in the 3D view (meters; about as tall as they're drawn),
-/// and how far apart its rings are.
-const BODY_HEIGHT: f32 = 2.1;
+/// How far apart a body's rings are in the 3D view (up to `BODY_HEIGHT`, what a shot takes it
+/// to be).
 const RING_EVERY: f32 = 0.15;
 
 /// A hitbox's color in the 3D view at `height` (meters) off the floor: blue at the floor, through
@@ -118,6 +117,7 @@ fn note_attacks(
 
 /// Draws every body, attack winding up, attack just gone off and projectile.
 fn draw_hitboxes(
+    map: Res<crate::rooms::CurrentMap>,
     mut gizmos: Gizmos,
     time: Res<Time>,
     flashes: Res<Flashes>,
@@ -132,7 +132,7 @@ fn draw_hitboxes(
         if health.is_some_and(|h| !h.alive()) {
             continue;
         }
-        circle(&mut gizmos, to_world(pos.0, 0.0), PLAYER_RADIUS, BODY);
+        circle(&mut gizmos, to_world(pos.0, map.map().height_at(pos.0)), PLAYER_RADIUS, BODY);
         if let Some(swing) = attack.winding_up() {
             lane(&mut gizmos, pos.0, swing.dir, swing.quick, *class, WINDING_UP);
         }
@@ -143,7 +143,7 @@ fn draw_hitboxes(
         let color = |base: Color| base.with_alpha(((until - now) / FLASH_SECONDS).clamp(0.0, 1.0));
         match *flash {
             Flash::Lane { at, dir, empowered, class } => lane(&mut gizmos, at, dir, empowered, class, color(GOING_OFF)),
-            Flash::Burst { at, radius } => circle(&mut gizmos, to_world(at, 0.0), radius, color(BURST)),
+            Flash::Burst { at, radius } => circle(&mut gizmos, to_world(at, map.map().height_at(at)), radius, color(BURST)),
         }
     }
     for (shot, transform) in &shots {
@@ -154,6 +154,7 @@ fn draw_hitboxes(
 /// Draws every fighter's body as a column of rings and every projectile's as a ball around it
 /// where it's drawn (around its point), each colored by its height (`height_color`).
 fn draw_hitboxes_3d(
+    map: Res<crate::rooms::CurrentMap>,
     mut gizmos: Gizmos,
     fighters: Query<(&Pos, Option<&Health>), Without<Projectile>>,
     shots: Query<(&Projectile, &Transform, &InheritedVisibility)>,
@@ -169,7 +170,7 @@ fn draw_hitboxes_3d(
         if health.is_some_and(|h| !h.alive()) {
             continue;
         }
-        let at = to_world(pos.0, 0.0);
+        let at = to_world(pos.0, map.map().height_at(pos.0));
         for &(height, color) in &rings {
             gizmos.circle(Isometry3d::new(at.with_y(height), flat), PLAYER_RADIUS, color);
         }
@@ -177,6 +178,29 @@ fn draw_hitboxes_3d(
         for k in 0..4 {
             let side = Quat::from_rotation_y(k as f32 * FRAC_PI_2) * Vec3::X * PLAYER_RADIUS;
             gizmos.line_gradient(at + side, at + side + Vec3::Y * BODY_HEIGHT, floor, top);
+        }
+    }
+    // What stands in the way (`map::Collider`): each box's edges, colored by how high its top
+    // is; a roof's top slopes down from its ridge to its eaves.
+    for collider in map.map().colliders() {
+        let color = height_color(collider.top);
+        let (lo, hi) = (collider.lo, collider.hi);
+        let corners = [lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)];
+        let top = |p: Vec2| to_world(p, collider.top_at(p));
+        for k in 0..4 {
+            let (p, q) = (corners[k], corners[(k + 1) % 4]);
+            gizmos.line(to_world(p, collider.bottom), to_world(q, collider.bottom), color);
+            gizmos.line(top(p), top(q), color);
+            gizmos.line(to_world(p, collider.bottom), top(p), color);
+        }
+        if let Some(roof) = collider.roof {
+            let ridge = if roof.along_x { [Vec2::new(lo.x, roof.ridge), Vec2::new(hi.x, roof.ridge)] } else { [Vec2::new(roof.ridge, lo.y), Vec2::new(roof.ridge, hi.y)] };
+            gizmos.line(top(ridge[0]), top(ridge[1]), color);
+            // Up from the gable ends' eaves to the ridge.
+            for p in corners {
+                let end = if roof.along_x { Vec2::new(p.x, roof.ridge) } else { Vec2::new(roof.ridge, p.y) };
+                gizmos.line(top(p), top(end), color);
+            }
         }
     }
     // Only one that's shown: a thrown spear still in the hand isn't anywhere yet.

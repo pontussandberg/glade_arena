@@ -22,7 +22,7 @@ impl Plugin for AudioPlugin {
         {
             app.init_non_send::<web::AudioLazy>();
             app.add_systems(Startup, web::warm_up);
-            app.add_systems(Update, web::play_sounds);
+            app.add_systems(Update, (web::play_sounds, web::apply_volume.run_if(resource_changed::<crate::settings::Settings>)));
         }
         #[cfg(not(target_family = "wasm"))]
         app.add_systems(Update, |mut queue: ResMut<SoundQueue>| queue.sounds.clear());
@@ -461,6 +461,13 @@ mod web {
     pub(super) fn warm_up(mut audio: NonSendMut<AudioLazy>) {
         if audio.0.is_none() {
             audio.0 = AudioOut::new();
+        }
+    }
+
+    /// The master gain follows the volume setting.
+    pub(super) fn apply_volume(settings: Res<crate::settings::Settings>, audio: NonSendMut<AudioLazy>) {
+        if let Some(out) = audio.0.as_ref() {
+            out.master.gain().set_value(MASTER * settings.volume);
         }
     }
 

@@ -8,7 +8,7 @@
     blurb: "It has outlived everything. It means to outlive you.",
     playable: false,
     max_hp: 1500,
-    move_speed: 2.6,
+    move_speed: 3.00,
     attack: (
         damage: 14,
         attack_ticks: 40,

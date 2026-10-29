@@ -1,11 +1,18 @@
 // Drive headless Chrome over CDP: load the game, optionally click/type, screenshot.
 // Usage: node shoot.mjs out.png [steps...]
-//   steps: wait:SECONDS | click:X,Y | type:TEXT | key:KEYNAME
+//   steps: wait:SECONDS | click:X,Y | type:TEXT | key:KEYNAME | size:W,H (the viewport, in CSS px)
+//          down:KEY / up:KEY (hold a key) | mdown:X,Y / mup:X,Y (hold the left button)
+//          throttle:N (the tab's CPU N times slower, as on a loaded machine; 1 lifts it)
+//          profile:SECONDS,PATH (a CPU profile of the page for SECONDS, as a .cpuprofile)
+//          fps:SECONDS (the page's frame times over SECONDS: frames a second, and the median,
+//          95th percentile and worst frame)
+// CDP_PORT=9223 drives a Chrome started on that port instead (a second player).
 // Chrome must already be running with --remote-debugging-port=9222.
 import { writeFileSync } from "node:fs";
 
 const [, , out, ...steps] = process.argv;
-const list = await (await fetch("http://127.0.0.1:9222/json")).json();
+const port = process.env.CDP_PORT ?? 9222; // another Chrome, for a second player
+const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
 const page = list.find((t) => t.type === "page");
 if (!page) throw new Error("no page target");
 const ws = new WebSocket(page.webSocketDebuggerUrl);
@@ -35,6 +42,11 @@ ws.addEventListener("message", (e) => {
 for (const step of steps) {
   const [cmd, rest] = [step.slice(0, step.indexOf(":")), step.slice(step.indexOf(":") + 1)];
   if (cmd === "wait") await sleep(Number(rest));
+  else if (cmd === "throttle") await send("Emulation.setCPUThrottlingRate", { rate: Number(rest) }); // N times slower, like a loaded machine
+  else if (cmd === "size") {
+    const [width, height] = rest.split(",").map(Number);
+    await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+  }
   else if (cmd === "nav") await send("Page.navigate", { url: rest });
   else if (cmd === "move") {
     const [x, y] = rest.split(",").map(Number);
@@ -44,7 +56,13 @@ for (const step of steps) {
     await send("Input.dispatchKeyEvent", { type: "keyDown", key: rest, code, text: rest });
     await send("Input.dispatchKeyEvent", { type: "keyUp", key: rest, code });
   }
-  else if (cmd === "click") {
+  else if (cmd === "down" || cmd === "up") {
+    const code = /^[a-z]$/.test(rest) ? "Key" + rest.toUpperCase() : rest;
+    await send("Input.dispatchKeyEvent", { type: cmd === "down" ? "keyDown" : "keyUp", key: rest, code, text: cmd === "down" ? rest : undefined });
+  } else if (cmd === "mdown" || cmd === "mup") {
+    const [x, y] = rest.split(",").map(Number);
+    await send("Input.dispatchMouseEvent", { type: cmd === "mdown" ? "mousePressed" : "mouseReleased", x, y, button: "left", buttons: cmd === "mdown" ? 1 : 0, clickCount: 1 });
+  } else if (cmd === "click") {
     const [x, y] = rest.split(",").map(Number);
     for (const type of ["mousePressed", "mouseReleased"])
       await send("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
@@ -69,6 +87,42 @@ for (const step of steps) {
     // An extra screenshot mid-sequence, to PATH.
     const s = await send("Page.captureScreenshot", clip ? { format: "jpeg", quality: 75, clip } : { format: "png" });
     writeFileSync(rest, Buffer.from(s.result.data, "base64"));
+  } else if (cmd === "profile") {
+    const [seconds, path] = [Number(rest.slice(0, rest.indexOf(","))), rest.slice(rest.indexOf(",") + 1)];
+    await send("Profiler.enable");
+    // Frames counted over the profile, so its time can be put per frame.
+    await send("Runtime.evaluate", { expression: `window.__profiledFrames = 0; (function count() { window.__profiledFrames++; if (window.__profiledFrames > 0) requestAnimationFrame(count); })()` });
+    await send("Profiler.start");
+    await sleep(seconds);
+    const r = await send("Profiler.stop");
+    const frames = (await send("Runtime.evaluate", { expression: `(() => { const n = window.__profiledFrames; window.__profiledFrames = -1e9; return n; })()`, returnByValue: true })).result?.result?.value;
+    console.log(`profile: ${frames} frames in ${seconds} s`);
+    writeFileSync(path, JSON.stringify(r.result.profile));
+  } else if (cmd === "fps") {
+    // Every animation frame's time, as the game's own frames come on them: when its callback
+    // runs, not the time it's handed (when the browser began the frame, which, the page busy, can
+    // be well before, so the gaps came out uneven: a long one and a short one for two even ones).
+    const seconds = Number(rest);
+    const r = await send("Runtime.evaluate", {
+      awaitPromise: true,
+      returnByValue: true,
+      expression: `new Promise((done) => {
+        const times = [];
+        const start = performance.now();
+        const frame = () => {
+          const t = performance.now();
+          times.push(t);
+          if (t - start < ${seconds * 1000}) requestAnimationFrame(frame);
+          else done(times);
+        };
+        requestAnimationFrame(frame);
+      })`,
+    });
+    const times = r.result?.result?.value ?? [];
+    const gaps = times.slice(1).map((t, i) => t - times[i]).sort((a, b) => a - b);
+    const at = (q) => gaps[Math.min(gaps.length - 1, Math.floor(gaps.length * q))]?.toFixed(2);
+    const fps = gaps.length / ((times.at(-1) - times[0]) / 1000);
+    console.log(`fps: ${fps.toFixed(1)} over ${gaps.length} frames; median ${at(0.5)} ms, p95 ${at(0.95)} ms, p99 ${at(0.99)} ms, worst ${gaps.at(-1)?.toFixed(2)} ms`);
   } else if (cmd === "type") await send("Input.insertText", { text: rest });
   else if (cmd === "key") {
     const codes = { Enter: 13, Escape: 27, Tab: 9 };

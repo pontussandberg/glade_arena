@@ -3,13 +3,15 @@
 
 use super::*;
 
+use arena_shared::abilities::AbilityKind;
+use arena_shared::config::PLAYER_RADIUS;
 use arena_shared::sim;
 
 use crate::Me;
 use crate::{DesiredInput, StopWalking};
 use crate::action_bar::AbilityIcon;
 use crate::camera::{CameraMode, key_axis};
-use crate::casting::{Aiming, CastMode, ability_key, key_casts};
+use crate::casting::{Aiming, CastMode, ability_key};
 use crate::feedback::AttackClock;
 use crate::arena::{to_gameplay, to_world};
 
@@ -26,17 +28,22 @@ pub(super) struct DestinationMarker;
 pub(super) struct RangeCircle;
 
 /// Mouse -> `DesiredInput`, LoL-style: right click walks to the clicked point, left click
-/// attacks toward the cursor. An ability's key (Q, W, E, R) casts it right away (quick cast) or
+/// attacks toward the cursor. An ability's key (1, 2, 3, 4) casts it right away (quick cast) or
 /// first shows where it will go, cast by the next left click and dropped by a right click
 /// (normal cast); with Shift it's the other one (see `casting.rs`). Clicking an ability's icon is
 /// always a normal cast.
+///
+/// With the action camera (`CameraMode::free`) you aim where it looks, WASD walks, and holding
+/// the left button attacks again each time the last attack is done (the server drops a click
+/// before then, so it's asked each tick until it takes). A click that only captures the cursor
+/// doesn't attack.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn read_local_input(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     window: Option<Single<&Window>>,
     camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
-    me: Query<(&Pos, &ClassId, &Cooldowns), (With<Me>, With<PlayerId>)>,
+    me: Query<(&Pos, &ClassId, &Cooldowns, &AttackState), (With<Me>, With<PlayerId>)>,
     (mode, cast_mode, clock, map): (Res<CameraMode>, Res<CastMode>, AttackClock, Res<crate::rooms::CurrentMap>),
     hud: Query<
         (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&AbilityIcon>),
@@ -51,12 +58,14 @@ pub(super) fn read_local_input(
     let me = me.single().ok();
     // Our abilities. A normal cast only aims while its ability is ready (the global cooldown over
     // too), as in LoL.
-    let my_class = me.map(|(_, class, _)| class.def());
+    let my_class = me.map(|(_, class, ..)| class.def());
     let ready = |slot: AbilitySlot| {
-        me.is_some_and(|(_, class, cooldowns)| {
+        me.is_some_and(|(_, class, cooldowns, _)| {
             class.def().ability(slot).is_some_and(|ability| cooldowns.usable_at(slot, ability) as f32 <= clock.now(true))
         })
     };
+    // Whether our next attack may start now: none in progress, or the last one's timer run out.
+    let attack_ready = me.is_some_and(|(_, class, _, attack)| attack.swing.is_none_or(|swing| swing.ready_at(&class.def().attack) as f32 <= clock.now(true)));
     let me = me.map(|(p, ..)| p.0);
     let (camera, camera_transform) = *camera;
     // Whether the cursor is on a HUD control, or on an ability's icon (and which). Tested on the
@@ -82,13 +91,14 @@ pub(super) fn read_local_input(
         move_to = None;
     }
     *last_pos = me;
-    // A right click (MOBA camera) while aiming a normal cast only drops the aim: it doesn't walk.
-    let right_click = !mode.free && mouse.just_pressed(MouseButton::Right);
+    // A right click while aiming a normal cast only drops the aim: it doesn't walk.
+    let right_click = mouse.just_pressed(MouseButton::Right);
     let drops_aim = right_click && aiming.0.is_some();
     // Once per click: holding the button doesn't keep re-targeting. Not with the free camera:
     // there the right button turns the camera, and WASD walks. A click on the minimap walks to
     // where it is there.
-    if right_click
+    if !mode.free
+        && right_click
         && !drops_aim
         && let Some(cursor) = on_minimap.or(cursor)
         && let Some(point) = map.map().walk_target(cursor, 4)
@@ -102,21 +112,27 @@ pub(super) fn read_local_input(
         move_to = None;
     }
 
+    // The action camera aims where it looks, up or down too (`camera::aim_of`).
     let aim = match (cursor, me) {
+        _ if mode.free => mode.aim,
         (Some(cursor), Some(me)) => cursor - me,
         _ => desired.0.aim,
     };
+    let climb = if mode.free { mode.climb } else { 0.0 };
     // Casts not sent yet, and new ones after them, each toward the cursor as its key went down.
     let mut casts = PlayerInput { casts: desired.0.casts, ..default() };
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    for (slot, _) in my_class.into_iter().flat_map(|def| def.abilities()) {
-        if !keys.just_pressed(ability_key(slot)) || !key_casts(slot, mode.free) {
+    for (slot, ability) in my_class.into_iter().flat_map(|def| def.abilities()) {
+        if !keys.just_pressed(ability_key(slot)) {
             continue;
         }
-        // A prime has nothing to aim: its key casts it at once, quick cast or not.
-        let aimed = my_class.and_then(|def| def.ability(slot)).is_some_and(|ability| ability.kind.aimed());
-        if cast_mode.casts_now(shift) || !aimed {
-            casts.order_cast(slot, aim);
+        // In action mode a strike is always a normal cast: its ring shows where the crosshair is
+        // on the ground until a left click calls it there (`cast_aim`); everything else goes
+        // off at once, a dash its whole distance. Otherwise a prime has nothing to aim: its key
+        // casts it at once, quick cast or not.
+        let now = if mode.free { !matches!(ability.kind, AbilityKind::Strike(_)) } else { cast_mode.casts_now(shift) || !ability.kind.aimed() };
+        if now {
+            casts.order_cast(slot, cast_aim(&mode, &ability.kind, me, aim));
             aiming.0 = None;
         } else if ready(slot) {
             aiming.0 = Some(slot);
@@ -126,7 +142,7 @@ pub(super) fn read_local_input(
     // attack. Any other one does: once per click (holding it doesn't attack again). A right
     // click drops the aim (`drops_aim`); ESC does too (`esc_menu`).
     if mouse.just_pressed(MouseButton::Left) {
-        if on_control {
+        if on_control || mode.just_locked {
             *held_click = true;
         } else if let Some(slot) = on_icon
             && my_class.and_then(|def| def.ability(slot)).is_some_and(|ability| !ability.kind.aimed())
@@ -137,7 +153,8 @@ pub(super) fn read_local_input(
             aiming.0 = Some(slot).filter(|&slot| ready(slot));
             *held_click = true;
         } else if let Some(slot) = aiming.0.take() {
-            casts.order_cast(slot, aim);
+            let kind = my_class.and_then(|def| def.ability(slot)).map(|ability| ability.kind);
+            casts.order_cast(slot, kind.map_or(aim, |kind| cast_aim(&mode, &kind, me, aim)));
             *held_click = true;
         }
     }
@@ -147,8 +164,14 @@ pub(super) fn read_local_input(
     if !mouse.pressed(MouseButton::Left) {
         *held_click = false;
     }
-    let fire = desired.0.fire || (mouse.just_pressed(MouseButton::Left) && aiming.0.is_none() && !*held_click);
-    // With the free camera, WASD walks relative to it, dropping any destination; otherwise S
+    // Not while the scoreboard is held up (Tab): the mouse is free then, for pointing at it.
+    let board = keys.pressed(KeyCode::Tab);
+    let attacking = if mode.free { mouse.pressed(MouseButton::Left) && attack_ready && !board } else { mouse.just_pressed(MouseButton::Left) };
+    let fire = desired.0.fire || (attacking && aiming.0.is_none() && !*held_click);
+    // Held down to attack (not for a control, nor to cast): a shot drawn is held so until it's
+    // let go, walking slower meanwhile (`PlayerInput::draw`).
+    let draw = mouse.pressed(MouseButton::Left) && aiming.0.is_none() && !*held_click && !board;
+    // With the action camera, WASD walks relative to it, dropping any destination; otherwise S
     // stops: drops the destination (as in LoL).
     let walk = if mode.free {
         let (forward, right) = mode.ground_axes();
@@ -163,9 +186,25 @@ pub(super) fn read_local_input(
         move_to = None;
         stop.0 = true;
     }
-    // `casts` and `fire` are kept until they've been sent (`send_commands` clears them), so a
-    // short tap isn't missed.
-    desired.0 = PlayerInput { move_to, walk, aim, fire, casts: casts.casts };
+    // Space jumps (action mode), and held, jumps again each time it lands (the server jumps
+    // only from the ground): whether it's held, sent as that changes (`send_commands`), so a
+    // tap is held for a frame at least. `casts` and `fire` are kept until they've been sent
+    // (`send_commands` clears them), so a short click isn't missed.
+    let jump = mode.free && (keys.pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Space)) && !board;
+    desired.0 = PlayerInput { move_to, walk, aim, climb, fire, draw, jump, casts: casts.casts, ..default() };
+}
+
+/// What a cast of `kind` by our fighter at `me` is aimed with, aiming `aim`: in action mode a
+/// dash's aim reaches its whole distance (`DashDef::length`), and a strike's is where the
+/// crosshair is on the ground (`CameraMode::strike_aim`); the rest, and everything in the MOBA,
+/// the aim as it is.
+fn cast_aim(mode: &CameraMode, kind: &AbilityKind, me: Option<Vec2>, aim: Vec2) -> Vec2 {
+    match kind {
+        _ if !mode.free => aim,
+        AbilityKind::Dash(dash) => aim.normalize_or(Vec2::Y) * (dash.distance + PLAYER_RADIUS),
+        AbilityKind::Strike(strike) => mode.strike_aim(me.unwrap_or_default(), strike.range),
+        _ => aim,
+    }
 }
 
 /// The range circle shows how far our attack reaches as it is now: further while our `follow_up`
@@ -184,7 +223,7 @@ pub(super) fn fit_range_circle(
     }
 }
 
-/// A shows the range circle (MOBA camera only: the free camera walks with A); any key or click
+/// A shows the range circle (MOBA camera only: the action camera walks with A); any key or click
 /// after that, A included, hides it.
 pub(super) fn toggle_range_circle(
     keys: Res<ButtonInput<KeyCode>>,

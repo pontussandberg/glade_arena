@@ -15,6 +15,7 @@ use crate::Me;
 use crate::feedback::AttackClock;
 use crate::arena::{self, FlatMesh, palette, to_world};
 use crate::fx::{FxArt, Sparkle, sparkle};
+use crate::plain::PlainMaterial;
 use crate::render::shown;
 
 pub struct PickupsPlugin;
@@ -68,15 +69,15 @@ const STREAK_HEIGHTS: (f32, f32) = (0.2, 1.6);
 struct PickupLooks {
     bar: Handle<Mesh>,
     ground: Handle<Mesh>,
-    heal: (Handle<StandardMaterial>, Handle<StandardMaterial>),
-    haste: (Handle<StandardMaterial>, Handle<StandardMaterial>),
-    chest: (Handle<StandardMaterial>, Handle<StandardMaterial>),
-    fury: (Handle<StandardMaterial>, Handle<StandardMaterial>),
+    heal: (Handle<PlainMaterial>, Handle<PlainMaterial>),
+    haste: (Handle<PlainMaterial>, Handle<PlainMaterial>),
+    chest: (Handle<PlainMaterial>, Handle<PlainMaterial>),
+    fury: (Handle<PlainMaterial>, Handle<PlainMaterial>),
     /// A chest's box and lid (in plain wood), its gold bands; a fury stone's blade and hilt.
     chest_box: Handle<Mesh>,
     chest_lid: Handle<Mesh>,
     chest_band: Handle<Mesh>,
-    wood: Handle<StandardMaterial>,
+    wood: Handle<PlainMaterial>,
     blade: Handle<Mesh>,
     hilt: Handle<Mesh>,
     /// The winged boot: its shaft, its foot, a feather of its wings (one meter long along +X,
@@ -84,18 +85,18 @@ struct PickupLooks {
     boot_shaft: Handle<Mesh>,
     boot_foot: Handle<Mesh>,
     feather: Handle<Mesh>,
-    wing: Handle<StandardMaterial>,
+    wing: Handle<PlainMaterial>,
     /// A heal burst's ring and sparks.
     ring: Handle<Mesh>,
     spark: Handle<Mesh>,
     /// A wind streak: a thin bar one meter long along +X, scaled to its length.
     streak: Handle<Mesh>,
-    streak_material: Handle<StandardMaterial>,
+    streak_material: Handle<PlainMaterial>,
 }
 
 impl PickupLooks {
     /// A kind's glowing body and its glow on the ground.
-    fn of(&self, kind: PickupKind) -> &(Handle<StandardMaterial>, Handle<StandardMaterial>) {
+    fn of(&self, kind: PickupKind) -> &(Handle<PlainMaterial>, Handle<PlainMaterial>) {
         match kind {
             PickupKind::Heal => &self.heal,
             PickupKind::Haste => &self.haste,
@@ -125,7 +126,7 @@ pub(crate) fn icon(kind: PickupKind) -> &'static str {
     }
 }
 
-fn load_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn load_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<PlainMaterial>>) {
     let mut kind = |kind| {
         let c = color(kind);
         (materials.add(arena::glow(c, GLOW)), materials.add(arena::translucent(c, 0.3, 1.5)))
@@ -199,7 +200,7 @@ fn add_pickup_visuals(mut commands: Commands, looks: Res<PickupLooks>, new: Quer
                 });
             }
             PickupKind::Haste => {
-                let part = |mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>, transform: Transform| {
+                let part = |mesh: &Handle<Mesh>, material: &Handle<PlainMaterial>, transform: Transform| {
                     (Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), transform)
                 };
                 commands.entity(floating).with_children(|boot| {

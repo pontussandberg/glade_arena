@@ -22,7 +22,7 @@ mod tests {
     use crate::abilities::{self, AbilityDef, AbilitySlot, Cast, CastOrder, Cooldowns};
     use crate::classes::{AbilityKind, AttackDef, AttackKind, Chill, ClassId, FollowUp, common};
     use crate::map::Map;
-    use crate::protocol::{AttackState, Chilled, Dashing, Hasted, LastSwing, PlayerCommand, PlayerInput, Projectile, Swing, Waygate};
+    use crate::protocol::{AttackState, Chilled, Dashing, Hasted, LastSwing, Motion, PlayerCommand, PlayerInput, Projectile, Swing, Waygate};
     use lightyear::prelude::PeerId;
 
     /// The tests walk and fight on the first map.
@@ -51,6 +51,14 @@ mod tests {
     /// The first class whose auto-attack is a projectile / melee (tests don't hard-code classes).
     fn shooter() -> ClassId {
         ClassId::all().find(|c| matches!(c.def().attack.kind, AttackKind::Projectile { .. })).unwrap()
+    }
+    /// A class whose shot is spent at its range (doesn't fall).
+    fn bolter() -> ClassId {
+        ClassId::all().find(|c| matches!(c.def().attack.kind, AttackKind::Projectile { falls: false, .. })).unwrap()
+    }
+    /// A class whose shot is thrown: it drops under gravity from the hand.
+    fn thrower() -> ClassId {
+        ClassId::all().find(|c| matches!(c.def().attack.kind, AttackKind::Projectile { falls: true, .. })).unwrap()
     }
     fn fighter() -> ClassId {
         ClassId::all().find(|c| matches!(c.def().attack.kind, AttackKind::Melee { .. })).unwrap()
@@ -188,6 +196,61 @@ mod tests {
         }
     }
 
+    /// Runs `class`'s attack from a click at tick 10, its button held down (`PlayerInput::draw`)
+    /// through `held` ticks from the click: the ticks it went off at, and its state on each tick.
+    fn draw_ticks(class: ClassId, held: u32, ticks: u32) -> (Vec<u32>, Vec<AttackState>) {
+        let (mut state, mut released, mut states) = (AttackState::default(), Vec::new(), Vec::new());
+        for tick in 10..10 + ticks {
+            let input = PlayerInput { aim: Vec2::X, fire: tick == 10, draw: tick < 10 + held, ..default() };
+            let (next, attack) = step_attack(tick, PeerId::Netcode(1), class, Vec2::ZERO, &input, state);
+            state = next;
+            states.push(state);
+            if attack.is_some() {
+                released.push(tick);
+            }
+        }
+        (released, states)
+    }
+
+    #[test]
+    fn a_shot_held_drawn_goes_off_when_let_go_and_its_backswing_runs_from_then() {
+        for class in ClassId::all().filter(|&class| shoots(class)) {
+            let (period, windup) = timers(class);
+            let attack = &class.def().attack;
+            // Held a good while past its windup, then let go: it goes off on that tick, not before.
+            let held = windup + 40;
+            let (released, states) = draw_ticks(class, held, held + period + 1);
+            assert_eq!(released, vec![10 + held], "{}: held drawn, it went off at {released:?}", class.def().id);
+            // All the while it's held, it's drawn all the way, going off no sooner than the next tick.
+            for (k, state) in states.iter().enumerate().take(held as usize).skip(windup as usize) {
+                let tick = 10 + k as u32;
+                let swing = state.winding_up().unwrap_or_else(|| panic!("{}: not drawn at {tick}", class.def().id));
+                assert_eq!(swing.windup_progress(tick as f32, attack), 1.0);
+                assert_eq!(swing.releases_at(attack), tick + 1, "{}: held at {tick}", class.def().id);
+            }
+            // Its backswing runs on from the tick it went off: the next may start a backswing later.
+            let gone = states[held as usize];
+            assert_eq!(gone.released_at, Some(10 + held));
+            assert_eq!(gone.swing.map(|swing| swing.ready_at(attack)), Some(10 + held + period - windup), "{}: ready again", class.def().id);
+            assert!(states.last().unwrap().swing.is_none(), "{}: still attacking after its backswing", class.def().id);
+        }
+    }
+
+    #[test]
+    fn a_shot_let_go_before_its_windup_is_over_goes_off_then_and_a_swing_is_never_held() {
+        for class in ClassId::all() {
+            let (period, windup) = timers(class);
+            // Let go halfway through the windup: it goes off as it would have.
+            let (released, _) = draw_ticks(class, windup / 2, period);
+            assert_eq!(released, vec![10 + windup], "{}: tapped", class.def().id);
+            // A swing goes off at its time however long its button is held.
+            if !shoots(class) {
+                let (released, _) = draw_ticks(class, period * 3, period);
+                assert_eq!(released, vec![10 + windup], "{}: a swing held back", class.def().id);
+            }
+        }
+    }
+
     #[test]
     fn clicks_before_the_timer_is_up_are_dropped() {
         for class in ClassId::all() {
@@ -255,7 +318,7 @@ mod tests {
         let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some()) else { return };
         let attack = quickened(class);
         let (period, windup) = (attack.period_ticks(1.0), attack.windup_ticks(1.0));
-        let mut swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false };
+        let mut swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0 };
         assert_eq!(swing.ready_at(&attack), 10 + period);
         // As the server does when the swing lands.
         swing.hastened = true;
@@ -279,7 +342,7 @@ mod tests {
             let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
             let (_, windup) = timers(class);
             let (idle, warm) = (Dashing::default(), Chilled::default());
-            let moves = |state: &AttackState| move_player(map(), from, &walk, class, state, &mut { idle }, &warm, &default(), 11) != from;
+            let moves = |state: &AttackState| move_player(map(), from, &walk, class, state, &mut { idle }, &mut Motion::default(), &warm, &default(), 11) != from;
             let (_, winding) = attack_ticks(class, &[10], 10, 9 + windup);
             assert!(winding.winding_up().is_some() && !moves(&winding), "{}: moved during the windup", class.def().id);
             let (_, backswing) = attack_ticks(class, &[10], 10, 10 + windup);
@@ -312,13 +375,15 @@ mod tests {
     #[test]
     fn an_order_to_move_drops_an_unseen_click() {
         let mut input = PlayerInput::default();
-        PlayerCommand::Attack(Vec2::X).apply(&mut input);
+        PlayerCommand::Attack(Vec2::X, 0).apply(&mut input);
         assert!(input.fire);
-        PlayerCommand::Walk(Vec2::ZERO).apply(&mut input);
+        PlayerCommand::Walk(Vec2::ZERO, 0).apply(&mut input);
         assert!(input.fire, "letting go of the walking keys isn't an order to move");
+        PlayerCommand::Walk(Vec2::X, 0).apply(&mut input);
+        assert!(input.fire, "the walking keys walk through an attack, so they keep the click");
         PlayerCommand::MoveTo(Vec2::ONE).apply(&mut input);
         assert!(!input.fire);
-        PlayerCommand::Attack(Vec2::X).apply(&mut input);
+        PlayerCommand::Attack(Vec2::X, 0).apply(&mut input);
         assert!(input.fire && input.move_to.is_some(), "only an attack that starts drops the walk (the server does)");
     }
 
@@ -341,19 +406,429 @@ mod tests {
             panic!("a projectile class should shoot after its windup");
         };
         let lifetime = proj.class.def().shot(None).unwrap().lifetime_ticks();
-        let hit_tick = (windup..windup + lifetime).find(|&tick| projectile_hits(projectile_pos(&proj, tick as f32), &proj, target));
+        let hit_tick = (windup..windup + lifetime).find(|&tick| projectile_hits(projectile_pos(&proj, tick as f32), &proj, tick, target, 0.0));
         assert!(hit_tick.is_some(), "projectile should hit a target 6 m away in its path");
     }
 
     #[test]
     fn projectile_expires_at_its_range_and_at_walls() {
-        let proj = Projectile { owner: PeerId::Netcode(1), class: shooter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false, extra: false };
-        let lifetime = shooter().def().shot(None).unwrap().lifetime_ticks();
-        assert!(!projectile_expired(map(), Vec2::ZERO, &proj, 5 + lifetime - 1));
-        assert!(projectile_expired(map(), Vec2::ZERO, &proj, 5 + lifetime));
+        let proj = Projectile { owner: PeerId::Netcode(1), class: bolter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
+        let lifetime = bolter().def().shot(None).unwrap().lifetime_ticks();
+        // Flying high over everything, only its range spends it.
+        let high = Projectile { lift: 50.0, ..proj };
+        let at = |tick: u32| projectile_pos(&high, tick as f32);
+        assert!(!projectile_expired(map(), at(5 + lifetime - 1), &high, 5 + lifetime - 1));
+        assert!(projectile_expired(map(), at(5 + lifetime), &high, 5 + lifetime));
         assert!(projectile_expired(map(), Vec2::new(100.0, 0.0), &proj, 6), "left the map");
-        let wall = map().tiles().find(|(_, t)| *t == crate::map::Tile::Wall).unwrap().0;
-        assert!(projectile_expired(map(), Map::center(wall), &proj, 6), "hit a wall");
+        assert!(projectile_expired(map(), Map::center(lone_ruin()), &proj, 6), "hit a wall");
+    }
+
+    /// A ruined wall on its own across x: open ground either side of it.
+    fn lone_ruin() -> IVec2 {
+        map().tiles().map(|(t, _)| t).find(|&t| map().ruin_at(t).is_some() && [t - IVec2::X * 2, t - IVec2::X, t + IVec2::X, t + IVec2::X * 2].iter().all(|&n| map().walkable(n))).expect("a ruin on its own")
+    }
+
+    /// A fighter walked by its keys from `from`, tick after tick: where it is and how it moves.
+    fn walk_ticks(from: Vec2, keys: &[(Vec2, u32)], jump_at: Option<u32>) -> Vec<(Vec2, Motion)> {
+        let (mut pos, mut motion, mut tick, mut out) = (from, Motion::default(), 0u32, Vec::new());
+        for &(walk, ticks) in keys {
+            for _ in 0..ticks {
+                tick += 1;
+                let input = PlayerInput { walk, jump: jump_at == Some(tick), ..default() };
+                pos = move_player(map(), pos, &input, fighter(), &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick);
+                out.push((pos, motion));
+            }
+        }
+        out
+    }
+
+    /// A way to walk from `from` with open ground for `meters` along it.
+    fn open_way(from: Vec2, meters: f32) -> Vec2 {
+        [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y].into_iter().find(|&way| map().line_walkable(from, from + way * meters)).expect("open ground somewhere")
+    }
+
+    /// How `class` is walked by its keys the way `way` from `from`, `ticks` ticks, as the server
+    /// steps a fighter in action mode (its windup never roots it; a shot winding up slows it:
+    /// `winding_speed`), clicking to attack on the tick `click` (if any) with its button held on
+    /// the ticks in `held`, and jumping on the tick `jump` (if any): where it is, how it moves and
+    /// its attack, tick by tick (from tick 1).
+    fn walk_attacking(class: ClassId, (from, way): (Vec2, Vec2), ticks: u32, click: Option<u32>, held: std::ops::Range<u32>, jump: Option<u32>) -> Vec<(Vec2, Motion, AttackState)> {
+        let (mut pos, mut motion, mut attack, mut out) = (from, Motion::default(), AttackState::default(), Vec::new());
+        for tick in 1..=ticks {
+            let input = PlayerInput { walk: way, aim: way, fire: click == Some(tick), draw: held.contains(&tick), jump: jump == Some(tick), ..default() };
+            let boost = winding_speed(class, &attack);
+            pos = move_player_boosted(map(), pos, &input, class, &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick, boost);
+            attack = step_attack(tick, PeerId::Netcode(1), class, pos, &input, attack).0;
+            out.push((pos, motion, attack));
+        }
+        out
+    }
+
+    #[test]
+    fn a_shot_winding_up_slows_the_walk_toward_its_draw_speed_not_at_once_till_it_goes_off() {
+        use crate::config::DRAW_SPEED;
+        let (class, from) = (shooter(), spawns()[0]);
+        let top = class.def().move_speed;
+        let (_, windup) = timers(class);
+        let way = open_way(from, 14.0);
+        // At full speed by the click; held drawn well past its windup, then let go.
+        let (click, gone) = (60, 60 + windup + 30);
+        let walked = walk_attacking(class, (from, way), gone + 40, Some(click), click..gone, None);
+        let speed = |tick: u32| walked[tick as usize - 1].1.along.length();
+        let winding = |tick: u32| walked[tick as usize - 1].2.winding_up().is_some();
+        assert!((speed(click) - top).abs() < top * 0.02, "walking at {} of {top} m/s before the click", speed(click));
+        assert!(winding(click) && winding(gone - 1) && !winding(gone), "the shot didn't wind up from {click} and go off at {gone}");
+        // From the windup's start its speed isn't cut: it slows on the ground, a step at a time.
+        assert!(speed(click + 1) > top * DRAW_SPEED + 0.1 && speed(click + 1) < speed(click), "slowed at once to {} m/s", speed(click + 1));
+        assert!(speed(click + 2) < speed(click + 1), "not slowing");
+        for tick in click + 15..=gone {
+            assert!((speed(tick) - top * DRAW_SPEED).abs() < top * 0.02, "walking at {} of {top} m/s at {tick}, winding up", speed(tick));
+        }
+        // Gone off, it speeds up again to its full speed.
+        assert!(speed(gone + 2) > speed(gone + 1), "not speeding up again");
+        assert!((speed(gone + 40) - top).abs() < top * 0.02, "walking at {} of {top} m/s after the shot", speed(gone + 40));
+    }
+
+    #[test]
+    fn the_windup_slows_a_tapped_shot_too_and_the_button_alone_or_a_swing_never() {
+        use crate::config::DRAW_SPEED;
+        let (shot, from) = (shooter(), spawns()[0]);
+        let (_, windup) = timers(shot);
+        let way = open_way(from, 14.0);
+        let top = shot.def().move_speed;
+        // Let go at once: slowed all through the windup still, not after it.
+        let tapped = walk_attacking(shot, (from, way), 60 + windup + 40, Some(60), 60..61, None);
+        let speed = |tick: u32| tapped[tick as usize - 1].1.along.length();
+        assert!(speed(60 + windup) < top * DRAW_SPEED + 0.1, "not slowed through the windup: {} m/s", speed(60 + windup));
+        assert!((speed(60 + windup + 40) - top).abs() < top * 0.02, "still slowed after the shot: {} m/s", speed(60 + windup + 40));
+        // The button held with no attack winding up, or a swing's windup: as fast as a plain walk.
+        let plain = |class: ClassId| walk_attacking(class, (from, way), 120, None, 0..0, None).last().unwrap().0;
+        let held = walk_attacking(shot, (from, way), 120, None, 60..120, None);
+        assert_eq!(held.last().unwrap().0, plain(shot), "the button alone slowed the walk");
+        let striker = fighter();
+        let swung = walk_attacking(striker, (from, way), 120, Some(60), 60..120, None);
+        assert!(swung[60].2.swing.is_some(), "the swing didn't start");
+        assert_eq!(swung.last().unwrap().0, plain(striker), "a swing's windup slowed the walk");
+    }
+
+    #[test]
+    fn a_jump_as_the_shot_winds_up_keeps_its_speed_through_the_air() {
+        let (class, from) = (shooter(), spawns()[0]);
+        let way = open_way(from, 14.0);
+        let held = 60..200;
+        let walked = walk_attacking(class, (from, way), 120, Some(60), held.clone(), None);
+        let jumped = walk_attacking(class, (from, way), 120, Some(60), held, Some(60));
+        let off = jumped[58].1.along.length();
+        // In the air it goes on as fast as it took off, winding up or not, till it lands.
+        let airborne: Vec<_> = jumped[59..].iter().take_while(|(_, motion, _)| motion.height > 0.0).collect();
+        assert!(airborne.len() > 10, "jumped for {} ticks", airborne.len());
+        for (_, motion, attack) in &airborne {
+            assert!(attack.winding_up().is_some(), "the shot isn't winding up");
+            assert!((motion.along.length() - off).abs() < off * 0.01, "slowed in the air: {} of {off} m/s", motion.along.length());
+        }
+        // So it gets further, winding up, than one that stayed on the ground.
+        let (ground, air) = ((walked.last().unwrap().0 - from).dot(way), (jumped.last().unwrap().0 - from).dot(way));
+        assert!(air > ground + 0.5, "jumped first it got {air} m, on the ground {ground} m");
+    }
+
+    /// A click-to-walk goes at its speed all the way, not a step and a slide, and stands on the
+    /// point it was sent to, still sent there or not.
+    #[test]
+    fn a_click_walk_goes_at_its_speed_and_stands_on_its_point() {
+        let (class, from) = (fighter(), spawns()[0]);
+        let goal = from + open_way(from, 6.0) * 4.0;
+        let step = class.def().move_speed * map().speed_factor_at(from) * TICK_DT;
+        let ticks = (from.distance(goal) / step).ceil() as u32;
+        let (mut pos, mut motion) = (from, Motion::default());
+        for tick in 1..=ticks + 30 {
+            let input = PlayerInput { move_to: (tick <= ticks + 10).then_some(goal), ..default() };
+            pos = move_player(map(), pos, &input, class, &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick);
+            if tick + 2 == ticks {
+                assert_ne!(pos, goal, "there too soon");
+            }
+            if tick > ticks {
+                assert!(pos == goal && motion.along == Vec2::ZERO, "at tick {tick} of {ticks} it's {} m off, going {}", pos.distance(goal), motion.along);
+            }
+        }
+    }
+
+    #[test]
+    fn walking_has_momentum_and_slides_to_a_stop() {
+        let from = spawns()[0];
+        let top = fighter().def().move_speed;
+        let run = walk_ticks(from, &[(Vec2::X, 48), (Vec2::ZERO, 96)], None);
+        let speed = |i: usize| run[i].1.along.length();
+        assert!(speed(0) > 0.0 && speed(0) < top * 0.75, "set off at {} of {top} m/s", speed(0));
+        assert!(speed(10) > speed(0), "not getting going");
+        assert!((speed(47) - top).abs() < top * 0.02, "running at {} of {top} m/s", speed(47));
+        assert!(speed(48) > top * 0.4 && speed(48) < speed(47), "stopped dead, not sliding: {}", speed(48));
+        assert!(speed(48 + 40) < top * 0.1, "still sliding at {}", speed(88));
+        assert_eq!(speed(143), 0.0, "never came to rest");
+        assert!(run[143].0.x > run[47].0.x + 0.1, "slid on less than a short way: {} m", run[143].0.x - run[47].0.x);
+    }
+
+    #[test]
+    fn a_jump_rises_to_its_height_and_lands_and_a_level_shot_passes_under_it() {
+        use crate::config::JUMP_HEIGHT;
+        let run = walk_ticks(spawns()[0], &[(Vec2::ZERO, 64)], Some(5));
+        let height = |i: usize| run[i].1.height;
+        assert_eq!(height(3), 0.0);
+        assert!(height(4) > 0.0, "didn't leave the ground");
+        let top = run.iter().map(|(_, m)| m.height).fold(0.0f32, f32::max);
+        assert!((top - JUMP_HEIGHT).abs() < 0.08, "jumped to {top} m");
+        let landed = 5 + run[5..].iter().position(|(_, m)| m.height == 0.0 && m.rise == 0.0).unwrap();
+        assert!(landed < 40, "took {landed} ticks to land");
+        assert!(landed > 20, "landed after only {landed} ticks");
+        let proj = Projectile { owner: PeerId::Netcode(1), class: bolter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 0, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
+        let at = projectile_pos(&proj, 3.0);
+        assert!(projectile_hits(at, &proj, 3, at, 0.0), "standing, it's hit");
+        assert!(!projectile_hits(at, &proj, 3, at, SHOT_HEIGHT + 0.5), "jumped over it");
+    }
+
+    /// Walks the yard toward each of `targets` in turn (jumping when on the ground and stuck
+    /// short of it, if `hop`), as far as it gets in `ticks` each: where it ends up, and how high.
+    fn climb(from: Vec2, targets: &[Vec2], hop: bool, ticks: u32) -> (Vec2, f32) {
+        let yard = crate::map::MapId::Yard.map();
+        let (mut pos, mut motion, mut tick, mut was) = (from, Motion::default(), 0u32, from);
+        for &target in targets {
+            for _ in 0..ticks {
+                tick += 1;
+                let walk = (target - pos).normalize_or_zero();
+                let grounded = motion.height <= yard.floor_at(pos, motion.height) + 1e-3;
+                let stuck = pos.distance(was) < 0.01 && pos.distance(target) > 0.3;
+                was = pos;
+                let input = PlayerInput { walk, jump: hop && grounded && stuck, ..default() };
+                pos = move_player(yard, pos, &input, fighter(), &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick);
+            }
+        }
+        (pos, motion.height)
+    }
+
+    #[test]
+    fn up_the_crates_onto_a_roof_and_up_it_but_not_through_its_walls() {
+        let yard = crate::map::MapId::Yard.map();
+        let house = yard.houses.iter().find(|house| house.covers(IVec2::new(13, 3))).unwrap();
+        let ridge = yard.height_at(house.center()) + house.ridge();
+        // From the lane beside the stack, hopping up it a crate at a time along their middles,
+        // onto the eaves and up the roof's slope to the ridge.
+        let (from, stack) = crate_stack(yard);
+        let top = Map::center(stack[2].0);
+        let steps = [Map::center(stack[0].0), Map::center(stack[1].0), top, Vec2::new(top.x, house.lo.y as f32 + 1.0), Vec2::new(top.x, house.center().y)];
+        let (at, height) = climb(from, &steps, true, 90);
+        assert!(house.covers(Map::tile_of(at)), "never got onto the roof: at {at}, {height} m up");
+        let under = yard.floor_at(at, height);
+        assert!((under - ridge).abs() < 0.1, "not over the ridge: over {under} m, the ridge at {ridge} m");
+        // Out along the ridge and down the slope to the eaves' edge, it's still up on the roof;
+        // a step past them, it falls.
+        let eaves = house.lo.as_vec2().y - crate::map::House::EAVES;
+        let (at, height) = climb(from, &[steps[0], steps[1], steps[2], steps[3], steps[4], Vec2::new(11.5, eaves + 0.3)], true, 90);
+        assert!(at.y < house.lo.y as f32 && height > 2.0, "not out on the eaves: at {at}, {height} m up");
+        let (_, height) = climb(from, &[steps[0], steps[1], steps[2], steps[3], steps[4], Vec2::new(11.5, eaves - 1.0)], false, 90);
+        assert!(height < 1e-3, "never fell off past the eaves: {height} m up");
+        // Walking, never jumping, it's kept out of the house and stays on the ground.
+        let (at, height) = climb(Vec2::new(12.0, 1.0), &[house.center()], false, 120);
+        assert!(!house.covers(Map::tile_of(at)) && at.y < 3.0 - 0.25, "walked into the house: {at}");
+        assert_eq!(height, 0.0);
+        // Nor jumping at its wall from the ground.
+        let (at, _) = climb(Vec2::new(12.0, 1.0), &[house.center()], true, 120);
+        assert!(at.y < 3.0 - 0.25, "jumped through the house's wall: {at}");
+    }
+
+    /// The yard's crate stack, lowest first (tile, how many high), and where on the lane beside
+    /// it a climb up it starts.
+    fn crate_stack(yard: &Map) -> (Vec2, Vec<(IVec2, u8)>) {
+        let mut stack = yard.crates.clone();
+        stack.sort_by_key(|&(_, high)| high);
+        (Map::center(stack[0].0) - Vec2::Y * 1.3, stack)
+    }
+
+    #[test]
+    fn the_crates_are_hopped_up_one_at_a_time_along_their_middles() {
+        use crate::map::CRATE;
+        let yard = crate::map::MapId::Yard.map();
+        let (from, stack) = crate_stack(yard);
+        let steps: Vec<Vec2> = stack.iter().map(|&(t, _)| Map::center(t)).collect();
+        for k in 1..=stack.len() {
+            let (t, high) = stack[k - 1];
+            let (at, height) = climb(from, &steps[..k], true, 90);
+            assert!(at.distance(Map::center(t)) < 0.3, "never got to the middle of the crates at {t}: at {at}");
+            assert!((height - CRATE * high as f32).abs() < 1e-3, "not standing on the {high} crates at {t}: {height} m up");
+        }
+        // Not two at once: from the ground, a jump at the second stack doesn't get up it.
+        let (at, height) = climb(steps[1] - Vec2::Y * 1.3, &[steps[1]], true, 90);
+        assert!(height < CRATE + 1e-3 && at.distance(steps[1]) > 0.5, "jumped straight up two crates: at {at}, {height} m up");
+    }
+
+    /// Walks the yard from `from` toward `target` for `ticks`, never jumping: where it is and how
+    /// it's moving after each tick.
+    fn walk_yard(from: Vec2, keys: &[(Vec2, u32)]) -> Vec<(Vec2, Motion)> {
+        let yard = crate::map::MapId::Yard.map();
+        let (mut pos, mut motion, mut tick, mut out) = (from, Motion::default(), 0u32, Vec::new());
+        for &(walk, ticks) in keys {
+            for _ in 0..ticks {
+                tick += 1;
+                let input = PlayerInput { walk, ..default() };
+                pos = move_player(yard, pos, &input, fighter(), &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick);
+                out.push((pos, motion));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn walking_turns_and_stops_without_skating() {
+        let top = fighter().def().move_speed;
+        // Down the open lane west of the village, then turning north.
+        let from = Vec2::new(-34.5, -0.5);
+        let ticks = TICK_HZ as u32;
+        let run = walk_yard(from, &[(Vec2::X, ticks), (Vec2::Y, ticks)]);
+        assert!((run[ticks as usize - 1].1.along.x - top).abs() < top * 0.02, "not running east at full speed");
+        // A quarter of a second after turning, nearly nothing of the old way is left, and it's
+        // well on its way the new one.
+        let turned = run[(ticks + ticks / 4) as usize].1.along;
+        assert!(turned.x.abs() < top * 0.1, "still skating east at {} m/s a quarter of a second after turning", turned.x);
+        assert!(turned.y > top * 0.9, "only going north at {} m/s", turned.y);
+        // Let go, it slides only a little, and comes to rest within a quarter of a second.
+        let stop = walk_yard(from, &[(Vec2::X, ticks), (Vec2::ZERO, ticks)]);
+        let slid = stop.last().unwrap().0.x - stop[ticks as usize - 1].0.x;
+        assert!(slid > 0.02 && slid < 0.4, "slid {slid} m to a stop");
+        assert_eq!(stop[(ticks + ticks / 4) as usize].1.along, Vec2::ZERO, "still sliding a quarter of a second after letting go");
+    }
+
+    #[test]
+    fn holding_jump_jumps_again_each_time_it_lands_and_never_in_the_air() {
+        let yard = crate::map::MapId::Yard.map();
+        let (mut pos, mut motion, mut takeoffs) = (Vec2::new(-34.5, -0.5), Motion::default(), 0);
+        for tick in 1..=4 * TICK_HZ as u32 {
+            let before = motion;
+            let grounded = before.height <= yard.floor_at(pos, before.height) + 1e-3;
+            pos = move_player(yard, pos, &PlayerInput { jump: true, ..default() }, fighter(), &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick);
+            // A jump's kick: going up, from standing or falling (landing only stops the fall).
+            if motion.rise > 0.0 && before.rise <= 0.0 {
+                assert!(grounded, "jumped in the air on tick {tick}, {} m up", before.height);
+                takeoffs += 1;
+            }
+        }
+        assert!(takeoffs >= 3, "held for four seconds, jumped {takeoffs} times");
+    }
+
+    /// Coming at a terrace's face at a slant, sliding along it, or round its corner, no part of
+    /// the body's square gets over it, as walking straight at it doesn't.
+    #[test]
+    fn walking_at_a_terraces_face_at_a_slant_keeps_the_body_out_of_it() {
+        use crate::map::{CLIMB, NAV_RADIUS};
+        let yard = crate::map::MapId::Yard.map();
+        // The upper village's south face is at y = 10, sheer, between its stairs; it turns north
+        // at its west end, x = -22.
+        for (from, to) in [(Vec2::new(-17.5, 7.5), Vec2::new(-12.5, 12.5)), (Vec2::new(-20.5, 9.0), Vec2::new(-13.5, 10.5)), (Vec2::new(-14.0, 7.5), Vec2::new(-20.0, 12.0))] {
+            let walk = (to - from).normalize();
+            for (tick, (at, motion)) in walk_yard(from, &[(walk, 3 * TICK_HZ as u32)]).into_iter().enumerate() {
+                assert_eq!(motion.height, 0.0, "{from} -> {to}: got up the face");
+                // All over the body's square, finer than the walk looks.
+                for i in 0..=8 {
+                    for j in 0..=8 {
+                        let o = (Vec2::new(i as f32, j as f32) / 4.0 - Vec2::ONE) * NAV_RADIUS;
+                        let over = yard.height_at(at + o) - motion.height;
+                        assert!(over <= CLIMB * o.length() + 1e-3, "{from} -> {to}: on tick {tick} at {at}, the body's edge at {} is over the face, {over} m up", at + o);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn walking_into_a_terraces_face_stops_with_the_body_at_it_not_in_it() {
+        // The upper village's south face is at y = 10, sheer.
+        let (at, height) = climb(Vec2::new(-17.5, 7.5), &[Vec2::new(-17.5, 12.0)], false, 120);
+        assert_eq!(height, 0.0, "got up the face");
+        assert!(at.y < 10.0 - 0.25 && at.y > 10.0 - 0.4, "stopped at {at}, not with its edge at the face");
+    }
+
+    #[test]
+    fn a_fence_stops_a_walk_and_a_jump_clears_it() {
+        // The fence down the west house's west side, at x = -18.
+        let (at, _) = climb(Vec2::new(-20.0, 5.0), &[Vec2::new(-17.5, 5.0)], false, 120);
+        assert!(at.x < -18.3, "walked through the fence: {at}");
+        let (at, _) = climb(Vec2::new(-20.0, 5.0), &[Vec2::new(-17.5, 5.0)], true, 120);
+        assert!(at.x > -18.0, "didn't jump the fence: {at}");
+    }
+
+    #[test]
+    fn a_fence_is_stood_on_and_eaves_are_walked_under() {
+        let yard = crate::map::MapId::Yard.map();
+        // Hopping up onto the fence down the west house's west side, and stopping on its rail.
+        let (at, height) = climb(Vec2::new(-20.0, 5.0), &[Vec2::new(-18.0, 5.0)], true, 120);
+        let under = yard.floor_at(at, height);
+        assert!((under - crate::map::FENCE_TOP).abs() < 0.05, "not up on the fence: over {under} m at {at}");
+        // Along the west house's south wall, under its eaves, never touching them.
+        let (at, height) = climb(Vec2::new(-16.5, 2.75), &[Vec2::new(-12.5, 2.75)], false, 120);
+        assert!(at.x > -13.0 && height == 0.0, "the eaves stopped it: {at}, {height} m up");
+    }
+
+    #[test]
+    fn a_shot_over_the_top_of_a_wall_clears_it() {
+        let wall = lone_ruin();
+        let at = Map::center(wall);
+        let top = map().height_at(at) + map().ruin_at(wall).unwrap().top();
+        // From a few meters short of it: level, it's stopped there; aimed up enough to be over
+        // its top by the time it's there, it isn't, and flies on past it.
+        let short = 3.0;
+        let over = (top + 0.1 - SHOT_HEIGHT - map().height_at(at - Vec2::X * short)) / (short - 0.5);
+        for (climb, stopped) in [(0.0, true), (over, false)] {
+            let proj = Projectile { owner: PeerId::Netcode(1), class: bolter(), origin: at - Vec2::X * short, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false, extra: false, climb, lift: map().height_at(at - Vec2::X * short) };
+            let past = (5..100).find(|&tick| projectile_pos(&proj, tick as f32).x > at.x + 1.0).unwrap();
+            let expired = (5..=past).any(|tick| projectile_expired(map(), projectile_pos(&proj, tick as f32), &proj, tick));
+            assert_eq!(expired, stopped, "climbing {climb} per meter");
+        }
+    }
+
+    #[test]
+    fn a_shot_flies_over_a_crate_and_into_a_roof() {
+        let yard = crate::map::MapId::Yard.map();
+        let shot = |origin: Vec2, dir: Vec2, lift: f32, climb: f32| Projectile { owner: PeerId::Netcode(1), class: bolter(), origin, dir, spawn_tick: 0, ability: None, crit: false, extra: false, climb, lift };
+        let stopped_by = |proj: &Projectile, ticks: u32| (0..ticks).find(|&tick| projectile_expired(yard, projectile_pos(proj, tick as f32), proj, tick)).map(|tick| projectile_pos(proj, tick as f32));
+        // North over the lowest crate from the ground: shots fly over a crate.
+        let (t, _) = *yard.crates.iter().find(|&&(_, high)| high == 1).unwrap();
+        let level = shot(Vec2::new(Map::center(t).x, -1.0), Vec2::Y, 0.0, 0.0);
+        let past = (4.0 / (bolter().def().shot(None).unwrap().speed * TICK_DT)).ceil() as u32;
+        assert_eq!(stopped_by(&level, past), None, "a level shot stopped over a crate");
+        // From up on the crate's top, a shot leaves it (it isn't stopped in the crate under it).
+        let off_the_top = shot(Map::center(t), Vec2::NEG_Y, crate::map::CRATE, 0.0);
+        assert_eq!(stopped_by(&off_the_top, past), None, "a shot off the crate's top stopped in it");
+        // Into a house's roof over its walls' top, it stops there, in the roof.
+        let house = yard.houses[0];
+        let g = yard.height_at(house.center());
+        let side = if house.long_x() { Vec2::NEG_Y } else { Vec2::NEG_X };
+        let from = house.center() + side * (house.size().min_element() / 2.0 + 3.0);
+        let into = shot(from, -side, g + crate::map::House::WALLS + 0.3 - SHOT_HEIGHT, 0.0);
+        let at = stopped_by(&into, 100).expect("flew through the roof");
+        assert!((house.center() - at).abs().cmple(house.size() / 2.0 + Vec2::splat(0.6)).all(), "stopped at {at}, not at the roof");
+    }
+
+    #[test]
+    fn thrown_projectile_drops_from_the_hand_and_lands() {
+        let thrown = |climb| Projectile { owner: PeerId::Netcode(1), class: thrower(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 0, ability: None, crit: false, extra: false, climb, lift: 0.0 };
+        let shot = thrower().def().shot(None).unwrap();
+        let lands = |proj: &Projectile| {
+            let down = (0..400).find(|&tick| projectile_expired(map(), projectile_pos(proj, tick as f32), proj, tick)).unwrap();
+            let at = projectile_pos(proj, down as f32);
+            assert!(!map().get(Map::tile_of(at)).blocks_shots(), "stopped by a wall at {at}, not the ground");
+            assert!(down < shot.lifetime_ticks(), "given up on in the air, not down on the ground");
+            assert!(projectile_height(proj, down as f32) < 0.0, "ended on the ground");
+            at.x
+        };
+        // Thrown level: below the hand and nosing down from the first tick, down where a thing
+        // falling from the hand's height at its speed lands (within the tick it lands in).
+        let level = thrown(0.0);
+        assert!(projectile_height(&level, 0.0) < SHOT_HEIGHT && projectile_pitch(&level, 0.0) < 0.0);
+        let expected = shot.speed * (2.0 * SHOT_HEIGHT / GRAVITY).sqrt();
+        let landed = lands(&level);
+        assert!(landed >= expected && landed < expected + shot.speed * TICK_DT, "landed at {landed} m, expected {expected} m");
+        // Thrown upward it flies past its range before coming down, and isn't spent there.
+        let lobbed = thrown(0.1);
+        let range_tick = (shot.range / shot.speed * TICK_HZ as f32).ceil() as u32;
+        assert!(!projectile_expired(map(), projectile_pos(&lobbed, range_tick as f32), &lobbed, range_tick));
+        assert!(lands(&lobbed) > shot.range, "a lob carries past the range");
     }
 
     const Q: AbilitySlot = AbilitySlot(0);
@@ -465,7 +940,7 @@ mod tests {
         assert!(swing.primed && swing.windup_ticks(attack) < plain.windup_ticks(attack), "not quicker");
         // Cancelled, it stays ready; gone off, it's used up.
         assert_eq!(cancel_attack(state).primed, primed.primed);
-        let (gone, released) = release_attack(swing.releases_at(attack), PeerId::Netcode(1), class, Vec2::ZERO, state);
+        let (gone, released) = release_attack(swing.releases_at(attack), PeerId::Netcode(1), class, Vec2::ZERO, false, state);
         assert!(released.is_some() && gone.primed.is_none(), "still primed after it went off");
     }
 
@@ -477,7 +952,7 @@ mod tests {
         while state.dashing.0.is_some() {
             tick += 1;
             assert!(tick < 1000, "the dash never ended");
-            pos = move_player(map(), pos, &PlayerInput::default(), class, &AttackState::default(), &mut state.dashing, chilled, hasted, tick);
+            pos = move_player(map(), pos, &PlayerInput::default(), class, &AttackState::default(), &mut state.dashing, &mut Motion::default(), chilled, hasted, tick);
             assert!(map().walkable_at(pos), "dashed into a wall at {pos}");
             state = step_kit(tick, class, pos, &PlayerInput::default(), chilled, state).0;
         }
@@ -526,7 +1001,7 @@ mod tests {
         let (_, winding) = attack_ticks(class, &[10], 10, 10);
         let (kit, _) = step_kit(11, class, from, &press_q(Vec2::Y), &default(), default());
         assert!(kit.dashing.0.is_some(), "no dash mid-windup");
-        let moved = move_player(map(), from, &PlayerInput::default(), class, &winding, &mut { kit.dashing }, &default(), &default(), 11);
+        let moved = move_player(map(), from, &PlayerInput::default(), class, &winding, &mut { kit.dashing }, &mut Motion::default(), &default(), &default(), 11);
         assert_ne!(moved, from, "the dash didn't move you mid-windup");
         let (_, windup) = timers(class);
         let (released, _) = (11..=10 + windup).fold((None, winding), |(released, state), tick| {
@@ -558,7 +1033,7 @@ mod tests {
         let from = spawns()[0];
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let (attack, ability) = (AttackState::default(), Dashing::default());
-        let step = |chilled: &Chilled| move_player(map(), from, &walk, chiller(), &attack, &mut { ability }, chilled, &default(), 101).distance(from);
+        let step = |chilled: &Chilled| move_player(map(), from, &walk, chiller(), &attack, &mut { ability }, &mut Motion::default(), chilled, &default(), 101).distance(from);
         assert!((step(&chilled) - step(&Chilled::default()) * (1.0 - chill.slow)).abs() < 1e-5);
 
         // A weaker slow doesn't replace a stronger one; the same one again renews it.
@@ -577,16 +1052,17 @@ mod tests {
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let class = dasher();
         let (attack, idle, warm) = (AttackState::default(), Dashing::default(), Chilled::default());
-        let step = |tick| move_player(map(), from, &walk, class, &attack, &mut { idle }, &warm, &hasted, tick).distance(from);
+        let step = |tick| move_player(map(), from, &walk, class, &attack, &mut { idle }, &mut Motion::default(), &warm, &hasted, tick).distance(from);
         let normal = class.def().move_speed * TICK_DT;
         assert!((step(100) - normal).abs() < 1e-5, "hasted on the tick it was taken");
         assert!((step(101) - normal * HASTE_FACTOR).abs() < 1e-5);
         assert!((step(100 + HASTE_TICKS) - normal * HASTE_FACTOR).abs() < 1e-5);
         assert!((step(101 + HASTE_TICKS) - normal).abs() < 1e-5, "still hasted after it wore off");
-        // Dashes are sped up just as much.
-        let (kit, _) = step_kit(101, class, from, &press_q(Vec2::X), &warm, default());
-        let dash = |hasted: &Hasted| move_player(map(), from, &walk, class, &attack, &mut { kit.dashing }, &warm, hasted, 102).distance(from);
-        assert!((dash(&hasted) - dash(&default()) * HASTE_FACTOR).abs() < 1e-5);
+        // Dashes are sped up just as much: over in as many fewer ticks.
+        let mut early = Hasted::default();
+        early.start(0);
+        let (normal, quick) = (dash_run(from, Vec2::X, &warm, &default()).1, dash_run(from, Vec2::X, &warm, &early).1);
+        assert_eq!(quick, (normal as f32 / HASTE_FACTOR).ceil() as u32, "a hasted dash of {normal} ticks took {quick}");
         assert!(touches_pickup(from, from + Vec2::X * PICKUP_RADIUS));
         assert!(!touches_pickup(from, from + Vec2::X * (PICKUP_RADIUS + 0.01)));
         // 15% of 95, rounded up.
@@ -601,8 +1077,8 @@ mod tests {
         let walk = walk_to(Map::tile_of(from) + IVec2::new(0, 3));
         let class = dasher();
         let (attack, idle) = (AttackState::default(), Dashing::default());
-        assert_eq!(move_player(map(), from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 11), from, "walked while rooted");
-        assert_ne!(move_player(map(), from, &walk, class, &attack, &mut { idle }, &chilled, &default(), 11 + TICK_HZ as u32), from, "still rooted after it wore off");
+        assert_eq!(move_player(map(), from, &walk, class, &attack, &mut { idle }, &mut Motion::default(), &chilled, &default(), 11), from, "walked while rooted");
+        assert_ne!(move_player(map(), from, &walk, class, &attack, &mut { idle }, &mut Motion::default(), &chilled, &default(), 11 + TICK_HZ as u32), from, "still rooted after it wore off");
 
         let (state, _) = step_kit(11, class, from, &press_q(Vec2::X), &chilled, default());
         assert!(state.dashing.0.is_none() && state.cooldowns.used_at(Q).is_none(), "dashed (or spent the cooldown) while rooted");
@@ -610,7 +1086,7 @@ mod tests {
         // A dash in progress when the root lands goes no further, and ends.
         let (dashing, _) = step_kit(9, class, from, &press_q(Vec2::X), &default(), default());
         assert!(dashing.dashing.0.is_some());
-        assert_eq!(move_player(map(), from, &walk, class, &attack, &mut { dashing.dashing }, &chilled, &default(), 11), from, "dashed on while rooted");
+        assert_eq!(move_player(map(), from, &walk, class, &attack, &mut { dashing.dashing }, &mut Motion::default(), &chilled, &default(), 11), from, "dashed on while rooted");
         let (stopped, _) = step_kit(11, class, from, &PlayerInput::default(), &chilled, dashing);
         assert!(stopped.dashing.0.is_none(), "the dash should stop");
     }
@@ -625,18 +1101,22 @@ mod tests {
         assert_eq!(state.cooldowns.cooldown_over_at(Q), 10 + q(class).cooldown_ticks);
         let dirs = [Vec2::X, Vec2::Y, -Vec2::X, Vec2::new(0.6, -0.8)];
         // Open ground all around (walls stop novas too).
-        let open = |p: Vec2| dirs.iter().all(|d| map().shot_clear(p, p + *d * (radius + 1.5)));
+        let ground = |p: Vec2| (p, map().height_at(p));
+        let open = |p: Vec2| dirs.iter().all(|d| map().shot_clear(ground(p), ground(p + *d * (radius + 1.5))));
         let at = map().tiles().map(|(tile, _)| Map::center(tile)).find(|&p| open(p)).unwrap();
         for dir in dirs {
-            assert!(nova.hits(map(), at, at + dir * (radius + PLAYER_RADIUS - 0.05)), "inside, toward {dir}");
-            assert!(!nova.hits(map(), at, at + dir * (radius + PLAYER_RADIUS + 0.05)), "outside, toward {dir}");
+            assert!(nova.hits(map(), ground(at), ground(at + dir * (radius + PLAYER_RADIUS - 0.05))), "inside, toward {dir}");
+            assert!(!nova.hits(map(), ground(at), ground(at + dir * (radius + PLAYER_RADIUS + 0.05))), "outside, toward {dir}");
         }
+        // Not up out of its reach, over the caster's head.
+        let (near, feet) = ground(at + Vec2::X);
+        assert!(!nova.hits(map(), ground(at), (near, feet + radius + 0.1)), "far over its head");
     }
 
     #[test]
     fn only_auto_attacks_chill() {
         let class = chiller();
-        let shot = Projectile { owner: PeerId::Netcode(1), class, origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 1, ability: None, crit: false, extra: false };
+        let shot = Projectile { owner: PeerId::Netcode(1), class, origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 1, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
         assert_eq!(projectile_chill(&shot), class.def().attack.chill);
         assert!(projectile_chill(&Projectile { class: primer(), ability: Some(Q), ..shot }).is_none());
     }
@@ -646,22 +1126,35 @@ mod tests {
         let class = fighter();
         let at = spawns()[0];
         let reach = class.def().attack.kind.reach() - 0.05;
-        assert!(melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at + Vec2::Y * reach), "straight ahead, at the edge of reach");
-        assert!(!melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at + Vec2::Y * (reach + 0.2)), "just out of reach");
-        assert!(!melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at - Vec2::Y * 1.0), "behind");
+        assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * reach, 0.0)), "straight ahead, at the edge of reach");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * (reach + 0.2), 0.0)), "just out of reach");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at - Vec2::Y * 1.0, 0.0)), "behind");
         let AttackKind::Melee { width, from, .. } = class.def().attack.kind else { unreachable!() };
         // Bodies overlapping connect when the lane starts at the attacker; one starting further
         // out misses what's closer than that.
-        assert_eq!(melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at - Vec2::Y * 0.3), from == 0.0, "bodies overlapping");
+        assert_eq!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at - Vec2::Y * 0.3, 0.0)), from == 0.0, "bodies overlapping");
         if from > 0.0 {
-            assert!(melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at + Vec2::Y * (from - PLAYER_RADIUS + 0.05)), "touching the lane's near end");
-            assert!(!melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at + Vec2::Y * (from - PLAYER_RADIUS - 0.05)), "short of the lane");
+            assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * (from - PLAYER_RADIUS + 0.05), 0.0)), "touching the lane's near end");
+            assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * (from - PLAYER_RADIUS - 0.05), 0.0)), "short of the lane");
         }
         let edge = width / 2.0 + PLAYER_RADIUS;
         let middle = from.max(1.0);
-        assert!(melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at + Vec2::new(edge - 0.05, middle)), "a body overlapping the lane");
-        assert!(!melee_hits(map(), at, Vec2::Y, (false, 0.0), class, at + Vec2::new(edge + 0.05, middle)), "beside the lane");
-        assert!(!melee_hits(map(), at, Vec2::Y, (false, 0.0), shooter(), at + Vec2::Y), "projectile classes don't swing");
+        assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::new(edge - 0.05, middle), 0.0)), "a body overlapping the lane");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::new(edge + 0.05, middle), 0.0)), "beside the lane");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), shooter(), (at + Vec2::Y, 0.0)), "projectile classes don't swing");
+    }
+
+    #[test]
+    fn a_swing_meets_bodies_from_over_its_strikers_head_to_below_its_feet() {
+        let class = fighter();
+        let at = spawns()[0];
+        let ahead = at + Vec2::Y * (class.def().attack.kind.reach() - 0.3);
+        let hits = |feet: f32| melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (ahead, feet));
+        assert!(hits(0.0) && hits(1.0), "one on the ground or up on a crate isn't struck");
+        assert!(!hits(BODY_HEIGHT + 0.1), "one up on a roof is struck");
+        // Struck from up on something: one down below it is, as far down as the blade reaches.
+        assert!(swing_reaches(2.5, 1.0) && swing_reaches(2.5, 0.0), "one down off a terrace isn't struck");
+        assert!(!swing_reaches(0.0, -BODY_HEIGHT - REACH_DOWN - 0.1), "one far below is struck");
     }
 
     #[test]
@@ -670,17 +1163,21 @@ mod tests {
         let def = class.def().attack.rift.unwrap();
         let at = spawns()[0];
         let swing = LastSwing { tick: 10, dir: Vec2::Y, empowered: false, grown: 0.0 };
-        let rift = Rift::torn(PeerId::Netcode(1), class, at, &swing).unwrap();
+        let feet = map().height_at(at);
+        let rift = Rift::torn(PeerId::Netcode(1), class, at, feet, &swing).unwrap();
         let (from, range, _) = class.def().attack.lane(false).unwrap();
         let inside = at + Vec2::Y * (from + range) / 2.0;
-        assert!(rift.holds(inside, 11) && rift.holds(inside, 9 + def.ticks), "not in its own rift");
-        assert!(!rift.holds(inside, 10 + def.ticks), "still open after it closed");
-        assert!(!rift.holds(at - Vec2::Y * 2.0, 11), "behind it");
+        let on = map().height_at(inside);
+        assert!(rift.holds(map(), inside, on, 11) && rift.holds(map(), inside, on, 9 + def.ticks), "not in its own rift");
+        assert!(!rift.holds(map(), inside, on, 10 + def.ticks), "still open after it closed");
+        assert!(!rift.holds(map(), at - Vec2::Y * 2.0, feet, 11), "behind it");
+        // Jumped up over it, it isn't in it; just off its ground, it still is.
+        assert!(!rift.holds(map(), inside, on + 1.0, 11) && rift.holds(map(), inside, on + 0.2, 11), "in it however high over it");
         // Walking there is that much faster.
         let walk = PlayerInput { walk: Vec2::X, ..default() };
         let (idle, warm) = (Dashing::default(), Chilled::default());
-        let plain = move_player(map(), at, &walk, class, &AttackState::default(), &mut { idle }, &warm, &default(), 11).distance(at);
-        let boosted = move_player_boosted(map(), at, &walk, class, &AttackState::default(), &mut { idle }, &warm, &default(), 11, 1.0 + def.haste).distance(at);
+        let plain = move_player(map(), at, &walk, class, &AttackState::default(), &mut { idle }, &mut Motion::default(), &warm, &default(), 11).distance(at);
+        let boosted = move_player_boosted(map(), at, &walk, class, &AttackState::default(), &mut { idle }, &mut Motion::default(), &warm, &default(), 11, 1.0 + def.haste).distance(at);
         assert!((boosted - plain * (1.0 + def.haste)).abs() < 1e-4, "{boosted} vs {plain}");
     }
 
@@ -693,8 +1190,8 @@ mod tests {
         let beyond = at + Vec2::Y * (range + PLAYER_RADIUS + 0.2);
         let aside = at + Vec2::new(width / 2.0 + PLAYER_RADIUS + (wide - width) / 4.0, (near + far) / 2.0);
         for target in [beyond, aside] {
-            assert!(!melee_hits(map(), at, Vec2::Y, (false, 0.0), class, target), "a plain swing reached {target}");
-            assert!(melee_hits(map(), at, Vec2::Y, (true, 0.0), class, target), "an empowered swing missed {target}");
+            assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (target, 0.0)), "a plain swing reached {target}");
+            assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (true, 0.0), class, (target, 0.0)), "an empowered swing missed {target}");
         }
     }
 
@@ -719,8 +1216,10 @@ mod tests {
         let DashDef { distance, ticks, .. } = dash_def();
         let mut dashing = Dashing(Some(dash_def().start(Q, Vec2::X, Vec2::X * 100.0, 10)));
         let warm = Chilled::default();
-        let moved = move_player(keep, from, &PlayerInput::default(), class, &AttackState::default(), &mut dashing, &warm, &default(), 11);
-        assert!((moved.distance(from) - distance / ticks as f32).abs() < 1e-4);
+        let moved = move_player(keep, from, &PlayerInput::default(), class, &AttackState::default(), &mut dashing, &mut Motion::default(), &warm, &default(), 11);
+        // Its first tick, the longest of an eased-out dash.
+        let first = distance * (1.0 - (1.0 - 1.0 / ticks as f32).powi(2));
+        assert!((moved.distance(from) - first).abs() < 1e-4, "moved {} the first tick, not {first}", moved.distance(from));
     }
 
     #[test]

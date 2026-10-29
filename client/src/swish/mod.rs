@@ -1,10 +1,11 @@
 //! A blade's wind: what a thrusting blade leaves in the air. A faint trail follows the blade
 //! itself wherever it moves fast (a lunge, a dash), so it shows where the sword just was, twice as
 //! bright while its Follow Through is on; and each strike leaves a mark, one thin, sharp line of
-//! wind along the blade where it was as the strike landed, lingering a moment as it fades. Air
-//! casts no shadow. A strike carries on into the ground (empowered or not): as the blade
+//! wind along its lane, lying on what the blade comes down on, lingering a moment as it fades.
+//! Air casts no shadow. A strike carries on into the ground (empowered or not): as the blade
 //! comes down, the ground tears open all over its hitbox (its melee lane: the rectangle it
-//! hits) onto the spectral realm beneath: the void showing dark through it, cracks edged in ink
+//! hits), lying on whatever's under it in pieces, one on each surface (`lay`), onto the spectral
+//! realm beneath: the void showing dark through it, cracks edged in ink
 //! with wisp light welling up out of them (flaring as it breaks, then glowing low and breathing),
 //! a burst of spectral mist, and chunks of
 //! earth thrown up and tumbling back (see-through and self-lit, so it reads on any ground). The
@@ -14,14 +15,18 @@
 //! scrapes. The same whoever swung (who it was shows in the
 //! health bar).
 
+use arena_shared::map::Map;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
 use crate::arena::{self, palette};
+use crate::plain::PlainMaterial;
 
 mod trail;
 pub(crate) use trail::*;
+mod lay;
+pub(crate) use lay::*;
 mod marks;
 use marks::*;
 mod rift;
@@ -38,7 +43,7 @@ impl Plugin for SwishPlugin {
         app.add_systems(Startup, load_swish);
         app.add_systems(Update, (add_trails, drive_marks, drive_impacts, throw_chunks, burn_in_rifts));
         app.add_systems(PostUpdate, (trail_blades, show_marks, strike_ground, drag_marks, shed_embers).chain().after(TransformSystems::Propagate));
-        app.add_systems(Update, (fade_scuffs, fly_sparks, drift_embers));
+        app.add_systems(Update, (fly_sparks, drift_embers));
     }
 }
 
@@ -54,8 +59,10 @@ pub(crate) struct Blade {
     pub(crate) from: f32,
     pub(crate) shown: u32,
     pub(crate) quickened: bool,
-    /// A strike that has just gone off: the ground breaks over its hitbox this frame.
+    /// A strike that has just gone off: the ground breaks over its hitbox this frame, on what's
+    /// under it (`Underfoot`), if it has one.
     pub(crate) striking: bool,
+    pub(crate) struck: Option<Underfoot>,
     /// Where on the ground its point last left a scuff, while it's dragging there (`drag_marks`).
     pub(crate) dragged: Option<Vec3>,
     /// The outer corner of its edge, in its own space: a broad blade reaches the ground there
@@ -75,15 +82,15 @@ pub(crate) struct Blade {
 /// A blade in a fighter's other hand, part of its lead forearm (the shade's reversed knife):
 /// where it runs along the forearm's own axis (meters from the elbow, its base to its point),
 /// for a trail of its own (as vivid and lingering as the main blade's), and the mark of the
-/// attack's second cut (`AttackDef::twice`): when (seconds) the next one lands, and where its
-/// mark goes (beside the first cut's), while one is coming.
+/// attack's second cut (`AttackDef::twice`): when (seconds) the next one lands, and where along
+/// its lane its mark goes (beside the first cut's), while one is coming.
 #[derive(Component)]
 pub(crate) struct OffBlade {
     pub(crate) held: Entity,
     pub(crate) span: (f32, f32),
     pub(crate) vivid: f32,
     pub(crate) linger: f32,
-    pub(crate) cut: Option<(f32, Vec3, Vec3)>,
+    pub(crate) cut: Option<(f32, Option<LaneMark>)>,
 }
 
 impl OffBlade {
@@ -92,6 +99,8 @@ impl OffBlade {
         held.transform_point(Vec3::Y * (self.span.0 + (self.span.1 - self.span.0) * up))
     }
 }
+
+pub(crate) use arena_shared::sim::{REACH_DOWN, REACH_UP, struck_surface};
 
 impl Blade {
     /// How low the end of the blade comes (meters): its point or its edge's corner, whichever.
@@ -110,35 +119,32 @@ impl Blade {
 struct SwishAssets {
     mark: Handle<Mesh>,
     /// Brightest first.
-    fades: Vec<Handle<StandardMaterial>>,
-    trail: Handle<StandardMaterial>,
-    dust: Handle<Mesh>,
+    fades: Vec<Handle<PlainMaterial>>,
+    trail: Handle<PlainMaterial>,
     chunk: Handle<Mesh>,
     wisp: Handle<Mesh>,
     /// The cracks' ink, darkest first; their spectral light, the void under them and the mist,
     /// brightest first.
-    rift_fades: Vec<Handle<StandardMaterial>>,
-    core_fades: Vec<Handle<StandardMaterial>>,
-    rim_fades: Vec<Handle<StandardMaterial>>,
-    dust_fades: Vec<Handle<StandardMaterial>>,
-    wisp_glow: Handle<StandardMaterial>,
+    rift_fades: Vec<Handle<PlainMaterial>>,
+    core_fades: Vec<Handle<PlainMaterial>>,
+    rim_fades: Vec<Handle<PlainMaterial>>,
+    dust_fades: Vec<Handle<PlainMaterial>>,
+    wisp_glow: Handle<PlainMaterial>,
     /// A dark mote of the void, thrown off with the rasp's sparks.
-    void_mote: Handle<StandardMaterial>,
-    /// A scuff a dragging point leaves, and its ink fading.
+    void_mote: Handle<PlainMaterial>,
+    /// A scuff a dragging point leaves.
     scuff: Handle<Mesh>,
-    scuff_fades: Vec<Handle<StandardMaterial>>,
     /// Earth and stone, dark enough for any ground.
-    chunks: [Handle<StandardMaterial>; 2],
+    chunks: [Handle<PlainMaterial>; 2],
     /// Embers flaking off a quickened blade.
-    ember_glow: Handle<StandardMaterial>,
+    ember_glow: Handle<PlainMaterial>,
 }
 
-fn load_swish(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn load_swish(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<PlainMaterial>>) {
     commands.insert_resource(SwishAssets {
-        mark: meshes.add(mark_mesh()),
+        mark: meshes.add(mark_shape().build()),
         fades: fades(&mut materials, AIR, MARK_ALPHA, 2.0),
         trail: materials.add(arena::translucent(AIR, 0.47, 1.8)),
-        dust: meshes.add(dust_mesh()),
         chunk: meshes.add(Cuboid::new(1.0, 0.7, 0.85)),
         wisp: meshes.add(Sphere::new(1.0).mesh().ico(1).unwrap()),
         // Layered up from the void: its outline, the cracks' ink, their light, the mist.
@@ -149,27 +155,26 @@ fn load_swish(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mate
         wisp_glow: materials.add(arena::glow(palette::WISP, CORE_GLOW)),
         void_mote: materials.add(arena::glow(palette::TATTERS, 0.0)),
         scuff: meshes.add(scuff_mesh()),
-        scuff_fades: fades(&mut materials, palette::INK, SCUFF_ALPHA, 0.0),
         chunks: [palette::HUNTER_DARK, palette::ASH].map(|color| materials.add(arena::matte(color))),
         ember_glow: materials.add(arena::glow(palette::SOUL, EMBER_GLOW)),
     });
 }
 
 /// A see-through `color` at `alpha`, fading out in `MARK_FADES` steps (one shared material each).
-fn fades(materials: &mut Assets<StandardMaterial>, color: Color, alpha: f32, glow: f32) -> Vec<Handle<StandardMaterial>> {
+fn fades(materials: &mut Assets<PlainMaterial>, color: Color, alpha: f32, glow: f32) -> Vec<Handle<PlainMaterial>> {
     layered(materials, color, alpha, glow, 0)
 }
 
 /// The step of `fades` (from `fades` or `layered`) for `t` (0 to 1) of the way faded out.
-fn faded(fades: &[Handle<StandardMaterial>], t: f32) -> &Handle<StandardMaterial> {
+fn faded(fades: &[Handle<PlainMaterial>], t: f32) -> &Handle<PlainMaterial> {
     &fades[((t * MARK_FADES as f32) as usize).min(MARK_FADES - 1)]
 }
 
 /// `fades`, drawn over the see-through layers below it in the same place (a higher `layer`):
 /// they'd otherwise sort however their distances happen to fall.
-fn layered(materials: &mut Assets<StandardMaterial>, color: Color, alpha: f32, glow: f32, layer: u8) -> Vec<Handle<StandardMaterial>> {
+fn layered(materials: &mut Assets<PlainMaterial>, color: Color, alpha: f32, glow: f32, layer: u8) -> Vec<Handle<PlainMaterial>> {
     (0..MARK_FADES)
-        .map(|i| materials.add(StandardMaterial { depth_bias: layer as f32, ..arena::translucent(color, alpha * (1.0 - i as f32 / MARK_FADES as f32), glow) }))
+        .map(|i| materials.add(PlainMaterial { depth_bias: layer as f32, ..arena::translucent(color, alpha * (1.0 - i as f32 / MARK_FADES as f32), glow) }))
         .collect()
 }
 

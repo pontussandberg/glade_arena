@@ -160,8 +160,8 @@ pub(crate) struct Zone {
 pub(crate) struct Zones(Vec<Zone>);
 
 /// `blow` from `by` to its foes `hits` says are hit (`hit_foes`). How many it hit.
-fn strike(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut Targets, by: By, blow: Blow, hits: impl FnMut(PeerId, Vec2) -> bool) -> usize {
-    hit_foes(commands, log, now, targets, (by.id, by.class, by.name()), (by.side, by.source), blow, hits)
+fn strike(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut Targets, by: By, blow: Blow, mut hits: impl FnMut(PeerId, Vec2) -> bool) -> usize {
+    hit_foes(commands, log, now, targets, (by.id, by.class, by.name()), (by.side, by.source), blow, |id, at, _| hits(id, at))
 }
 
 /// Deals `damage` (and `chill`) to `by`'s foes within `radius` of `at`, shown as a blast in `color`.
@@ -184,7 +184,7 @@ fn blast_as(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut T
 fn nearest_foe(targets: &Targets, (by, side): (PeerId, Side), at: Vec2, reach: f32, skip: impl Fn(PeerId) -> bool) -> Option<(PeerId, Vec2)> {
     targets
         .iter()
-        .filter(|(_, id, (room, team), pos, health, .., (sheltered, decoy))| {
+        .filter(|(_, id, (room, team), pos, health, .., (sheltered, decoy, _))| {
             health.0 > 0 && !sheltered && id.0 != by && !owns(by, *decoy) && !skip(id.0) && foes(side, (**room, **team)) && pos.0.distance(at) <= reach
         })
         .map(|(_, id, _, pos, ..)| (id.0, pos.0))
@@ -238,9 +238,10 @@ pub(super) fn tick_items(
     let due: Vec<Volley> = barrages.0.iter().filter(|v| v.at <= now).copied().collect();
     barrages.0.retain(|v| v.at > now);
     for volley in due {
-        // From where the thrower is now, if they're still in the fight, fanning out a touch.
+        // From where the thrower is now, if they're still in the fight, all but straight after
+        // the first: just enough scatter that they don't fly as one.
         let Some((_, _, pos, ..)) = holders.iter().find(|(id, ..)| id.0 == volley.shot.owner) else { continue };
-        let dir = Vec2::from_angle((fastrand::f32() - 0.5) * 0.14).rotate(volley.shot.dir);
+        let dir = Vec2::from_angle((fastrand::f32() - 0.5) * 0.02).rotate(volley.shot.dir);
         let radius = volley.shot.class.def().shot(None).map_or(0.0, |s| s.radius);
         let shot = Projectile { origin: pos.0 + dir * (PLAYER_RADIUS + radius), dir, spawn_tick: now, crit: false, extra: true, ..volley.shot };
         spawn_projectile(&mut commands, shot, volley.side, volley.might);
@@ -290,7 +291,7 @@ pub(super) fn tick_items(
     for zone in &zones.0 {
         if zone.pull > 0.0 {
             // Only its maker's foes, as its pulse hurts (never them, nor the sheltered).
-            for (entity, id, (room, team), pos, health, .., (sheltered, decoy)) in targets.iter() {
+            for (entity, id, (room, team), pos, health, .., (sheltered, decoy, _)) in targets.iter() {
                 if health.0 > 0 && !sheltered && id.0 != zone.by.id && !owns(zone.by.id, decoy) && foes(zone.by.side, (*room, *team)) && pos.0.distance(zone.at) <= zone.radius + PLAYER_RADIUS {
                     let next = pos.0.move_towards(zone.at, zone.pull * TICK_DT);
                     if lobby.map(room).line_walkable(pos.0, next) {
@@ -412,7 +413,7 @@ fn ability_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (E
             Item::VoidOrb => {
                 let (radius, pull, damage, lasts) = items::void_orb(level);
                 let map = r.lobby.map(&hit.side.0);
-                let at = map.nearest_walkable(Map::tile_of(hit.at), 3).map_or(hit.at, Map::center);
+                let at = map.nearest_walkable(Map::tile_of(hit.at), 3).map_or(hit.at, |t| map.stand(t));
                 r.zones.0.push(Zone { by: by(item), at, radius, damage, slow: 0.0, pull, until: now + lasts });
                 spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Zone(FxColor::Void), at, radius, now, lasts));
             }

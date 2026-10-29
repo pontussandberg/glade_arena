@@ -6,12 +6,12 @@
     role: "Marksman",
     blurb: "Hurls heavy javelins. The farther they fly, the harder they hit.",
     max_hp: 95,
-    move_speed: 3.7,
+    move_speed: 4.25,
     attack: (
         damage: 16,
         attack_ticks: 43,
         windup: 0.442,
-        kind: Projectile(speed: 15.0, radius: 0.25, range: 15.0, far_scale: Some(2.25)),
+        kind: Projectile(speed: 30.0, radius: 0.25, range: 15.0, far_scale: Some(2.25), falls: true),
         // Javelins go right through monsters (not players), skewering a line of them.
         pierces: true,
     ),

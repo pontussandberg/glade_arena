@@ -29,16 +29,44 @@ const DODGE_STEP: f32 = 3.0;
 
 /// Present when this client is played by the bot.
 #[derive(Resource)]
-pub struct Bot;
+pub struct Bot {
+    /// It holds its ground in a fight (`ARENA_BOT=stand`): back where it first stood, it fights
+    /// whatever comes into reach from there, so a crowd piles up round it (for measuring a
+    /// fight).
+    pub stand: bool,
+}
 
-pub struct BotPlugin;
+pub struct BotPlugin {
+    pub stand: bool,
+}
 
 impl Plugin for BotPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Bot);
+        app.insert_resource(Bot { stand: self.stand });
         app.configure_sets(Update, PlayerControls.run_if(|| false));
         // Decide every frame, right before what changed is sent.
-        app.add_systems(Update, (think, go_shopping).chain().before(SendCommands));
+        app.add_systems(Update, (think, go_shopping, stand_ground).chain().before(SendCommands));
+    }
+}
+
+/// A bot holding its ground walks nowhere but to the merchant between waves, and back to where
+/// it first stood on this map when the fight's on.
+fn stand_ground(
+    bot: Res<Bot>,
+    room: Res<CurrentRoom>,
+    map: Res<CurrentMap>,
+    me: Query<&Pos, With<Me>>,
+    mut desired: ResMut<DesiredInput>,
+    mut home: Local<Option<(arena_shared::map::MapId, Vec2)>>,
+) {
+    let Ok(me) = me.single() else { return };
+    let home = match *home {
+        Some((on, at)) if on == map.0 => at,
+        _ => home.insert((map.0, me.0)).1,
+    };
+    let shopping = room.run().is_some_and(|run| matches!(run.phase, arena_shared::rooms::Phase::Shop { .. }));
+    if bot.stand && !shopping {
+        desired.0.move_to = (me.0.distance(home) > 1.0).then_some(home);
     }
 }
 
@@ -129,7 +157,8 @@ fn think(
         desired.0 = PlayerInput { move_to: to, aim: to_target, ..default() };
         return;
     }
-    let clear = map.shot_clear(me.0, target);
+    // As if each stood on the ground there.
+    let clear = map.shot_clear((me.0, map.height_at(me.0)), (target, map.height_at(target)));
     let fire = in_reach && clear;
     let move_to = move_to.filter(|_| !fire && attack.winding_up().is_none());
     // The first ready ability that would land: a dash to close in from just out of reach, a

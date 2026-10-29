@@ -79,7 +79,7 @@ fn melee_hits_where_the_target_is_now() {
     let a_spot = A_SPOT + Vec2::X * 2.0;
     let mut d = Duel::placed(5895, (A_CLASS, a_spot), (B_CLASS, a_spot + Vec2::X * (reach() - 0.3)));
     let damage = class_id(A_CLASS).def().attack.damage;
-    let hits = |a: Vec2, b: Vec2| sim::melee_hits(map(), a, Vec2::X, (false, 0.0), class_id(A_CLASS), b);
+    let hits = |a: Vec2, b: Vec2| sim::melee_hits(map(), (a, map().height_at(a)), Vec2::X, (false, 0.0), class_id(A_CLASS), (b, map().height_at(b)));
 
     // B standing just inside reach is hit; just outside, it isn't.
     let (_, _, dealt) = swing_judged_on_server(&mut d);

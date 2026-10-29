@@ -8,7 +8,7 @@
     blurb: "A spark with legs and a grudge.",
     playable: false,
     max_hp: 26,
-    move_speed: 4.4,
+    move_speed: 5.05,
     attack: (
         damage: 6,
         attack_ticks: 28,

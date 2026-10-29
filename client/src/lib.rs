@@ -5,6 +5,7 @@
 //! The networking part (`ClientNetPlugin`) has no rendering, so integration tests can run it
 //! headless as a bot. `render` adds the window, 3D scene and keyboard/mouse input on top.
 
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -19,6 +20,7 @@ use lightyear::prelude::*;
 #[cfg(feature = "render")]
 pub mod abilities;
 
+#[cfg(feature = "render")]
 pub mod audio;
 #[cfg(feature = "render")]
 pub mod action_bar;
@@ -36,13 +38,19 @@ pub mod casting;
 #[cfg(feature = "render")]
 pub mod esc_menu;
 #[cfg(feature = "render")]
+pub mod settings;
+#[cfg(feature = "render")]
 pub mod practice;
 #[cfg(feature = "render")]
 pub mod feedback;
 #[cfg(feature = "render")]
 pub mod fx;
-#[cfg(all(feature = "render", not(target_family = "wasm")))]
+#[cfg(feature = "render")]
 pub mod perf;
+#[cfg(feature = "render")]
+pub mod rects;
+#[cfg(feature = "render")]
+pub mod plain;
 #[cfg(feature = "render")]
 mod item_icons;
 #[cfg(feature = "render")]
@@ -137,6 +145,45 @@ pub struct FakeLatency(pub Duration);
 #[derive(Component, Debug)]
 pub struct Me;
 
+/// Which tick each `PlayerCommand::Walk` we sent was for, and which way, oldest first: what our
+/// own fighter's prediction replays (`render::glide`), since the server steps what was sent,
+/// from the tick it was sent for.
+#[derive(Resource, Default)]
+pub struct SentWalks(pub VecDeque<(u32, Vec2)>);
+
+/// How many sent walks are kept for replaying.
+const SENT_WALKS_KEPT: usize = 64;
+
+/// Which tick each `PlayerCommand::Draw` we sent was for, and whether the attack button was
+/// held, oldest first: what our own fighter's prediction walks slower by (`render::glide`), and
+/// whether our shot is held drawn at a tick before the server says so (`rig`).
+#[derive(Resource, Default)]
+pub struct SentDraws(pub VecDeque<(u32, bool)>);
+
+impl SentDraws {
+    /// Whether the attack button was held at `tick`, as sent.
+    pub fn held_at(&self, tick: u32) -> bool {
+        self.0.iter().rev().find(|(t, _)| *t <= tick).is_some_and(|(_, held)| *held)
+    }
+}
+
+/// Which tick each `PlayerCommand::Attack` we sent was for, oldest first: what our own fighter's
+/// prediction steps its attack by (`render::glide`), a shot winding up slowing its walk.
+#[derive(Resource, Default)]
+pub struct SentAttacks(pub VecDeque<u32>);
+
+impl SentAttacks {
+    /// Whether an attack was clicked for `tick`, as sent.
+    pub fn clicked_at(&self, tick: u32) -> bool {
+        self.0.contains(&tick)
+    }
+}
+
+/// The server tick the next walk we send is for: the newest tick our fighter's prediction steps
+/// (`render::glide` sets it each frame); 0 without the action camera, for at once.
+#[derive(Resource, Default)]
+pub struct WalkSchedule(pub u32);
+
 /// Builds a client app without rendering, for tests and bots.
 pub fn build_headless_client_app(settings: ClientSettings) -> App {
     let mut app = App::new();
@@ -173,6 +220,10 @@ impl Plugin for ClientNetPlugin {
         app.add_observer(mark_controlled_player);
         app.configure_sets(Update, SendCommands.after(PlayerControls));
         app.init_resource::<WalkWhenOrdered>();
+        app.init_resource::<SentWalks>();
+        app.init_resource::<SentDraws>();
+        app.init_resource::<SentAttacks>();
+        app.init_resource::<WalkSchedule>();
         app.add_systems(Update, (forget_walk_on_attack, send_commands).chain().in_set(SendCommands));
         app.add_systems(Update, fake_latency.run_if(resource_changed::<FakeLatency>));
     }
@@ -228,9 +279,16 @@ fn mark_controlled_player(trigger: On<Add, Controlled>, players: Query<(), With<
 struct Sent {
     move_to: Option<Vec2>,
     walk: Vec2,
-    /// When the attack or walk was last sent (`Time<Real>`), to send changes at most once a tick.
+    aim: Vec2,
+    climb: f32,
+    /// Whether Space was held, and the attack button, as last sent.
+    jump: bool,
+    draw: bool,
+    /// When the attack, walk or aim was last sent (`Time<Real>`), to send changes at most once a
+    /// tick.
     attack_at: Duration,
     walk_at: Duration,
+    aim_at: Duration,
 }
 
 /// Sends the server what changed in `DesiredInput`: a new destination, a stop, walking keys, an
@@ -242,12 +300,18 @@ fn send_commands(
     mut desired: ResMut<DesiredInput>,
     mut walk_when_ordered: ResMut<WalkWhenOrdered>,
     mut stop: ResMut<StopWalking>,
-    me: Query<(), With<Me>>,
+    me: Query<Option<&AttackState>, With<Me>>,
     mut client: Query<&mut MessageSender<PlayerCommand>, (With<Client>, With<Connected>)>,
     mut sent: Local<Sent>,
+    #[cfg(feature = "render")] mode: Option<Res<crate::camera::CameraMode>>,
+    (mut sent_walks, mut sent_draws, mut sent_attacks): (ResMut<SentWalks>, ResMut<SentDraws>, ResMut<SentAttacks>),
+    schedule: Res<WalkSchedule>,
 ) {
-    let (Ok(mut sender), false) = (client.single_mut(), me.is_empty()) else {
+    let (Ok(mut sender), Ok(attack)) = (client.single_mut(), me.single()) else {
         *sent = Sent::default();
+        sent_walks.0.clear();
+        sent_draws.0.clear();
+        sent_attacks.0.clear();
         // Nothing carries over to our next fighter: not a destination, not a click.
         desired.0 = PlayerInput { aim: desired.0.aim, ..default() };
         stop.0 = false;
@@ -270,12 +334,38 @@ fn send_commands(
     }
     let started_or_stopped = (input.walk == Vec2::ZERO) != (sent.walk == Vec2::ZERO);
     if input.walk != sent.walk && (started_or_stopped || due(sent.walk_at)) {
-        send(PlayerCommand::Walk(input.walk));
+        send(PlayerCommand::Walk(input.walk, schedule.0));
         (sent.walk, sent.walk_at) = (input.walk, now);
+        sent_walks.0.push_back((schedule.0, input.walk));
+        while sent_walks.0.len() > SENT_WALKS_KEPT {
+            sent_walks.0.pop_front();
+        }
     }
-    if input.fire && due(sent.attack_at) {
-        send(PlayerCommand::Attack(input.aim));
-        sent.attack_at = now;
+    // In action mode the aim is the camera's: its direction and its pitch (`climb`). It's sent
+    // as the camera turns while our attack winds up (the only time the server has a use for it),
+    // so the attack follows it until it goes off (`PlayerCommand::Aim`); the click that starts
+    // one carries the direction itself, and the pitch goes ahead of it if it changed. Out of
+    // action mode the pitch is sent level once, so no shot keeps the last one.
+    #[cfg(feature = "render")]
+    let action = mode.as_ref().is_some_and(|mode| mode.free);
+    #[cfg(not(feature = "render"))]
+    let action = false;
+    let winding_up = attack.is_some_and(|attack| attack.winding_up().is_some());
+    let turned = input.aim != sent.aim || input.climb != sent.climb;
+    let pitched = input.climb != sent.climb;
+    let firing = input.fire && due(sent.attack_at);
+    if (action && winding_up && turned && due(sent.aim_at)) || (pitched && (firing || !action)) {
+        send(PlayerCommand::Aim(input.aim, input.climb));
+        (sent.aim, sent.climb, sent.aim_at) = (input.aim, input.climb, now);
+    }
+    if firing {
+        // For the tick a walk would be (`PlayerCommand::Attack`).
+        send(PlayerCommand::Attack(input.aim, schedule.0));
+        sent_attacks.0.push_back(schedule.0);
+        while sent_attacks.0.len() > SENT_WALKS_KEPT {
+            sent_attacks.0.pop_front();
+        }
+        (sent.aim, sent.attack_at) = (input.aim, now);
         desired.0.fire = false;
         walk_when_ordered.0 = input.move_to;
     }
@@ -285,6 +375,19 @@ fn send_commands(
         }
         desired.0.casts = default();
         walk_when_ordered.0 = input.move_to;
+    }
+    if input.jump != sent.jump {
+        send(PlayerCommand::Jump(input.jump));
+        sent.jump = input.jump;
+    }
+    // The attack button, for the tick a walk would be (`PlayerCommand::Draw`).
+    if input.draw != sent.draw {
+        send(PlayerCommand::Draw(input.draw, schedule.0));
+        sent.draw = input.draw;
+        sent_draws.0.push_back((schedule.0, input.draw));
+        while sent_draws.0.len() > SENT_WALKS_KEPT {
+            sent_draws.0.pop_front();
+        }
     }
 }
 

@@ -693,6 +693,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             room.started = true;
             room.practice = true;
             lobby.guests.get_mut(&link).expect("a guest").playing = true;
+            stand_dummies(lobby, ctx, key);
             join(lobby, ctx, link, key)?;
         }
         RoomRequest::PlaySolo => {
@@ -828,8 +829,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                 return Err("A dummy can't stand there");
             }
             let patrol = if walks { Some(Patrol::through(room.map.map(), at).ok_or("No room for a dummy to walk there")?) } else { None };
-            // Each class in turn.
-            let class = ClassId::playable().nth(room.dummies.len() % ClassId::playable().count()).expect("a class");
+            let class = dummy_class(room.dummies.len());
             let in_room = room.in_room(key);
             let dummy = spawn_dummy(&mut ctx.commands, lobby.next_local(), class, in_room, at);
             let room = lobby.rooms.get_mut(&key).expect("in it");
@@ -954,6 +954,26 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
 
 /// The most target dummies a practice room may have.
 const MAX_DUMMIES: usize = 12;
+
+/// What a room's `n`th dummy fights as: each class in turn.
+fn dummy_class(n: usize) -> ClassId {
+    ClassId::playable().nth(n % ClassId::playable().count()).expect("a class")
+}
+
+/// The target dummies a practice room's map comes with (`Map::dummies`) stand on it, as if
+/// placed first. Nothing happens for any other room.
+fn stand_dummies(lobby: &mut Lobby, ctx: &mut Ctx, key: RoomKey) {
+    let room = &lobby.rooms[&key];
+    if !room.practice {
+        return;
+    }
+    let in_room = room.in_room(key);
+    for &at in &room.map.map().dummies {
+        let class = dummy_class(lobby.rooms[&key].dummies.len());
+        let dummy = spawn_dummy(&mut ctx.commands, lobby.next_local(), class, in_room, at);
+        lobby.rooms.get_mut(&key).expect("in it").dummies.push(dummy);
+    }
+}
 /// The most zombies a practice room may have about.
 const MAX_PRACTICE_ZOMBIES: usize = 12;
 
@@ -1046,6 +1066,7 @@ fn switch_map(lobby: &mut Lobby, ctx: &mut Ctx, key: RoomKey, map: MapId) {
             ctx.commands.entity(player).insert(NeedsSpawnPoint);
         }
     }
+    stand_dummies(lobby, ctx, key);
 }
 
 /// The team a mode puts its `n`th member on.

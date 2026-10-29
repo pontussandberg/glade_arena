@@ -11,14 +11,23 @@ use bevy::camera::{ClearColorConfig, RenderTarget};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 
+use crate::plain::PlainMaterial;
 use crate::{ChosenClass, Me};
 use crate::arena::{self, palette};
 use crate::render::{GameUi, HudButton, clicked};
 use crate::rooms::CurrentRoom;
 
-/// Each playable class's face, rendered once per frame by its tiny camera.
+/// Each playable class's face, drawn by its tiny camera in the first frames (`rest_faces`).
 #[derive(Resource)]
 pub(super) struct FaceIcons(Vec<(ClassId, Handle<Image>)>);
+
+/// A face's head, eyes, lights or camera: there for the first frames only (`rest_faces`).
+#[derive(Component)]
+pub(super) struct FaceScene;
+
+/// How many frames the faces are drawn before their scenes go: a face never changes, so what
+/// its camera drew lasts, but its first frames may still be waiting on shaders.
+const FACE_FRAMES: u32 = 60;
 
 /// How many pixels a face image is, each way.
 const FACE_PIXELS: u32 = 128;
@@ -37,7 +46,7 @@ pub(super) struct PickFrame(ClassId);
 
 /// Builds every face: for each playable class, its head and eyes alone on a render layer of
 /// their own, lit by their own little sun, watched by a camera drawing into the icon's image.
-pub(super) fn load_faces(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>) {
+pub(super) fn load_faces(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<PlainMaterial>>, mut images: ResMut<Assets<Image>>) {
     let body = materials.add(arena::matte(Color::WHITE));
     let eyes_glow = materials.add(arena::glow(palette::SOUL, FACE_EYE_GLOW));
     let mut icons = Vec::new();
@@ -48,20 +57,23 @@ pub(super) fn load_faces(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>
         image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
         let image = images.add(image);
         let rig = arena::fighter_rig(class.def().figure());
-        commands.spawn((Mesh3d(meshes.add(rig.head)), MeshMaterial3d(body.clone()), Transform::IDENTITY, layer.clone()));
-        commands.spawn((Mesh3d(meshes.add(rig.eyes)), MeshMaterial3d(eyes_glow.clone()), Transform::IDENTITY, layer.clone()));
+        commands.spawn((FaceScene, Mesh3d(meshes.add(rig.head)), MeshMaterial3d(body.clone()), Transform::IDENTITY, layer.clone()));
+        commands.spawn((FaceScene, Mesh3d(meshes.add(rig.eyes)), MeshMaterial3d(eyes_glow.clone()), Transform::IDENTITY, layer.clone()));
         commands.spawn((
+            FaceScene,
             PointLight { intensity: 140_000.0, range: 5.0, shadow_maps_enabled: false, ..default() },
             Transform::from_xyz(0.8, 0.6, 0.5),
             layer.clone(),
         ));
         // A softer fill from the other side, so the shadowed half of the face still reads.
         commands.spawn((
+            FaceScene,
             PointLight { intensity: 50_000.0, range: 5.0, shadow_maps_enabled: false, ..default() },
             Transform::from_xyz(-0.7, 0.2, 0.6),
             layer.clone(),
         ));
         commands.spawn((
+            FaceScene,
             Camera3d::default(),
             // Each face before the main view, into its own image, over nothing.
             Camera { order: -(FACE_LAYER as isize + i as isize), clear_color: ClearColorConfig::Custom(Color::NONE), ..default() },
@@ -73,6 +85,20 @@ pub(super) fn load_faces(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>
         icons.push((class, image));
     }
     commands.insert_resource(FaceIcons(icons));
+}
+
+/// Takes the faces' scenes down once their cameras have drawn enough frames: the images they
+/// drew into stay as they are, and a view per class every frame cost more than the arena itself.
+pub(super) fn rest_faces(mut commands: Commands, mut frames: Local<u32>, scenes: Query<Entity, With<FaceScene>>) {
+    if scenes.is_empty() {
+        return;
+    }
+    *frames += 1;
+    if *frames >= FACE_FRAMES {
+        for entity in &scenes {
+            commands.entity(entity).despawn();
+        }
+    }
 }
 
 /// The row of frames, up while practicing and gone when not.

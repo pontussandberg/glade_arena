@@ -6,7 +6,7 @@
     role: "Scourge",
     blurb: "Feeds the fire. Every bolt sets its mark alight, and a mark fed enough goes up in a burst that lights the rest.",
     max_hp: 95,
-    move_speed: 3.6,
+    move_speed: 4.15,
     attack: (
         damage: 12,
         attack_ticks: 34,

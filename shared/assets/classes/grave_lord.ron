@@ -8,7 +8,7 @@
     blurb: "The first revenant. The last thing you will see.",
     playable: false,
     max_hp: 2200,
-    move_speed: 3.3,
+    move_speed: 3.80,
     attack: (
         damage: 32,
         attack_ticks: 48,

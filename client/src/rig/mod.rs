@@ -8,8 +8,9 @@
 //! An attack is timed to the server's: the draw and the strike fill its windup, and the
 //! strike is `Moves::contact` of the way through as it goes off (the spear leaving the hand, the
 //! blade's tip just reaching the target). The rest of the strike and the follow-through are the
-//! backswing, which walking cuts short (`CUT_RATE`). Nothing on screen says when the attack has
-//! gone off but the fighter itself. A quicker attack (`follow_up`) plays all of it faster.
+//! backswing, played out in full as the fighter walks on; only a dash cuts it short
+//! (`CUT_RATE`). Nothing on screen says when the attack has gone off but the fighter itself. A
+//! quicker attack (`follow_up`) plays all of it faster.
 //!
 //! The javelinist always carries the javelin cocked over the shoulder, ready to throw. The
 //! windup: twist the throwing shoulder far back, lean well back and sink into a wide stance, lead arm
@@ -55,6 +56,7 @@ use crate::cloth::WardrobeAssets;
 use crate::feedback::AttackClock;
 use crate::arena::{self, RIG_HIP, RIG_KNEE, RIG_NECK, RIG_SHOULDER};
 use crate::ease::*;
+use crate::plain::PlainMaterial;
 
 mod joints;
 pub(crate) use joints::*;
@@ -115,8 +117,8 @@ pub(crate) fn drawn_size(class: ClassId, elite: bool) -> f32 {
 pub(crate) const EMPOWERED_BLADE: f32 = 1.5;
 const EMPOWER_RATE: f32 = 12.0;
 pub(crate) const EMPOWERED_STRETCH: f32 = 0.05;
-/// How quickly walking off cuts the backswing short (per second, exponential): the
-/// follow-through blends out into the walk.
+/// How quickly dashing off cuts the backswing short (per second, exponential): the
+/// follow-through blends out into the dash.
 const CUT_RATE: f32 = 30.0;
 /// A thrown Q's flick: ticks after the throw until the arm starts and finishes coming back.
 const FLICK: (f32, f32) = (0.5, 5.0);
@@ -157,11 +159,11 @@ const AURA_GLOW: f32 = 9.0;
 
 /// Rig meshes for each class, and its glow (crystals: the same for everyone of a class), and the
 /// cold white everyone's eyes burn with. Every other part is drawn in the fighter's own material
-/// (colors in the vertices), so a hit flashes all of it.
+/// (colors in the vertices), so a tint or a chill takes all of it.
 #[derive(Resource)]
 struct RigAssets {
     meshes: HashMap<ClassId, RigHandles>,
-    eye_glow: Handle<StandardMaterial>,
+    eye_glow: Handle<PlainMaterial>,
 }
 
 struct RigHandles {
@@ -174,11 +176,11 @@ struct RigHandles {
     shin: Handle<Mesh>,
     held: Handle<Mesh>,
     eyes: Handle<Mesh>,
-    glow: Handle<StandardMaterial>,
+    glow: Handle<PlainMaterial>,
     held_glow: Option<Handle<Mesh>>,
     body_glow: Option<Handle<Mesh>>,
-    held_aura: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
-    held_glint: Option<(Handle<Mesh>, Handle<StandardMaterial>, arena::Edge)>,
+    held_aura: Option<(Handle<Mesh>, Handle<PlainMaterial>)>,
+    held_glint: Option<(Handle<Mesh>, Handle<PlainMaterial>, arena::Edge)>,
     wardrobe: Option<WardrobeAssets>,
 }
 
@@ -238,7 +240,7 @@ pub(crate) struct Rig {
 fn load_rigs(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
 ) {
     let rigs = ClassId::all()
@@ -281,7 +283,7 @@ fn mirrored(right: Vec3) -> Vec3 {
 fn add_rigs(
     mut commands: Commands,
     assets: Res<RigAssets>,
-    new: Query<(Entity, &ClassId, &Pos, &MeshMaterial3d<StandardMaterial>, Option<&Elite>, Has<Shopkeeper>), Added<Mesh3d>>,
+    new: Query<(Entity, &ClassId, &Pos, &MeshMaterial3d<PlainMaterial>, Option<&Elite>, Has<Shopkeeper>), Added<Mesh3d>>,
     map: Res<crate::rooms::CurrentMap>,
 ) {
     for (player, class, pos, body, elite, shopkeeper) in &new {
@@ -290,7 +292,7 @@ fn add_rigs(
         let size = drawn_size(*class, elite.is_some());
         let elbows = [(); 2].map(|_| commands.spawn((Transform::from_translation(class_moves.elbow_at), Visibility::default())).id());
         let knees = [(); 2].map(|_| commands.spawn((Transform::from_translation(RIG_KNEE), Visibility::default())).id());
-        let mut part = |mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>, at: Vec3| {
+        let mut part = |mesh: &Handle<Mesh>, material: &Handle<PlainMaterial>, at: Vec3| {
             let transform = Transform::from_translation(at);
             commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), transform)).id()
         };
@@ -323,6 +325,11 @@ fn add_rigs(
         let forearms = [Some(&handles.forearm), handles.lead_arm.as_ref().map_or(Some(&handles.forearm), |(_, forearm)| forearm.as_ref())];
         let forearms = forearms.map(|mesh| mesh.map(|mesh| part(mesh, own, Vec3::ZERO)));
         let shins = [(); 2].map(|_| part(&handles.shin, own, Vec3::ZERO));
+        // What glows is set in the figure, inside its shadow: each would cost the sun's shadows a
+        // draw of its own, a crowd's every kind, for nothing to see.
+        for glowing in [Some(eyes), held_glow, body_glow].into_iter().flatten() {
+            commands.entity(glowing).insert(NotShadowCaster);
+        }
         commands.entity(rig.head).add_child(eyes);
         for (arm, elbow) in rig.arms.into_iter().zip(rig.elbows) {
             commands.entity(arm).add_child(elbow);
@@ -360,7 +367,7 @@ fn add_rigs(
             // A glaive's broad edge reaches the ground at its corner before its point; a plain
             // blade's lowest point is its point.
             let corner = if figure == "revenant" { arena::glaive_edge(1.0) } else { Vec3::Y * length };
-            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length, from: from / length, shown: 0, quickened: false, striking: false, dragged: None, corner, rasp: 0, embers: (0.0, 0), vivid, linger });
+            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length, from: from / length, shown: 0, quickened: false, striking: false, struck: None, dragged: None, corner, rasp: 0, embers: (0.0, 0), vivid, linger });
         }
         // A blade on the other hand too (the shade's), on its lead forearm, which hangs from
         // its lead elbow.
@@ -384,16 +391,17 @@ fn rate(time: &Time, per_second: f32) -> f32 {
 }
 
 /// Turns every fighter toward where it wants to face: its locked aim while winding up, its dash,
-/// or the way it walks (if it moved this frame). Snaps once there, so it settles.
+/// or the way it walks (if it moved this frame). Snaps once there, so it settles. Our own, with
+/// the action camera, faces where the camera looks instead of the way it walks: it strafes.
 ///
 /// A dash taken mid-windup doesn't turn it at all: it holds its look through the dash and after,
 /// until its next attack, or until it walks off once the dash is over (`STEADY_SETTLE` after, so
 /// the dash's own last steps don't count). A dash in the backswing cuts it short and turns it
 /// to the dash, like walking off.
-fn turn_fighters(time: Res<Time>, mut fighters: Query<(&mut Facing, &Pos, &AttackState, &Dashing)>) {
+fn turn_fighters(time: Res<Time>, mode: Res<crate::camera::CameraMode>, mut fighters: Query<(&mut Facing, &Pos, &AttackState, &Dashing, Has<Me>)>) {
     let turn = rate(&time, TURN_RATE);
     let now = time.elapsed_secs();
-    for (mut facing, pos, attack, dashing) in &mut fighters {
+    for (mut facing, pos, attack, dashing, me) in &mut fighters {
         let moved = pos.0 - facing.last_pos;
         let mut steady = facing.steady;
         let mut dash_seen = facing.dash_seen;
@@ -414,6 +422,7 @@ fn turn_fighters(time: Res<Time>, mut fighters: Query<(&mut Facing, &Pos, &Attac
         }
         let wants = match (attack.winding_up(), dashing.0) {
             (Some(windup), _) => windup.dir,
+            _ if me && mode.free && mode.watching().is_none() => mode.forward(),
             _ if steady.is_some() => facing.look,
             (None, Some(dash)) => dash.dir,
             (None, None) if moved.length() > 0.01 => moved.normalize(),
@@ -439,8 +448,10 @@ const STEADY_SETTLE: f32 = 0.15;
 fn pose_rigs(
     time: Res<Time>,
     // Not there until we're synced with the server; the lobby's fighter is posed before that
-    // (and it never attacks, so it doesn't need the clock).
+    // (and it never attacks, so it doesn't need the clock, nor the ground: it stands on a stage).
     clock: Option<AttackClock>,
+    map: Option<Res<crate::rooms::CurrentMap>>,
+    draws: Option<Res<crate::SentDraws>>,
     mut rigs: Query<(
         &mut Rig,
         &Facing,
@@ -454,21 +465,27 @@ fn pose_rigs(
         Option<&HitSquash>,
         &mut Footfalls,
         Option<&Chilled>,
+        Option<&arena_shared::protocol::Motion>,
+        Option<&crate::render::PredictedWalk>,
+        Option<&crate::swish::Blade>,
     )>,
     mut parts: Query<(&mut Transform, &mut Visibility), Without<Rig>>,
 ) {
     let ease_walk = rate(&time, WALK_RATE);
     let dt = time.delta_secs().min(0.1);
     let wall_clock = time.elapsed_secs();
-    for (mut rig, facing, mut body, mut held_at, class, attack, (cooldowns, dashing), seen, is_me, squash, mut footfalls, chilled) in &mut rigs {
+    for (mut rig, facing, mut body, mut held_at, class, attack, (cooldowns, dashing), seen, is_me, squash, mut footfalls, chilled, motion, predicted, edged) in &mut rigs {
         let rig = &mut *rig;
         // Dashing, it glides along in its pose without a stride, thrown into a lunge.
         let gliding = dashing.0.is_some();
         rig.glide += (if gliding { 1.0 } else { 0.0 } - rig.glide) * rate(&time, GLIDE_RATE);
-        // A jump (a spawn, a waygate, a correction) is no stride at all.
+        // A jump (a spawn, a waygate, a correction) is no stride at all. Backing away (walking
+        // against its look: the action camera's S) runs the stride backward, so the legs
+        // retreat rather than moonwalk.
         if !gliding && facing.moved.length() < arena_shared::config::JUMP {
             let before = rig.stride;
-            rig.stride += facing.moved.length() * STRIDES_PER_METER * rig.moves.gait.cadence;
+            let way = if facing.moved.dot(facing.look) < 0.0 { -1.0 } else { 1.0 };
+            rig.stride += way * facing.moved.length() * STRIDES_PER_METER * rig.moves.gait.cadence;
             // A foot comes down every half stride (the legs pass each other there).
             if (before * 2.0).floor() != (rig.stride * 2.0).floor() {
                 footfalls.0 += 1;
@@ -477,12 +494,12 @@ fn pose_rigs(
         let is_walking = if facing.moved.length() > 0.001 && !gliding { 1.0 } else { 0.0 };
         let walking = rig.walking + (is_walking - rig.walking) * ease_walk;
         rig.walking = if (walking - is_walking).abs() < 1e-3 { is_walking } else { walking };
-        let stride = rig.stride.fract() * TAU;
+        let stride = rig.stride.rem_euclid(1.0) * TAU;
         let step = Vec2::new(stride.sin(), stride.cos()) * rig.walking;
 
         // Where in the strike we are: drawing (0..1), holding, then striking during the windup,
         // up to its contact pose as the attack goes off; then the rest of the strike, and the
-        // follow-through easing back to carrying, unless walking cuts it short. A thrown Q
+        // follow-through easing back to carrying, unless a dash cuts it short. A thrown Q
         // flicks through it.
         let def = class.def();
         let now = clock.as_ref().map_or(0.0, |clock| clock.now(is_me));
@@ -499,6 +516,13 @@ fn pose_rigs(
         // gets there; until it does, it's still winding up, so the strike plays out in full.
         let windup = SeenThrows::windup(seen, attack)
             .or_else(|| attack.swing.filter(|swing| is_me && attack.released_at.is_some_and(|at| at >= swing.started_at && now < at as f32)));
+        // Ours, a shot the server will hold drawn (the attack button held for the tick its
+        // windup's over, as sent: `sim::release_attack`) is held from the first, before its word
+        // that it is, so it doesn't start its strike only to draw back.
+        let windup = windup.map(|swing| {
+            let holds = is_me && swing.held == 0 && arena_shared::sim::shoots(*class) && draws.as_ref().is_some_and(|draws| draws.held_at(swing.releases_at(&def.attack)));
+            if holds { Swing { held: 1, ..swing } } else { swing }
+        });
         // The last attack's speed scales its backswing like its windup, and a hit that armed its
         // `follow_up` speeds it up (normal once it's done).
         let speed = match attack.swing {
@@ -520,13 +544,14 @@ fn pose_rigs(
         let stretch = moves.stretch + if empowering { EMPOWERED_STRETCH } else { 0.0 };
         let (posed_windup, posed_released, ahead) = ahead_of_springs(*class, moves, windup, released, now);
         let (mut draw, mut throw, mut smear, mut second) = strike_phase(*class, moves, attack, posed_windup, posed_released, ahead);
-        // Walking off (or dashing off, after it went off) once the attack has gone off cuts its
-        // backswing short, for good: the follow-through blends out quickly into the walk.
+        // Dashing off once the attack has gone off cuts its backswing short, for good: the
+        // follow-through blends out quickly into the dash. Walking doesn't: the swing or throw
+        // plays out over the walk.
         let cut = match (windup, attack.released_at) {
             (None, Some(at)) if released.is_some() => {
                 let cut = rig.cut.filter(|(of, _)| *of == at).map_or(0.0, |(_, cut)| cut);
                 let dashed_off = dashing.0.is_some_and(|dash| dash.started_at > at);
-                let cut = if cut > 0.0 || is_walking > 0.0 || dashed_off { cut + (1.0 - cut) * rate(&time, CUT_RATE) } else { 0.0 };
+                let cut = if cut > 0.0 || dashed_off { cut + (1.0 - cut) * rate(&time, CUT_RATE) } else { 0.0 };
                 rig.cut = Some((at, cut));
                 cut
             }
@@ -607,13 +632,22 @@ fn pose_rigs(
         let mut aimed = targets(moves, phase, Vec2::ZERO, rig.walking);
         aimed.add(&fidget, 1.0);
         let walk = rig.walking * free;
-        let posed = assemble(moves, &angles, &aimed, facing.look, stride, walk, stretch * smear, blade, free);
+        // As high as it is: on the ground where it stands, or up in a jump or a fall
+        // (`render::shown_height`).
+        let at = arena::to_gameplay(body.translation);
+        let height = map.as_ref().map_or(0.0, |map| crate::render::shown_height(map.map(), motion, predicted, at));
+        let pose = |angles: &Angles| assemble(moves, angles, &aimed, facing.look, stride, walk, stretch * smear, blade, free);
+        // A blade striking meets the ground where it is.
+        let posed = match (&map, edged) {
+            (Some(map), Some(edged)) if free < 1.0 => onto_ground(map.map(), at, height, rig.size, [Vec3::Y * edged.length, edged.corner], 1.0 - free, &angles, pose),
+            _ => pose(&angles),
+        };
         // Just hit, the whole figure flinches: squashed wide and short, springing back over
         // `SQUASH_SECONDS`, so a blow visibly lands in the body and not just on the health bar.
         let flinch = squash.map_or(0.0, |s| (1.0 - (wall_clock - s.at) / SQUASH_SECONDS).clamp(0.0, 1.0).powi(2));
         let squashed = Vec3::new(1.0 + 0.12 * flinch, 1.0 - 0.16 * flinch, 1.0 + 0.12 * flinch);
         let placed = Transform {
-            translation: body.translation.with_y((posed.body.translation.y + BREATH_RISE * (0.5 + 0.5 * breath) * breathing) * rig.size),
+            translation: body.translation.with_y((posed.body.translation.y + BREATH_RISE * (0.5 + 0.5 * breath) * breathing) * rig.size + height),
             scale: posed.body.scale * rig.size * squashed,
             ..posed.body
         };
@@ -713,7 +747,7 @@ mod tests {
         let mut heights = Vec::new();
         for fps in [30.0, 60.0, 144.0] {
             for phase in 0..8 {
-                let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false };
+                let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0 };
                 let release = 10 + swing.windup_ticks(&def.attack);
                 let mut joints = Joints::default();
                 let dt = 1.0 / fps;

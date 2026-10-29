@@ -10,6 +10,7 @@
 use bevy::prelude::*;
 
 use crate::cloth::Wardrobe;
+use crate::plain::PlainMaterial;
 
 mod theme;
 pub use theme::*;
@@ -195,8 +196,8 @@ pub fn to_gameplay(w: Vec3) -> Vec2 {
 }
 
 /// Matte, so flat facets read cleanly. Vertex colors (if any) multiply `color`.
-pub fn matte(color: Color) -> StandardMaterial {
-    StandardMaterial {
+pub fn matte(color: Color) -> PlainMaterial {
+    PlainMaterial {
         base_color: color,
         perceptual_roughness: 0.95,
         metallic: 0.0,
@@ -206,13 +207,13 @@ pub fn matte(color: Color) -> StandardMaterial {
 }
 
 /// Self-lit: shots, flames and markers that should read the same in light and shade.
-pub fn glow(color: Color, strength: f32) -> StandardMaterial {
-    StandardMaterial { emissive: LinearRgba::from(color) * strength, unlit: true, ..matte(color) }
+pub fn glow(color: Color, strength: f32) -> PlainMaterial {
+    PlainMaterial { emissive: LinearRgba::from(color) * strength, unlit: true, ..matte(color) }
 }
 
 /// See-through glow: swishes, streaks and auras.
-pub fn translucent(color: Color, alpha: f32, strength: f32) -> StandardMaterial {
-    StandardMaterial { alpha_mode: AlphaMode::Blend, ..glow(color.with_alpha(alpha), strength) }
+pub fn translucent(color: Color, alpha: f32, strength: f32) -> PlainMaterial {
+    PlainMaterial { alpha_mode: AlphaMode::Blend, ..glow(color.with_alpha(alpha), strength) }
 }
 
 /// One normal per face: the low-poly look.

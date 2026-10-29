@@ -6,10 +6,7 @@
 use std::collections::HashMap;
 
 use arena_shared::items::Item;
-use bevy::asset::RenderAssetUsages;
-use bevy::image::ImageSampler;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 /// How many pixels an icon is, each way.
 pub(crate) const ICON_PIXELS: usize = 13;
@@ -48,11 +45,7 @@ fn paint((rows, colors): Art) -> Image {
             pixels.extend(rgba);
         }
     }
-    let size = Extent3d { width: ICON_PIXELS as u32, height: ICON_PIXELS as u32, depth_or_array_layers: 1 };
-    let mut image = Image::new(size, TextureDimension::D2, pixels, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
-    // Crisp pixels, not blurred.
-    image.sampler = ImageSampler::nearest();
-    image
+    crate::render::crisp_image(ICON_PIXELS as u32, ICON_PIXELS as u32, pixels)
 }
 
 fn rgb(color: u32) -> [u8; 4] {

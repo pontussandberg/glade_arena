@@ -425,13 +425,18 @@ pub enum AttackKind {
     },
     /// Flies straight until it hits someone, a blocking tile, or runs out of range. With
     /// `far_scale`, damage scales linearly from the attack's `damage` (point blank) to `far_scale`
-    /// times it (after flying the full range).
+    /// times it (after flying the full range, and no more past it). One that `falls` is thrown:
+    /// gravity pulls it down from the moment it leaves the hand, so it drops ever further below
+    /// the line it was aimed along, and it isn't spent at its range but ends where it hits
+    /// something or the ground (`sim::projectile_height`).
     Projectile {
         speed: f32,
         radius: f32,
         range: f32,
         #[serde(default)]
         far_scale: Option<f32>,
+        #[serde(default)]
+        falls: bool,
     },
 }
 
@@ -450,7 +455,14 @@ pub struct Shot {
     pub speed: f32,
     pub radius: f32,
     pub range: f32,
+    /// Thrown: it drops under gravity from the hand, and isn't spent at its range
+    /// (`AttackKind::Projectile`).
+    pub falls: bool,
 }
+
+/// How many times its range a thrown shot may fly in all before it's given up on: room for one
+/// lobbed as high as the camera aims to come down (the map's edge stops it sooner).
+const FALL_SPAN: f32 = 14.0;
 
 impl Shot {
     /// How far from its shooter's center a target's body can reach and still be hit: its front
@@ -459,9 +471,11 @@ impl Shot {
         PLAYER_RADIUS + 2.0 * self.radius + self.range
     }
 
-    /// How many ticks it flies before it's out of range.
+    /// How many ticks it flies before it's out of range; a thrown one, before it's given up on
+    /// (it ends on the ground long before).
     pub fn lifetime_ticks(&self) -> u32 {
-        (self.range / self.speed * TICK_HZ as f32).ceil() as u32
+        let span = if self.falls { self.range * FALL_SPAN } else { self.range };
+        (span / self.speed * TICK_HZ as f32).ceil() as u32
     }
 }
 
@@ -669,14 +683,14 @@ impl AttackKind {
     pub fn edge_reach(&self) -> f32 {
         match *self {
             AttackKind::Melee { range, .. } => range,
-            AttackKind::Projectile { speed, radius, range, .. } => Shot { speed, radius, range }.edge_reach(),
+            AttackKind::Projectile { speed, radius, range, falls, .. } => Shot { speed, radius, range, falls }.edge_reach(),
         }
     }
 
     /// How a projectile attack flies (`None` for melee).
     pub fn shot(&self) -> Option<Shot> {
-        let AttackKind::Projectile { speed, radius, range, .. } = *self else { return None };
-        Some(Shot { speed, radius, range })
+        let AttackKind::Projectile { speed, radius, range, falls, .. } = *self else { return None };
+        Some(Shot { speed, radius, range, falls })
     }
 }
 
@@ -820,7 +834,7 @@ mod tests {
                     assert!((0.5..=4.0).contains(&range) && (0.05..=3.0).contains(&width), "{}: melee", c.id);
                     assert!((0.0..range).contains(&from), "{}: melee lane starts past its end", c.id);
                 }
-                AttackKind::Projectile { speed, radius, range, far_scale } => {
+                AttackKind::Projectile { speed, radius, range, far_scale, .. } => {
                     assert!(far_scale.is_none_or(|scale| (1.0..=5.0).contains(&scale)), "{}: far_scale", c.id);
                     assert!((2.0..=60.0).contains(&speed) && (0.05..=1.0).contains(&radius), "{}: projectile", c.id);
                     assert!((1.0..=30.0).contains(&range), "{}: projectile range", c.id);
@@ -940,7 +954,7 @@ mod tests {
 
     #[test]
     fn far_scale_scales_with_distance() {
-        let kind = |far_scale| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_scale };
+        let kind = |far_scale| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_scale, falls: false };
         let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None, pierces: false, burst: None, shove: None, unstoppable: false, burn: None, chain: None, twice: None };
         assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(3.0))).damage_at(d)), [10, 20, 30, 30]);
         assert_eq!(attack(kind(None)).damage_at(5.0), 10);
@@ -954,7 +968,7 @@ mod tests {
 
     #[test]
     fn projectile_lifetime_covers_its_range() {
-        let kind = AttackKind::Projectile { speed: 16.0, radius: 0.2, range: 8.0, far_scale: None };
+        let kind = AttackKind::Projectile { speed: 16.0, radius: 0.2, range: 8.0, far_scale: None, falls: false };
         assert_eq!(kind.shot().unwrap().lifetime_ticks(), TICK_HZ as u32 / 2);
     }
 }

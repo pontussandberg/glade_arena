@@ -14,6 +14,7 @@ use bevy::prelude::*;
 
 use crate::arena::{self, palette, to_world};
 use crate::feedback::AttackClock;
+use crate::plain::PlainMaterial;
 use crate::render::shown;
 
 pub struct WaygatesPlugin;
@@ -41,15 +42,15 @@ const FLASH_HEIGHT: f32 = 3.2;
 #[derive(Resource)]
 struct GateLooks {
     stone: Handle<Mesh>,
-    stone_material: Handle<StandardMaterial>,
+    stone_material: Handle<PlainMaterial>,
     rune: Handle<Mesh>,
     fill: Handle<Mesh>,
     crystal: Handle<Mesh>,
-    crystal_material: Handle<StandardMaterial>,
+    crystal_material: Handle<PlainMaterial>,
     column: Handle<Mesh>,
 }
 
-fn load_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn load_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<PlainMaterial>>) {
     commands.insert_resource(GateLooks {
         stone: meshes.add(arena::faceted(Cuboid::new(0.26, 0.42, 0.2).mesh().build())),
         stone_material: materials.add(arena::matte(palette::WALL.mix(&palette::STONE, 0.3))),
@@ -66,7 +67,7 @@ fn load_looks(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mate
 struct GateEnd {
     gate: Entity,
     crystal: Entity,
-    rune: Handle<StandardMaterial>,
+    rune: Handle<PlainMaterial>,
     fill: Entity,
 }
 
@@ -79,7 +80,7 @@ struct GateVisuals {
 fn add_gate_visuals(
     mut commands: Commands,
     looks: Res<GateLooks>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
     new: Query<(Entity, &Waygate), Added<Waygate>>,
 ) {
     let flat = Quat::from_rotation_x(-FRAC_PI_2);
@@ -133,7 +134,7 @@ fn show_gates(
     gates: Query<&Waygate>,
     ends: Query<(Entity, &GateEnd)>,
     mut parts: Query<(&mut Transform, &mut Visibility)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
 ) {
     let (t, now) = (time.elapsed_secs(), clock.now(true));
     for (entity, end) in &ends {
@@ -165,7 +166,7 @@ fn show_gates(
 #[derive(Component)]
 struct GateFlash {
     born: f32,
-    material: Handle<StandardMaterial>,
+    material: Handle<PlainMaterial>,
 }
 
 /// Flashes both ends of a gate the moment we learn someone went through. A use already there
@@ -174,7 +175,7 @@ fn flash_on_use(
     mut commands: Commands,
     time: Res<Time>,
     looks: Res<GateLooks>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
     mut gates: Query<(&Waygate, &mut GateVisuals), Changed<Waygate>>,
 ) {
     for (gate, mut visuals) in &mut gates {
@@ -182,7 +183,7 @@ fn flash_on_use(
             continue;
         }
         for at in gate.ends {
-            let material = materials.add(StandardMaterial { unlit: true, ..arena::translucent(palette::SPIRIT, 0.6, 3.0) });
+            let material = materials.add(PlainMaterial { unlit: true, ..arena::translucent(palette::SPIRIT, 0.6, 3.0) });
             commands.spawn((
                 GateFlash { born: time.elapsed_secs(), material: material.clone() },
                 Mesh3d(looks.column.clone()),
@@ -200,7 +201,7 @@ fn fade_flashes(
     mut commands: Commands,
     time: Res<Time>,
     mut flashes: Query<(Entity, &GateFlash, &mut Transform)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
 ) {
     for (entity, flash, mut transform) in &mut flashes {
         let t = (time.elapsed_secs() - flash.born) / FLASH_SECONDS;

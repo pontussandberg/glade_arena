@@ -7,7 +7,7 @@
     blurb: "Crouches, waits, then leaps.",
     playable: false,
     max_hp: 55,
-    move_speed: 3.3,
+    move_speed: 3.80,
     attack: (
         damage: 12,
         attack_ticks: 40,

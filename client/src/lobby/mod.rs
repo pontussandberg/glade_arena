@@ -34,6 +34,7 @@ use crate::ChosenClass;
 use crate::camera::{CameraControl, CameraMoves, Orbit};
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::{self, palette, to_world};
+use crate::plain::PlainMaterial;
 use crate::render::{ButtonFill, GameUi, ui_text};
 use crate::rooms::{Me, Picking, Screen};
 
@@ -150,7 +151,7 @@ fn open_lobby(
     chosen: Res<ChosenClass>,
     me: Option<Res<Me>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
     mut shadows: Single<&mut CascadeShadowConfig, With<DirectionalLight>>,
 ) {
     **shadows = arena::sun_shadows(VISTA_SHADOWS);

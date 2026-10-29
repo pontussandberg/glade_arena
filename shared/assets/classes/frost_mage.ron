@@ -6,7 +6,7 @@
     role: "Controller",
     blurb: "Bends the cold. Its frostbolts shatter into bursts of ice that slow whole packs, its nova freezes, and it always crits the frozen.",
     max_hp: 100,
-    move_speed: 3.7,
+    move_speed: 4.25,
     attack: (
         damage: 11,
         attack_ticks: 26,

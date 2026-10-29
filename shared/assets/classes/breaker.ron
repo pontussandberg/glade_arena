@@ -6,7 +6,7 @@
     role: "Juggernaut",
     blurb: "The maul comes round slow, and nothing on earth makes it stop. Whatever it finds is knocked off its feet.",
     max_hp: 150,
-    move_speed: 3.4,
+    move_speed: 3.90,
     attack: (
         damage: 30,
         attack_ticks: 60,

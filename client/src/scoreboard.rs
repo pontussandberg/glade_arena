@@ -1,7 +1,7 @@
 //! The match's score in the arena, for a match that's won by kills (`RoomView::goal`): at the top
 //! of the screen, the race to the goal (the leaders and us in free-for-all, the two teams'
 //! kills in teams); once it's won, who won, across the middle, until everyone's taken back to
-//! the lobby.
+//! the lobby. And everyone's standing, in the middle while Tab is held (`show_board`).
 
 use arena_shared::rooms::{Mode, NO_TEAM, RoomView, TEAMS, first_name};
 use bevy::prelude::*;
@@ -16,7 +16,7 @@ pub struct ScoreboardPlugin;
 impl Plugin for ScoreboardPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_scoreboard);
-        app.add_systems(Update, show_score);
+        app.add_systems(Update, (show_score, show_board));
     }
 }
 
@@ -28,15 +28,32 @@ struct ScorePanel;
 #[derive(Component)]
 struct WinnerBanner;
 
+/// Everyone's standing, in the middle, while Tab is held.
+#[derive(Component)]
+struct Board;
+
 /// How many of the leaders the free-for-all score lists (and us, if we're not among them).
 const LEADERS: usize = 3;
 
 fn spawn_scoreboard(mut commands: Commands) {
+    // The board: a panel in the middle of the screen, nothing dimmed behind it.
+    commands
+        .spawn((
+            GameUi,
+            Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, display: Display::None, ..default() },
+        ))
+        .with_children(|screen| {
+            screen.spawn((
+                Board,
+                Node { flex_direction: FlexDirection::Column, row_gap: px(6.0), padding: UiRect::axes(px(22.0), px(16.0)), border: UiRect::all(px(1.0)), min_width: px(360.0), ..default() },
+                BackgroundColor(palette::ui::BACKDROP.with_alpha(0.92)),
+                BorderColor::all(palette::ui::MUTED.with_alpha(0.6)),
+            ));
+        });
     commands
         .spawn((
             GameUi,
             Node { position_type: PositionType::Absolute, width: percent(100.0), top: px(8.0), justify_content: JustifyContent::Center, ..default() },
-            Pickable::IGNORE,
         ))
         .with_child((
             ScorePanel,
@@ -60,7 +77,6 @@ fn spawn_scoreboard(mut commands: Commands) {
                 justify_content: JustifyContent::Center,
                 ..default()
             },
-            Pickable::IGNORE,
         ))
         .with_child((
             WinnerBanner,
@@ -141,5 +157,47 @@ fn team_row(panel: &mut ChildSpawnerCommands, view: &RoomView, my_id: u32) {
         row.spawn(ui_text("Your team", 13.0, palette::ALLY));
         row.spawn(ui_text(format!("{}  -  {}", view.kills_of(ours), view.kills_of(theirs)), 20.0, palette::ui::TEXT));
         row.spawn(ui_text("Enemies", 13.0, palette::ENEMY));
+    });
+}
+
+/// Everyone's standing while Tab is held: in the order of their kills, their name, class and
+/// kills (and zombie kills, in waves), us marked out. Laid out as Tab goes down and as the room
+/// changes while it's held; hidden otherwise.
+fn show_board(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    room: Res<CurrentRoom>,
+    me: Option<Res<Me>>,
+    board: Single<(Entity, &ChildOf), With<Board>>,
+    mut screens: Query<&mut Node>,
+) {
+    let (board, screen) = board.into_inner();
+    let held = keys.pressed(KeyCode::Tab);
+    if let Ok(mut screen) = screens.get_mut(screen.parent()) {
+        let display = if held { Display::Flex } else { Display::None };
+        if screen.display != display {
+            screen.display = display;
+        }
+    }
+    if !held || !(keys.just_pressed(KeyCode::Tab) || room.is_changed()) {
+        return;
+    }
+    commands.entity(board).despawn_children();
+    let Some(view) = room.0.as_ref() else { return };
+    let my_id = me.map_or(0, |me| me.guest_id);
+    let mut ranked: Vec<_> = view.members.iter().collect();
+    ranked.sort_by_key(|m| std::cmp::Reverse((m.kills, m.zombie_kills)));
+    commands.entity(board).with_children(|board| {
+        board.spawn(ui_text(view.name.clone(), 11.0, palette::ui::MUTED));
+        for (place, member) in ranked.iter().enumerate() {
+            let color = if member.guest_id == my_id { ACCENT } else { palette::ui::TEXT };
+            let class = member.class.map_or("", |class| class.def().name.as_str());
+            let kills = if view.mode == Mode::Waves { format!("{} / {}", member.kills, member.zombie_kills) } else { member.kills.to_string() };
+            board.spawn(Node { column_gap: px(18.0), justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
+                row.spawn(ui_text(format!("{}. {}", place + 1, first_name(&member.name)), 14.0, color));
+                row.spawn(ui_text(class.to_string(), 12.0, palette::ui::MUTED));
+                row.spawn(ui_text(kills, 14.0, color));
+            });
+        }
     });
 }

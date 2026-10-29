@@ -8,7 +8,7 @@
     blurb: "A dead hunter that still hunts. Keeps its distance.",
     playable: false,
     max_hp: 40,
-    move_speed: 3.2,
+    move_speed: 3.70,
     attack: (
         damage: 10,
         attack_ticks: 52,

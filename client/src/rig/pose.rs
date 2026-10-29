@@ -402,6 +402,60 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
     }
 }
 
+/// How high over its feet (meters) a blade's lowest point is when it starts reaching on down
+/// where the ground falls away (`onto_ground`), fully once it's down.
+const GROUND_BAND: f32 = 0.5;
+
+/// A blade coming down meets the ground where it is (`swish::struck_surface`), not where level
+/// ground at its striker's feet would be: up a slope or onto a step ahead it stops on it (as
+/// deep in it as it goes into level ground), never in it; down one or out over a drop it reaches
+/// on down as it comes near the ground (`GROUND_BAND`), `striking` of the way (as far as
+/// `swish::REACH_DOWN`, past that it cuts the air). The weapon arm swings its lowest point
+/// (`ends`: its point, its edge's corner, in its own space) there (the secant method). A carried
+/// blade (`striking` nothing) is kept on the ground by `Moves::rests`. `pose` puts the rig
+/// together from its angles; it stands at `at`, its feet `feet` high, drawn `size` times its
+/// figure's size.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn onto_ground(map: &arena_shared::map::Map, at: Vec2, feet: f32, size: f32, ends: [Vec3; 2], striking: f32, angles: &Angles, pose: impl Fn(&Angles) -> Posed) -> Posed {
+    use crate::swish::{REACH_DOWN, REACH_UP, struck_surface};
+    let lowest = |posed: &Posed| {
+        let [p, q] = ends.map(|end| posed.held_on_body.transform_point(end) * size);
+        if p.y < q.y { p } else { q }
+    };
+    let level = pose(angles);
+    if striking <= 0.0 {
+        return level;
+    }
+    let deep = lowest(&level).y;
+    let swung = |by: f32| pose(&Angles { weapon_arm: angles.weapon_arm + by, ..*angles });
+    // How far its lowest point `low` is over where it should be, by the ground under it now:
+    // stopped on what rises over it, the lower ground followed as it comes near it.
+    let over = |low: Vec3| {
+        let ground = (struck_surface(map, at, at + arena::to_gameplay(low), feet) - feet).clamp(-REACH_DOWN, REACH_UP);
+        let met = if ground > 0.0 { deep.max(ground + deep.min(0.0)) } else { deep + ground * (1.0 - deep / GROUND_BAND).clamp(0.0, 1.0) * striking };
+        low.y - met
+    };
+    // The secant method: how fast the lowest point drops as the arm swings, from the try before
+    // (the first time, from a nudge).
+    let (mut by, mut posed, mut tried) = (0.0, level, None);
+    for _ in 0..3 {
+        let low = lowest(&posed);
+        let off = over(low);
+        if off.abs() < 0.01 {
+            break;
+        }
+        let (was, was_low) = tried.unwrap_or_else(|| (by + 0.02, lowest(&swung(by + 0.02)).y));
+        let slope = (was_low - low.y) / (was - by);
+        if !(slope.abs() >= 1e-3) {
+            break;
+        }
+        tried = Some((by, low.y));
+        by = (by - (off / slope).clamp(-0.4, 0.4)).clamp(-1.0, 1.0);
+        posed = swung(by);
+    }
+    posed
+}
+
 /// The lower of two heights, rounded off where they cross (by about `FOOT_BLEND`): standing on
 /// the lower foot, the body passing smoothly from one to the other as they swap, rather than
 /// jolting.
@@ -413,7 +467,8 @@ fn soft_min(a: f32, b: f32) -> f32 {
 /// The attack as the joints' targets see it at `now`: as far ahead of its own clock as the
 /// joints lag behind their targets on their springs (`Moves::stiffness`), so they're where the
 /// attack is when it is, the strike reaching its contact pose as the attack goes off, not a tick
-/// or two after. A windup that will have gone off by then has (`windup` and `released` as for
+/// or two after. A windup that will have gone off by then has, unless it's a shot held drawn
+/// (`Swing::held`), whose going off is the server's word (`windup` and `released` as for
 /// `strike_phase`).
 pub(crate) fn ahead_of_springs(class: ClassId, moves: &Moves, windup: Option<Swing>, released: Option<f32>, now: f32) -> (Option<Swing>, Option<f32>, f32) {
     let attack = &class.def().attack;
@@ -422,7 +477,7 @@ pub(crate) fn ahead_of_springs(class: ClassId, moves: &Moves, windup: Option<Swi
     let lead = if moves.throws { 0.0 } else { crate::spring::Spring::lag(moves.stiffness, moves.damping) * TICK_HZ as f32 };
     let ahead = now + lead;
     match windup {
-        Some(swing) if ahead >= swing.releases_at(attack) as f32 => (None, Some((ahead - swing.releases_at(attack) as f32) * swing.speed(attack)), ahead),
+        Some(swing) if swing.held == 0 && ahead >= swing.releases_at(attack) as f32 => (None, Some((ahead - swing.releases_at(attack) as f32) * swing.speed(attack)), ahead),
         _ => (windup, released.map(|since| since + lead), ahead),
     }
 }
@@ -431,8 +486,9 @@ pub(crate) fn ahead_of_springs(class: ClassId, moves: &Moves, windup: Option<Swi
 /// (draw, throw, smear, second) for its `windup` in progress (if any), or the attack that went
 /// off `released` ticks ago (at normal attack speed). Draw: drawing back (0..1), most of it by
 /// `Moves::draw_end` and the rest creeping on through the hold (`COIL`), then striking during
-/// the windup, up to the contact pose as the attack goes off; then the rest of the strike, and
-/// the follow-through easing back to carrying. Smear: how far the weapon is stretched out
+/// the windup, up to the contact pose as the attack goes off (a shot held drawn, `Swing::held`,
+/// stays drawn till then, and strikes as it goes); then the rest of the strike, and the
+/// follow-through easing back to carrying. Smear: how far the weapon is stretched out
 /// (0..1), longest as the strike is done. Second: the off hand's cut, for a figure that cuts
 /// twice, whipping through as the server's second cut lands (`Phase::second`).
 pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, windup: Option<Swing>, released: Option<f32>, now: f32) -> (f32, f32, f32, f32) {
@@ -467,9 +523,11 @@ pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, 
     };
     match (windup, released) {
         (Some(windup), _) => {
-            let progress = windup.windup_progress(now, &def.attack);
             let windup_ticks = windup.windup_ticks(&def.attack) as f32;
             let striking = strike_ticks(&windup);
+            // Held drawn, no further than the strike's start.
+            let progress = windup.windup_progress(now, &def.attack);
+            let progress = if windup.held > 0 { progress.min(1.0 - striking / windup_ticks) } else { progress };
             let (strike, _) = strike_at(striking - (1.0 - progress) * windup_ticks, striking, moves.contact, moves.heavy, moves.throws);
             // What's left of the strike eases out over the draw, and how much the pose
             // carries only ever shrinks, from what it was when the windup began.
@@ -527,3 +585,78 @@ fn strike_at(ticks: f32, strike_ticks: f32, contact: f32, heavy: bool, throws: b
     (strike, whole - strike_ticks)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::swish::REACH_DOWN;
+    use arena_shared::map::{CRATE, Map, MapId};
+
+    /// The revenant's slam in `phase`, the revenant standing at `at` on the yard facing `look`:
+    /// where its blade's lowest point is (meters, in the world, from where it stands), posed for
+    /// level ground and as `onto_ground` poses it.
+    fn slammed(phase: Phase, at: Vec2, look: Vec2) -> [Vec3; 2] {
+        let map = MapId::Yard.map();
+        let class = ClassId::all().find(|class| class.def().figure() == "revenant").unwrap();
+        let moves = moves("revenant");
+        let size = drawn_size(class, false);
+        let (_, length) = arena::blade_span("revenant");
+        let ends = [Vec3::Y * length, arena::glaive_edge(1.0)];
+        let angles = targets(moves, phase, Vec2::ZERO, 0.0);
+        let free = 1.0 - phase.braced();
+        let pose = |angles: &Angles| assemble(moves, angles, angles, look, 0.0, 0.0, moves.stretch, 1.0, free);
+        let feet = map.height_at(at);
+        let lowest = |posed: &Posed| ends.map(|end| posed.held_on_body.transform_point(end) * size).into_iter().min_by(|p, q| p.y.total_cmp(&q.y)).unwrap();
+        [lowest(&pose(&angles)), lowest(&onto_ground(map, at, feet, size, ends, 1.0 - free, &angles, &pose))].map(|low| low + Vec3::Y * feet)
+    }
+
+    /// Fully struck: the slam's blade as low as it comes.
+    const STRUCK: Phase = Phase { draw: 0.0, throw: 1.0, dashing: 0.0, second: 1.0 };
+
+    /// Where to stand, facing north, for the struck blade's lowest point to come down at `p`.
+    fn standing_to_strike(p: Vec2) -> Vec2 {
+        let [level, _] = slammed(STRUCK, Vec2::new(-34.5, -0.5), Vec2::Y);
+        p - arena::to_gameplay(level)
+    }
+
+    #[test]
+    fn on_level_ground_the_blade_is_struck_as_it_is_posed() {
+        let at = Vec2::new(-34.5, -0.5);
+        let [level, struck] = slammed(STRUCK, at, Vec2::Y);
+        // Near the ground, so `onto_ground` has something to do where the ground isn't level.
+        assert!(level.y < GROUND_BAND * 0.5, "the slam only comes down to {} m", level.y);
+        assert!(level.distance(struck) < 1e-4, "moved from {level} to {struck} on level ground");
+    }
+
+    #[test]
+    fn struck_onto_a_crate_the_blade_stops_on_it() {
+        let yard = MapId::Yard.map();
+        let (t, _) = *yard.crates.iter().find(|&&(_, high)| high == 1).unwrap();
+        let at = standing_to_strike(Map::center(t));
+        assert!(yard.height_at(at) == 0.0 && yard.floor_at(at, 0.0) == 0.0, "standing at {at} isn't on the ground beside the crate");
+        let [level, struck] = slammed(STRUCK, at, Vec2::Y);
+        // On it, as deep in it as in level ground (if it goes in).
+        let on = CRATE + level.y.min(0.0);
+        assert!((struck.y - on).abs() < 0.03, "struck down to {} m, the crate's top is {CRATE} m; {} m in level ground", struck.y, level.y);
+        // Coming down on it, and in the follow-through, never in it or whatever else it's over.
+        for throw in [0.3, 0.6, 0.8, 0.9] {
+            let [level, coming] = slammed(Phase { throw, second: throw, ..STRUCK }, at, Vec2::Y);
+            let under = crate::swish::struck_surface(yard, at, at + arena::to_gameplay(coming), 0.0);
+            assert!(coming.y > under + level.y.min(0.0) - 0.03, "{throw} of the way down: at {} m over {under} m, posed for level ground at {} m", coming.y, level.y);
+        }
+    }
+
+    #[test]
+    fn struck_out_over_a_drop_the_blade_reaches_on_down_as_far_as_it_reaches() {
+        // Off the south terrace's north edge (y = -9), over the square far below.
+        let yard = MapId::Yard.map();
+        let at = standing_to_strike(Vec2::new(2.5, -8.5));
+        assert!(yard.height_at(at) == 1.5 && at.y < -9.3, "standing at {at} isn't on the terrace");
+        let [level, struck] = slammed(STRUCK, at, Vec2::Y);
+        // On down, about as far as it's near the ground, never past its reach.
+        let reached = level.y - struck.y;
+        assert!(reached > REACH_DOWN * (1.0 - (level.y - 1.5) / GROUND_BAND) - 0.03 && reached < REACH_DOWN + 0.03, "struck down to {} m, posed for level ground to {} m", struck.y, level.y);
+        // Drawn back, the blade is up over the striker's head, left as it's posed.
+        let [level, drawn] = slammed(Phase { draw: 1.0, throw: 0.0, dashing: 0.0, second: 0.0 }, at, Vec2::Y);
+        assert!(level.y > yard.height_at(at) + GROUND_BAND && level.distance(drawn) < 1e-4);
+    }
+}

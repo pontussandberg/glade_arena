@@ -104,7 +104,7 @@ pub(super) fn spark_hits(
                 .grow(0.3)
                 .shrink(0.2)
                 .spin(8.0);
-            put(&mut commands, &art, &art.glint, part);
+            put(&mut commands, &art.glint, part);
         }
     }
 }
@@ -116,11 +116,11 @@ fn burst(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3, size: f32, bo
     let s = size * if boss { 1.4 } else { 1.0 };
     // A puff of dust where it fell.
     let dust = art.splotch[(r(0) * VARIANTS as f32) as usize % VARIANTS as usize].clone();
-    put(commands, art, &dust, Part::new(now, [0.04, 0.16, 0.5], Ink::Smoke, at.with_y(0.06)).size(2.2 * s).grow(0.35).facing(r(1) * TAU));
+    put(commands, &dust, Part::new(now, [0.04, 0.16, 0.5], Ink::Smoke, at.with_y(0.06)).size(2.2 * s).grow(0.35).facing(r(1) * TAU));
     // A dark splotch that stays a while, sunk into the grass.
     let splotch = art.splotch[(r(2) * VARIANTS as f32) as usize % VARIANTS as usize].clone();
     let linger = if boss { [0.06, 9.0, 14.0] } else { [0.06, 4.5, 8.0] };
-    put(commands, art, &splotch, Part::new(now, linger, Ink::Blood, at.with_y(0.02)).size((1.5 + 0.5 * r(3)) * s).grow(0.4).facing(r(4) * TAU));
+    put(commands, &splotch, Part::new(now, linger, Ink::Blood, at.with_y(0.02)).size((1.5 + 0.5 * r(3)) * s).grow(0.4).facing(r(4) * TAU));
     // Gore and bone flung up and out, tumbling, lying where they land as they fade.
     let chunks = if boss { 18 } else { 6 + (r(5) * 3.0) as u32 };
     for k in 0..chunks {
@@ -135,7 +135,7 @@ fn burst(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3, size: f32, bo
             .size((0.07 + 0.09 * n(0)) * s.min(1.6))
             .motion(Motion::Thrown { velocity, gravity: 9.0, tumble })
             .shrink(0.5);
-        put(commands, art, &art.chunk, part);
+        put(commands, &art.chunk, part);
     }
     // The kill pays: a coin or two tossed up, spinning, catching the light.
     if bounty {
@@ -148,7 +148,7 @@ fn burst(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3, size: f32, bo
                 .size(0.14)
                 .motion(toss)
                 .shrink(0.4);
-            put(commands, art, &art.coin, part);
+            put(commands, &art.coin, part);
         }
     }
     // Its soul slips away: a pale wisp (or a few, off a boss) drifting up, guttering out.
@@ -162,6 +162,6 @@ fn burst(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3, size: f32, bo
             .motion(rise)
             .flicker(0.35)
             .shrink(0.25);
-        put(commands, art, &art.mote, part);
+        put(commands, &art.mote, part);
     }
 }

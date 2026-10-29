@@ -188,7 +188,7 @@ pub(super) fn think(
         };
         let to = target - pos.0;
         let dist = to.length();
-        let sees = map.shot_clear(pos.0, target);
+        let sees = map.shot_clear((pos.0, map.height_at(pos.0)), (target, map.height_at(target)));
         // Where it can hit from: a little inside its reach, so it lands on prey that stands still.
         let reach = match def.attack.kind.shot() {
             Some(shot) => shot.edge_reach() * 0.85,
@@ -284,7 +284,7 @@ pub(super) fn think(
                     let shots = (0..*count)
                         .map(|n| {
                             let dir = Vec2::from_angle(from + step * n as f32);
-                            Projectile { owner: id.0, class: *class, origin: pos.0 + dir * (PLAYER_RADIUS + shot.radius), dir, spawn_tick: now, ability: None, crit: false, extra: false }
+                            Projectile { owner: id.0, class: *class, origin: pos.0 + dir * (PLAYER_RADIUS + shot.radius), dir, spawn_tick: now, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 }
                         })
                         .collect();
                     deeds.0.push(Deed::Shots { side, shots, might });

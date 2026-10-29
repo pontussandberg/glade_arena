@@ -10,6 +10,7 @@ use bevy::light::NotShadowCaster;
 use bevy::pbr::{DistanceFog, FogFalloff};
 
 use crate::arena::{self, palette, to_world};
+use crate::plain::PlainMaterial;
 use crate::rooms::CurrentMap;
 
 /// Where the stage is, on the gameplay plane: out in the wilds off the map's east side, the
@@ -41,7 +42,7 @@ const TAG_HEIGHT: f32 = 2.75;
 
 /// The stage: a dais on a crag (`raise_crag`), a flickering warm key light, a cold rim light and
 /// fireflies drifting about.
-pub(super) fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
+pub(super) fn spawn_stage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<PlainMaterial>) {
     let center = stage_at(0.0);
     // No shadows from these: a point light's would draw the whole map six times over every frame,
     // just for the fighter's shadow on the dais (the sun casts one already). It nearly halved
@@ -101,7 +102,7 @@ pub(super) fn raise_crag(
     current: Res<CurrentMap>,
     crag: Query<Entity, With<Crag>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
 ) {
     if !current.is_changed() && !crag.is_empty() {
         return;

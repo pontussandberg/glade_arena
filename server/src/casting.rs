@@ -23,7 +23,7 @@ pub(super) fn use_abilities(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut users: Query<
-        (&PlayerId, &ClassId, &Pos, &mut PlayerInput, (&mut Cooldowns, &mut Dashing), &mut DashHits, (&InRoom, &Team), &mut AttackState, Option<&Might>),
+        (&PlayerId, &ClassId, (&Pos, &arena_shared::protocol::Motion), &mut PlayerInput, (&mut Cooldowns, &mut Dashing), &mut DashHits, (&InRoom, &Team), &mut AttackState, Option<&Might>),
         InPlay,
     >,
     mut targets: Targets,
@@ -34,7 +34,7 @@ pub(super) fn use_abilities(
     // Read up front: `targets` holds every player's `Chilled` mutably. A root or slow landing
     // during this loop starts next tick anyway.
     let chills: Vec<(PeerId, Chilled)> = targets.iter().map(|(_, id, .., chilled, _, _, _)| (id.0, *chilled)).collect();
-    for (id, class, pos, mut input, (mut cooldowns, mut dashing), mut hits, (room, team), mut attack, might) in &mut users {
+    for (id, class, (pos, motion), mut input, (mut cooldowns, mut dashing), mut hits, (room, team), mut attack, might) in &mut users {
         let side = (*room, *team);
         let might = might_of(might);
         let map = lobby.map(room);
@@ -56,8 +56,8 @@ pub(super) fn use_abilities(
                 hits.0 = dash.started_at;
                 hits.1.clear();
             }
-            hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Ability(dash.slot)), blow, |target, at| {
-                let fresh = !hits.1.contains(&target) && dash::hits(map, pos.0, at);
+            hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Ability(dash.slot)), blow, |target, at, feet| {
+                let fresh = !hits.1.contains(&target) && dash::hits(map, (pos.0, motion.height), (at, feet));
                 if fresh {
                     hits.1.push(target);
                 }
@@ -101,7 +101,7 @@ pub(super) fn use_abilities(
                 }
                 Cast::Nova { slot, ability, nova } => {
                     let (blow, with) = blow(ability);
-                    hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Ability(slot)), blow, |_, at| nova.hits(map, pos.0, at));
+                    hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Ability(slot)), blow, |_, at, feet| nova.hits(map, (pos.0, motion.height), (at, feet)));
                 }
                 Cast::Strike { slot, strike, at } => {
                     // The same shells monsters' mortars bring down (`Deed::Mortar`): a warning

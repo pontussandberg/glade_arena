@@ -389,7 +389,8 @@ fn practice_shops_free_and_deadeye_sets_off_ability_items() {
 
     // A dummy straight ahead.
     let target = open_near(MapId::Keep, me + Vec2::new(4.0, 0.0));
-    assert!(MapId::Keep.map().shot_clear(me, target), "no clear shot at the dummy");
+    let keep = MapId::Keep.map();
+    assert!(keep.shot_clear((me, keep.height_at(me)), (target, keep.height_at(target))), "no clear shot at the dummy");
     p.ask(RoomRequest::PlaceDummy { at: target, walks: false });
     let dummy = |p: &mut Party| {
         let world = p.server.world_mut();

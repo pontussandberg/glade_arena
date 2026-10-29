@@ -2,7 +2,6 @@ use std::net::{Ipv4Addr, SocketAddr};
 
 use arena_client::{ClientNetPlugin, ClientSettings, render::RenderPlugin};
 use arena_shared::config::*;
-#[cfg(not(target_family = "wasm"))]
 use arena_shared::protocol::ClassId;
 use bevy::prelude::*;
 use bevy::winit::WinitSettings;
@@ -11,35 +10,56 @@ use lightyear::prelude::client::ClientPlugins;
 #[cfg(target_family = "wasm")]
 mod hidden_tab;
 
+/// How often a client in the background (`ARENA_BACKGROUND`) draws a frame, a second.
+const BACKGROUND_FPS: f32 = 30.0;
+
 fn main() {
     #[cfg(target_family = "wasm")]
     console_error_panic_hook::set_once();
 
     let settings = client_settings();
     let mut app = App::new();
+    // `ARENA_BACKGROUND=1` (native): a small window, drawn at a low frame rate, for a bot played
+    // beside a client being measured, taking as little of the machine from it as it can.
+    #[cfg(not(target_family = "wasm"))]
+    let background = std::env::var_os("ARENA_BACKGROUND").is_some();
+    #[cfg(target_family = "wasm")]
+    let background = false;
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
             title: format!("Arena (client {})", settings.client_id),
             canvas: Some("#game".into()),
             fit_canvas_to_parent: true,
+            resolution: if background { (480, 270).into() } else { default() },
             ..default()
         }),
         ..default()
     }));
     // Keep simulating at full rate when the window is unfocused (two windows side by side).
-    app.insert_resource(WinitSettings::continuous());
+    app.insert_resource(if background {
+        let mode = bevy::winit::UpdateMode::reactive_low_power(std::time::Duration::from_secs_f32(1.0 / BACKGROUND_FPS));
+        WinitSettings { focused_mode: mode, unfocused_mode: mode }
+    } else {
+        WinitSettings::continuous()
+    });
     #[cfg(target_family = "wasm")]
     app.add_plugins(hidden_tab::HiddenTabPlugin);
     app.add_plugins(ClientPlugins { tick_duration: TICK_DURATION });
     app.add_plugins(ClientNetPlugin { settings });
-    #[cfg(not(target_family = "wasm"))]
-    if std::env::var_os("ARENA_BOT").is_some() {
-        app.add_plugins(arena_client::bot::BotPlugin);
+    if let Some(stand) = bot_plays() {
+        app.add_plugins(arena_client::bot::BotPlugin { stand });
     }
     app.add_plugins(RenderPlugin);
     #[cfg(not(target_family = "wasm"))]
     if let Some(out) = std::env::var_os("ARENA_PERF") {
         app.add_plugins(arena_client::perf::PerfPlugin { out: out.into() });
+    }
+    #[cfg(not(target_family = "wasm"))]
+    let off = std::env::var("ARENA_PERF_OFF").ok();
+    #[cfg(target_family = "wasm")]
+    let off = web_sys::window().and_then(|window| js_sys::Reflect::get(&window, &"ARENA_OFF".into()).ok()).and_then(|off| off.as_string());
+    if let Some(off) = off {
+        app.add_plugins(arena_client::perf::OffPlugin { off });
     }
     #[cfg(not(target_family = "wasm"))]
     if let Some(dir) = std::env::var_os("ARENA_SHOTS") {
@@ -136,8 +156,20 @@ fn client_settings() -> ClientSettings {
         cert_digest,
         server_url: get("ARENA_SERVER_URL"),
         conditioner: None,
-        class: None,
-        quick_join: None,
+        // In local dev, `?class=…&room=…` joins that room as that class, as the native client's
+        // arguments do.
+        class: get("ARENA_CLASS").and_then(|key| ClassId::by_key(&key)),
+        quick_join: get("ARENA_ROOM"),
         guest_name: arena_client::rooms::load_guest_name(),
     }
+}
+
+/// Whether a bot plays this client (`ARENA_BOT=1` natively, `?bot` on the page in local dev),
+/// and whether it holds its ground (`ARENA_BOT=stand`, `?bot=stand`).
+fn bot_plays() -> Option<bool> {
+    #[cfg(target_family = "wasm")]
+    let bot = web_sys::window().and_then(|window| js_sys::Reflect::get(&window, &"ARENA_BOT".into()).ok()).filter(|bot| !bot.is_undefined()).map(|bot| bot.as_string().unwrap_or_default());
+    #[cfg(not(target_family = "wasm"))]
+    let bot = std::env::var("ARENA_BOT").ok();
+    bot.map(|bot| bot == "stand")
 }
