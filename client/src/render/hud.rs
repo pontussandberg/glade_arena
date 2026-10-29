@@ -168,16 +168,33 @@ pub(super) const HOUSE: &[&str] = &[
 ];
 
 /// Pixel art drawn from `rows` (`#` a pixel, anything else see-through), each pixel `pixel`
-/// pixels square, in `color`.
+/// pixels square, in `color`: one picture, crisp at any size. (A node for each pixel made Bevy
+/// go over hundreds of them every frame.)
 pub(crate) fn pixel_art(parent: &mut ChildSpawnerCommands, rows: &[&str], pixel: f32, color: Color) {
-    parent.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|art| {
-        for row in rows {
-            art.spawn(Node::default()).with_children(|line| {
-                for c in row.chars() {
-                    let fill = if c == '#' { color } else { Color::NONE };
-                    line.spawn((Node { width: px(pixel), height: px(pixel), ..default() }, BackgroundColor(fill), Pickable::IGNORE));
-                }
-            });
+    use bevy::asset::RenderAssetUsages;
+    use bevy::image::ImageSampler;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let width = rows.iter().map(|row| row.chars().count()).max().unwrap_or(0);
+    if width == 0 {
+        return;
+    }
+    let [r, g, b, a] = color.to_srgba().to_u8_array();
+    let texels = rows
+        .iter()
+        .flat_map(|row| {
+            let row: Vec<char> = row.chars().collect();
+            (0..width).flat_map(move |x| if row.get(x) == Some(&'#') { [r, g, b, a] } else { [0; 4] })
+        })
+        .collect();
+    let size = Extent3d { width: width as u32, height: rows.len() as u32, depth_or_array_layers: 1 };
+    let mut image = Image::new(size, TextureDimension::D2, texels, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
+    image.sampler = ImageSampler::nearest();
+    let node = Node { width: px(width as f32 * pixel), height: px(rows.len() as f32 * pixel), ..default() };
+    let art = parent.spawn((node, Pickable::IGNORE)).id();
+    parent.commands().queue(move |world: &mut World| {
+        let image = world.resource_mut::<Assets<Image>>().add(image);
+        if let Ok(mut art) = world.get_entity_mut(art) {
+            art.insert(ImageNode { image_mode: NodeImageMode::Stretch, ..ImageNode::new(image) });
         }
     });
 }

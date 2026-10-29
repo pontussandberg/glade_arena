@@ -132,6 +132,7 @@ fn census(
     materials: Res<Assets<StandardMaterial>>,
     entities: Query<EntityRef>,
     components: &bevy::ecs::component::Components,
+    nodes: Query<Entity, With<Node>>,
 ) {
     if *done || time.elapsed_secs() < perf.secs - 2.0 {
         return;
@@ -149,6 +150,20 @@ fn census(
     }
     let mut kinds: HashMap<String, Kind> = HashMap::new();
     let mut all_mats: HashMap<Option<AssetId<StandardMaterial>>, usize> = HashMap::new();
+    let ours = |entity: Entity| -> String {
+        let Ok(entity) = entities.get(entity) else { return String::new() };
+        let mut ours: Vec<String> = entity
+            .archetype()
+            .components()
+            .iter()
+            .filter_map(|&id| components.get_info(id))
+            .map(|info| info.name().to_string())
+            .filter(|name| name.starts_with("arena_"))
+            .map(|name| name.rsplit("::").next().unwrap_or_default().to_string())
+            .collect();
+        ours.sort();
+        ours.join(",")
+    };
     for (entity, visible, mesh, material, no_shadow) in &meshes {
         if !visible.get() {
             continue;
@@ -170,20 +185,6 @@ fn census(
             }
         }
         let custom = if material.is_none() { " (own material)" } else { "" };
-        let ours = |entity: Entity| -> String {
-            let Ok(entity) = entities.get(entity) else { return String::new() };
-            let mut ours: Vec<String> = entity
-                .archetype()
-                .components()
-                .iter()
-                .filter_map(|&id| components.get_info(id))
-                .map(|info| info.name().to_string())
-                .filter(|name| name.starts_with("arena_"))
-                .map(|name| name.rsplit("::").next().unwrap_or_default().to_string())
-                .collect();
-            ours.sort();
-            ours.join(",")
-        };
         let kind = kind.unwrap_or_else(|| match named {
             Some(name) => format!("other {name}{custom}"),
             None => format!("other [{}]{custom}", ours(top)),
@@ -206,6 +207,30 @@ fn census(
         let _ = writeln!(text, "{name:40} drawn={:5} blended={:5} casters={:5} pairs={:4} materials={:4} meshes={:4}", k.drawn, k.blended, k.casters, k.pairs.len(), k.mats.len(), k.meshes.len());
     }
     let _ = writeln!(text, "distinct materials drawn: {}", all_mats.len());
+    // The UI's nodes, by the game's own components on the nearest of each and its owners that
+    // has any.
+    let mut uis: HashMap<String, usize> = HashMap::new();
+    for node in &nodes {
+        let mut at = node;
+        let mut depth = 0;
+        let label = loop {
+            let found = ours(at);
+            if !found.is_empty() {
+                break format!("{}[{found}]", "^".repeat(depth));
+            }
+            match parents.get(at) {
+                Ok(parent) => (at, depth) = (parent.parent(), depth + 1),
+                Err(_) => break names.get(node).map_or("(none)".to_string(), |n| n.to_string()),
+            }
+        };
+        *uis.entry(label).or_default() += 1;
+    }
+    let mut uis: Vec<_> = uis.into_iter().collect();
+    uis.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+    let _ = writeln!(text, "ui nodes: {}", nodes.iter().count());
+    for (label, n) in uis {
+        let _ = writeln!(text, "  {n:5} {label}");
+    }
     let _ = std::fs::write(perf.out.with_extension("census.txt"), text);
 }
 
@@ -221,7 +246,7 @@ fn measure(
     mut perf: ResMut<Perf>,
     all: Query<Entity>,
     meshes: Query<(&ViewVisibility, &Mesh3d, Option<&MeshMaterial3d<StandardMaterial>>)>,
-    parts: Res<FxParts>,
+    parts: (Res<FxParts>, Res<crate::fx::draw::Drawn>),
     lights: Query<(), Or<(With<PointLight>, With<SpotLight>, With<DirectionalLight>)>>,
     nodes: Query<(), With<Node>>,
     assets: (Res<Assets<Mesh>>, Res<Assets<StandardMaterial>>, Res<Assets<Image>>),
@@ -243,11 +268,12 @@ fn measure(
         // What's drawn by mesh and material: about what batching leaves as draws.
         let batches = meshes.iter().filter(|(v, ..)| v.get()).map(|(_, mesh, material)| (mesh.id(), material.map(|m| m.id()))).collect::<std::collections::HashSet<_>>().len();
         let line = format!(
-            "t={now:5.1}s fps={:5.0} avg={avg:5.2}ms worst={worst:6.2}ms entities={} meshes={} drawn={drawn} batches={batches} fx_parts={} lights={} ui_nodes={} mesh_assets={} materials={} images={}",
+            "t={now:5.1}s fps={:5.0} avg={avg:5.2}ms worst={worst:6.2}ms entities={} meshes={} drawn={drawn} batches={batches} fx_parts={} fx_corners={} lights={} ui_nodes={} mesh_assets={} materials={} images={}",
             second.len(),
             all.iter().count(),
             meshes.iter().count(),
-            parts.0.len(),
+            parts.0.0.len(),
+            parts.1.corners(),
             lights.iter().count(),
             nodes.iter().count(),
             assets.0.len(),

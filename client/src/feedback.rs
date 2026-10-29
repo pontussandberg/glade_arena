@@ -139,6 +139,13 @@ struct HealthTrail {
     crit: bool,
 }
 
+/// On a fighter with bars: whether a wall, a roof or a hill hides them from the camera
+/// (`Map::sight_meets`), as last looked (`None` before the first look). Looked again only every
+/// `SIGHT_FRAMES` frames, each fighter on frames of its own, as a crowd's every bar is looked at.
+#[derive(Component, Default)]
+struct BarSight(Option<bool>);
+const SIGHT_FRAMES: u32 = 4;
+
 /// When this fighter last took a crit we showed a number for.
 #[derive(Component)]
 struct CritAt(f32);
@@ -186,7 +193,7 @@ fn spawn_world_ui(mut commands: Commands) {
 /// Each fighter gets its bars once it has a body. The shopkeeper has none: no one can hurt them.
 fn add_bars(mut commands: Commands, new: Query<Entity, (With<PlayerId>, Added<Mesh3d>, Without<Shopkeeper>)>) {
     for fighter in &new {
-        commands.entity(fighter).insert(HealthTrail { fraction: 1.0, last: 1.0, hit_at: 0.0, crit_at: 0.0, crit: false });
+        commands.entity(fighter).insert((HealthTrail { fraction: 1.0, last: 1.0, hit_at: 0.0, crit_at: 0.0, crit: false }, BarSight::default()));
     }
 }
 
@@ -291,11 +298,12 @@ struct Bar {
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn draw_bars(
     time: Res<Time>,
+    frame: Res<bevy::diagnostic::FrameCount>,
     clock: AttackClock,
     map: Option<Res<crate::rooms::CurrentMap>>,
     camera: Single<(&Camera, &GlobalTransform, &RenderEntity), With<crate::camera::CameraRig>>,
     world_ui: Single<(&ComputedStackIndex, &InheritedVisibility), With<WorldUi>>,
-    mut fighters: Query<(&Transform, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Has<Me>, (Option<&MaxHealth>, Has<Elite>, Option<&Relation>), &mut HealthTrail)>,
+    mut fighters: Query<(Entity, &Transform, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Has<Me>, (Option<&MaxHealth>, Has<Elite>, Option<&Relation>), (&mut HealthTrail, &mut BarSight))>,
     mut rects: ResMut<Rects>,
     mut shown: Local<Vec<(f32, Bar)>>,
 ) {
@@ -305,14 +313,20 @@ fn draw_bars(
     let now = time.elapsed_secs();
     let eye = camera_transform.translation();
     shown.clear();
-    for (body, class, health, crit_at, attack, is_me, (max, elite, relation), mut trail) in &mut fighters {
+    for (fighter, body, class, health, crit_at, attack, is_me, (max, elite, relation), (mut trail, mut sight)) in &mut fighters {
         let max_hp = max.map_or(class.def().max_hp, |m| m.0);
         let health_fraction = health.map_or(1.0, |h| h.0 as f32 / max_hp as f32);
         update_trail(&mut trail, health_fraction, crit_at.map(|c| c.0), now, time.delta_secs());
         let alive = health.is_none_or(Health::alive);
         let height = crate::rig::drawn_size(*class, elite);
         let over = bar_point(body, height);
-        let hidden = !is_me && map.as_ref().is_some_and(|map| map.map().sight_meets((to_gameplay(eye), eye.y), (to_gameplay(over), over.y)));
+        let hidden = !is_me
+            && map.as_ref().is_some_and(|map| {
+                if sight.0.is_none() || (frame.0 + fighter.index_u32()) % SIGHT_FRAMES == 0 {
+                    sight.0 = Some(map.map().sight_meets((to_gameplay(eye), eye.y), (to_gameplay(over), over.y)));
+                }
+                sight.0 == Some(true)
+            });
         let Some(middle) = over_bar(camera, camera_transform, body, height).filter(|_| alive && !hidden && world_ui_shown.get()) else { continue };
         let size = bar_size(*class, elite);
         let (start, hold) = if trail.crit { (palette::TORCH_FLAME, CRIT_TRAIL_HOLD) } else { (Color::WHITE, TRAIL_HOLD) };

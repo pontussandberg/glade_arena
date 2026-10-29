@@ -23,7 +23,7 @@ use crate::feedback::AttackClock;
 
 mod death;
 mod downed;
-mod draw;
+pub(crate) mod draw;
 mod recipes;
 mod shapes;
 

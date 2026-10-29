@@ -26,11 +26,18 @@ pub(super) type Corner = [f32; 7];
 
 /// What `draw_parts` laid out this frame, taken by the render world as it is (`take_drawn`).
 #[derive(Resource, Default)]
-pub(super) struct Drawn {
+pub(crate) struct Drawn {
     pub(super) corners: Vec<Corner>,
     pub(super) triangles: Vec<u32>,
     /// About where they are: they're sorted among the other see-through things as one, from here.
     pub(super) center: Vec3,
+}
+
+impl Drawn {
+    /// How many corners there are to draw this frame (for the perf mode).
+    pub(crate) fn corners(&self) -> usize {
+        self.corners.len()
+    }
 }
 
 /// How much of the haze lies over what's `distance` from the eye, as Bevy's shaders work it out
