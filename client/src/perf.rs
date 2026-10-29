@@ -5,16 +5,16 @@
 //! writes them out, a line a second and a summary (frame times: average, median, 99th
 //! percentile, worst), and quits.
 //!
-//! `ARENA_PERF_OFF` (a comma-separated list) switches parts of the scene off, to see what each
-//! costs: `lights` (the torches' point lights), `shadows` (the sun's), `fog`, `ui` (all of it),
-//! `fx` (effects' parts).
+//! `ARENA_PERF_OFF` (a comma-separated list; `?off=` on the page in local dev) switches parts of
+//! the scene off, to see what each costs: `lights` (the torches' point lights), `shadows` (the
+//! sun's), `fog`, `ui` (all of it), `fx` (effects' parts), `blend` (everything see-through).
 
 use std::fmt::Write as _;
 
 use bevy::prelude::*;
 use bevy::window::PresentMode;
 
-use crate::fx::Part as FxPart;
+use crate::fx::Parts as FxParts;
 
 pub struct PerfPlugin {
     pub out: std::path::PathBuf,
@@ -25,9 +25,26 @@ impl Plugin for PerfPlugin {
         let secs = std::env::var("ARENA_PERF_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(60.0);
         app.insert_resource(Perf { out: self.out.clone(), secs, frames: Vec::new(), lines: String::new(), next: 1.0, second: Vec::new() });
         app.add_systems(Startup, no_vsync);
-        app.add_systems(Last, measure);
-        let off = std::env::var("ARENA_PERF_OFF").unwrap_or_default();
-        app.insert_resource(Off { lights: off.contains("lights"), shadows: off.contains("shadows"), fog: off.contains("fog"), ui: off.contains("ui"), fx: off.contains("fx") });
+        app.add_systems(Last, (measure, census));
+    }
+}
+
+/// Switches parts of the scene off (`ARENA_PERF_OFF`, `?off=`): `off` lists them.
+pub struct OffPlugin {
+    pub off: String,
+}
+
+impl Plugin for OffPlugin {
+    fn build(&self, app: &mut App) {
+        let off = &self.off;
+        app.insert_resource(Off {
+            lights: off.contains("lights"),
+            shadows: off.contains("shadows"),
+            fog: off.contains("fog"),
+            ui: off.contains("ui"),
+            fx: off.contains("fx"),
+            blend: off.contains("blend"),
+        });
         app.add_systems(PostUpdate, switch_off);
     }
 }
@@ -52,6 +69,7 @@ struct Off {
     fog: bool,
     ui: bool,
     fx: bool,
+    blend: bool,
 }
 
 #[allow(clippy::type_complexity)]
@@ -62,7 +80,9 @@ fn switch_off(
     mut suns: Query<&mut DirectionalLight>,
     fog: Query<Entity, With<bevy::pbr::DistanceFog>>,
     mut roots: Query<&mut Node, Without<ChildOf>>,
-    parts: Query<Entity, With<FxPart>>,
+    mut parts: ResMut<FxParts>,
+    mut drawn: Query<(&MeshMaterial3d<StandardMaterial>, &mut Visibility)>,
+    materials: Res<Assets<StandardMaterial>>,
 ) {
     if off.lights {
         for light in &lights {
@@ -85,10 +105,108 @@ fn switch_off(
         }
     }
     if off.fx {
-        for part in &parts {
-            commands.entity(part).despawn();
+        parts.0.clear();
+    }
+    if off.blend {
+        for (material, mut visibility) in &mut drawn {
+            if materials.get(&material.0).is_some_and(|m| matches!(m.alpha_mode, AlphaMode::Blend | AlphaMode::Add | AlphaMode::Premultiplied | AlphaMode::Multiply)) {
+                visibility.set_if_neq(Visibility::Hidden);
+            }
         }
     }
+}
+
+/// Once, a while into the run: what's drawn, by what it belongs to (the class of the fighter whose
+/// rig it's on, else its own or its nearest named owner's name, else the game's own components
+/// its topmost owner has), how many of each are see-through, and how many distinct meshes and
+/// materials each comes to, written next to the perf file.
+#[allow(clippy::type_complexity)]
+fn census(
+    time: Res<Time<Real>>,
+    perf: Res<Perf>,
+    mut done: Local<bool>,
+    meshes: Query<(Entity, &ViewVisibility, &Mesh3d, Option<&MeshMaterial3d<StandardMaterial>>, Has<bevy::light::NotShadowCaster>)>,
+    parents: Query<&ChildOf>,
+    classes: Query<&arena_shared::classes::ClassId>,
+    names: Query<&Name>,
+    materials: Res<Assets<StandardMaterial>>,
+    entities: Query<EntityRef>,
+    components: &bevy::ecs::component::Components,
+) {
+    if *done || time.elapsed_secs() < perf.secs - 2.0 {
+        return;
+    }
+    *done = true;
+    use std::collections::{HashMap, HashSet};
+    #[derive(Default)]
+    struct Kind {
+        drawn: usize,
+        blended: usize,
+        casters: usize,
+        pairs: HashSet<(AssetId<Mesh>, Option<AssetId<StandardMaterial>>)>,
+        mats: HashSet<Option<AssetId<StandardMaterial>>>,
+        meshes: HashSet<AssetId<Mesh>>,
+    }
+    let mut kinds: HashMap<String, Kind> = HashMap::new();
+    let mut all_mats: HashMap<Option<AssetId<StandardMaterial>>, usize> = HashMap::new();
+    for (entity, visible, mesh, material, no_shadow) in &meshes {
+        if !visible.get() {
+            continue;
+        }
+        let mut top = entity;
+        let mut kind = None;
+        let mut named = None;
+        loop {
+            if named.is_none() {
+                named = names.get(top).ok().map(|n| n.to_string());
+            }
+            if let Ok(class) = classes.get(top) {
+                kind = Some(format!("class {}", class.def().id));
+                break;
+            }
+            match parents.get(top) {
+                Ok(parent) => top = parent.parent(),
+                Err(_) => break,
+            }
+        }
+        let custom = if material.is_none() { " (own material)" } else { "" };
+        let ours = |entity: Entity| -> String {
+            let Ok(entity) = entities.get(entity) else { return String::new() };
+            let mut ours: Vec<String> = entity
+                .archetype()
+                .components()
+                .iter()
+                .filter_map(|&id| components.get_info(id))
+                .map(|info| info.name().to_string())
+                .filter(|name| name.starts_with("arena_"))
+                .map(|name| name.rsplit("::").next().unwrap_or_default().to_string())
+                .collect();
+            ours.sort();
+            ours.join(",")
+        };
+        let kind = kind.unwrap_or_else(|| match named {
+            Some(name) => format!("other {name}{custom}"),
+            None => format!("other [{}]{custom}", ours(top)),
+        });
+        let k = kinds.entry(kind).or_default();
+        let id = material.map(|m| m.id());
+        let blended = id.and_then(|id| materials.get(id)).is_some_and(|m| !matches!(m.alpha_mode, AlphaMode::Opaque | AlphaMode::Mask(_)));
+        k.drawn += 1;
+        k.blended += blended as usize;
+        k.casters += (!no_shadow && !blended) as usize;
+        k.pairs.insert((mesh.id(), id));
+        k.mats.insert(id);
+        k.meshes.insert(mesh.id());
+        *all_mats.entry(id).or_default() += 1;
+    }
+    let mut text = String::new();
+    let mut rows: Vec<_> = kinds.into_iter().collect();
+    rows.sort_by_key(|(_, k)| std::cmp::Reverse(k.drawn));
+    for (name, k) in rows {
+        let _ = writeln!(text, "{name:40} drawn={:5} blended={:5} casters={:5} pairs={:4} materials={:4} meshes={:4}", k.drawn, k.blended, k.casters, k.pairs.len(), k.mats.len(), k.meshes.len());
+    }
+    let _ = writeln!(text, "distinct materials drawn: {}", all_mats.len());
+    let _ = std::fs::write(perf.out.with_extension("census.txt"), text);
 }
 
 fn no_vsync(mut windows: Query<&mut Window>) {
@@ -103,7 +221,7 @@ fn measure(
     mut perf: ResMut<Perf>,
     all: Query<Entity>,
     meshes: Query<(&ViewVisibility, &Mesh3d, Option<&MeshMaterial3d<StandardMaterial>>)>,
-    parts: Query<(), With<FxPart>>,
+    parts: Res<FxParts>,
     lights: Query<(), Or<(With<PointLight>, With<SpotLight>, With<DirectionalLight>)>>,
     nodes: Query<(), With<Node>>,
     assets: (Res<Assets<Mesh>>, Res<Assets<StandardMaterial>>, Res<Assets<Image>>),
@@ -129,7 +247,7 @@ fn measure(
             second.len(),
             all.iter().count(),
             meshes.iter().count(),
-            parts.iter().count(),
+            parts.0.len(),
             lights.iter().count(),
             nodes.iter().count(),
             assets.0.len(),

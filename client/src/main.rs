@@ -55,6 +55,13 @@ fn main() {
         app.add_plugins(arena_client::perf::PerfPlugin { out: out.into() });
     }
     #[cfg(not(target_family = "wasm"))]
+    let off = std::env::var("ARENA_PERF_OFF").ok();
+    #[cfg(target_family = "wasm")]
+    let off = web_sys::window().and_then(|window| js_sys::Reflect::get(&window, &"ARENA_OFF".into()).ok()).and_then(|off| off.as_string());
+    if let Some(off) = off {
+        app.add_plugins(arena_client::perf::OffPlugin { off });
+    }
+    #[cfg(not(target_family = "wasm"))]
     if let Some(dir) = std::env::var_os("ARENA_SHOTS") {
         app.insert_resource(Snapshots { dir: dir.into(), next: 0.0, taken: 0 });
         app.add_systems(Update, take_snapshots);

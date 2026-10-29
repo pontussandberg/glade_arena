@@ -348,6 +348,14 @@ fn place(node: &mut Node, map: &Map, at: Vec2, size: f32) {
     }
 }
 
+/// `place` for a mark that's always on the move (a fighter's dot), by its `UiTransform`, which
+/// Bevy applies after laying the UI out: a crowd moving doesn't make it lay everything out again
+/// every frame. On whole pixels, as `place`'s are.
+fn place_moving(transform: &mut Mut<UiTransform>, map: &Map, at: Vec2, size: f32) {
+    let at = (on_minimap(map, at) - Vec2::splat(size / 2.0)).round();
+    transform.set_if_neq(UiTransform { translation: Val2::px(at.x, at.y), ..default() });
+}
+
 /// A dot in its own color whoever its fighter is to us (the merchant's gold).
 #[derive(Component)]
 struct KeepsColor;
@@ -372,6 +380,8 @@ fn spawn_dots(
                 Dot { player, size },
                 Node {
                     position_type: PositionType::Absolute,
+                    left: px(0.0),
+                    top: px(0.0),
                     width: px(size),
                     height: px(size),
                     border: UiRect::all(px(1.0)),
@@ -411,15 +421,15 @@ fn place_dots(
     mut commands: Commands,
     current: Res<CurrentMap>,
     players: Query<(&Pos, Option<&Health>)>,
-    mut dots: Query<(Entity, &Dot, &mut Node, &mut Visibility)>,
+    mut dots: Query<(Entity, &Dot, &mut UiTransform, &mut Visibility)>,
 ) {
-    for (dot, owner, mut node, mut visibility) in &mut dots {
+    for (dot, owner, mut transform, mut visibility) in &mut dots {
         let Ok((pos, health)) = players.get(owner.player) else {
             commands.entity(dot).despawn();
             continue;
         };
         visibility.set_if_neq(shown(health.is_none_or(Health::alive)));
-        place(&mut node, current.map(), pos.0, owner.size);
+        place_moving(&mut transform, current.map(), pos.0, owner.size);
     }
 }
 

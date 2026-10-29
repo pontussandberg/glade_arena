@@ -324,6 +324,11 @@ fn add_rigs(
         let forearms = [Some(&handles.forearm), handles.lead_arm.as_ref().map_or(Some(&handles.forearm), |(_, forearm)| forearm.as_ref())];
         let forearms = forearms.map(|mesh| mesh.map(|mesh| part(mesh, own, Vec3::ZERO)));
         let shins = [(); 2].map(|_| part(&handles.shin, own, Vec3::ZERO));
+        // What glows is set in the figure, inside its shadow: each would cost the sun's shadows a
+        // draw of its own, a crowd's every kind, for nothing to see.
+        for glowing in [Some(eyes), held_glow, body_glow].into_iter().flatten() {
+            commands.entity(glowing).insert(NotShadowCaster);
+        }
         commands.entity(rig.head).add_child(eyes);
         for (arm, elbow) in rig.arms.into_iter().zip(rig.elbows) {
             commands.entity(arm).add_child(elbow);

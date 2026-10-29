@@ -90,9 +90,13 @@ for (const step of steps) {
   } else if (cmd === "profile") {
     const [seconds, path] = [Number(rest.slice(0, rest.indexOf(","))), rest.slice(rest.indexOf(",") + 1)];
     await send("Profiler.enable");
+    // Frames counted over the profile, so its time can be put per frame.
+    await send("Runtime.evaluate", { expression: `window.__profiledFrames = 0; (function count() { window.__profiledFrames++; if (window.__profiledFrames > 0) requestAnimationFrame(count); })()` });
     await send("Profiler.start");
     await sleep(seconds);
     const r = await send("Profiler.stop");
+    const frames = (await send("Runtime.evaluate", { expression: `(() => { const n = window.__profiledFrames; window.__profiledFrames = -1e9; return n; })()`, returnByValue: true })).result?.result?.value;
+    console.log(`profile: ${frames} frames in ${seconds} s`);
     writeFileSync(path, JSON.stringify(r.result.profile));
   } else if (cmd === "fps") {
     // Every animation frame's time, as the game's own frames come on them.

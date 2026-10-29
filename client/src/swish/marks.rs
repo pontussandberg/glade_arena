@@ -83,6 +83,9 @@ impl Mark {
         let thin = 1.0 - 0.6 * t;
         match &mut self.lies {
             Lies::Laid(lane, laid) => {
+                // Thinning a step at a time, with its fade (`faded`), so it's laid again only that
+                // often, not every frame: a crowd strikes all the time.
+                let thin = 1.0 - 0.6 * (t * MARK_FADES as f32).floor() / MARK_FADES as f32;
                 let from = Vec3::new(lane.near, 0.0, lane.beside);
                 laid.lay(meshes, &mut lane.under, 0, from, Vec3::new((lane.far - lane.near) * drawn, thin, thin));
                 Transform::IDENTITY

@@ -475,7 +475,7 @@ fn open_shop(
 }
 
 /// The shop: every item our fighter can carry, what it costs us now and a way to buy it; rebuilt
-/// when it opens, or our gold or items change.
+/// when it opens, or our gold or items change, and emptied when it shuts.
 fn show_shop(
     mut commands: Commands,
     room: Res<CurrentRoom>,
@@ -489,8 +489,15 @@ fn show_shop(
     if node.display != display {
         node.display = display;
     }
+    if !open.0 {
+        // Nothing of it kept while it's shut: Bevy goes over even what isn't shown, every frame.
+        if open.is_changed() {
+            commands.entity(panel).despawn_children();
+        }
+        return;
+    }
     let Ok((satchel, class)) = me.single() else { return };
-    if !open.0 || !(open.is_changed() || satchel.is_changed()) {
+    if !(open.is_changed() || satchel.is_changed()) {
         return;
     }
     commands.entity(panel).despawn_children();
@@ -593,7 +600,7 @@ fn name_in_world(
         commands.spawn((
             GameUi,
             NameOver { of: entity, height },
-            Node { position_type: PositionType::Absolute, ..default() },
+            Node { position_type: PositionType::Absolute, left: px(0.0), top: px(0.0), ..default() },
             ui_text(text, 11.0, color),
             Pickable::IGNORE,
             Visibility::Hidden,
@@ -601,15 +608,17 @@ fn name_in_world(
     }
 }
 
-/// Names follow their fighters on screen, hidden while they're dead; gone with them.
+/// Names follow their fighters on screen, hidden while they're dead; gone with them. A name is
+/// moved by its `UiTransform`, which Bevy applies after laying the UI out, so names on the move
+/// don't make it lay everything out again every frame.
 fn place_names(
     mut commands: Commands,
     camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
     fighters: Query<(&Pos, Option<&Health>)>,
-    mut names: Query<(Entity, &NameOver, &mut Node, &mut Visibility, &ComputedNode)>,
+    mut names: Query<(Entity, &NameOver, &mut UiTransform, &mut Visibility, &ComputedNode)>,
 ) {
     let (camera, transform) = *camera;
-    for (name, over, mut node, mut visibility, computed) in &mut names {
+    for (name, over, mut placed, mut visibility, computed) in &mut names {
         let Ok((pos, health)) = fighters.get(over.of) else {
             commands.entity(name).despawn();
             continue;
@@ -618,11 +627,7 @@ fn place_names(
         visibility.set_if_neq(shown(screen.is_some()));
         let Some(screen) = screen else { continue };
         let width = computed.size().x * computed.inverse_scale_factor();
-        let (left, top) = (px(screen.x - width / 2.0), px(screen.y));
-        if node.left != left || node.top != top {
-            node.left = left;
-            node.top = top;
-        }
+        placed.set_if_neq(UiTransform { translation: Val2::px(screen.x - width / 2.0, screen.y), ..default() });
     }
 }
 

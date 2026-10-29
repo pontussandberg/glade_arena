@@ -6,8 +6,11 @@
 
 use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
+use bevy::asset::RenderAssetUsages;
 use bevy::ecs::system::SystemParam;
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use lightyear::core::time::TickInstant;
 use lightyear::interpolation::timeline::InterpolationTimeline;
 use lightyear::prelude::client::RemoteTimeline;
@@ -191,6 +194,8 @@ fn spawn_world_ui(mut commands: Commands) {
 #[allow(clippy::type_complexity)]
 fn spawn_bars(
     mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    mut strips: Local<TickStrips>,
     world_ui: Single<Entity, With<WorldUi>>,
     // The shopkeeper has none: no one can hurt them.
     new: Query<(Entity, &ClassId, Has<Me>, Option<&MaxHealth>, Has<Elite>), (With<PlayerId>, Added<Mesh3d>, Without<Shopkeeper>)>,
@@ -210,18 +215,13 @@ fn spawn_bars(
             .spawn((Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() }, BackgroundColor(Color::WHITE)))
             .id();
         let health_fill = commands.spawn(fill(Relation::of(is_me, false).color())).id();
-        // Over the fill (spawned after it), at every `HP_PER_TICK` of the fighter's health.
+        // Over the fill (spawned after it), at every `HP_PER_TICK` of the fighter's health: one
+        // picture of them all (`TickStrips`).
         let max_hp = max.map_or(class.def().max_hp, |m| m.0);
         let per_tick = tick_every(max_hp, size.x);
-        let ticks: Vec<Entity> = (1..)
-            .map(|n| n * per_tick)
-            .take_while(|&hp| hp < max_hp)
-            .map(|hp| {
-                let left = percent(100.0 * hp as f32 / max_hp as f32);
-                let node = Node { position_type: PositionType::Absolute, left, width: px(1.0), height: percent(100.0), ..default() };
-                commands.spawn((node, BackgroundColor(palette::ui::PANEL.with_alpha(0.85)))).id()
-            })
-            .collect();
+        let (atlas, rect) = strips.strip(&mut images, (size.x - 2.0).round() as u32, per_tick, max_hp);
+        let marks = ImageNode { image_mode: NodeImageMode::Stretch, rect: Some(rect), ..ImageNode::new(atlas) };
+        let ticks = commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() }, marks)).id();
         // Pale, so it never reads as a (colored) health bar.
         let cast_fill = commands.spawn(fill(palette::SUN)).id();
         // Absolute inside the health bar's border, so shift left by it to line the two up.
@@ -242,7 +242,7 @@ fn spawn_bars(
             ))
             .add_child(trail)
             .add_child(health_fill)
-            .add_children(&ticks)
+            .add_child(ticks)
             .add_child(cast);
     }
 }
@@ -273,6 +273,70 @@ fn tick_every(max_hp: i32, width: f32) -> i32 {
     let tough = max_hp / (HP_PER_TICK * MOST_TICKS);
     let close = (TICK_GAP * max_hp as f32 / (width * HP_PER_TICK as f32)).ceil() as i32;
     HP_PER_TICK * tough.max(close).max(1)
+}
+
+/// How many texels a strip of marks has to a pixel of the bar, so a mark a pixel wide stays
+/// sharp stretched over the bar (fewer for a bar too wide for the picture); how wide the picture
+/// of them all is (`TickStrips`); and how many rows each strip takes (the same, so none blurs into
+/// the next).
+const STRIP_TEXELS: u32 = 4;
+const STRIPS_WIDTH: u32 = 512;
+const STRIP_ROWS: u32 = 3;
+
+/// Every bar's marks in one picture, a strip for each way they fall (a bar's width inside its
+/// frame, the health a mark is apart, the most), added as a bar needs one: every bar draws from
+/// the same texture, so they're all drawn together, not a draw for each kind of fighter.
+#[derive(Default)]
+struct TickStrips {
+    image: Option<Handle<Image>>,
+    strips: HashMap<(u32, i32, i32), u32>,
+}
+
+impl TickStrips {
+    /// The picture, and where in it the marks over a bar `width` pixels wide inside its frame
+    /// are, every `per_tick` of `max_hp`: a mark a pixel wide at each, clear between.
+    fn strip(&mut self, images: &mut Assets<Image>, width: u32, per_tick: i32, max_hp: i32) -> (Handle<Image>, Rect) {
+        let per_pixel = STRIP_TEXELS.min(STRIPS_WIDTH / width.max(1)).max(1);
+        let texels = (width * per_pixel).min(STRIPS_WIDTH);
+        let row = |strip: u32| Rect::new(0.0, (strip * STRIP_ROWS + 1) as f32, texels as f32, (strip * STRIP_ROWS + 2) as f32);
+        let image = self.image.get_or_insert_with(|| images.add(blank_strips(8))).clone();
+        if let Some(&strip) = self.strips.get(&(width, per_tick, max_hp)) {
+            return (image, row(strip));
+        }
+        let strip = self.strips.len() as u32;
+        self.strips.insert((width, per_tick, max_hp), strip);
+        let Some(mut picture) = images.get_mut(&image) else { return (image, row(strip)) };
+        // Twice as tall once it's full, the strips so far kept.
+        let rows = picture.height();
+        if (strip + 1) * STRIP_ROWS > rows {
+            let mut taller = blank_strips(rows / STRIP_ROWS * 2);
+            if let (Some(old), Some(new)) = (&picture.data, &mut taller.data) {
+                new[..old.len()].copy_from_slice(old);
+            }
+            *picture = taller;
+        }
+        let mark = (0.85 * 255.0f32).round() as u8;
+        if let Some(pixels) = &mut picture.data {
+            for hp in (1..).map(|n| n * per_tick).take_while(|&hp| hp < max_hp) {
+                let at = (width as f32 * hp as f32 / max_hp as f32).round() as u32 * per_pixel;
+                for y in strip * STRIP_ROWS..(strip + 1) * STRIP_ROWS {
+                    for x in at..(at + per_pixel).min(texels) {
+                        pixels[((y * STRIPS_WIDTH + x) * 4 + 3) as usize] = mark;
+                    }
+                }
+            }
+        }
+        (image, row(strip))
+    }
+}
+
+/// Room for `strips` strips of marks, all clear (in the marks' own color, so the edges they blur
+/// into don't darken).
+fn blank_strips(strips: u32) -> Image {
+    let [r, g, b, _] = palette::ui::PANEL.to_srgba().to_u8_array();
+    let size = Extent3d { width: STRIPS_WIDTH, height: strips * STRIP_ROWS, depth_or_array_layers: 1 };
+    let pixels = (0..size.width * size.height).flat_map(|_| [r, g, b, 0]).collect();
+    Image::new(size, TextureDimension::D2, pixels, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default())
 }
 
 /// A bar's fill (its health, the health just lost, the attack timer) at `fraction` of its

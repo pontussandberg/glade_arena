@@ -51,7 +51,7 @@ pub(super) fn mark_downed(
             let (angle, out) = (noise(k, 1) * std::f32::consts::TAU, 0.5 * noise(k, 2));
             let from = at + Vec3::new(angle.cos() * out, 0.2, angle.sin() * out);
             let rise = Motion::Thrown { velocity: Vec3::Y * (1.2 + noise(k, 3)), gravity: -0.3, tumble: Vec3::ZERO };
-            put(&mut commands, &art, &art.mote, Part::new(now, [0.15, 0.9, 1.6], Ink::Heal, from).size(0.06 + 0.05 * noise(k, 4)).motion(rise).flicker(0.3).shrink(0.2));
+            put(&mut commands, &art.mote, Part::new(now, [0.15, 0.9, 1.6], Ink::Heal, from).size(0.06 + 0.05 * noise(k, 4)).motion(rise).flicker(0.3).shrink(0.2));
         }
     }
     for (fighter, pos, _) in &downed {

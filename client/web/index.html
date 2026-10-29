@@ -161,6 +161,8 @@
         if (params.has('room')) window.ARENA_ROOM = params.get('room');
         if (params.has('class')) window.ARENA_CLASS = params.get('class');
         if (params.has('bot')) window.ARENA_BOT = params.get('bot');
+        // Parts of the scene switched off (`&off=fx,shadows`, see perf.rs), to see what each costs.
+        if (params.has('off')) window.ARENA_OFF = params.get('off');
         // Another build of the game, kept beside this one (`?pkg=pkg-base`), to measure the two.
         if (/^pkg[-a-z0-9]*$/.test(params.get('pkg') ?? '')) pkg = params.get('pkg');
       } else {
