@@ -12,12 +12,13 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::ui::ComputedStackIndex;
 
 use crate::Me;
 use crate::camera::{CameraMode, CameraPlaced};
 use crate::feedback::AttackClock;
 use crate::arena::{self, palette};
-use crate::render::{HudButton, Relation, button_fill, clicked, ground_at, key_chip, pixel_art, shown, ui_text};
+use crate::render::{HudButton, Relation, button_fill, clicked, ground_at, key_chip, pixel_art, ui_text};
 use crate::tooltip::{Side, hover_shows, tip, tip_text, tip_title};
 use crate::rooms::CurrentMap;
 
@@ -30,8 +31,7 @@ impl Plugin for MinimapPlugin {
             Update,
             (
                 draw_map.run_if(resource_changed::<CurrentMap>),
-                (spawn_dots, color_dots).chain(),
-                place_dots,
+                draw_dots.in_set(CameraPlaced),
                 (spawn_markers, update_markers).chain(),
                 (spawn_gate_marks, update_gate_marks).chain(),
                 frame_view.in_set(CameraPlaced),
@@ -60,13 +60,6 @@ const GATE_MARK: f32 = 14.0;
 /// there (`render::read_local_input`).
 #[derive(Component)]
 pub(crate) struct Minimap;
-
-/// A fighter's dot, `size` across (a monster's smaller).
-#[derive(Component)]
-struct Dot {
-    player: Entity,
-    size: f32,
-}
 
 /// What the camera sees.
 #[derive(Component)]
@@ -287,16 +280,19 @@ fn left_fullscreen(mut window: Single<&mut Window, With<bevy::window::PrimaryWin
     let _ = (&mut window, &mut was_full);
 }
 
-/// The full screen button shows which way a click goes: out to full screen, or back in.
+/// The full screen button shows which way a click goes: out to full screen, or back in. Drawn
+/// anew only when that changes (the window is changed for much else, every frame).
 fn show_fullscreen(
     mut commands: Commands,
-    window: Single<Ref<Window>, With<bevy::window::PrimaryWindow>>,
+    window: Single<&Window, With<bevy::window::PrimaryWindow>>,
     button: Single<Ref<FullscreenButton>>,
+    mut shown: Local<Option<bool>>,
 ) {
-    if !window.is_changed() && !button.is_added() {
+    let full = window.mode != bevy::window::WindowMode::Windowed;
+    if *shown == Some(full) && !button.is_added() {
         return;
     }
-    let full = window.mode != bevy::window::WindowMode::Windowed;
+    *shown = Some(full);
     commands.entity(button.art).despawn_children().with_children(|art| pixel_art(art, FULLSCREEN_ART[full as usize], PADLOCK_PIXEL, palette::ui::TEXT));
 }
 
@@ -308,12 +304,14 @@ fn click_lock(lock: Single<Ref<Interaction>, With<CameraLock>>, mut mode: ResMut
 }
 
 /// The lock shows the camera's: shut and plain while it follows you, open and lit while it's
-/// unlocked.
-fn show_lock(mut commands: Commands, mode: Res<CameraMode>, lock: Single<(Ref<CameraLock>, &mut BorderColor)>) {
+/// unlocked. Drawn anew only when that changes (the camera's mode is changed for much else,
+/// every frame).
+fn show_lock(mut commands: Commands, mode: Res<CameraMode>, lock: Single<(Ref<CameraLock>, &mut BorderColor)>, mut shown: Local<Option<bool>>) {
     let (lock, mut border) = lock.into_inner();
-    if !mode.is_changed() && !lock.is_added() {
+    if *shown == Some(mode.unlocked) && !lock.is_added() {
         return;
     }
+    *shown = Some(mode.unlocked);
     let color = if mode.unlocked { palette::ui::ACCENT } else { palette::ui::TEXT };
     border.set_if_neq(BorderColor::all(if mode.unlocked { palette::ui::ACCENT } else { palette::ui::MUTED }));
     commands.entity(lock.art).despawn_children().with_children(|art| pixel_art(art, PADLOCK[mode.unlocked as usize], PADLOCK_PIXEL, color));
@@ -348,88 +346,52 @@ fn place(node: &mut Node, map: &Map, at: Vec2, size: f32) {
     }
 }
 
-/// `place` for a mark that's always on the move (a fighter's dot), by its `UiTransform`, which
-/// Bevy applies after laying the UI out: a crowd moving doesn't make it lay everything out again
-/// every frame. On whole pixels, as `place`'s are.
-fn place_moving(transform: &mut Mut<UiTransform>, map: &Map, at: Vec2, size: f32) {
-    let at = (on_minimap(map, at) - Vec2::splat(size / 2.0)).round();
-    transform.set_if_neq(UiTransform { translation: Val2::px(at.x, at.y), ..default() });
-}
-
-/// A dot in its own color whoever its fighter is to us (the merchant's gold).
-#[derive(Component)]
-struct KeepsColor;
-
-/// Each fighter gets a dot once it has a body.
-fn spawn_dots(
-    mut commands: Commands,
-    minimap: Single<Entity, With<Minimap>>,
-    new: Query<(Entity, &ClassId, Has<Me>, Has<Shopkeeper>), (With<PlayerId>, Added<Mesh3d>)>,
+/// Every living fighter with a body as a dot on the minimap, round, in its `Relation` color
+/// (ours, an ally's, an enemy's or a monster's; the merchant's gold), ringed: on whole pixels, as
+/// `place`'s are, ours over the rest. Drawn as round rectangles (`Rects`) just over the minimap's
+/// picture, under its marks: a crowd's dots as nodes made Bevy go over every one of them every
+/// frame.
+#[allow(clippy::type_complexity)]
+fn draw_dots(
+    current: Res<CurrentMap>,
+    minimap: Single<(&ComputedNode, &UiGlobalTransform, &ComputedStackIndex, &InheritedVisibility), With<Minimap>>,
+    fighters: Query<(&Pos, &ClassId, Option<&Health>, Option<&Relation>, Has<Me>, Has<Shopkeeper>), (With<PlayerId>, With<Mesh3d>)>,
+    mut rects: ResMut<crate::rects::Rects>,
 ) {
-    for (player, class, is_me, shopkeeper) in &new {
+    let (node, transform, stack, visible) = *minimap;
+    if !visible.get() {
+        return;
+    }
+    rects.over(stack.0);
+    let scale = node.inverse_scale_factor.recip();
+    let corner = transform.translation - node.size() / 2.0 + node.border().min_inset;
+    let ring = scale.round().max(1.0);
+    let mut dot = |at: Vec2, size: f32, fill: Color| {
+        let from = corner + (on_minimap(current.map(), at) - Vec2::splat(size / 2.0)).round() * scale;
+        let to = from + Vec2::splat(size * scale);
+        rects.round(from.into(), to.into(), size * scale, palette::ui::PANEL);
+        rects.round((from + ring).into(), (to - ring).into(), size * scale, fill);
+    };
+    let mut me = None;
+    for (pos, class, health, relation, is_me, shopkeeper) in &fighters {
+        if !health.is_none_or(Health::alive) {
+            continue;
+        }
         // The merchant and bosses stand out: bigger, the merchant in gold.
-        let boss = class.def().is_boss();
         let size = match () {
-            _ if shopkeeper || boss => DOT * 1.6,
+            _ if shopkeeper || class.def().is_boss() => DOT * 1.6,
             _ if class.def().playable => DOT,
             _ => MONSTER_DOT,
         };
-        let fill = if shopkeeper { palette::GOLD } else { Relation::of(is_me, false).color() };
-        let dot = commands
-            .spawn((
-                Dot { player, size },
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(0.0),
-                    top: px(0.0),
-                    width: px(size),
-                    height: px(size),
-                    border: UiRect::all(px(1.0)),
-                    border_radius: BorderRadius::MAX,
-                    ..default()
-                },
-                BackgroundColor(fill),
-                BorderColor::all(palette::ui::PANEL),
-            ))
-            .id();
-        if shopkeeper {
-            commands.entity(dot).insert(KeepsColor);
-        }
-        commands.entity(*minimap).add_child(dot);
-    }
-}
-
-/// A dot is in its fighter's `Relation` color: ours, an ally's, an enemy's or a monster's.
-fn color_dots(
-    players: Query<&Relation>,
-    changed: Query<(), Changed<Relation>>,
-    mut dots: Query<(Ref<Dot>, &mut BackgroundColor), Without<KeepsColor>>,
-) {
-    for (dot, mut fill) in &mut dots {
-        if !(changed.contains(dot.player) || dot.is_added()) {
-            continue;
-        }
-        if let Ok(relation) = players.get(dot.player) {
-            fill.set_if_neq(BackgroundColor(relation.color()));
+        let fill = if shopkeeper { palette::GOLD } else { relation.copied().unwrap_or(Relation::of(is_me, false)).color() };
+        if is_me {
+            me = Some((pos.0, size, fill));
+        } else {
+            dot(pos.0, size, fill);
         }
     }
-}
-
-/// Keep dots on their fighters (only writing what changed); the dead's are hidden, the gone's
-/// removed.
-fn place_dots(
-    mut commands: Commands,
-    current: Res<CurrentMap>,
-    players: Query<(&Pos, Option<&Health>)>,
-    mut dots: Query<(Entity, &Dot, &mut UiTransform, &mut Visibility)>,
-) {
-    for (dot, owner, mut transform, mut visibility) in &mut dots {
-        let Ok((pos, health)) = players.get(owner.player) else {
-            commands.entity(dot).despawn();
-            continue;
-        };
-        visibility.set_if_neq(shown(health.is_none_or(Health::alive)));
-        place_moving(&mut transform, current.map(), pos.0, owner.size);
+    if let Some((at, size, fill)) = me {
+        dot(at, size, fill);
     }
 }
 

@@ -474,11 +474,15 @@ pub(crate) fn put(commands: &mut Commands, mesh: &Handle<Mesh>, part: Part) {
 }
 
 /// A part's shape as `draw_parts` copies it: its corners, how opaque each is (white, colored by
-/// the ink), its triangles, and the ball it fits in. Each corner is in it once, however many
-/// triangles share it (the shapes are made of triangles of their own, and facing both ways).
+/// the ink) and how many times over its triangles are laid, its triangles, and the ball it fits
+/// in. Each corner is in it once, however many triangles share it (the shapes are made of
+/// triangles of their own), and a triangle laid again straight after itself (the other way round,
+/// as one facing both ways is) is in it once, laid over twice (`draw::layered`): the same drawn,
+/// at half the triangles.
 struct Shape {
     positions: Vec<Vec3>,
     colors: Vec<Vec4>,
+    overs: Vec<u32>,
     indices: Vec<u32>,
     center: Vec3,
     radius: f32,
@@ -496,15 +500,33 @@ impl Shape {
             Some(indices) => indices.iter().collect(),
             None => (0..positions.len()).collect(),
         };
-        let mut seen: HashMap<([u32; 3], [u32; 4]), u32> = HashMap::default();
-        let (mut unique, mut unique_colors) = (Vec::new(), Vec::new());
-        let indices = corners
+        // Each triangle, and how many times over it's laid.
+        let corner = |i: usize| (positions[i].to_array().map(f32::to_bits), colors[i].to_array().map(f32::to_bits));
+        let same = |a: &[usize; 3], b: &[usize; 3]| {
+            let key = |t: &[usize; 3]| {
+                let mut key = t.map(corner);
+                key.sort_unstable();
+                key
+            };
+            key(a) == key(b)
+        };
+        let mut laid: Vec<([usize; 3], u32)> = Vec::new();
+        for triangle in corners.as_chunks::<3>().0 {
+            match laid.last_mut() {
+                Some((last, over)) if same(last, triangle) => *over += 1,
+                _ => laid.push((*triangle, 1)),
+            }
+        }
+        let mut seen: HashMap<(([u32; 3], [u32; 4]), u32), u32> = HashMap::default();
+        let (mut unique, mut unique_colors, mut overs) = (Vec::new(), Vec::new(), Vec::new());
+        let indices = laid
             .into_iter()
-            .map(|i| {
-                let key = (positions[i].to_array().map(f32::to_bits), colors[i].to_array().map(f32::to_bits));
-                *seen.entry(key).or_insert_with(|| {
+            .flat_map(|(triangle, over)| triangle.map(|i| (i, over)))
+            .map(|(i, over)| {
+                *seen.entry((corner(i), over)).or_insert_with(|| {
                     unique.push(positions[i]);
                     unique_colors.push(colors[i]);
+                    overs.push(over);
                     unique.len() as u32 - 1
                 })
             })
@@ -513,7 +535,7 @@ impl Shape {
         let (low, high) = positions.iter().fold((Vec3::MAX, Vec3::MIN), |(low, high), &p| (low.min(p), high.max(p)));
         let center = (low + high) / 2.0;
         let radius = positions.iter().map(|p| p.distance(center)).fold(0.0, f32::max);
-        Some(Shape { positions, colors, indices, center, radius })
+        Some(Shape { positions, colors, overs, indices, center, radius })
     }
 }
 
@@ -531,8 +553,18 @@ fn draw_parts(
     mut changed: MessageReader<AssetEvent<Mesh>>,
     mut shapes: Local<HashMap<AssetId<Mesh>, Shape>>,
     mut drawn: ResMut<draw::Drawn>,
+    mut inks: Local<Vec<(Vec3, f32, u8)>>,
     mut seed: Local<u32>,
 ) {
+    if inks.is_empty() {
+        // Each ink's color (linear), opacity at most and layer, in its place (`Ink as usize`),
+        // worked out once.
+        *inks = vec![(Vec3::ZERO, 0.0, 0); Ink::ALL.len()];
+        for ink in Ink::ALL {
+            let (color, alpha, _, layer) = ink.look();
+            inks[ink as usize] = (Vec4::from_array(color.to_linear().to_f32_array()).truncate(), alpha, layer);
+        }
+    }
     for event in changed.read() {
         if let AssetEvent::Modified { id } | AssetEvent::Removed { id } | AssetEvent::Unused { id } = event {
             shapes.remove(id);
@@ -554,7 +586,7 @@ fn draw_parts(
         if age < 0.0 {
             continue;
         }
-        let (color, alpha, _, layer) = part.ink.look();
+        let (color, alpha, layer) = inks[part.ink as usize];
         let alpha = alpha * part.opacity(age) * (1.0 - part.flicker * random());
         let mesh = if part.frames.is_empty() { &part.mesh } else { &part.frames[(age * 24.0) as usize % part.frames.len()] };
         let id = mesh.id();
@@ -569,7 +601,7 @@ fn draw_parts(
         if alpha <= 0.0 || !frustum.intersects_sphere(&ball, false) {
             continue;
         }
-        let tint = Vec4::from_array(color.to_linear().with_alpha(alpha).to_f32_array());
+        let tint = color.extend(alpha);
         // The haze worked out once for the whole part, small as each is.
         let haze = fog.map_or(0.0, |fog| draw::haze(fog, eye.translation().distance(center)));
         shown.push((depth.dot(center.extend(1.0)) + layer as f32, id, placed.compute_affine(), tint, haze));
@@ -582,11 +614,11 @@ fn draw_parts(
     for (_, id, placed, tint, haze) in &shown {
         let shape = &shapes[id];
         let first = corners.len() as u32;
-        corners.extend(shape.positions.iter().zip(&shape.colors).map(|(&p, &c)| {
+        corners.extend(shape.positions.iter().zip(&shape.colors).zip(&shape.overs).map(|((&p, &c), &over)| {
             let [x, y, z] = placed.transform_point3(p).to_array();
             let color = c * *tint;
             let [r, g, b] = color.truncate().lerp(haze_color, *haze).to_array();
-            [x, y, z, r, g, b, color.w]
+            [x, y, z, r, g, b, draw::layered(color.w, over)]
         }));
         triangles.extend(shape.indices.iter().map(|&i| first + i));
     }

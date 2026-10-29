@@ -21,8 +21,16 @@ use bevy::render::{ExtractSchedule, GpuResourceAppExt, MainWorld, Render, Render
 use bevy::shader::Shader;
 
 /// A corner as drawn: where it is in the world, then its color (linear, and not multiplied by
-/// how opaque it is).
+/// how opaque it is), its opacity as `layered` puts it.
 pub(super) type Corner = [f32; 7];
+
+/// A corner's opacity as the shader takes it, with how many times over its triangle is laid
+/// (`over`, more than once for a shape's triangle laid again on itself, as one facing both ways
+/// is: drawn once, blended as if drawn that many times). The opacity is kept clear of the whole
+/// numbers, so a triangle's corners interpolated never cross one.
+pub(super) fn layered(opacity: f32, over: u32) -> f32 {
+    (over - 1) as f32 + 0.25 + 0.5 * opacity
+}
 
 /// What `draw_parts` laid out this frame, taken by the render world as it is (`take_drawn`).
 #[derive(Resource, Default)]

@@ -309,7 +309,8 @@ fn draw_bars(
 ) {
     let (camera, camera_transform, render_entity) = *camera;
     let (stack, world_ui_shown) = *world_ui;
-    (rects.over, rects.camera) = (Some(stack.0), Some(render_entity.id()));
+    rects.camera = Some(render_entity.id());
+    rects.over(stack.0);
     let now = time.elapsed_secs();
     let eye = camera_transform.translation();
     shown.clear();

@@ -99,7 +99,9 @@ for (const step of steps) {
     console.log(`profile: ${frames} frames in ${seconds} s`);
     writeFileSync(path, JSON.stringify(r.result.profile));
   } else if (cmd === "fps") {
-    // Every animation frame's time, as the game's own frames come on them.
+    // Every animation frame's time, as the game's own frames come on them: when its callback
+    // runs, not the time it's handed (when the browser began the frame, which, the page busy, can
+    // be well before, so the gaps came out uneven: a long one and a short one for two even ones).
     const seconds = Number(rest);
     const r = await send("Runtime.evaluate", {
       awaitPromise: true,
@@ -107,7 +109,8 @@ for (const step of steps) {
       expression: `new Promise((done) => {
         const times = [];
         const start = performance.now();
-        const frame = (t) => {
+        const frame = () => {
+          const t = performance.now();
           times.push(t);
           if (t - start < ${seconds * 1000}) requestAnimationFrame(frame);
           else done(times);
