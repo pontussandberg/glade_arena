@@ -167,13 +167,22 @@ pub(super) const HOUSE: &[&str] = &[
     ".##...##.",
 ];
 
+/// A picture `width` by `height` of `texels` (sRGB, four bytes each, row by row from the top
+/// left), only on the GPU, its pixels crisp, not blurred, however big it's drawn.
+pub(crate) fn crisp_image(width: u32, height: u32, texels: Vec<u8>) -> Image {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::image::ImageSampler;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let size = Extent3d { width, height, depth_or_array_layers: 1 };
+    let mut image = Image::new(size, TextureDimension::D2, texels, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
+    image.sampler = ImageSampler::nearest();
+    image
+}
+
 /// Pixel art drawn from `rows` (`#` a pixel, anything else see-through), each pixel `pixel`
 /// pixels square, in `color`: one picture, crisp at any size. (A node for each pixel made Bevy
 /// go over hundreds of them every frame.)
 pub(crate) fn pixel_art(parent: &mut ChildSpawnerCommands, rows: &[&str], pixel: f32, color: Color) {
-    use bevy::asset::RenderAssetUsages;
-    use bevy::image::ImageSampler;
-    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     let width = rows.iter().map(|row| row.chars().count()).max().unwrap_or(0);
     if width == 0 {
         return;
@@ -186,9 +195,7 @@ pub(crate) fn pixel_art(parent: &mut ChildSpawnerCommands, rows: &[&str], pixel:
             (0..width).flat_map(move |x| if row.get(x) == Some(&'#') { [r, g, b, a] } else { [0; 4] })
         })
         .collect();
-    let size = Extent3d { width: width as u32, height: rows.len() as u32, depth_or_array_layers: 1 };
-    let mut image = Image::new(size, TextureDimension::D2, texels, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
-    image.sampler = ImageSampler::nearest();
+    let image = crisp_image(width as u32, rows.len() as u32, texels);
     let node = Node { width: px(width as f32 * pixel), height: px(rows.len() as f32 * pixel), ..default() };
     let art = parent.spawn(node).id();
     parent.commands().queue(move |world: &mut World| {

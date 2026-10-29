@@ -82,7 +82,10 @@ impl Plugin for RenderPlugin {
                 (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
                 (add_visuals, sync_transforms, lift_fighters).chain().before(crate::rig::Posing),
                 (fly_shots, fade_wakes, fly_impacts, crate::rig::empty_hands).chain().after(crate::rig::Posing),
-                (show_novas, grow_bursts, end_fleeting, show_frost),
+                (show_novas, grow_bursts, end_fleeting),
+                // Once a new fighter's rig and cloth are on it, so they go over to the frosted
+                // material with its body.
+                show_frost.after(crate::rig::Posing),
                 align_to_world.after(crate::rig::Posing).after(fly_shots),
                 toggle_range_circle,
                 fit_range_circle,

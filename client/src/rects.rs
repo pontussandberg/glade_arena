@@ -14,10 +14,11 @@ use bevy::prelude::*;
 use bevy::render::render_phase::{AddRenderCommand, DrawFunctions, PhaseItemExtraIndex, RenderCommand, RenderCommandResult, SetItemPipeline, TrackedRenderPass, ViewSortedRenderPhases};
 use bevy::render::render_resource::*;
 use bevy::render::renderer::{RenderDevice, RenderQueue};
-use bevy::render::sync_world::MainEntity;
+use bevy::render::sync_world::{MainEntity, RenderEntity};
 use bevy::render::view::ExtractedView;
 use bevy::render::{ExtractSchedule, GpuResourceAppExt, MainWorld, Render, RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::Shader;
+use bevy::ui::{ComputedStackIndex, ComputedUiTargetCamera};
 use bevy::ui_render::{SetUiViewBindGroup, TransparentUi, UiCameraView, UiPipeline, init_ui_pipeline};
 
 /// A rectangle as drawn: its left, top, right and bottom (in the camera's pixels, the physical
@@ -27,21 +28,21 @@ use bevy::ui_render::{SetUiViewBindGroup, TransparentUi, UiCameraView, UiPipelin
 pub type Quad = [f32; 9];
 
 /// This frame's rectangles, in the order they're drawn (later over earlier), and where: each run
-/// of them over which node (`over`), on which camera (its render world entity). Laid out anew
-/// every frame, by whatever draws them: what isn't is gone.
+/// of them over which node (`over`). Laid out anew every frame, by whatever draws them: what isn't
+/// is gone.
 #[derive(Resource, Default)]
 pub struct Rects {
     quads: Vec<Quad>,
-    /// Each run's node (its `ComputedStackIndex`), and its first rectangle.
-    runs: Vec<(u32, u32)>,
-    pub camera: Option<Entity>,
+    /// Each run's node, and its first rectangle.
+    runs: Vec<(Entity, u32)>,
 }
 
 impl Rects {
-    /// What's pushed from now on is drawn over the node `stack` (its `ComputedStackIndex`): over
-    /// its own background, border and picture, under what's in it.
-    pub fn over(&mut self, stack: u32) {
-        self.runs.push((stack, self.quads.len() as u32));
+    /// What's pushed from now on is drawn over the UI node `node`, on its camera: over its own
+    /// background, border and picture, under what's in it. Where it is among the UI's nodes is
+    /// looked up as the frame is handed to be drawn, once Bevy has stacked them for it.
+    pub fn over(&mut self, node: Entity) {
+        self.runs.push((node, self.quads.len() as u32));
     }
 
     /// `color` over `left`..`right`, `top`..`bottom`. A color drawn many times a frame is best
@@ -75,18 +76,17 @@ impl Plugin for RectsPlugin {
     }
 }
 
-/// The rectangles on the GPU, kept from frame to frame, and where they're drawn: each run's node
-/// and its rectangles.
+/// The rectangles on the GPU, kept from frame to frame, and where they're drawn: each run's
+/// camera (its render world entity), its node's `ComputedStackIndex`, and its rectangles.
 #[derive(Resource)]
 struct RectsBuffer {
     quads: RawBufferVec<Quad>,
-    runs: Vec<(u32, std::ops::Range<u32>)>,
-    camera: Option<Entity>,
+    runs: Vec<(Entity, u32, std::ops::Range<u32>)>,
 }
 
 impl Default for RectsBuffer {
     fn default() -> Self {
-        RectsBuffer { quads: RawBufferVec::new(BufferUsages::VERTEX), runs: Vec::new(), camera: None }
+        RectsBuffer { quads: RawBufferVec::new(BufferUsages::VERTEX), runs: Vec::new() }
     }
 }
 
@@ -130,16 +130,35 @@ impl SpecializedRenderPipeline for RectsPipeline {
 }
 
 /// The frame's rectangles, swapped for the ones already drawn, which are cleared for the next
-/// frame's: nothing's copied, nor made anew.
+/// frame's: nothing's copied, nor made anew. Each run goes where its node is in the UI as laid out
+/// and stacked for this frame, on the node's camera; none while the node is hidden or takes no
+/// room (as Bevy draws nothing of its own then).
 fn take_rects(mut main: ResMut<MainWorld>, mut buffer: ResMut<RectsBuffer>) {
-    let Some(mut rects) = main.get_resource_mut::<Rects>() else { return };
-    std::mem::swap(buffer.quads.values_mut(), &mut rects.quads);
-    rects.quads.clear();
-    let end = buffer.quads.len() as u32;
-    let starts = rects.runs.iter().map(|&(_, start)| start).skip(1).chain([end]);
-    buffer.runs = rects.runs.iter().zip(starts).map(|(&(over, start), end)| (over, start..end)).filter(|(_, run)| !run.is_empty()).collect();
-    rects.runs.clear();
-    buffer.camera = rects.camera;
+    if !main.contains_resource::<Rects>() {
+        return;
+    }
+    main.resource_scope(|world, mut rects: Mut<Rects>| {
+        let rects = &mut *rects;
+        std::mem::swap(buffer.quads.values_mut(), &mut rects.quads);
+        rects.quads.clear();
+        let placed = |node: Entity| {
+            let node = world.get_entity(node).ok()?;
+            let shown = node.get::<InheritedVisibility>().is_some_and(|visible| visible.get()) && node.get::<ComputedNode>().is_some_and(|node| !node.is_empty());
+            let camera = world.get::<RenderEntity>(node.get::<ComputedUiTargetCamera>()?.get()?)?.id();
+            shown.then_some((camera, node.get::<ComputedStackIndex>()?.0))
+        };
+        let end = buffer.quads.len() as u32;
+        let starts = rects.runs.iter().map(|&(_, start)| start).skip(1).chain([end]);
+        buffer.runs.clear();
+        for (&(node, start), end) in rects.runs.iter().zip(starts) {
+            if start < end
+                && let Some((camera, stack)) = placed(node)
+            {
+                buffer.runs.push((camera, stack, start..end));
+            }
+        }
+        rects.runs.clear();
+    });
 }
 
 fn write_buffer(mut buffer: ResMut<RectsBuffer>, device: Res<RenderDevice>, queue: Res<RenderQueue>) {
@@ -160,15 +179,14 @@ fn queue_rects(
     cameras: Query<&UiCameraView>,
     views: Query<&ExtractedView>,
 ) {
-    let Some(camera) = buffer.camera else { return };
     if buffer.runs.is_empty() {
         return;
     }
     let Some(draw_function) = draw_functions.read().get_id::<DrawRects>() else { return };
-    let Some(view) = cameras.get(camera).ok().and_then(|ui| views.get(ui.0).ok()) else { return };
-    let Some(phase) = phases.get_mut(&view.retained_view_entity) else { return };
-    let pipeline_id = pipelines.specialize(&pipeline_cache, &pipeline, view.target_format);
-    for (run, (over, _)) in buffer.runs.iter().enumerate() {
+    for (run, (camera, over, _)) in buffer.runs.iter().enumerate() {
+        let Some(view) = cameras.get(*camera).ok().and_then(|ui| views.get(ui.0).ok()) else { continue };
+        let Some(phase) = phases.get_mut(&view.retained_view_entity) else { continue };
+        let pipeline_id = pipelines.specialize(&pipeline_cache, &pipeline, view.target_format);
         phase.add_transient(TransparentUi {
             // Over the node's own background, border and all, and under the first thing in it.
             sort_key: FloatOrd(*over as f32 + 0.4),
@@ -206,7 +224,7 @@ impl RenderCommand<TransparentUi> for DrawQuads {
     ) -> RenderCommandResult {
         let buffer = buffer.into_inner();
         let Some(quads) = buffer.quads.buffer() else { return RenderCommandResult::Skip };
-        let Some((_, run)) = buffer.runs.get(usize::MAX - item.index) else { return RenderCommandResult::Skip };
+        let Some((.., run)) = buffer.runs.get(usize::MAX - item.index) else { return RenderCommandResult::Skip };
         pass.set_vertex_buffer(0, quads.slice(..));
         pass.draw(0..6, run.clone());
         RenderCommandResult::Success

@@ -50,10 +50,20 @@ impl Plugin for BotPlugin {
 }
 
 /// A bot holding its ground walks nowhere but to the merchant between waves, and back to where
-/// it first stood when the fight's on.
-fn stand_ground(bot: Res<Bot>, room: Res<CurrentRoom>, me: Query<&Pos, With<Me>>, mut desired: ResMut<DesiredInput>, mut home: Local<Option<Vec2>>) {
+/// it first stood on this map when the fight's on.
+fn stand_ground(
+    bot: Res<Bot>,
+    room: Res<CurrentRoom>,
+    map: Res<CurrentMap>,
+    me: Query<&Pos, With<Me>>,
+    mut desired: ResMut<DesiredInput>,
+    mut home: Local<Option<(arena_shared::map::MapId, Vec2)>>,
+) {
     let Ok(me) = me.single() else { return };
-    let home = *home.get_or_insert(me.0);
+    let home = match *home {
+        Some((on, at)) if on == map.0 => at,
+        _ => home.insert((map.0, me.0)).1,
+    };
     let shopping = room.run().is_some_and(|run| matches!(run.phase, arena_shared::rooms::Phase::Shop { .. }));
     if bot.stand && !shopping {
         desired.0.move_to = (me.0.distance(home) > 1.0).then_some(home);

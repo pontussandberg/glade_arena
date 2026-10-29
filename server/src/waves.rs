@@ -97,8 +97,8 @@ fn most_about(wave: u32, party: usize) -> usize {
     HORDE.unwrap_or((14 + wave as usize + 4 * (party.max(1) - 1)).min(44))
 }
 
-/// `ARENA_HORDE=N` (for measuring what a crowd costs): every wave keeps `N` monsters about, a
-/// pack coming out every other tick till it has them, and never runs out of them; and the party
+/// `ARENA_HORDE=N` (for measuring what a crowd costs): every wave keeps `N` monsters about, packs
+/// coming out quickly till it has them, and never runs out of them; and the party
 /// never falls (`combat::damage`).
 pub(crate) static HORDE: std::sync::LazyLock<Option<usize>> = std::sync::LazyLock::new(|| std::env::var("ARENA_HORDE").ok().and_then(|n| n.parse().ok()));
 
@@ -412,10 +412,11 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, now: 
         }
         RunPhase::Fight => {
             // Measuring a crowd (`HORDE`): the party stays on its feet, healed whole every tick,
-            // so the fight goes on.
+            // so the fight goes on. Only a hurt one's health is written, so the others' isn't sent
+            // again every tick.
             if HORDE.is_some() {
                 for (_, r, _, mut health, max, dead) in party.iter_mut() {
-                    if *r == room && dead.is_none() {
+                    if *r == room && dead.is_none() && health.0 != max.0 {
                         health.0 = max.0;
                     }
                 }

@@ -1,8 +1,8 @@
 //! Each mesh's bounds, worked out once: Bevy works out a new mesh entity's `Aabb` from its
-//! vertices, and a fight spawns many of the same (a monster's rig parts, effects' parts), so
-//! here a mesh's is kept and given to each entity with it, before Bevy would. Natively, the meshes
-//! are then culled by them on the GPU alone (`cull_on_gpu`). And no mesh's transform from the frame
-//! before is kept.
+//! vertices, and a fight spawns many of the same (a monster's rig parts), so here a mesh's is kept
+//! and given to each entity with it, in Bevy's stead (`NoAutoAabb`). Natively, the meshes are then
+//! culled by them on the GPU alone (`cull_on_gpu`). And no mesh's transform from the frame before
+//! is kept.
 
 use bevy::camera::primitives::{Aabb, MeshAabb};
 use bevy::camera::visibility::{NoAutoAabb, NoFrustumCulling, VisibilitySystems};
@@ -36,8 +36,15 @@ fn cull_on_gpu(trigger: On<Add, Mesh3d>, mut commands: Commands, layered: Query<
     }
 }
 
-/// What Bevy's `calculate_bounds` would give each new mesh entity, from what each mesh's is (a
-/// changed or dropped mesh's worked out again).
+/// On a mesh entity whose `Aabb` comes from `give_bounds` (and so not from Bevy, `NoAutoAabb`).
+#[derive(Component)]
+struct GivenBounds;
+
+/// What Bevy's `calculate_bounds` would give each mesh entity, from what each mesh's is (a changed
+/// or dropped mesh's worked out again): to a new one, and again to one given another mesh or whose
+/// mesh changed. Bevy is told to leave them be (`NoAutoAabb`), or it would work each new one's out
+/// from its vertices all the same. A mesh changed is seen a frame on, as the frame's asset news
+/// comes after this: waiting for it would hold up the visibility checks behind it.
 #[allow(clippy::type_complexity)]
 fn give_bounds(
     mut commands: Commands,
@@ -45,20 +52,29 @@ fn give_bounds(
     mut events: MessageReader<AssetEvent<Mesh>>,
     mut known: Local<HashMap<AssetId<Mesh>, Aabb>>,
     new: Query<(Entity, &Mesh3d), (Without<Aabb>, Without<NoFrustumCulling>, Without<NoAutoAabb>)>,
+    mut changed: Query<(&Mesh3d, &mut Aabb), (With<GivenBounds>, Or<(AssetChanged<Mesh3d>, Changed<Mesh3d>)>)>,
 ) {
     for event in events.read() {
         if let AssetEvent::Modified { id } | AssetEvent::Removed { id } | AssetEvent::Unused { id } = event {
             known.remove(id);
         }
     }
+    let mut bounds = |mesh: &Mesh3d| match known.get(&mesh.id()) {
+        Some(aabb) => Some(*aabb),
+        None => {
+            let aabb = meshes.get(mesh).and_then(MeshAabb::compute_aabb)?;
+            known.insert(mesh.id(), aabb);
+            Some(aabb)
+        }
+    };
+    for (mesh, mut aabb) in &mut changed {
+        if let Some(bounds) = bounds(mesh) {
+            aabb.set_if_neq(bounds);
+        }
+    }
     for (entity, mesh) in &new {
-        let aabb = match known.get(&mesh.id()) {
-            Some(aabb) => *aabb,
-            None => {
-                let Some(aabb) = meshes.get(mesh).and_then(MeshAabb::compute_aabb) else { continue };
-                *known.entry(mesh.id()).insert(aabb).get()
-            }
-        };
-        commands.entity(entity).try_insert(aabb);
+        if let Some(aabb) = bounds(mesh) {
+            commands.entity(entity).try_insert((aabb, NoAutoAabb, GivenBounds));
+        }
     }
 }

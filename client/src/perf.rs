@@ -121,10 +121,14 @@ impl Plugin for OffPlugin {
             shadows: off.contains("shadows"),
             fog: off.contains("fog"),
             ui: off.contains("ui"),
-            fx: off.contains("fx"),
             blend: off.contains("blend"),
         });
         app.add_systems(PostUpdate, switch_off);
+        // Before the effects' parts are laid out to be drawn, so none that's switched off is: on
+        // its own, as `switch_off` before them would hold them up behind its commands.
+        if off.contains("fx") || off.contains("blend") {
+            app.add_systems(PostUpdate, clear_parts.before(crate::fx::DrawParts));
+        }
     }
 }
 
@@ -147,7 +151,6 @@ struct Off {
     shadows: bool,
     fog: bool,
     ui: bool,
-    fx: bool,
     blend: bool,
 }
 
@@ -159,7 +162,6 @@ fn switch_off(
     mut suns: Query<&mut DirectionalLight>,
     fog: Query<Entity, With<bevy::pbr::DistanceFog>>,
     mut roots: Query<&mut Node, Without<ChildOf>>,
-    mut parts: ResMut<FxParts>,
     mut drawn: Query<(&MeshMaterial3d<PlainMaterial>, &mut Visibility)>,
     materials: Res<Assets<PlainMaterial>>,
 ) {
@@ -183,9 +185,6 @@ fn switch_off(
             node.display = Display::None;
         }
     }
-    if off.fx {
-        parts.0.clear();
-    }
     if off.blend {
         for (material, mut visibility) in &mut drawn {
             if materials.get(&material.0).is_some_and(|m| matches!(m.alpha_mode, AlphaMode::Blend | AlphaMode::Add | AlphaMode::Premultiplied | AlphaMode::Multiply)) {
@@ -193,6 +192,11 @@ fn switch_off(
             }
         }
     }
+}
+
+/// The effects' parts gone, switched off (`fx`) or as they're all see-through (`blend`).
+fn clear_parts(mut parts: ResMut<FxParts>) {
+    parts.0.clear();
 }
 
 /// Once, a while into the run: what's drawn, by what it belongs to (the class of the fighter whose

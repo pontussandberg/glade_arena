@@ -42,9 +42,13 @@ impl Plugin for FxPlugin {
         // then: after its frustum's worked out, and before Bevy hands out the frame's mesh asset
         // news (it reads the meshes, and that news), so it runs alongside the UI's layout instead
         // of holding up the frustum, and with it the visibility checks, the layout and the rest.
-        app.add_systems(PostUpdate, draw_parts.after(VisibilitySystems::UpdateFrusta).before(AssetEventSystems));
+        app.add_systems(PostUpdate, draw_parts.in_set(DrawParts).after(VisibilitySystems::UpdateFrusta).before(AssetEventSystems));
     }
 }
+
+/// Where the parts are laid out to be drawn for the frame (`draw_parts`).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct DrawParts;
 
 /// How often (seconds) a burning fighter sheds a new round of flames.
 const FLAME_EVERY: f32 = 0.08;
@@ -131,6 +135,10 @@ pub(crate) fn cast_nova(commands: &mut Commands, art: &FxArt, now: f32, figure: 
 
 /// How many steps a fading material goes through, from its full opacity to clear.
 const FADE_STEPS: usize = 12;
+
+/// The inks that are also laid on meshes of their own (the downed's marks), and so have materials
+/// (`FxArt::ink`): parts are drawn in their inks' colors without one.
+const MESHED: [Ink; 2] = [Ink::Heal, Ink::HealMist];
 
 /// What a part is drawn in: a color, how see-through at most, how brightly it glows, and which
 /// layer it's drawn on among others in the same place (higher over lower). (The glow is for
@@ -256,8 +264,9 @@ const VARIANTS: u32 = 4;
 /// Everything effects are drawn with.
 #[derive(Resource)]
 pub(crate) struct FxArt {
-    /// Each ink's materials, full first, clearing in `FADE_STEPS`.
-    inks: Vec<Vec<Handle<PlainMaterial>>>,
+    /// The materials of each ink laid on meshes of its own (`MESHED`), full first, clearing in
+    /// `FADE_STEPS`.
+    inks: Vec<(Ink, Vec<Handle<PlainMaterial>>)>,
     splotch: Vec<Handle<Mesh>>,
     streaks: Vec<Handle<Mesh>>,
     cracks: Vec<Handle<Mesh>>,
@@ -282,22 +291,23 @@ pub(crate) struct FxArt {
 
 impl FxArt {
     fn ink(&self, ink: Ink, faded: f32) -> &Handle<PlainMaterial> {
-        let steps = &self.inks[ink as usize];
+        let (_, steps) = self.inks.iter().find(|(made, _)| *made == ink).expect("an ink laid on a mesh of its own is in `MESHED`");
         &steps[((faded * FADE_STEPS as f32) as usize).min(FADE_STEPS - 1)]
     }
 }
 
 fn load_art(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<PlainMaterial>>) {
-    let inks = Ink::ALL
+    let inks = MESHED
         .iter()
-        .map(|ink| {
+        .map(|&ink| {
             let (color, alpha, glow, layer) = ink.look();
-            (0..FADE_STEPS)
+            let steps = (0..FADE_STEPS)
                 .map(|i| {
                     let faded = alpha * (1.0 - i as f32 / FADE_STEPS as f32);
                     materials.add(PlainMaterial { depth_bias: layer as f32, cull_mode: None, ..arena::translucent(color, faded, glow) })
                 })
-                .collect()
+                .collect();
+            (ink, steps)
         })
         .collect();
     let mut variants = |make: &dyn Fn(u32) -> Mesh| (0..VARIANTS).map(|seed| meshes.add(make(seed * 7919 + 13))).collect::<Vec<_>>();
@@ -550,7 +560,7 @@ impl Shape {
 /// colored by their inks and hazed with distance as everything else is, nearest last, as Bevy
 /// sorts see-through things drawn one by one (a higher layer counting as nearer). Those off
 /// screen are left out.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn draw_parts(
     time: Res<Time>,
     mut parts: ResMut<Parts>,
@@ -561,6 +571,7 @@ fn draw_parts(
     mut drawn: ResMut<draw::Drawn>,
     mut inks: Local<Vec<(Vec3, f32, u8)>>,
     mut seed: Local<u32>,
+    mut shown: Local<Vec<(f32, AssetId<Mesh>, Affine3A, Vec4, f32)>>,
 ) {
     if inks.is_empty() {
         // Each ink's color (linear), opacity at most and layer, in its place (`Ink as usize`),
@@ -585,7 +596,7 @@ fn draw_parts(
     let (eye, frustum, fog) = *camera;
     let depth = eye.to_matrix().inverse().row(2);
     let haze_color = fog.map_or(Vec3::ZERO, |fog| Vec4::from_array(fog.color.to_linear().to_f32_array()).truncate());
-    let mut shown: Vec<(f32, AssetId<Mesh>, Affine3A, Vec4, f32)> = Vec::new();
+    shown.clear();
     let mut middle = Vec3::ZERO;
     for part in &parts.0 {
         let age = now - part.born;
@@ -617,7 +628,7 @@ fn draw_parts(
     let draw::Drawn { corners, triangles, center } = &mut *drawn;
     corners.clear();
     triangles.clear();
-    for (_, id, placed, tint, haze) in &shown {
+    for (_, id, placed, tint, haze) in shown.iter() {
         let shape = &shapes[id];
         let first = corners.len() as u32;
         corners.extend(shape.positions.iter().zip(&shape.colors).zip(&shape.overs).map(|((&p, &c), &over)| {

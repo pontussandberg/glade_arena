@@ -8,8 +8,6 @@ use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use bevy::render::sync_world::RenderEntity;
-use bevy::ui::ComputedStackIndex;
 use lightyear::core::time::TickInstant;
 use lightyear::interpolation::timeline::InterpolationTimeline;
 use lightyear::prelude::client::RemoteTimeline;
@@ -300,16 +298,15 @@ fn draw_bars(
     frame: Res<bevy::diagnostic::FrameCount>,
     clock: AttackClock,
     map: Option<Res<crate::rooms::CurrentMap>>,
-    camera: Single<(&Camera, &GlobalTransform, &RenderEntity), With<crate::camera::CameraRig>>,
-    world_ui: Single<(&ComputedStackIndex, &InheritedVisibility), With<WorldUi>>,
+    camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
+    world_ui: Single<(Entity, &InheritedVisibility), With<WorldUi>>,
     mut fighters: Query<(Entity, &Transform, &ClassId, Option<&Health>, Option<&CritAt>, &AttackState, Has<Me>, (Option<&MaxHealth>, Has<Elite>, Option<&Relation>), (&mut HealthTrail, &mut BarSight))>,
     mut rects: ResMut<Rects>,
     mut shown: Local<Vec<(f32, Bar)>>,
 ) {
-    let (camera, camera_transform, render_entity) = *camera;
-    let (stack, world_ui_shown) = *world_ui;
-    rects.camera = Some(render_entity.id());
-    rects.over(stack.0);
+    let (camera, camera_transform) = *camera;
+    let (world_ui, world_ui_shown) = *world_ui;
+    rects.over(world_ui);
     let now = time.elapsed_secs();
     let eye = camera_transform.translation();
     shown.clear();
@@ -322,7 +319,7 @@ fn draw_bars(
         let over = bar_point(body, height);
         let hidden = !is_me
             && map.as_ref().is_some_and(|map| {
-                if sight.0.is_none() || (frame.0 + fighter.index_u32()) % SIGHT_FRAMES == 0 {
+                if sight.0.is_none() || frame.0.wrapping_add(fighter.index_u32()) % SIGHT_FRAMES == 0 {
                     sight.0 = Some(map.map().sight_meets((to_gameplay(eye), eye.y), (to_gameplay(over), over.y)));
                 }
                 sight.0 == Some(true)
@@ -591,7 +588,7 @@ fn spawn_damage_numbers(
 /// Damage numbers follow their fighter's health bar, thrown up off it a little to one side,
 /// slowing and falling back as they fade out; a crit pops in big and settles. Where it is, the
 /// throw, the size and the pop are its `UiTransform`, which doesn't make Bevy lay out the UI
-/// again, and like `place_bars` only what changed is written.
+/// again, and only what changed is written.
 fn float_damage_numbers(
     mut commands: Commands,
     time: Res<Time>,

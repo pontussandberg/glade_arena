@@ -8,17 +8,13 @@
 use arena_shared::config::TICK_HZ;
 use arena_shared::map::Map;
 use arena_shared::protocol::*;
-use bevy::asset::RenderAssetUsages;
-use bevy::image::ImageSampler;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy::ui::ComputedStackIndex;
 
 use crate::Me;
 use crate::camera::{CameraMode, CameraPlaced};
 use crate::feedback::AttackClock;
 use crate::arena::{self, palette};
-use crate::render::{HudButton, Relation, button_fill, clicked, ground_at, key_chip, pixel_art, ui_text};
+use crate::render::{HudButton, Relation, button_fill, clicked, crisp_image, ground_at, key_chip, pixel_art, ui_text};
 use crate::tooltip::{Side, hover_shows, tip, tip_text, tip_title};
 use crate::rooms::CurrentMap;
 
@@ -153,16 +149,7 @@ fn picture(map: &Map) -> Image {
         let at = ((row * map.size.x + column) * 4) as usize;
         pixels[at..at + 4].copy_from_slice(&arena::tile_color(arena::Theme::of(map.id), kind).to_srgba().to_u8_array());
     }
-    let mut image = Image::new(
-        Extent3d { width: size.x, height: size.y, depth_or_array_layers: 1 },
-        TextureDimension::D2,
-        pixels,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    // Crisp tiles, not blurred.
-    image.sampler = ImageSampler::nearest();
-    image
+    crisp_image(size.x, size.y, pixels)
 }
 
 /// The minimap, empty: `draw_map` puts the map in it.
@@ -354,15 +341,15 @@ fn place(node: &mut Node, map: &Map, at: Vec2, size: f32) {
 #[allow(clippy::type_complexity)]
 fn draw_dots(
     current: Res<CurrentMap>,
-    minimap: Single<(&ComputedNode, &UiGlobalTransform, &ComputedStackIndex, &InheritedVisibility), With<Minimap>>,
+    minimap: Single<(Entity, &ComputedNode, &UiGlobalTransform, &InheritedVisibility), With<Minimap>>,
     fighters: Query<(&Pos, &ClassId, Option<&Health>, Option<&Relation>, Has<Me>, Has<Shopkeeper>), (With<PlayerId>, With<Mesh3d>)>,
     mut rects: ResMut<crate::rects::Rects>,
 ) {
-    let (node, transform, stack, visible) = *minimap;
+    let (minimap, node, transform, visible) = *minimap;
     if !visible.get() {
         return;
     }
-    rects.over(stack.0);
+    rects.over(minimap);
     let scale = node.inverse_scale_factor.recip();
     let corner = transform.translation - node.size() / 2.0 + node.border().min_inset;
     let ring = scale.round().max(1.0);
