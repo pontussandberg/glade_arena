@@ -113,21 +113,17 @@ pub(super) fn merchant_head() -> Mesh {
 pub(super) const MERCHANT_EYES: Vec3 = Vec3::new(0.108, 0.2, 0.045);
 
 /// A puffed coat sleeve, cuffed in gold, into a leather glove.
-pub(super) fn merchant_arm() -> Mesh {
+pub(super) fn merchant_arm() -> (Mesh, Mesh) {
     let coat = palette::MERCHANT_COAT;
-    let sleeve = tube(
-        &[
-            ring(0.0, 0.08, (0.09, 0.09), coat),
-            ring(0.0, -0.08, (0.105, 0.105), coat),
-            ring(0.0, -0.22, (0.1, 0.1), coat),
-            ring(0.0, -0.32, (0.09, 0.09), coat),
-            ring(0.0, -0.34, (0.095, 0.095), palette::GOLD),
-            ring(0.0, -0.37, (0.095, 0.095), palette::GOLD),
-        ],
-        16,
-        (true, true),
-    );
-    sculpted(vec![sleeve, fist(palette::LEATHER, -0.36, 0.055)])
+    let sleeve = vec![
+        ring(0.0, 0.08, (0.09, 0.09), coat),
+        ring(0.0, -0.08, (0.105, 0.105), coat),
+        ring(0.0, -0.22, (0.1, 0.1), coat),
+        ring(0.0, -0.32, (0.09, 0.09), coat),
+        ring(0.0, -0.34, (0.095, 0.095), palette::GOLD),
+        ring(0.0, -0.37, (0.095, 0.095), palette::GOLD),
+    ];
+    jointed(RIG_ELBOW, vec![(sleeve, 16, (true, true))], vec![fist(palette::LEATHER, -0.36, 0.055)])
 }
 
 /// The merchant's walking staff, gripped at the origin, standing up (+Y): a knotted shaft curling

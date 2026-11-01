@@ -112,11 +112,58 @@ fn a_click_fires_once_at_4_fps() {
     assert_eq!(p.shots(), after_release, "server kept firing after the click");
 }
 
-/// Attacking cancels the walk: once the attack is off you stand still until you click again. An
-/// order to move during the windup cancels the attack (no shot) and walks at once; one after it
-/// went off walks too, while the attack timer runs on.
+/// Walking with the keys, a shot winding up slows us to its draw speed (`DRAW_SPEED`) from the
+/// click till it goes off, held drawn or not; once it's off we're back up to full speed.
 #[test]
-fn attacking_cancels_the_walk_and_moving_cancels_the_windup() {
+fn a_shot_winding_up_slows_the_walk_till_it_goes_off() {
+    use arena_shared::config::DRAW_SPEED;
+    let mut p = Pair::new(5907);
+    p.until(Duration::from_secs(5), "our player is spawned", |p| client_view(&mut p.client, CLIENT).is_some_and(|v| v.2));
+    let start = p.server_pos();
+    let way = [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y].into_iter().find(|&way| map().line_walkable(start, start + way * 16.0)).expect("open ground");
+    let top = class_id(CLASS).def().move_speed * map().speed_factor_at(start);
+    let speed = |p: &mut Pair| player::<Motion>(&mut p.server, CLIENT).map_or(0.0, |m| m.along.length());
+    p.input(PlayerInput { walk: way, aim: way, ..default() });
+    p.run(Duration::from_millis(800), SMOOTH);
+    assert!((speed(&mut p) - top).abs() < top * 0.05, "walking at {} of {top} m/s", speed(&mut p));
+    p.input(PlayerInput { walk: way, aim: way, fire: true, draw: true, ..default() });
+    p.until(Duration::from_secs(1), "the attack starts", |p| p.attack().is_some_and(|a| a.swing.is_some()));
+    // Through the windup and held drawn past it: slowed.
+    p.run(windup(CLASS) + Duration::from_millis(400), SMOOTH);
+    assert!(p.attack().is_some_and(|a| a.winding_up().is_some()), "not held drawn");
+    assert!((speed(&mut p) - top * DRAW_SPEED).abs() < top * 0.05, "walking at {} of {top} m/s winding up", speed(&mut p));
+    // Let go: it's off, and we speed up again.
+    p.input(PlayerInput { walk: way, aim: way, ..default() });
+    p.until(Duration::from_millis(500), "the shot goes off", |p| p.shots() == 1);
+    p.run(Duration::from_millis(700), SMOOTH);
+    assert!((speed(&mut p) - top).abs() < top * 0.05, "walking at {} of {top} m/s after the shot", speed(&mut p));
+}
+
+/// A shot's button held keeps it drawn past its windup, never going off, until it's let go; then
+/// it goes off at once, the one shot.
+#[test]
+fn a_shot_held_drawn_goes_off_once_when_let_go() {
+    let mut p = Pair::new(5906);
+    p.until(Duration::from_secs(5), "our player is spawned", |p| client_view(&mut p.client, CLIENT).is_some_and(|v| v.2));
+    p.input(PlayerInput { aim: Vec2::X, fire: true, draw: true, ..default() });
+    p.until(Duration::from_secs(1), "the attack starts", |p| p.attack().is_some_and(|a| a.swing.is_some()));
+    // Well past its windup, still held: drawn, and no shot.
+    p.run(windup(CLASS) + Duration::from_millis(600), SMOOTH);
+    let drawn = p.attack().and_then(|a| a.winding_up());
+    assert!(drawn.is_some_and(|swing| swing.held > 0), "not held drawn: {drawn:?}");
+    assert_eq!(p.shots(), 0, "went off while held");
+    p.input(PlayerInput { aim: Vec2::X, ..default() });
+    p.until(Duration::from_millis(500), "the shot goes off as it's let go", |p| p.shots() == 1);
+    p.run(Duration::from_secs(1), SMOOTH);
+    assert_eq!(p.shots(), 1, "more than the one shot");
+}
+
+/// Attacking cancels the walk: once the attack is off you stand still until you click again. An
+/// order to move during the windup walks at once, the attack going off on the way (every player
+/// is in action mode: `ActionMode`); one after it went off walks too, while the attack timer runs
+/// on.
+#[test]
+fn attacking_cancels_the_walk_and_walking_off_keeps_the_windup() {
     let mut p = Pair::new(5893);
     p.until(Duration::from_secs(5), "our player is spawned", |p| client_view(&mut p.client, CLIENT).is_some_and(|v| v.2));
 
@@ -133,13 +180,14 @@ fn attacking_cancels_the_walk_and_moving_cancels_the_windup() {
     println!("moved {drift:.2} units in the 0.25 s after attacking");
     assert!(drift < 0.01, "kept walking to the old destination after attacking");
 
-    // An order to move during the windup: the attack never goes off, and off we go.
+    // An order to move during the windup: off we go, and the attack goes off on the way.
     let (here, shots) = (p.server_pos(), p.shots());
     let goal = map().nearest_walkable(Map::tile_of(here) + IVec2::new(0, 4), 2).expect("open ground nearby");
     p.click_fire();
     edit_input(&mut p.client, |i| i.move_to = Some(Map::center(goal)));
     p.until(Duration::from_secs(2), "we walk off mid-windup", |p| here.distance(p.server_pos()) > 2.0);
-    assert_eq!(p.shots(), shots, "the attack went off after an order to move during its windup");
+    p.until(Duration::from_secs(1), "the attack goes off on the way", |p| p.shots() == shots + 1);
+    let shots = p.shots();
 
     // One once it has gone off: the shot is out, and its timer runs on as we walk.
     p.click_fire();

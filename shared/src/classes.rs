@@ -18,10 +18,15 @@ use crate::protocol::FxColor;
 /// The class files, compiled into both server and client so they can't disagree. Their order is
 /// the classes' order everywhere: the class picker and its number keys, the default pick, and the
 /// order target dummies come in. The ones no one picks (`ClassDef::playable`) go last.
-const CLASS_FILES: [&str; 23] = [
+const CLASS_FILES: [&str; 28] = [
     include_str!("../assets/classes/revenant.ron"),
     include_str!("../assets/classes/javelinist.ron"),
     include_str!("../assets/classes/frost_mage.ron"),
+    include_str!("../assets/classes/warden.ron"),
+    include_str!("../assets/classes/pyre_witch.ron"),
+    include_str!("../assets/classes/shade.ron"),
+    include_str!("../assets/classes/breaker.ron"),
+    include_str!("../assets/classes/stormweaver.ron"),
     include_str!("../assets/classes/zombie.ron"),
     include_str!("../assets/classes/gnawer.ron"),
     include_str!("../assets/classes/ghoul.ron"),
@@ -236,6 +241,9 @@ pub struct Crit {
     pub chance: f32,
     pub vs_frozen: f32,
     pub empowered: f32,
+    /// An ambush: an auto-attack into a target this attacker hasn't hit within this many ticks
+    /// is sure to crit (0: never).
+    pub ambush_ticks: u32,
 }
 
 impl Crit {
@@ -272,14 +280,65 @@ pub struct AttackDef {
     /// Its shots fly on through monsters (never players), hitting each once (no by default).
     #[serde(default)]
     pub pierces: bool,
-    /// Its shots burst where they hit, hitting the struck one's foes round it too (none by
+    /// Its shots burst where they hit or end, hitting the shooter's foes round there too (none by
     /// default).
     #[serde(default)]
     pub burst: Option<BurstDef>,
+    /// Each hit shoves the one struck back, away from the striker (none by default).
+    #[serde(default)]
+    pub shove: Option<ShoveDef>,
+    /// Nothing stops the swing: while winding up, no slow, root or knock-up takes (`Chilled::steady`).
+    #[serde(default)]
+    pub unstoppable: bool,
+    /// Each hit sets the one struck ablaze, a stack more each time, igniting at full stacks
+    /// (none by default).
+    #[serde(default)]
+    pub burn: Option<BurnDef>,
+    /// Its hits arc on to more foes near the one struck (none by default).
+    #[serde(default)]
+    pub chain: Option<ChainDef>,
+    /// It cuts twice: a second blow down the same lane this many ticks after the first goes
+    /// off, from wherever the striker stands then (melee only; none by default).
+    #[serde(default)]
+    pub twice: Option<u32>,
 }
 
-/// A shot's burst where it hits (`AttackDef::burst`): everyone else within `radius` of the one
-/// struck takes `share` of the shot's damage, and its chill.
+/// A hit arcs on (`AttackDef::chain`): from the one struck to the nearest foe within `reach` of
+/// it not yet struck, and on again from there, `hops` times at most, each arc for `share` of the
+/// hit's damage.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct ChainDef {
+    pub hops: u32,
+    pub reach: f32,
+    pub share: f32,
+}
+
+/// A hit sets the one struck ablaze (`AttackDef::burn`, `Burning`): `damage` every
+/// `ZONE_PULSE_TICKS` for `ticks`, once per stack; each hit adds a stack (the time starting over)
+/// up to `stacks`, where it ignites instead: a blast of `ignite_share` of the attack's damage on
+/// the struck one's foes within `ignite_radius`, and the fire is out.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct BurnDef {
+    pub damage: i32,
+    pub ticks: u32,
+    pub stacks: u32,
+    pub ignite_radius: f32,
+    pub ignite_share: f32,
+}
+
+/// A hit shoves the one struck (`AttackDef::shove`): `distance` meters straight away from the
+/// striker (a bigger one less; a boss not at all). One shoved into what it can't pass (a wall, a
+/// rock, a tree) is stunned there, rooted `wall_root_ticks`.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct ShoveDef {
+    pub distance: f32,
+    #[serde(default)]
+    pub wall_root_ticks: u32,
+}
+
+/// A shot's burst where it hits, or where it ends unspent (its range, a wall) (`AttackDef::burst`):
+/// everyone else within `radius` of the one struck, or of where it ended, takes `share` of the
+/// shot's damage, and its chill.
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct BurstDef {
     pub radius: f32,
@@ -367,13 +426,18 @@ pub enum AttackKind {
     },
     /// Flies straight until it hits someone, a blocking tile, or runs out of range. With
     /// `far_scale`, damage scales linearly from the attack's `damage` (point blank) to `far_scale`
-    /// times it (after flying the full range).
+    /// times it (after flying the full range, and no more past it). One that `falls` is thrown:
+    /// straight along the line it was aimed along out to its range, then gravity pulls it down,
+    /// ever further below the line, and it isn't spent at its range but ends where it hits
+    /// something or the ground (`sim::projectile_height`).
     Projectile {
         speed: f32,
         radius: f32,
         range: f32,
         #[serde(default)]
         far_scale: Option<f32>,
+        #[serde(default)]
+        falls: bool,
     },
 }
 
@@ -392,7 +456,14 @@ pub struct Shot {
     pub speed: f32,
     pub radius: f32,
     pub range: f32,
+    /// Thrown: it drops under gravity past its range, and isn't spent there
+    /// (`AttackKind::Projectile`).
+    pub falls: bool,
 }
+
+/// How many times its range a thrown shot may fly in all before it's given up on: room for one
+/// lobbed as high as the camera aims to come down (the map's edge stops it sooner).
+const FALL_SPAN: f32 = 14.0;
 
 impl Shot {
     /// How far from its shooter's center a target's body can reach and still be hit: its front
@@ -401,9 +472,11 @@ impl Shot {
         PLAYER_RADIUS + 2.0 * self.radius + self.range
     }
 
-    /// How many ticks it flies before it's out of range.
+    /// How many ticks it flies before it's out of range; a thrown one, before it's given up on
+    /// (it ends on the ground long before).
     pub fn lifetime_ticks(&self) -> u32 {
-        (self.range / self.speed * TICK_HZ as f32).ceil() as u32
+        let span = if self.falls { self.range * FALL_SPAN } else { self.range };
+        (span / self.speed * TICK_HZ as f32).ceil() as u32
     }
 }
 
@@ -470,16 +543,33 @@ impl ClassDef {
             ("far_scale", percent(self.attack.far_scale())),
             ("attack_slow", percent(self.attack.chill.slow)),
             ("attack_slow_time", seconds(self.attack.chill.slow_ticks)),
+            ("attack_lift", seconds(self.attack.chill.lift_ticks)),
             ("crit", percent(self.crit.chance)),
             ("crit_vs_frozen", percent(self.crit.vs_frozen)),
             ("crit_empowered", percent(self.crit.empowered)),
             ("crit_multiplier", percent(common().crit_multiplier)),
+            ("ambush_time", seconds(self.crit.ambush_ticks)),
         ];
         if let Some(rift) = self.attack.rift {
             all.extend([("rift_time", seconds(rift.ticks)), ("rift_haste", percent(rift.haste)), ("rift_burn", rift.burn.to_string()), ("rift_leech", percent(rift.leech))]);
         }
         if let Some(burst) = self.attack.burst {
             all.extend([("burst_radius", format!("{} m", burst.radius)), ("burst_share", percent(burst.share))]);
+        }
+        if let Some(shove) = self.attack.shove {
+            all.extend([("shove_distance", format!("{} m", shove.distance)), ("wall_stun", seconds(shove.wall_root_ticks))]);
+        }
+        if let Some(chain) = self.attack.chain {
+            all.extend([("chain_hops", chain.hops.to_string()), ("chain_reach", format!("{} m", chain.reach)), ("chain_share", percent(chain.share))]);
+        }
+        if let Some(burn) = self.attack.burn {
+            all.extend([
+                ("burn_damage", burn.damage.to_string()),
+                ("burn_time", seconds(burn.ticks)),
+                ("burn_stacks", burn.stacks.to_string()),
+                ("ignite_radius", format!("{} m", burn.ignite_radius)),
+                ("ignite_share", percent(burn.ignite_share)),
+            ]);
         }
         if let Some(follow_up) = self.attack.follow_up {
             all.extend([
@@ -594,14 +684,14 @@ impl AttackKind {
     pub fn edge_reach(&self) -> f32 {
         match *self {
             AttackKind::Melee { range, .. } => range,
-            AttackKind::Projectile { speed, radius, range, .. } => Shot { speed, radius, range }.edge_reach(),
+            AttackKind::Projectile { speed, radius, range, falls, .. } => Shot { speed, radius, range, falls }.edge_reach(),
         }
     }
 
     /// How a projectile attack flies (`None` for melee).
     pub fn shot(&self) -> Option<Shot> {
-        let AttackKind::Projectile { speed, radius, range, .. } = *self else { return None };
-        Some(Shot { speed, radius, range })
+        let AttackKind::Projectile { speed, radius, range, falls, .. } = *self else { return None };
+        Some(Shot { speed, radius, range, falls })
     }
 }
 
@@ -700,6 +790,7 @@ mod tests {
     use crate::abilities::dash::DashDef;
     use crate::abilities::nova::NovaDef;
     use crate::abilities::prime::PrimeDef;
+    use crate::abilities::strike::StrikeDef;
     use crate::abilities::throw::Throw;
 
     #[test]
@@ -713,7 +804,10 @@ mod tests {
             assert!((1..=most_hp).contains(&c.max_hp), "{}: max_hp", c.id);
             if let Some(look) = &c.look {
                 let figure = ClassId::by_key(&look.figure).unwrap_or_else(|| panic!("{}: its figure {} isn't a class", c.id, look.figure));
-                assert!(figure.def().look.is_none(), "{}: its figure {} borrows another's itself", c.id, look.figure);
+                // A class may wear its own figure (to color only its bolts, or resize it), but
+                // never a borrowed figure that is itself borrowed: the client resolves one level.
+                let borrowed = figure.def().look.as_ref().is_some_and(|its| its.figure != look.figure);
+                assert!(look.figure == c.id || !borrowed, "{}: its figure {} borrows another's itself", c.id, look.figure);
                 assert!((0.3..=3.0).contains(&look.size), "{}: size", c.id);
             }
             if let Some(mob) = &c.mob {
@@ -739,10 +833,10 @@ mod tests {
             assert!(c.attack.windup > 0.0 && c.attack.windup < 1.0, "{}: windup must be a part of the attack", c.id);
             match c.attack.kind {
                 AttackKind::Melee { range, width, from } => {
-                    assert!((0.5..=4.0).contains(&range) && (0.05..=3.0).contains(&width), "{}: melee", c.id);
+                    assert!((0.5..=5.0).contains(&range) && (0.05..=3.0).contains(&width), "{}: melee", c.id);
                     assert!((0.0..range).contains(&from), "{}: melee lane starts past its end", c.id);
                 }
-                AttackKind::Projectile { speed, radius, range, far_scale } => {
+                AttackKind::Projectile { speed, radius, range, far_scale, .. } => {
                     assert!(far_scale.is_none_or(|scale| (1.0..=5.0).contains(&scale)), "{}: far_scale", c.id);
                     assert!((2.0..=60.0).contains(&speed) && (0.05..=1.0).contains(&radius), "{}: projectile", c.id);
                     assert!((1.0..=30.0).contains(&range), "{}: projectile range", c.id);
@@ -775,6 +869,12 @@ mod tests {
                     AbilityKind::Prime(PrimeDef { attack_speed }) => {
                         assert!((0.0..=3.0).contains(&attack_speed), "{what}: prime attack_speed");
                     }
+                    AbilityKind::Strike(StrikeDef { range, radius, damage, fuse_ticks, chill, shell: _ }) => {
+                        assert!(damage > 0 && (1.0..=30.0).contains(&range) && (0.5..=6.0).contains(&radius), "{what}: strike");
+                        // Long enough to be dodged, short enough to ever land.
+                        assert!((8..=3 * TICK_HZ as u32).contains(&fuse_ticks), "{what}: strike fuse");
+                        chill_is_sane(&c.id, chill);
+                    }
                 }
                 let filled = c.describe_ability(ability);
                 assert!(!filled.contains(['{', '}']), "{what}: unknown placeholder in {filled:?}");
@@ -782,6 +882,22 @@ mod tests {
             chill_is_sane(&c.id, c.attack.chill);
             assert!(!c.attack.pierces || c.attack.kind.shot().is_some(), "{}: pierces, but throws nothing", c.id);
             assert!(c.attack.burst.is_none() || c.attack.kind.shot().is_some(), "{}: bursts, but throws nothing", c.id);
+            if let Some(ShoveDef { distance, wall_root_ticks }) = c.attack.shove {
+                assert!((0.2..=4.0).contains(&distance) && wall_root_ticks <= 2 * TICK_HZ as u32, "{}: shove", c.id);
+            }
+            if let Some(gap) = c.attack.twice {
+                assert!(matches!(c.attack.kind, AttackKind::Melee { .. }), "{}: a second cut from a projectile", c.id);
+                let backswing = c.attack.period_ticks(1.0) - c.attack.windup_ticks(1.0);
+                assert!(gap >= 1 && gap < backswing, "{}: the second cut comes after the next attack may start", c.id);
+            }
+            if let Some(ChainDef { hops, reach, share }) = c.attack.chain {
+                assert!(c.attack.kind.shot().is_some(), "{}: chains, but throws nothing", c.id);
+                assert!((1..=8).contains(&hops) && (0.5..=10.0).contains(&reach) && (0.0..=1.0).contains(&share), "{}: chain", c.id);
+            }
+            if let Some(BurnDef { damage, ticks, stacks, ignite_radius, ignite_share }) = c.attack.burn {
+                assert!(damage > 0 && (TICK_HZ as u32 / 2..=10 * TICK_HZ as u32).contains(&ticks), "{}: burn", c.id);
+                assert!((1..=10).contains(&stacks) && (0.5..=6.0).contains(&ignite_radius) && (0.0..=3.0).contains(&ignite_share), "{}: ignite", c.id);
+            }
             // A knock-up shorter than the empowered attack: the striker alone can't chain it.
             if let Some(follow_up) = c.attack.follow_up {
                 let quickest = c.attack.period_ticks(c.attack.speed(true));
@@ -805,8 +921,9 @@ mod tests {
                 let filled = c.describe(&passive.description);
                 assert!(!filled.contains(['{', '}']), "{}: unknown placeholder in {filled:?}", c.id);
             }
-            let Crit { chance, vs_frozen, empowered } = c.crit;
+            let Crit { chance, vs_frozen, empowered, ambush_ticks } = c.crit;
             assert!([chance, vs_frozen, empowered].iter().all(|odds| (0.0..=1.0).contains(odds)), "{}: crit odds", c.id);
+            assert!(ambush_ticks <= 30 * TICK_HZ as u32, "{}: an ambush that waits too long", c.id);
             assert!(empowered == 0.0 || c.attack.follow_up.is_some(), "{}: empowered crit odds without a follow_up", c.id);
         }
     }
@@ -815,6 +932,7 @@ mod tests {
         assert!((0.0..1.0).contains(&chill.slow), "{id}: slow must leave some speed");
         // Long enough to matter, short enough to fight back: at most 5 s slowed, 3 s rooted.
         assert!(chill.slow_ticks <= 5 * TICK_HZ as u32 && chill.root_ticks <= 3 * TICK_HZ as u32, "{id}: chill too long");
+        assert!(chill.lift_ticks <= 3 * TICK_HZ as u32 / 2, "{id}: knocked up too long");
     }
 
     #[test]
@@ -838,8 +956,8 @@ mod tests {
 
     #[test]
     fn far_scale_scales_with_distance() {
-        let kind = |far_scale| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_scale };
-        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None, pierces: false, burst: None };
+        let kind = |far_scale| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_scale, falls: false };
+        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None, pierces: false, burst: None, shove: None, unstoppable: false, burn: None, chain: None, twice: None };
         assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(3.0))).damage_at(d)), [10, 20, 30, 30]);
         assert_eq!(attack(kind(None)).damage_at(5.0), 10);
     }
@@ -852,7 +970,7 @@ mod tests {
 
     #[test]
     fn projectile_lifetime_covers_its_range() {
-        let kind = AttackKind::Projectile { speed: 16.0, radius: 0.2, range: 8.0, far_scale: None };
+        let kind = AttackKind::Projectile { speed: 16.0, radius: 0.2, range: 8.0, far_scale: None, falls: false };
         assert_eq!(kind.shot().unwrap().lifetime_ticks(), TICK_HZ as u32 / 2);
     }
 }

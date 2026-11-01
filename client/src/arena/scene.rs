@@ -3,15 +3,19 @@
 
 use super::*;
 
-use arena_shared::map::{Map, Tile};
+use arena_shared::map::{COUNTER_TOP, CRATE, FENCE_TOP, House, Map, MapId, PARAPET_HEIGHT, ROCK_LIFT, ROCK_RADIUS, SIDES, STALL_BACK, STALL_EAVES, STALL_ROOF, Stall, Tile, WELL_HEIGHT, WELL_RING, WELL_ROOF, boulder};
 use bevy::color::Mix;
-use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, NotShadowCaster};
 use bevy::pbr::{DistanceFog, FogFalloff};
-use bevy::platform::collections::HashMap;
 use super::palette::*;
 
+use crate::plain::PlainMaterial;
 use crate::rooms::CurrentMap;
 use crate::sculpt::bevel_box;
+
+mod falls;
+mod fortress;
+mod ravens;
 
 /// A tile's color on the minimap: the palette of the scene, flattened.
 pub fn tile_color(theme: &Theme, tile: Tile) -> Color {
@@ -31,6 +35,7 @@ pub fn tile_color(theme: &Theme, tile: Tile) -> Color {
             Wilds::Forest => theme.pine.mix(&INK, 0.4),
             Wilds::Fen => theme.pond.mix(&INK, 0.45),
             Wilds::Highlands => theme.wall.mix(&INK, 0.35),
+            Wilds::Field => theme.meadow.mix(&INK, 0.2),
         },
     }
 }
@@ -38,7 +43,7 @@ pub fn tile_color(theme: &Theme, tile: Tile) -> Color {
 /// Haze that fades the forest ring into the sky color; goes on the camera, and takes the map's
 /// color in `light_scene`.
 pub fn haze() -> DistanceFog {
-    DistanceFog { color: HAZE, falloff: FogFalloff::Linear { start: 40.0, end: 95.0 }, ..default() }
+    DistanceFog { color: HAZE, falloff: FogFalloff::Linear { start: 55.0, end: 115.0 }, ..default() }
 }
 
 pub struct ArenaPlugin;
@@ -46,10 +51,10 @@ pub struct ArenaPlugin;
 impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClearColor(HAZE));
-        app.insert_resource(GlobalAmbientLight { color: SKY, brightness: 160.0, ..default() });
+        app.insert_resource(GlobalAmbientLight { color: SKY, brightness: 450.0, ..default() });
         app.add_systems(Startup, spawn_sun);
         // The scene is built from our room's map, and built again when it changes.
-        app.add_systems(Update, ((build_arena, light_scene).run_if(resource_exists_and_changed::<CurrentMap>), flicker_torches));
+        app.add_systems(Update, ((build_arena, light_scene).run_if(resource_exists_and_changed::<CurrentMap>), flicker_torches, ravens::fly_ravens, falls::pour_falls));
     }
 }
 
@@ -69,7 +74,7 @@ pub const DAIS_HEIGHT: f32 = 0.16;
 /// below and beyond. Vertex-colored, for one matte white material.
 pub fn crag_mesh(theme: &'static Theme, height: f32) -> Mesh {
     let mut rng = Lcg(11);
-    let mut props = Props::new(theme);
+    let mut props = Props::new(theme, arena_shared::map::flat);
     let dais = faceted(Cylinder::new(DAIS_RADIUS, DAIS_HEIGHT).mesh().resolution(24).build());
     props.push(dais.transformed_by(Transform::from_xyz(0.0, DAIS_HEIGHT / 2.0, 0.0)), theme.stone.mix(&theme.wall, 0.4));
     let top = faceted(Cylinder::new(CRAG_TOP, 0.5).mesh().resolution(9).build());
@@ -104,6 +109,18 @@ pub fn crag_mesh(theme: &'static Theme, height: f32) -> Mesh {
     props.into_mesh()
 }
 
+/// How far round the lookout by the falls (`Falls::lookout`) nothing grows, and how far back
+/// from a cliff's brink.
+const LOOKOUT_CLEAR: f32 = 10.0;
+const BRINK: f32 = 5.0;
+
+/// How high the land out in the wilds is at `p` on `map` as the scene lays it (the map's relief
+/// running on out, and the wilds' own rise), give or take its roughness.
+pub fn land_height(map: MapId, p: Vec2) -> f32 {
+    let m = map.map();
+    wild_height(Theme::of(map), m, p) + m.height_at(p)
+}
+
 /// The crag's top's radius: a little past the dais.
 const CRAG_TOP: f32 = DAIS_RADIUS + 0.6;
 
@@ -113,7 +130,7 @@ struct Torch {
     pub(super) phase: f32,
 }
 
-pub(super) const TORCH_INTENSITY: f32 = 170_000.0;
+pub(super) const TORCH_INTENSITY: f32 = 320_000.0;
 
 fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight, &Children)>, mut flames: Query<&mut Transform>) {
     let t = time.elapsed_secs();
@@ -128,14 +145,38 @@ fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight,
     }
 }
 
-/// The low sun, from the same side over every map (its color and strength are the map's).
+/// The low sun (where it stands, its color and strength are the map's: `light_scene`).
 fn spawn_sun(mut commands: Commands) {
     commands.spawn((
-        DirectionalLight { color: SUN, illuminance: 3_600.0, shadow_maps_enabled: true, ..default() },
-        // Low dusk sun from the upper left, so shadows are long and fall toward the camera's right.
-        Transform::from_xyz(-32.0, 14.0, -18.0).looking_at(Vec3::ZERO, Vec3::Y),
+        DirectionalLight { color: SUN, illuminance: 2_050.0, shadow_maps_enabled: true, ..default() },
+        Transform::from_translation(SUN_FROM).looking_at(Vec3::ZERO, Vec3::Y),
         sun_shadows(SUN_SHADOWS),
     ));
+}
+
+/// Where the sun stands over the glade (and most maps): a sinking sun from the upper left, low
+/// enough for evening light, high enough that trees don't carpet the arena in shadow.
+pub const SUN_FROM: Vec3 = Vec3::new(-32.0, 32.0, -18.0);
+
+/// The village's houses: their plaster, their roof tiles, and the warm light in their windows.
+const PLASTER: Color = Color::srgb_u8(0xD9, 0xC9, 0xA6);
+const ROOF: Color = Color::srgb_u8(0x6E, 0x3A, 0x2E);
+const WINDOW: Color = Color::srgb_u8(0xFF, 0xC2, 0x6A);
+/// The dark round a house's window, and the paint on its shutters (one of these a house).
+const WINDOW_REVEAL: Color = Color::srgb_u8(0x1C, 0x17, 0x14);
+const SHUTTERS: [Color; 3] = [Color::srgb_u8(0x3D, 0x4A, 0x36), Color::srgb_u8(0x5A, 0x2A, 0x24), Color::srgb_u8(0x3A, 0x46, 0x52)];
+/// How far apart the courses of tiles lie up a house's roof.
+const ROOF_COURSE: f32 = 0.42;
+
+/// A slab against a side facing `d` (a unit grid direction): `w` along that side, `h` tall,
+/// `deep` out from it.
+fn face_box(d: Vec2, w: f32, h: f32, deep: f32) -> Vec3 {
+    if d.x != 0.0 { Vec3::new(deep, h, w) } else { Vec3::new(w, h, deep) }
+}
+
+/// Placed at `p`, `h` over the ground there (`Props::block` grounds it), unturned.
+fn plain(p: Vec2, h: f32) -> Transform {
+    Transform::from_translation(to_world(p, h))
 }
 
 /// How far from the camera the sun casts shadows in the arena: enough to cover what it sees at
@@ -147,22 +188,23 @@ pub fn sun_shadows(reach: f32) -> CascadeShadowConfig {
     CascadeShadowConfigBuilder { num_cascades: 1, maximum_distance: reach, ..default() }.build()
 }
 
-/// The map's light and air: the sun's color and strength, the sky's fill, and the haze (and the
-/// clear color behind it, the same).
+/// The map's light and air: where the sun stands, its color and strength, the sky's fill, and
+/// the haze (and the clear color behind it, the same).
 fn light_scene(
     current: Res<CurrentMap>,
     mut clear: ResMut<ClearColor>,
     mut ambient: ResMut<GlobalAmbientLight>,
-    mut suns: Query<&mut DirectionalLight>,
+    mut suns: Query<(&mut DirectionalLight, &mut Transform)>,
     mut fogs: Query<&mut DistanceFog>,
 ) {
     let theme = Theme::of(current.0);
     clear.0 = theme.haze;
     ambient.color = theme.sky;
     ambient.brightness = theme.sky_brightness;
-    for mut sun in &mut suns {
+    for (mut sun, mut transform) in &mut suns {
         sun.color = theme.sun;
         sun.illuminance = theme.sun_illuminance;
+        *transform = Transform::from_translation(theme.sun_from).looking_at(Vec3::ZERO, Vec3::Y);
     }
     for mut fog in &mut fogs {
         fog.color = theme.haze;
@@ -176,7 +218,7 @@ struct ArenaScene;
 fn build_arena(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
     current: Res<CurrentMap>,
     old: Query<Entity, With<ArenaScene>>,
 ) {
@@ -191,14 +233,32 @@ fn build_arena(
     let vertex_colored = materials.add(matte(Color::WHITE));
     commands.spawn((ArenaScene, Mesh3d(meshes.add(terrain_mesh(m, &scene, theme, &mut rng))), MeshMaterial3d(vertex_colored.clone())));
     commands.spawn((ArenaScene, Mesh3d(meshes.add(ground_mesh(m, theme, &mut rng))), MeshMaterial3d(vertex_colored.clone())));
-    if let Some(water) = water_mesh(&scene, theme.wilds == Wilds::Fen) {
-        let material = StandardMaterial { perceptual_roughness: 0.35, reflectance: 0.5, ..matte(theme.pond) };
+    if let Some(water) = water_mesh(m, &scene, theme.wilds == Wilds::Fen) {
+        let material = PlainMaterial { perceptual_roughness: 0.18, reflectance: 0.6, ..matte(theme.pond) };
         commands.spawn((ArenaScene, Mesh3d(meshes.add(water)), MeshMaterial3d(materials.add(material))));
     }
+    if let Some(falling) = falls::falls_mesh(m, theme, &mut rng) {
+        // A little light of its own: white water reads even in the cliff's shade.
+        let material = PlainMaterial { perceptual_roughness: 0.25, reflectance: 0.5, emissive: LinearRgba::from(falls::FOAM) * 0.12, ..matte(Color::WHITE) };
+        commands.spawn((ArenaScene, Mesh3d(meshes.add(falling)), MeshMaterial3d(materials.add(material)), NotShadowCaster));
+        falls::spawn_spills(&mut commands, &mut meshes, &mut materials, m, &mut rng);
+    }
 
-    let mut props = Props::new(theme);
-    let wall_tops = props.walls(m, &mut rng);
+    let mut props = Props::new(theme, m.relief());
+    props.walls(m, &mut rng);
     props.stall(m);
+    props.houses(m, &mut rng);
+    props.crates(m, &mut rng);
+    props.fences(m);
+    props.well(m);
+    props.gardens(m, &mut rng);
+    props.retaining(m, &mut rng);
+    props.towers(m, &mut rng);
+    props.rubble(m, &mut rng);
+    props.falls(m, &mut rng);
+    if theme.battlements {
+        props.stairs(m, &mut rng);
+    }
     props.bridges(m, &mut rng);
     props.rope_bridges(m, &mut rng);
     props.fords(m, &mut rng);
@@ -208,11 +268,13 @@ fn build_arena(
     for (t, tile) in m.tiles() {
         let c = Map::center(t);
         match tile {
-            Tile::Rock if theme.wilds == Wilds::Highlands => props.sandstone(&mut rng, c),
-            Tile::Rock => props.boulder(&mut rng, c),
+            Tile::Rock if m.well.is_some_and(|well| Map::tile_of(well) == t) => {}
+            Tile::Rock if theme.wilds == Wilds::Highlands => props.sandstone(&mut rng, t),
+            Tile::Rock => props.boulder(t, c),
             Tile::Grass if theme.wilds == Wilds::Fen => props.fen_grass(&mut rng, c),
+            Tile::Grass => props.floor_detail(m, &mut rng, t, c),
+            Tile::Path if rng.next() < 0.12 => props.pebbles(&mut rng, c),
             Tile::Tree => props.map_tree(&mut rng, c),
-            Tile::Grass if rng.next() < 0.02 => props.flower(&mut rng, c),
             Tile::Marsh => props.bog(&mut rng, c),
             _ => {}
         }
@@ -221,13 +283,18 @@ fn build_arena(
     let extent = scene.extent.as_vec2() - Vec2::splat(4.0);
     let open = |p: Vec2| [Vec2::ZERO, Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y].iter().all(|d| scene.get(Map::tile_of(p + *d * 1.5)) == Tile::Forest);
     let density = match theme.wilds {
-        Wilds::Forest => 0.035,
+        Wilds::Forest => 0.055,
         Wilds::Fen => 0.04,
         Wilds::Highlands => 0.02,
+        Wilds::Field => 0.0,
     };
     for _ in 0..(extent.x * extent.y * 4.0 * density) as usize {
         let p = Vec2::new(rng.range(-extent.x, extent.x), rng.range(-extent.y, extent.y));
-        if m.edge_margin(p) > -1.2 || !open(p) {
+        // Nothing grows on the lookout by the falls (the lobby's stage stands there), nor on a
+        // cliff's brink, hiding its face.
+        let lookout = m.falls.is_some_and(|falls| falls.lookout.distance(p) < LOOKOUT_CLEAR);
+        let brink = [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y].iter().any(|d| m.height_at(p + *d * BRINK) < m.height_at(p) - 3.0);
+        if m.edge_margin(p) > -1.2 || !open(p) || lookout || brink {
             continue;
         }
         props.wild(&mut rng, p, wild_height(theme, m, p));
@@ -237,8 +304,8 @@ fn build_arena(
     let flame = meshes.add(faceted(Cone::new(0.16, 0.42).mesh().resolution(5).build()));
     let flame_mat = materials.add(glow(TORCH_FLAME, 8.0));
     for (i, &p) in m.torches.iter().enumerate() {
-        let base = wall_tops.get(&Map::tile_of(p)).copied().unwrap_or(0.0);
-        let post_height = if base > 0.0 { 0.5 } else { 1.5 };
+        // A standing torch is a brazier post, taller than anyone; one on a wall is a short stake.
+        let (base, post_height) = m.torch_post(p);
         props.block(Vec3::new(0.14, post_height, 0.14), theme.bark, Transform::from_translation(to_world(p, base + post_height / 2.0)));
         commands
             .spawn((
@@ -248,6 +315,10 @@ fn build_arena(
                 Transform::from_translation(to_world(p, base + post_height + 0.5)),
             ))
             .with_child((Mesh3d(flame.clone()), MeshMaterial3d(flame_mat.clone()), Transform::from_xyz(0.0, -0.3, 0.0)));
+    }
+
+    if theme.battlements {
+        ravens::spawn_ravens(&mut commands, &mut meshes, &mut materials, m, &mut rng);
     }
 
     // All static props as one mesh: ~1,200 trees, stones and wall blocks draw as one object.
@@ -280,12 +351,9 @@ impl SceneTiles {
     }
 }
 
-/// The four directions, in tiles.
-const SIDES: [IVec2; 4] = [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y];
-
 /// Water or a chasm: what bridges cross, and banks or cliffs drop into.
 fn is_gap(tile: Tile) -> bool {
-    matches!(tile, Tile::Water | Tile::Ford | Tile::Chasm)
+    tile.is_gap()
 }
 
 #[derive(Clone, Copy)]
@@ -305,6 +373,8 @@ enum Shape {
 /// Builds every static prop into one vertex-colored mesh.
 struct Props {
     pub(super) theme: &'static Theme,
+    /// The lie of the land (`Map::relief`): everything added stands on the ground where it is.
+    ground: fn(Vec2) -> f32,
     pub(super) rock: Mesh,
     trunk: Mesh,
     cones: [Mesh; 3],
@@ -317,10 +387,11 @@ struct Props {
 }
 
 impl Props {
-    pub(super) fn new(theme: &'static Theme) -> Self {
+    pub(super) fn new(theme: &'static Theme, ground: fn(Vec2) -> f32) -> Self {
         Props {
             theme,
-            rock: faceted(Sphere::new(0.6).mesh().ico(0).unwrap()),
+            ground,
+            rock: faceted(Sphere::new(ROCK_RADIUS).mesh().ico(0).unwrap()),
             trunk: faceted(Cylinder::new(0.22, 1.2).mesh().resolution(5).build()),
             cones: [0, 1, 2].map(|k| faceted(Cone::new(1.5 - k as f32 * 0.35, 1.7).mesh().resolution(7).build())),
             flower: gem_mesh(0.14),
@@ -333,6 +404,7 @@ impl Props {
     }
 
     pub(super) fn add(&mut self, shape: Shape, color: Color, t: Transform) {
+        let t = self.grounded(t);
         let base = match shape {
             Shape::Rock => &self.rock,
             Shape::Trunk => &self.trunk,
@@ -350,7 +422,14 @@ impl Props {
     /// edges bevelled so they catch the light.
     pub(super) fn block(&mut self, size: Vec3, color: Color, t: Transform) {
         let bevel = (size.min_element() * 0.12).clamp(0.02, 0.07);
-        self.push(bevel_box(size, bevel, color).transformed_by(t), color);
+        self.push(bevel_box(size, bevel, color).transformed_by(self.grounded(t)), color);
+    }
+
+    /// `t` raised onto the ground under it (`Map::height_at`): props are placed as if the land
+    /// were flat.
+    fn grounded(&self, mut t: Transform) -> Transform {
+        t.translation.y += (self.ground)(to_gameplay(t.translation));
+        t
     }
 
     pub(super) fn push(&mut self, mut mesh: Mesh, color: Color) {
@@ -366,37 +445,384 @@ impl Props {
         self.out.expect("the arena has props")
     }
 
-    /// Ruined walls: stacked stone blocks of uneven height, some with a block on top. Returns the
-    /// top height per wall tile, so torches can stand on them.
-    pub(super) fn walls(&mut self, m: &Map, rng: &mut Lcg) -> HashMap<IVec2, f32> {
-        let mut tops = HashMap::default();
-        for (t, tile) in m.tiles() {
-            // The merchant's counter is their stall's (`stall`), not a ruin.
-            if tile != Tile::Wall || m.counter.contains(&t) {
-                continue;
-            }
+    /// Ruined walls (`Map::ruin_at`): stacked stone blocks of uneven height, some with a block on
+    /// top.
+    pub(super) fn walls(&mut self, m: &Map, rng: &mut Lcg) {
+        for (t, _) in m.tiles() {
+            // As high as its collider, the block on top of some square to it.
+            let Some(ruin) = m.ruin_at(t) else { continue };
             let c = Map::center(t);
-            let h = rng.range(0.9, 1.7);
             let color = self.theme.wall.mix(&self.theme.stone, rng.range(0.0, 0.25));
-            self.block(Vec3::new(1.0, h, 1.0), color, Transform::from_translation(to_world(c, h / 2.0)));
-            let mut top = h;
-            if rng.next() < 0.45 {
-                let s = rng.range(0.45, 0.7);
-                let off = Vec2::new(rng.range(-0.2, 0.2), rng.range(-0.2, 0.2));
-                let turn = Quat::from_rotation_y(rng.range(-0.3, 0.3));
-                self.block(Vec3::splat(s), color, Transform::from_translation(to_world(c + off, h + s / 2.0)).with_rotation(turn));
-                top += s;
+            self.block(Vec3::new(1.0, ruin.height, 1.0), color, Transform::from_translation(to_world(c, ruin.height / 2.0)));
+            if let Some((s, off)) = ruin.cap {
+                self.block(Vec3::splat(s), color, Transform::from_translation(to_world(c + off, ruin.height + s / 2.0)));
             }
-            tops.insert(t, top);
             // Rubble at the foot, below knee height, on dry ground only.
             for _ in 0..2 {
                 let p = c + Vec2::new(rng.range(-0.9, 0.9), rng.range(-0.9, 0.9));
                 if matches!(m.get(Map::tile_of(p)), Tile::Grass | Tile::Path | Tile::Marsh) {
-                    self.add(Shape::Rock, self.theme.slate, Transform::from_translation(to_world(p, 0.05)).with_scale(Vec3::splat(rng.range(0.15, 0.3))));
+                    self.add(Shape::Rock, self.theme.slate, Transform::from_translation(to_world(p, 0.08)).with_scale(Vec3::splat(rng.range(0.2, 0.4))));
                 }
             }
         }
-        tops
+    }
+
+    /// The village's houses (`Map::houses`): plastered walls in a timber frame (studs, rails,
+    /// braces) on a stone footing, each storey over the first jutting out over the gable ends; a
+    /// door on the side it faces, with a step and a hood over it; lit windows, shuttered, along
+    /// the other sides downstairs and all round upstairs, boxes of flowers under some; a pitched
+    /// roof of dark tiles laid in courses, its gables plastered and framed, and a chimney at one
+    /// end.
+    pub(super) fn houses(&mut self, m: &Map, rng: &mut Lcg) {
+        for house in &m.houses {
+            let (c, size) = (house.center(), house.size());
+            // Its long side runs along `along`; the roof slopes down to either side of it.
+            let long_x = house.long_x();
+            let (along, across) = if long_x { (Vec2::X, Vec2::Y) } else { (Vec2::Y, Vec2::X) };
+            let (length, width) = if long_x { (size.x, size.y) } else { (size.y, size.x) };
+            let turn = if long_x { Quat::IDENTITY } else { Quat::from_rotation_y(std::f32::consts::FRAC_PI_2) };
+            let at = |p: Vec2, h: f32| Transform::from_translation(to_world(p, h)).with_rotation(turn);
+            let walls = house.walls();
+            let plaster = PLASTER.mix(&self.theme.stone, rng.range(0.0, 0.2));
+            let timber = self.theme.bark.darker(0.08);
+            let shutters = SHUTTERS[(rng.next() * SHUTTERS.len() as f32) as usize % SHUTTERS.len()];
+            let door = house.door.as_vec2();
+            self.block(Vec3::new(length + 0.1, 0.3, width + 0.1), self.theme.stone, at(c, 0.15));
+            let storeys = house.storeys.max(1);
+            for k in 0..storeys {
+                let (bottom, top) = if k == 0 { (0.0, House::WALLS) } else { (House::WALLS + House::STOREY * (k - 1) as f32, House::WALLS + House::STOREY * k as f32) };
+                let tall = top - bottom;
+                // Upstairs juts out over the gable ends, on joists under its floor.
+                let jut = if k == 0 { 0.0 } else { House::JETTY };
+                let long = length + 2.0 * jut;
+                self.block(Vec3::new(long, tall, width), plaster, at(c, bottom + tall / 2.0));
+                if k > 0 {
+                    for end in [-1.0, 1.0] {
+                        let joists = (width / 0.6) as i32;
+                        for j in 0..joists {
+                            let off = ((j as f32 + 0.5) / joists as f32 - 0.5) * width;
+                            self.block(Vec3::new(jut + 0.12, 0.14, 0.14), timber, at(c + along * end * (length / 2.0 + jut / 2.0) + across * off, bottom - House::JOISTS + 0.07));
+                        }
+                    }
+                }
+                for sx in [-1.0, 1.0] {
+                    for sy in [-1.0, 1.0] {
+                        let corner = c + along * sx * (long / 2.0) + across * sy * (width / 2.0);
+                        self.block(Vec3::new(0.2, tall, 0.2), timber, at(corner, bottom + tall / 2.0));
+                    }
+                }
+                for h in [bottom + if k == 0 { 0.3 } else { 0.06 }, bottom + 1.1, top - 0.1] {
+                    self.block(Vec3::new(long + 0.06, 0.14, width + 0.06), timber, at(c, h));
+                }
+                // Each side: its windows (and downstairs the door), studs between them, braces
+                // out of its corners.
+                for d in [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y] {
+                    let gable_end = d.dot(along).abs() > 0.5;
+                    let (half, run) = if gable_end { (long / 2.0, width) } else { (width / 2.0, long) };
+                    let face = c + d * half;
+                    let side = d.perp();
+                    let has_door = k == 0 && d.dot(door) > 0.5;
+                    let count = (run / 2.2).floor().max(1.0) as i32;
+                    let windows: Vec<f32> = (0..count)
+                        .map(|i| ((i as f32 + 0.5) / count as f32 - 0.5) * run * 0.8)
+                        .filter(|&off| !has_door || off.abs() > 0.9)
+                        .collect();
+                    for &off in &windows {
+                        self.window(face + side * off, d, bottom + 1.5, timber, shutters, k == 0 && rng.next() < 0.6, rng);
+                    }
+                    if has_door {
+                        self.door(face, d, timber);
+                    }
+                    let clear = |p: f32| windows.iter().all(|w| (p - w).abs() > 0.62) && (!has_door || p.abs() > 0.78);
+                    let studs = (run / 0.9).floor() as i32;
+                    for s in 1..studs {
+                        let p = (s as f32 / studs as f32 - 0.5) * run;
+                        if clear(p) {
+                            self.block(face_box(d, 0.11, tall - 0.2, 0.06), timber, plain(face + side * p + d * 0.03, bottom + tall / 2.0));
+                        }
+                    }
+                    for end in [-1.0, 1.0] {
+                        let (from, reach) = (end * (run / 2.0 - 0.15), 0.75);
+                        if !clear(from - end * reach) || !clear(from - end * reach / 2.0) {
+                            continue;
+                        }
+                        let rise = tall * 0.55;
+                        let mid = face + side * (from - end * reach / 2.0) + d * 0.035;
+                        let dir = (to_world(-side * end * reach, rise) - to_world(Vec2::ZERO, 0.0)).normalize();
+                        let t = Transform::from_translation(to_world(mid, bottom + 0.1 + rise / 2.0)).with_rotation(Quat::from_rotation_arc(Vec3::X, dir));
+                        self.block(Vec3::new((reach * reach + rise * rise).sqrt(), 0.1, 0.1), timber, t);
+                    }
+                }
+            }
+            let jut = if storeys > 1 { House::JETTY } else { 0.0 };
+            // The roof: two slabs leaning to the ridge, overhanging, lying on the walls with their
+            // tops where the roof is stood on (`House::ridge`), tiles laid in courses across them;
+            // a beam along the ridge.
+            let (pitch, rise) = (House::SLOPE.atan(), house.rise());
+            let slope = (width / 2.0 + House::EAVES) / pitch.cos();
+            let roof = ROOF.mix(&self.theme.bark, rng.range(0.0, 0.3));
+            let slab = Vec3::new(length + 2.0 * House::GABLE_EAVES, House::ROOF_THICK * pitch.cos(), slope);
+            for side in [-1.0, 1.0] {
+                // Rolled about the slab's own length (the house's long side), its outer edge down.
+                let roll = Quat::from_rotation_x(if long_x { -side * pitch } else { side * pitch });
+                let mid = c + across * side * (width / 2.0 + House::EAVES) / 2.0;
+                let middle = walls + House::ROOF_THICK / 2.0 + (rise - House::SLOPE * House::EAVES) / 2.0;
+                let t = Transform::from_translation(to_world(mid, middle)).with_rotation(turn * roll);
+                self.block(slab, roof, t);
+                let courses = (slope / ROOF_COURSE) as i32;
+                for k in 0..courses {
+                    let z = (k as f32 + 0.6) * ROOF_COURSE - slope / 2.0;
+                    let course = Transform::from_xyz(0.0, slab.y / 2.0 + 0.012, z);
+                    self.block(Vec3::new(slab.x, 0.035, 0.07), roof.darker(0.14), t.mul_transform(course));
+                }
+            }
+            self.block(Vec3::new(length + 0.9, 0.16, 0.22), ROOF.darker(0.15), at(c, house.ridge() - 0.08));
+            // The gables: plaster up under the slabs, framed by a king post and a collar.
+            let gable = Triangle2d::new(Vec2::new(-width / 2.0, 0.0), Vec2::new(width / 2.0, 0.0), Vec2::new(0.0, rise));
+            let prism = faceted(Extrusion::new(gable, length + 2.0 * jut - 0.02).mesh().build());
+            let turned = turn * Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+            self.push(prism.transformed_by(Transform::from_translation(to_world(c, walls + (self.ground)(c))).with_rotation(turned)), plaster.darker(0.04));
+            for end in [-1.0, 1.0] {
+                let d = along * end;
+                let face = c + d * (length / 2.0 + jut + 0.03);
+                self.block(face_box(d, 0.12, rise - 0.15, 0.06), timber, plain(face, walls + (rise - 0.15) / 2.0));
+                let collar = 0.45;
+                self.block(face_box(d, width * (1.0 - collar) - 0.15, 0.12, 0.06), timber, plain(face, walls + rise * collar));
+            }
+            // The chimney, capped, a pot on top.
+            let chimney = house.chimney();
+            let top = walls + rise + House::CHIMNEY_TOP;
+            self.block(Vec3::new(House::CHIMNEY, 1.3, House::CHIMNEY), self.theme.stone, at(chimney, top - 1.3 / 2.0));
+            self.block(Vec3::new(House::CHIMNEY + 0.16, 0.1, House::CHIMNEY + 0.16), self.theme.stone.darker(0.15), at(chimney, top + 0.05));
+            self.block(Vec3::new(0.16, 0.24, 0.16), ROOF.darker(0.05), at(chimney + across * 0.08, top + 0.22));
+        }
+    }
+
+    /// A house's window on its side facing `d`, its middle at `p`, `h` up: a dark reveal round a
+    /// lit pane crossed by glazing bars, a head beam over it, shutters open either side, and
+    /// (`flowers`) a box of flowers under it.
+    #[allow(clippy::too_many_arguments)]
+    fn window(&mut self, p: Vec2, d: Vec2, h: f32, timber: Color, shutters: Color, flowers: bool, rng: &mut Lcg) {
+        let side = d.perp();
+        self.block(face_box(d, 0.78, 0.82, 0.05), WINDOW_REVEAL, plain(p + d * 0.03, h));
+        self.block(face_box(d, 0.6, 0.64, 0.05), WINDOW, plain(p + d * 0.045, h));
+        self.block(face_box(d, 0.05, 0.64, 0.04), timber, plain(p + d * 0.075, h));
+        self.block(face_box(d, 0.6, 0.05, 0.04), timber, plain(p + d * 0.075, h + 0.06));
+        self.block(face_box(d, 0.92, 0.1, 0.1), timber, plain(p + d * 0.05, h + 0.47));
+        for s in [-1.0, 1.0] {
+            self.block(face_box(d, 0.3, 0.74, 0.05), shutters, plain(p + side * s * 0.56 + d * 0.06, h));
+        }
+        if flowers {
+            self.block(face_box(d, 0.74, 0.16, 0.2), timber.lighter(0.04), plain(p + d * 0.13, h - 0.5));
+            for f in 0..4 {
+                let off = (f as f32 / 3.0 - 0.5) * 0.56;
+                let bloom = self.theme.bloom.mix(&self.theme.fern, if f % 2 == 0 { 0.0 } else { 0.6 });
+                self.block(Vec3::splat(rng.range(0.1, 0.15)), bloom, plain(p + side * off + d * 0.14, h - 0.38));
+            }
+        }
+    }
+
+    /// A house's door on its side facing `d`, `face` the middle of that side: planks in a timber
+    /// frame, a stone step before it, and a hood of tiles over it on two brackets.
+    fn door(&mut self, face: Vec2, d: Vec2, timber: Color) {
+        let side = d.perp();
+        self.block(face_box(d, 0.95, 1.95, 0.08), timber.darker(0.25), plain(face + d * 0.03, 0.98));
+        for s in [-1.0, 1.0] {
+            self.block(face_box(d, 0.14, 2.05, 0.12), timber, plain(face + side * s * 0.54 + d * 0.05, 1.02));
+        }
+        self.block(face_box(d, 1.22, 0.14, 0.14), timber, plain(face + d * 0.06, 2.08));
+        self.block(face_box(d, 1.3, 0.14, 0.5), self.theme.stone, plain(face + d * 0.25, 0.07));
+        // The hood: a slab of tiles leaning out and down.
+        let out = to_world(d, 0.0) - to_world(Vec2::ZERO, 0.0);
+        let tilt = Quat::from_axis_angle(Vec3::Y.cross(out).normalize(), 0.38);
+        self.block(face_box(d, 1.6, 0.07, 0.75), ROOF.darker(0.05), plain(face + d * 0.38, 2.36).with_rotation(tilt));
+        for s in [-1.0, 1.0] {
+            self.block(face_box(d, 0.08, 0.38, 0.08), timber, plain(face + side * s * 0.62 + d * 0.16, 2.18));
+        }
+    }
+
+    /// Stacks of crates (`Map::crates`), stood on: plank boxes, each a crate high, a band of
+    /// darker boards round each.
+    pub(super) fn crates(&mut self, m: &Map, rng: &mut Lcg) {
+        for &(t, high) in &m.crates {
+            let c = Map::center(t);
+            let wood = self.theme.bark.mix(&PLASTER, 0.25);
+            for k in 0..high {
+                let wood = wood.mix(&self.theme.bark, rng.range(0.0, 0.3));
+                let mid = CRATE * (k as f32 + 0.5);
+                self.block(Vec3::new(0.94, CRATE - 0.04, 0.94), wood, Transform::from_translation(to_world(c, mid)));
+                self.block(Vec3::new(0.98, 0.12, 0.98), wood.darker(0.12), Transform::from_translation(to_world(c, mid)));
+            }
+        }
+    }
+
+    /// Stone faces wherever the ground drops sheer (`Map::height_at`): a terrace's edge, a
+    /// tower's sides, a plateau's cliff, so a level reads as built, not heaped. Each tile's
+    /// sides are looked at: where the ground breaks off at one, down to the next tile (not just
+    /// sloping on down a ramp), it gets a face of blocks along that side, from the lower ground
+    /// up to the higher, set into the higher tile so its face is the edge, where walking stops;
+    /// a drop of a step or more gets a battlement's worth over it.
+    pub(super) fn retaining(&mut self, m: &Map, rng: &mut Lcg) {
+        for (t, tile) in m.tiles() {
+            if tile == Tile::Forest {
+                continue;
+            }
+            let c = Map::center(t);
+            let here = m.height_at(c);
+            for d in SIDES {
+                let there = Map::center(t + d);
+                // How far the ground breaks off along the side, from just inside it to just past.
+                let side = |s: f32| c + d.as_vec2() * 0.5 + d.as_vec2().perp() * s;
+                let sheer = [-0.45, -0.2, 0.0, 0.2, 0.45]
+                    .map(|s| m.height_at(side(s) - d.as_vec2() * 0.002) - m.height_at(side(s) + d.as_vec2() * 0.002))
+                    .into_iter()
+                    .fold(f32::NEG_INFINITY, f32::max);
+                if sheer < 0.05 || m.scene_tile(t + d) == Tile::Forest {
+                    continue;
+                }
+                // The wall stands just inside the side's edge, its foot on the ground past it, its
+                // face a hair out past the ground's own sheer face there, and every other one a
+                // hair further, so neither that nor a neighbor's overlapping end flickers through.
+                // None where a tower or a house stands past the side: its own wall is the face
+                // there (one in front of it would only stand out into the way, a wedge up a ramp).
+                let walled = m.towers.iter().any(|tower| tower.covers(t + d)) || m.houses.iter().any(|house| house.covers(t + d));
+                let proud = if (t.x + t.y).rem_euclid(2) == 0 { 0.015 } else { 0.03 };
+                let edge = c + d.as_vec2() * (0.35 + proud);
+                let foot = m.height_at(c + d.as_vec2() * 0.502).min(m.height_at(there));
+                let height = here - foot + 0.08;
+                let color = self.theme.stone.mix(&self.theme.wall, rng.range(0.0, 0.4));
+                let size = if d.x == 0 { Vec3::new(1.02, height, 0.3) } else { Vec3::new(0.3, height, 1.02) };
+                // A fortress's walls are laid in courses (`Theme::battlements`).
+                let fortress = self.theme.battlements;
+                if walled {
+                } else if fortress && height >= fortress::COURSED {
+                    self.coursed(size, color, edge, foot, d.x == 0, rng);
+                } else {
+                    // Placed as if the ground were flat here: the block's own height is absolute.
+                    let face = Transform::from_translation(to_world(edge, foot + height / 2.0 - (self.ground)(edge)));
+                    self.block(size, color, face);
+                }
+                // A low parapet along the top (`Map::parapet`), a hair longer so they meet.
+                let Some(parapet) = m.parapet(t, d) else { continue };
+                let (on, size) = ((parapet.lo + parapet.hi) / 2.0, parapet.hi - parapet.lo + d.as_vec2().perp().abs() * 0.02);
+                let top = Transform::from_translation(to_world(on, parapet.bottom + PARAPET_HEIGHT / 2.0 - (self.ground)(on)));
+                self.block(Vec3::new(size.x, PARAPET_HEIGHT, size.y), color.darker(0.05), top);
+            }
+        }
+    }
+
+    /// Fences (`Map::fences`): posts a meter apart with two rails between.
+    pub(super) fn fences(&mut self, m: &Map) {
+        for &(a, b) in &m.fences {
+            let run = b - a;
+            let length = run.length();
+            if length < 0.5 {
+                continue;
+            }
+            let dir = run / length;
+            let turn = Quat::from_rotation_y((-to_world(dir, 0.0).z).atan2(dir.x));
+            let posts = (length / 1.0).round().max(1.0) as i32;
+            for i in 0..=posts {
+                let p = a + dir * (length * i as f32 / posts as f32);
+                self.block(Vec3::new(0.12, FENCE_TOP + 0.08, 0.12), self.theme.bark, Transform::from_translation(to_world(p, (FENCE_TOP + 0.08) / 2.0)));
+            }
+            for h in [0.45, FENCE_TOP - 0.035] {
+                self.block(Vec3::new(length, 0.07, 0.05), self.theme.bark.lighter(0.08), Transform::from_translation(to_world(a + run / 2.0, h)).with_rotation(turn));
+            }
+        }
+    }
+
+    /// The village well (`Map::well`): a ring of stone in two courses under a coping, dark water
+    /// down in it; two posts either side up to a ridge beam, tied across under the eaves and
+    /// braced, holding a little roof of tiles laid in courses; a windlass between them, a drum
+    /// with rope wound on it and a crank, the rope down to a bucket hung over the water.
+    pub(super) fn well(&mut self, m: &Map) {
+        let Some(c) = m.well else { return };
+        let g = (self.ground)(c);
+        let stone = |i: usize| self.theme.stone.mix(&self.theme.slate, (i % 3) as f32 * 0.18);
+        let course = WELL_HEIGHT * 0.42;
+        for (k, bottom) in [0.0, course].into_iter().enumerate() {
+            let stones = 11;
+            for i in 0..stones {
+                let a = std::f32::consts::TAU * (i as f32 + 0.5 * k as f32) / stones as f32;
+                let p = c + Vec2::from_angle(a) * (WELL_RING - 0.17);
+                let t = Transform::from_translation(to_world(p, bottom + course / 2.0)).with_rotation(Quat::from_rotation_y(a));
+                self.block(Vec3::new(0.32, course - 0.02, 0.44), stone(i + k), t);
+            }
+        }
+        let coping = faceted(cylinder(WELL_RING, WELL_HEIGHT - 2.0 * course, 14));
+        self.push(coping.translated_by(to_world(c, g + 2.0 * course + (WELL_HEIGHT - 2.0 * course) / 2.0)), self.theme.stone.lighter(0.05));
+        // The dark of the shaft, a hair over the coping's top (level with it, the two flicker).
+        let hole = faceted(cylinder(WELL_RING - 0.3, 0.04, 14));
+        self.push(hole.translated_by(to_world(c, g + WELL_HEIGHT - 0.02 + 0.012)), self.theme.pond.darker(0.65));
+        let (half, under, top) = WELL_ROOF;
+        let timber = self.theme.bark;
+        let post = |s: f32| c + Vec2::X * s * (half.x - 0.22);
+        let ridge = top - 0.12;
+        for s in [-1.0, 1.0] {
+            // A post up to the ridge, a beam across under the eaves, and braces up to the ridge
+            // from either end of it.
+            self.block(Vec3::new(0.16, ridge, 0.16), timber, Transform::from_translation(to_world(post(s), ridge / 2.0)));
+            self.block(Vec3::new(0.12, 0.12, 2.0 * half.y - 0.1), timber, Transform::from_translation(to_world(post(s), under - 0.02)));
+            for side in [-1.0, 1.0] {
+                let (from, to) = (Vec2::new(0.0, side * (half.y - 0.12)), Vec2::new(0.0, side * 0.08));
+                let rise = ridge - under - 0.05;
+                let length = (from - to).length().hypot(rise);
+                let mid = post(s) + (from + to) / 2.0;
+                let tilt = Quat::from_rotation_x(-side * rise.atan2((from - to).length()));
+                self.block(Vec3::new(0.09, 0.09, length), timber, Transform::from_translation(to_world(mid, under + rise / 2.0)).with_rotation(tilt));
+            }
+            // Feet of stone at the post's foot.
+            self.block(Vec3::new(0.3, 0.16, 0.3), self.theme.stone, Transform::from_translation(to_world(post(s), 0.08)));
+        }
+        self.block(Vec3::new(2.0 * half.x + 0.1, 0.14, 0.14), timber.darker(0.1), Transform::from_translation(to_world(c, ridge)));
+        // The roof: two slabs from the ridge out over the eaves, tiles laid in courses on them.
+        let pitch = (top - under).atan2(half.y);
+        let slope = (half.y + 0.1) / pitch.cos();
+        for side in [-1.0, 1.0] {
+            let mid = c + Vec2::Y * side * (half.y + 0.1) / 2.0;
+            let t = Transform::from_translation(to_world(mid, top - (top - under) * (half.y + 0.1) / half.y / 2.0 + 0.04)).with_rotation(Quat::from_rotation_x(-side * pitch));
+            self.block(Vec3::new(2.0 * half.x + 0.3, 0.07, slope), ROOF.darker(0.08), t);
+            for k in 0..(slope / 0.26) as i32 {
+                let z = (k as f32 + 0.6) * 0.26 - slope / 2.0;
+                self.block(Vec3::new(2.0 * half.x + 0.3, 0.03, 0.06), ROOF.darker(0.2), t.mul_transform(Transform::from_xyz(0.0, 0.045, z)));
+            }
+        }
+        self.block(Vec3::new(2.0 * half.x + 0.36, 0.1, 0.16), ROOF.darker(0.25), Transform::from_translation(to_world(c, top + 0.02)));
+        // The windlass: an axle between the posts, a drum of rope on it, a crank outside one
+        // post; the rope down to the bucket.
+        let axle = 1.55;
+        self.block(Vec3::new(2.0 * (half.x - 0.22) + 0.2, 0.07, 0.07), timber.darker(0.15), Transform::from_translation(to_world(c, axle)));
+        let drum = faceted(cylinder(0.13, 0.7, 10)).rotated_by(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
+        self.push(drum.translated_by(to_world(c, g + axle)), timber.lighter(0.08));
+        for k in 0..4 {
+            let x = -0.27 + k as f32 * 0.18;
+            let wrap = faceted(cylinder(0.145, 0.05, 10)).rotated_by(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
+            self.push(wrap.translated_by(to_world(c + Vec2::X * x, g + axle)), PLASTER.darker(0.45));
+        }
+        let crank = post(1.0) + Vec2::X * 0.2;
+        self.block(Vec3::new(0.05, 0.36, 0.05), IRON.darker(0.3), Transform::from_translation(to_world(crank, axle - 0.16)));
+        self.block(Vec3::new(0.16, 0.05, 0.05), IRON.darker(0.3), Transform::from_translation(to_world(crank + Vec2::X * 0.06, axle - 0.33)));
+        let hang = c + Vec2::Y * 0.13;
+        let bucket_top = 1.0;
+        self.block(Vec3::new(0.025, axle - bucket_top - 0.08, 0.025), PLASTER.darker(0.45), Transform::from_translation(to_world(hang, (axle + bucket_top) / 2.0 + 0.04)));
+        let bucket = faceted(ConicalFrustum { radius_top: 0.16, radius_bottom: 0.12, height: 0.24 }.mesh().resolution(8).build());
+        self.push(bucket.translated_by(to_world(hang, g + bucket_top - 0.2)), timber.lighter(0.12));
+        for h in [bucket_top - 0.28, bucket_top - 0.13] {
+            self.push(faceted(cylinder(0.155, 0.025, 8)).translated_by(to_world(hang, g + h)), IRON.darker(0.35));
+        }
+        self.block(Vec3::new(0.3, 0.025, 0.025), IRON.darker(0.35), Transform::from_translation(to_world(hang, bucket_top - 0.02)));
+    }
+
+    /// Flower beds (`Map::gardens`): a tumble of blooms on each.
+    pub(super) fn gardens(&mut self, m: &Map, rng: &mut Lcg) {
+        for &c in &m.gardens {
+            for _ in 0..7 {
+                let p = c + Vec2::new(rng.range(-0.4, 0.4), rng.range(-0.4, 0.4));
+                let color = [self.theme.bloom, GOLD, BLOOD.lighter(0.25), PLASTER][(rng.next() * 4.0) as usize % 4];
+                self.add(Shape::Flower, color, Transform::from_translation(to_world(p, 0.14)).with_scale(Vec3::splat(rng.range(0.7, 1.2))));
+            }
+        }
     }
 
     /// The merchant's stall, round their counter (`Map::counter`): a plank counter with a cloth
@@ -404,15 +830,8 @@ impl Props {
     /// a striped awning that slopes down over it with a scalloped edge, shelves of bottles at the
     /// back, barrels and crates at its sides, and a sign with a gold coin on a post.
     pub(super) fn stall(&mut self, m: &Map) {
-        if m.counter.is_empty() {
-            return;
-        }
-        let tiles: Vec<Vec2> = m.counter.iter().map(|t| Map::center(*t)).collect();
-        let c = tiles.iter().sum::<Vec2>() / tiles.len() as f32;
         // Its front faces where the merchant does; `side` runs along the counter.
-        let front = m.shop_faces.normalize_or(Vec2::NEG_Y);
-        let side = front.perp();
-        let half = tiles.iter().map(|t| (*t - c).dot(side).abs()).fold(0.0f32, f32::max) + 0.5;
+        let Some(stall @ Stall { middle: c, front, side, half }) = m.stall() else { return };
         // Turned so a block's X runs along the counter and its Z out to the front.
         let along = to_world(side, 0.0) - to_world(Vec2::ZERO, 0.0);
         let turn = Quat::from_rotation_y((-along.z).atan2(along.x));
@@ -423,7 +842,7 @@ impl Props {
 
         // The counter, its top overhanging, a striped cloth down its front.
         self.block(Vec3::new(len, 1.0, 0.85), wood.darker(0.1), at(c, 0.5));
-        self.block(Vec3::new(len + 0.25, 0.08, 1.0), plank, at(c, 1.04));
+        self.block(Vec3::new(len + 0.25, 0.08, 1.0), plank, at(c, COUNTER_TOP - 0.04));
         let stripes = 7;
         for i in 0..stripes {
             let x = -half + 0.1 + (len - 0.2) * (i as f32 + 0.5) / stripes as f32;
@@ -441,8 +860,8 @@ impl Props {
         }
 
         // Posts: two at the counter's front corners, two taller ones at the back.
-        let back = -1.3;
-        for (out, h) in [(0.5, 2.4), (back, 2.95)] {
+        let back = -STALL_BACK;
+        for (out, h) in [(0.5, 2.4), (back, STALL_ROOF.0)] {
             for s in [-1.0, 1.0] {
                 self.block(Vec3::new(0.13, h, 0.13), wood, at(c + side * s * (half + 0.05) + front * out, h / 2.0));
             }
@@ -463,7 +882,7 @@ impl Props {
 
         // The awning, sloping from the back posts' tops down past the counter's front, in stripes,
         // and a scalloped edge hanging from its front.
-        let (top, low): ((f32, f32), (f32, f32)) = ((back, 2.95), (0.95, 2.25));
+        let (top, low): ((f32, f32), (f32, f32)) = ((back, STALL_ROOF.0), (STALL_EAVES, STALL_ROOF.1));
         let run = top.0 - low.0;
         let slope = (top.1 - low.1).atan2(run.abs());
         let length = (run * run + (top.1 - low.1) * (top.1 - low.1)).sqrt() + 0.1;
@@ -480,14 +899,13 @@ impl Props {
         }
 
         // Barrels and crates at its sides.
-        for (s, out) in [(-1.0, 0.1), (1.0, -0.4)] {
-            let p = c + side * s * (half + 0.55) + front * out;
+        for p in stall.barrels() {
             self.push(tinted(cylinder(0.3, 0.8, 12).translated_by(to_world(p, 0.4)), wood.darker(0.05)), wood.darker(0.05));
             self.push(tinted(cylinder(0.31, 0.06, 12).translated_by(to_world(p, 0.62)), IRON), IRON);
             self.push(tinted(cylinder(0.31, 0.06, 12).translated_by(to_world(p, 0.18)), IRON), IRON);
         }
-        self.block(Vec3::new(0.5, 0.45, 0.5), plank, at(c - side * (half + 0.6) + front * (back + 0.4), 0.225));
-        self.block(Vec3::new(0.4, 0.35, 0.4), plank.darker(0.1), at(c - side * (half + 0.6) + front * (back + 0.4), 0.62));
+        self.block(Vec3::new(0.5, 0.45, 0.5), plank, at(stall.crates(), 0.225));
+        self.block(Vec3::new(0.4, 0.35, 0.4), plank.darker(0.1), at(stall.crates(), 0.62));
 
         // A sign on the front post: a board with a gold coin painted on it.
         let post = c + side * (half + 0.05) + front * 0.5;
@@ -520,7 +938,8 @@ impl Props {
                 .min()
                 .unwrap_or(6);
             let over_water = SIDES.iter().any(|&d| matches!(m.scene_tile(t + d), Tile::Water | Tile::Ford));
-            let depth = if over_water { -RIVERBED_LEVEL } else { 0.4 + 2.2 / to_bank as f32 };
+            // Down to the riverbed, from however high the bridge is (an arch, a footbridge).
+            let depth = if over_water { -RIVERBED_LEVEL + (self.ground)(c) } else { 0.4 + 2.2 / to_bank as f32 };
             self.block(Vec3::new(1.0, depth, 1.0), self.theme.wall, Transform::from_translation(to_world(c, -0.36 - depth / 2.0)));
             for d in SIDES {
                 if !is_gap(m.scene_tile(t + d)) {
@@ -628,21 +1047,49 @@ impl Props {
         }
     }
 
-    fn boulder(&mut self, rng: &mut Lcg, c: Vec2) {
-        let t = Transform::from_translation(to_world(c, 0.25))
-            .with_rotation(Quat::from_euler(EulerRot::XYZ, rng.range(0.0, 3.0), rng.range(0.0, 3.0), 0.0))
-            .with_scale(Vec3::new(rng.range(1.2, 1.5), rng.range(0.9, 1.3), rng.range(1.2, 1.5)));
+    /// A boulder on tile `t`, as big as its collider (`map::boulder`), only turned about the up
+    /// axis so it stays in it.
+    fn boulder(&mut self, t: IVec2, c: Vec2) {
+        let (size, yaw) = boulder(t);
+        let t = Transform::from_translation(to_world(c, ROCK_LIFT * size.y))
+            .with_rotation(Quat::from_rotation_y(yaw))
+            .with_scale(size);
         self.add(Shape::Rock, self.theme.slate, t);
     }
 
     fn tree(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
         self.add(Shape::Trunk, self.theme.bark, Transform::from_translation(to_world(p, ground + 0.6 * s)).with_scale(Vec3::splat(s)));
         let tiers = 2 + (rng.next() * 2.0) as usize;
+        // Each tree leans its own way between the two greens, so the stand isn't a print.
+        let lean = rng.next() * 0.2;
         for k in 0..tiers {
             let t = Transform::from_translation(to_world(p, ground + (1.5 + k as f32 * 0.85) * s))
                 .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
                 .with_scale(Vec3::splat(s));
-            self.add(Shape::Cone(k), if k % 2 == 0 { self.theme.fern } else { self.theme.pine }, t);
+            let leaf = if k % 2 == 0 { self.theme.fern } else { self.theme.pine };
+            self.add(Shape::Cone(k), leaf.mix(&self.theme.meadow, lean), t);
+        }
+    }
+
+    /// What grows at a forest tree's feet: a fern clump or two, and now and then a branch of
+    /// deadfall lying in the needles.
+    fn understory(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
+        for _ in 0..1 + (rng.next() * 2.0) as usize {
+            let at = p + Vec2::new(rng.range(-1.0, 1.0), rng.range(-1.0, 1.0));
+            let s = rng.range(0.25, 0.5);
+            let t = Transform::from_translation(to_world(at, ground + s * 0.4))
+                .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
+                .with_scale(Vec3::new(s * 1.5, s, s * 1.5));
+            self.add(Shape::Ball, self.theme.fern.mix(&self.theme.grass, rng.next() * 0.4), t);
+        }
+        if rng.next() < 0.5 {
+            let at = p + Vec2::new(rng.range(-1.2, 1.2), rng.range(-1.2, 1.2));
+            let yaw = rng.range(0.0, std::f32::consts::TAU);
+            let long = rng.range(0.8, 1.6);
+            let t = Transform::from_translation(to_world(at, ground + 0.05))
+                .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2 + rng.range(-0.1, 0.1)))
+                .with_scale(Vec3::new(1.6, long, 1.6));
+            self.add(Shape::Stick, self.theme.bark.mix(&self.theme.slate, 0.3), t);
         }
     }
 
@@ -654,18 +1101,30 @@ impl Props {
     /// A map's tree (a `Tile::Tree`), as its wilds grow them.
     fn map_tree(&mut self, rng: &mut Lcg, c: Vec2) {
         match self.theme.wilds {
-            Wilds::Forest => self.tree(rng, c, 0.0, 1.25),
-            Wilds::Fen => self.willow(rng, c, 0.0, 1.1),
-            Wilds::Highlands => self.round_tree(rng, c, 0.0, 1.0),
+            Wilds::Forest => {
+                self.tree(rng, c, 0.0, 1.7);
+                if rng.next() < 0.5 {
+                    self.understory(rng, c, 0.0);
+                }
+            }
+            Wilds::Fen => self.willow(rng, c, 0.0, 1.5),
+            Wilds::Highlands => self.round_tree(rng, c, 0.0, 1.4),
+            Wilds::Field => self.tree(rng, c, 0.0, 1.7),
         }
     }
 
     /// Something out in the wilds at `p`, on land `ground` high.
     fn wild(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
         let pick = rng.next();
-        let s = rng.range(0.9, 1.8);
+        // Old growth: the wilds tower over whoever walks the clearing.
+        let s = rng.range(1.3, 2.4);
         match self.theme.wilds {
-            Wilds::Forest => self.tree(rng, p, ground, s),
+            Wilds::Forest => {
+                self.tree(rng, p, ground, s);
+                if rng.next() < 0.45 {
+                    self.understory(rng, p, ground);
+                }
+            }
             Wilds::Fen if pick < 0.1 => self.snag(rng, p, ground, s),
             Wilds::Fen if pick < 0.18 => self.willow(rng, p, ground, s * 0.8),
             Wilds::Fen => self.reed_bed(rng, p, ground),
@@ -682,6 +1141,8 @@ impl Props {
                 self.add(Shape::Rock, self.theme.slate.mix(&self.theme.wall, rng.next()), t);
             }
             Wilds::Highlands => self.shrub(rng, p, ground),
+            // Nothing grows on the field (none are asked for: its density is zero).
+            Wilds::Field => {}
         }
     }
 
@@ -816,30 +1277,129 @@ impl Props {
         self.add(Shape::Ball, self.theme.meadow, top);
     }
 
-    /// A rock on the highlands' fight floor: sandstone in one of a few forms, all about a tile
-    /// across like any rock there.
-    pub(super) fn sandstone(&mut self, rng: &mut Lcg, c: Vec2) {
+    /// A rock on the highlands' fight floor (tile `t`): sandstone in one of a few forms, each
+    /// fitted to the boulder there (`boulder`): as wide as what stands in the way.
+    pub(super) fn sandstone(&mut self, rng: &mut Lcg, t: IVec2) {
+        let c = Map::center(t);
         let turn = Quat::from_rotation_y(rng.range(0.0, 3.0));
-        match (rng.next() * 3.0) as usize {
+        let form = (rng.next() * 3.0) as usize;
+        // How wide each form is (its widest, in the rock mesh's scale), and what it's scaled
+        // across by to fit.
+        let wide = [1.6, 2.0, 1.5][form.min(2)];
+        let (size, _) = boulder(t);
+        let fit = size.x.min(size.z) / wide;
+        let add = |props: &mut Props, k: usize, at: Vec2, h: f32, turn: Quat, s: Vec3| {
+            props.add(Shape::Rock, rock_band(props.theme, k), Transform::from_translation(to_world(at, h)).with_rotation(turn).with_scale(Vec3::new(s.x * fit, s.y, s.z * fit)));
+        };
+        match form {
             // Flat-topped, with a smaller one balanced on it.
             0 => {
-                self.add(Shape::Rock, rock_band(self.theme, 0), Transform::from_translation(to_world(c, 0.3)).with_rotation(turn).with_scale(Vec3::new(1.5, 0.9, 1.4)));
-                self.add(Shape::Rock, rock_band(self.theme, 2), Transform::from_translation(to_world(c, 0.9)).with_rotation(turn.inverse()).with_scale(Vec3::new(0.8, 0.7, 0.9)));
+                add(self, 0, c, 0.45, turn, Vec3::new(1.6, 1.4, 1.5));
+                add(self, 2, c, 1.5, turn.inverse(), Vec3::new(1.0, 1.0, 1.1));
             }
             // Split in two, a crack between them.
             1 => {
-                let side = Vec2::from_angle(rng.range(0.0, 3.0)) * 0.28;
+                let side = Vec2::from_angle(rng.range(0.0, 3.0)) * 0.3 * fit;
                 for (k, s) in [(1, 1.0), (3, -1.0)] {
-                    let t = Transform::from_translation(to_world(c + side * s, 0.35)).with_rotation(turn).with_scale(Vec3::new(0.9, 1.3, 1.4));
-                    self.add(Shape::Rock, rock_band(self.theme, k), t);
+                    add(self, k, c + side * s, 0.55, turn, Vec3::new(1.0, 2.0, 1.5));
                 }
             }
             // A stack of two, banded.
             _ => {
-                self.add(Shape::Rock, rock_band(self.theme, 1), Transform::from_translation(to_world(c, 0.3)).with_rotation(turn).with_scale(Vec3::new(1.4, 0.9, 1.4)));
-                self.add(Shape::Rock, rock_band(self.theme, 0), Transform::from_translation(to_world(c, 0.95)).with_rotation(turn).with_scale(Vec3::new(1.1, 0.8, 1.1)));
+                add(self, 1, c, 0.45, turn, Vec3::new(1.5, 1.4, 1.5));
+                add(self, 0, c, 1.55, turn, Vec3::new(1.2, 1.2, 1.2));
             }
         }
+    }
+
+    /// What litters the fight floor's grass (forest and highlands; the fen has `fen_grass`):
+    /// tufts, pebbles, a flower, a patch of bare earth — and in the lee of cover (trees, walls,
+    /// rock, the forest's edge) thicker growth, mushrooms and a stump or two, so the clearing
+    /// reads as a lived-in place and not an empty board. Everything is below the ankle: detail,
+    /// never obstacle.
+    pub(super) fn floor_detail(&mut self, m: &Map, rng: &mut Lcg, t: IVec2, c: Vec2) {
+        let near_cover = SIDES.iter().any(|&d| matches!(m.scene_tile(t + d), Tile::Tree | Tile::Forest | Tile::Wall | Tile::Rock));
+        let woods = self.theme.wilds == Wilds::Forest;
+        let pick = rng.next();
+        if near_cover {
+            match () {
+                _ if pick < 0.3 => self.grass_tuft(rng, c),
+                _ if pick < 0.36 && woods => self.mushrooms(rng, c),
+                _ if pick < 0.4 && woods => self.stump(rng, c),
+                _ if pick < 0.46 => self.pebbles(rng, c),
+                _ if pick < 0.52 => self.earth_patch(rng, c),
+                _ if pick < 0.56 => self.flower(rng, c),
+                _ => {}
+            }
+        } else {
+            match () {
+                _ if pick < 0.14 => self.grass_tuft(rng, c),
+                _ if pick < 0.18 => self.pebbles(rng, c),
+                _ if pick < 0.24 => self.earth_patch(rng, c),
+                _ if pick < 0.27 => self.flower(rng, c),
+                _ => {}
+            }
+        }
+    }
+
+    /// A tuft of grass blades, a shade lusher or drier than the lawn they stand on.
+    fn grass_tuft(&mut self, rng: &mut Lcg, c: Vec2) {
+        let p = c + Vec2::new(rng.range(-0.35, 0.35), rng.range(-0.35, 0.35));
+        let lush = self.theme.fern.mix(&self.theme.grass, 0.45);
+        let dry = self.theme.meadow.mix(&self.theme.path, 0.35);
+        for _ in 0..3 + (rng.next() * 2.0) as usize {
+            let at = p + Vec2::new(rng.range(-0.12, 0.12), rng.range(-0.12, 0.12));
+            let h = rng.range(0.12, 0.26);
+            let lean = Quat::from_euler(EulerRot::XYZ, rng.range(-0.35, 0.35), 0.0, rng.range(-0.35, 0.35));
+            let color = if rng.next() < 0.5 { lush } else { dry };
+            self.add(Shape::Reed, color, Transform::from_translation(to_world(at, h / 2.0)).with_rotation(lean).with_scale(Vec3::new(1.8, h, 1.8)));
+        }
+    }
+
+    /// A pebble or two, half sunk in the turf.
+    pub(super) fn pebbles(&mut self, rng: &mut Lcg, c: Vec2) {
+        for _ in 0..1 + (rng.next() * 2.0) as usize {
+            let p = c + Vec2::new(rng.range(-0.4, 0.4), rng.range(-0.4, 0.4));
+            let s = rng.range(0.07, 0.16);
+            let t = Transform::from_translation(to_world(p, s * 0.25))
+                .with_rotation(Quat::from_euler(EulerRot::XYZ, rng.range(0.0, 3.0), rng.range(0.0, 3.0), 0.0))
+                .with_scale(Vec3::new(s, s * 0.6, s));
+            self.add(Shape::Rock, self.theme.stone.mix(&self.theme.path, rng.next() * 0.5), t);
+        }
+    }
+
+    /// A worn patch of bare earth showing through the grass.
+    fn earth_patch(&mut self, rng: &mut Lcg, c: Vec2) {
+        let p = c + Vec2::new(rng.range(-0.25, 0.25), rng.range(-0.25, 0.25));
+        let size = Vec3::new(rng.range(0.3, 0.55), 1.0, rng.range(0.25, 0.45));
+        let color = self.theme.path.mix(&self.theme.grass, rng.range(0.2, 0.5)).darker(0.03);
+        let t = Transform::from_translation(to_world(p, 0.008)).with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0))).with_scale(size);
+        self.add(Shape::Puddle, color, t);
+    }
+
+    /// A few toadstools huddled together: pale stems under caps the map's bloom color.
+    fn mushrooms(&mut self, rng: &mut Lcg, c: Vec2) {
+        let p = c + Vec2::new(rng.range(-0.3, 0.3), rng.range(-0.3, 0.3));
+        let stem_color = self.theme.stone.lighter(0.15);
+        for _ in 0..2 + (rng.next() * 3.0) as usize {
+            let at = p + Vec2::new(rng.range(-0.18, 0.18), rng.range(-0.18, 0.18));
+            let h = rng.range(0.07, 0.15);
+            self.add(Shape::Stick, stem_color, Transform::from_translation(to_world(at, h / 2.0)).with_scale(Vec3::new(h * 0.7, h, h * 0.7)));
+            let cap = Transform::from_translation(to_world(at, h))
+                .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
+                .with_scale(Vec3::new(h * 0.9, h * 0.45, h * 0.9));
+            self.add(Shape::Ball, self.theme.bloom.darker(0.08), cap);
+        }
+    }
+
+    /// A stump, cut low, its top rings showing.
+    fn stump(&mut self, rng: &mut Lcg, c: Vec2) {
+        let p = c + Vec2::new(rng.range(-0.3, 0.3), rng.range(-0.3, 0.3));
+        let h = rng.range(0.18, 0.3);
+        let s = rng.range(0.8, 1.1);
+        self.add(Shape::Trunk, self.theme.bark, Transform::from_translation(to_world(p, h / 2.0)).with_scale(Vec3::new(s, h / 1.2, s)));
+        let top = Transform::from_translation(to_world(p, h + 0.005)).with_scale(Vec3::new(0.2 * s, 1.0, 0.2 * s));
+        self.add(Shape::Puddle, self.theme.path.lighter(0.08), top);
     }
 
     /// What grows on the fen's fight floor here and there: tufts of sedge, bog cotton and pads of
@@ -886,7 +1446,7 @@ impl Props {
 
 /// Height of the land outside the clearing (0 at its edge), before roughness: the forest rolls
 /// up into low hills, a fen sinks under the water with tussocks breaking it, highlands climb in
-/// terraces.
+/// terraces, a field rises gently.
 fn wild_height(theme: &Theme, m: &Map, p: Vec2) -> f32 {
     let out = -m.edge_margin(p);
     match theme.wilds {
@@ -902,6 +1462,7 @@ fn wild_height(theme: &Theme, m: &Map, p: Vec2) -> f32 {
             let f = (rise / TERRACE).fract();
             (rise / TERRACE).floor() * TERRACE + TERRACE * ((f - 0.6) / 0.25).clamp(0.0, 1.0)
         }
+        Wilds::Field => (out * 0.12).clamp(0.0, 1.5),
     }
 }
 
@@ -931,6 +1492,8 @@ fn wild_color(theme: &Theme, height: f32, flat: f32, pick: f32) -> Color {
         Wilds::Highlands if pick < 0.5 => theme.grass,
         Wilds::Highlands if pick < 0.8 => theme.meadow,
         Wilds::Highlands => theme.path,
+        Wilds::Field if pick < 0.7 => theme.grass,
+        Wilds::Field => theme.meadow,
     }
 }
 
@@ -966,11 +1529,39 @@ fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut Lcg) -> Me
                     Wilds::Forest => (0.5, (-0.3, 0.6)),
                     Wilds::Fen => (0.3, (-0.05, 0.05)),
                     Wilds::Highlands => (0.3, (-0.15, 0.15)),
+                    Wilds::Field => (0.3, (-0.04, 0.04)),
                 };
                 p += Vec2::new(rng.range(-shift, shift), rng.range(-shift, shift));
                 wild_height(theme, m, p) + rng.range(rough.0, rough.1)
             } else {
                 wild_height(theme, m, p)
+            };
+            // The map's own lie of the land runs on out into the wilds.
+            // At a step it goes with the lower side, under the ground tiles on both. Under a
+            // tower, as low as the ground round its foot: a level it's built into (a wall walk)
+            // would lift the land up out of its sides, into the way beside it.
+            let ground = |q: Vec2| m.towers.iter().find(|tower| tower.covers(Map::tile_of(q))).map_or_else(|| m.height_at(q), |tower| m.tower_ground(tower));
+            let mut low = [Vec2::new(-1.0, -1.0), Vec2::new(1.0, -1.0), Vec2::new(-1.0, 1.0), Vec2::new(1.0, 1.0)]
+                .map(|d| ground(p + d * 0.002))
+                .into_iter()
+                .fold(f32::INFINITY, f32::min);
+            // Inside the map, under all the ground round it out to the next points: the land runs
+            // straight between them, and at a ramp's foot that would cut up through the stairs.
+            if around.iter().all(|t| !matches!(t, Tile::Forest | Tile::Water | Tile::Ford | Tile::Chasm)) {
+                let span = TERRAIN_CELL as f32;
+                for i in -4..=4 {
+                    for j in -4..=4 {
+                        low = low.min(ground(p + Vec2::new(i as f32, j as f32) * span / 4.0));
+                    }
+                }
+            }
+            let h = if around.contains(&Tile::Chasm) {
+                h
+            } else if around.iter().any(|t| matches!(t, Tile::Water | Tile::Ford)) {
+                // A river up on high ground (over a cliff's top) has its bed up there.
+                h + low.max(0.0)
+            } else {
+                h + low
             };
             grid.push(to_world(p, h));
         }
@@ -980,6 +1571,9 @@ fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut Lcg) -> Me
     for j in 0..(2 * cells.y) as usize {
         for i in 0..width - 1 {
             let (a, r, u, ru) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
+            // A cliff's face is one tone over each cell, both its triangles alike (each running
+            // its whole height, they'd fall in different bands and stripe it).
+            let face = theme.slate.mix(&theme.stone, 0.35 + 0.25 * rng.next());
             for tri in [[a, r, u], [r, ru, u]] {
                 let height = (tri[0].y + tri[1].y + tri[2].y) / 3.0;
                 let flat = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize_or_zero().y.abs();
@@ -990,6 +1584,12 @@ fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut Lcg) -> Me
                     theme.riverbed
                 } else if height < 0.05 {
                     theme.grass
+                } else if matches!(scene.get(Map::tile_of(to_gameplay((tri[0] + tri[1] + tri[2]) / 3.0))), Tile::Water | Tile::Ford) {
+                    // A river's bed up on high ground.
+                    theme.riverbed
+                } else if flat < 0.45 && height > 1.5 {
+                    // Sheer: a cliff's face.
+                    face
                 } else {
                     wild_color(theme, height, flat, rng.next())
                 };
@@ -1022,7 +1622,8 @@ fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
             continue;
         }
         let c = Map::center(t);
-        let checker = if (t.x + t.y) % 2 == 0 { 1.03 } else { 0.97 };
+        // Faint: just enough for distances to read, well under the patches' wander.
+        let checker = if (t.x + t.y) % 2 == 0 { 1.006 } else { 0.994 };
         let base = match tile {
             // Paved: the slabs go on top (`Props::flagstones`); this is the moss between them.
             Tile::Path if theme.wilds == Wilds::Fen => theme.fern.mix(&theme.marsh, rng.next() * 0.4),
@@ -1030,11 +1631,19 @@ fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
             Tile::Marsh => theme.marsh.mix(&theme.bank, rng.next() * 0.35),
             // Damp ground: wet hollows and drier rises wandering across the grass.
             _ if theme.wilds == Wilds::Fen => theme.meadow.mix(&theme.marsh, patches(c)).mix(&theme.grass, rng.next() * 0.3),
-            _ => theme.grass.mix(&theme.meadow, rng.next() * 0.25),
+            // Lusher and drier sweeps wandering across the lawn, not a tile-by-tile dither.
+            _ => theme.grass.mix(&theme.meadow, (patches(c) * 0.75 + rng.next() * 0.25).clamp(0.0, 1.0) * 0.6),
         };
+        // Grass in the lee of the trees sits in their shade.
+        let shaded = tile == Tile::Grass && SIDES.iter().any(|&d| matches!(m.scene_tile(t + d), Tile::Forest | Tile::Tree));
+        let base = if shaded { base.mix(&theme.fern, 0.3) } else { base };
         let color = Color::from(base.to_linear() * checker);
         let (lo, hi) = (c - Vec2::splat(0.5), c + Vec2::splat(0.5));
-        b.quad([to_world(lo, 0.0), to_world(Vec2::new(hi.x, lo.y), 0.0), to_world(hi, 0.0), to_world(Vec2::new(lo.x, hi.y), 0.0)], color);
+        // Each corner on the lie of the land, so slopes are the ground itself; at a step (a
+        // terrace's edge) as it is on this tile's side of it, the face between the two is the
+        // stone wall there (`retaining`).
+        let corner = |p: Vec2| to_world(p, m.height_at(p + (c - p) * 0.002));
+        b.quad([corner(lo), corner(Vec2::new(hi.x, lo.y)), corner(hi), corner(Vec2::new(lo.x, hi.y))], color);
         // Bank or cliff faces toward the gaps around it.
         for (dir, a, z) in [
             (IVec2::X, Vec2::new(hi.x, lo.y), Vec2::new(hi.x, hi.y)),
@@ -1071,7 +1680,7 @@ fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
 /// and over the wilds within a terrain cell of those too, so where the land rises out of it the
 /// water runs in under its slope; if the wilds are `flooded`, one sheet over the whole scene (the
 /// land rises out of it). `None` if there's no water.
-fn water_mesh(scene: &SceneTiles, flooded: bool) -> Option<Mesh> {
+fn water_mesh(m: &Map, scene: &SceneTiles, flooded: bool) -> Option<Mesh> {
     let covers = |tile: Tile| matches!(tile, Tile::Water | Tile::Ford);
     let extent = scene.extent;
     let mut b = FlatMesh::default();
@@ -1090,7 +1699,9 @@ fn water_mesh(scene: &SceneTiles, flooded: bool) -> Option<Mesh> {
             }
             let (lo, hi) = (t.as_vec2(), t.as_vec2() + Vec2::ONE);
             let corners = [lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)];
-            b.quad(corners.map(|p| to_world(p, WATER_LEVEL)), Color::WHITE);
+            // Up on high ground (over a cliff's top), it runs up there.
+            let level = WATER_LEVEL + m.height_at(Map::center(t)).max(0.0);
+            b.quad(corners.map(|p| to_world(p, level)), Color::WHITE);
         }
     }
     (!b.positions.is_empty()).then(|| b.build())

@@ -8,7 +8,7 @@
     blurb: "Sells what the dead left behind. No refunds.",
     playable: false,
     max_hp: 100,
-    move_speed: 1.0,
+    move_speed: 1.15,
     attack: (
         damage: 1,
         attack_ticks: 32,

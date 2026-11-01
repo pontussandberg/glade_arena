@@ -8,7 +8,7 @@
     blurb: "Slow as a landslide, and as hard to stop.",
     playable: false,
     max_hp: 300,
-    move_speed: 2.5,
+    move_speed: 2.90,
     attack: (
         damage: 30,
         attack_ticks: 64,

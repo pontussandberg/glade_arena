@@ -8,7 +8,7 @@
     blurb: "Small, quick and always hungry. Never alone.",
     playable: false,
     max_hp: 20,
-    move_speed: 4.4,
+    move_speed: 5.05,
     attack: (
         damage: 4,
         attack_ticks: 32,

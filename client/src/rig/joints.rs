@@ -24,15 +24,27 @@ pub(crate) struct Joints {
     pub(super) lead_knee: Spring,
     pub(super) twist: Spring,
     pub(super) lean: Spring,
+    pub(super) side_lean: Spring,
     pub(super) head_dip: Spring,
+    pub(super) head_turn: Spring,
     pub(super) elbow: Spring,
     pub(super) elbow_turn: Spring,
     pub(super) arm_yaw: Spring,
+    pub(super) arm_tilt: Spring,
+    pub(super) lead_elbow: Spring,
+    pub(super) lead_elbow_turn: Spring,
+    pub(super) lead_yaw: Spring,
+    pub(super) hold: Spring,
     /// The held weapon's tip (`Held::Upright`) or wrist (`Held::Gripped`): an
     /// angle, which may come right round, so it takes the nearest way to its target.
     held_tip: Spring,
-    /// The forearm's roll (`Held::Gripped`).
+    /// The forearm's roll (`Held::Gripped`): the nearest way to its target, like the tip.
     pub(super) roll: Spring,
+    /// A swept weapon's yaw (`Held::Swept`): the nearest way to its target, like the tip.
+    held_yaw: Spring,
+    pub(super) sway: Spring,
+    pub(super) back_leg_turn: Spring,
+    pub(super) lead_leg_turn: Spring,
 }
 
 impl Joints {
@@ -42,12 +54,15 @@ impl Joints {
     pub(crate) fn follow(&mut self, to: &Angles, dt: f32, moves: &Moves) -> Angles {
         let spring = |joint: &mut Spring, target: f32| joint.follow(target, dt, moves.stiffness, moves.damping, PI);
         self.held_tip.at += TAU * ((to.tip - self.held_tip.at) / TAU).round();
+        self.held_yaw.at += TAU * ((to.yaw - self.held_yaw.at) / TAU).round();
+        self.roll.at += TAU * ((to.roll - self.roll.at) / TAU).round();
         if moves.windmill {
             self.weapon_arm.at += TAU * ((to.weapon_arm - self.weapon_arm.at) / TAU).round();
         }
         Angles {
             twist: spring(&mut self.twist, to.twist),
             lean: spring(&mut self.lean, to.lean),
+            side_lean: spring(&mut self.side_lean, to.side_lean),
             weapon_arm: spring(&mut self.weapon_arm, to.weapon_arm),
             lead_arm: spring(&mut self.lead_arm, to.lead_arm),
             back_leg: spring(&mut self.back_leg, to.back_leg),
@@ -55,11 +70,21 @@ impl Joints {
             back_knee: spring(&mut self.back_knee, to.back_knee),
             lead_knee: spring(&mut self.lead_knee, to.lead_knee),
             head_dip: spring(&mut self.head_dip, to.head_dip),
+            head_turn: spring(&mut self.head_turn, to.head_turn),
             elbow: spring(&mut self.elbow, to.elbow),
             elbow_turn: spring(&mut self.elbow_turn, to.elbow_turn),
             arm_yaw: spring(&mut self.arm_yaw, to.arm_yaw),
+            arm_tilt: spring(&mut self.arm_tilt, to.arm_tilt),
+            lead_elbow: spring(&mut self.lead_elbow, to.lead_elbow),
+            lead_elbow_turn: spring(&mut self.lead_elbow_turn, to.lead_elbow_turn),
+            lead_yaw: spring(&mut self.lead_yaw, to.lead_yaw),
+            hold: spring(&mut self.hold, to.hold),
             tip: spring(&mut self.held_tip, to.tip),
             roll: spring(&mut self.roll, to.roll),
+            yaw: spring(&mut self.held_yaw, to.yaw),
+            sway: spring(&mut self.sway, to.sway),
+            back_leg_turn: spring(&mut self.back_leg_turn, to.back_leg_turn),
+            lead_leg_turn: spring(&mut self.lead_leg_turn, to.lead_leg_turn),
         }
     }
 }

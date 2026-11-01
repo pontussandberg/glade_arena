@@ -9,23 +9,37 @@ use crate::rooms::InRoom;
 
 /// Server-only: a target dummy, for practice: a fighter of `class` standing at a spot, never
 /// moving or attacking, hit like anyone else, and back to full health instead of dying. `home`
-/// is where it was placed, where it comes back to.
+/// is where it was placed, where it comes back to, and `feet` how high it stood there.
 #[derive(Component)]
 pub(crate) struct Dummy {
     pub(super) home: Vec2,
+    pub(super) feet: f32,
 }
 
-/// A target dummy of `class` standing `at` (a walkable spot) in `room`, as `id` (none of the
-/// clients'). Replicated straight away: it already stands where it'll stay.
-pub(crate) fn spawn_dummy(commands: &mut Commands, id: PeerId, class: ClassId, room: InRoom, at: Vec2) -> Entity {
+/// A target dummy of `class` standing `at` (a walkable spot) on `map` in `room`, as `id` (none
+/// of the clients'), on top of whatever is there (a tower's, a crate's). Replicated straight
+/// away: it already stands where it'll stay.
+pub(crate) fn spawn_dummy(commands: &mut Commands, map: &Map, id: PeerId, class: ClassId, room: InRoom, at: Vec2) -> Entity {
+    let feet = map.surface_under(at, f32::INFINITY);
     commands
         .spawn((
             Name::from("Dummy"),
-            Dummy { home: at },
+            Dummy { home: at, feet },
             fighter(id, class, room, Team(arena_shared::rooms::NO_TEAM), at),
             replicated_npc(),
         ))
+        .insert(Motion { height: feet, ..default() })
         .id()
+}
+
+/// Fighters nothing walks (dummies, the shopkeeper: `move_players` walks everyone else) stand on
+/// what's under them as they're moved about (a patrol, a shove), up and down the ground with
+/// them, so they're hit and drawn where they stand, not down at the gameplay plane.
+pub(super) fn stand_unwalked(lobby: Res<crate::rooms::Lobby>, mut bodies: Query<(&Pos, &InRoom, &mut Motion), (Without<PlayerInput>, InPlay)>) {
+    for (pos, room, mut motion) in &mut bodies {
+        let height = lobby.map(room).floor_at(pos.0, motion.height);
+        motion.set_if_neq(Motion { height, ..*motion });
+    }
 }
 
 /// Server-only: a practice dummy that walks back and forth between `ends`, toward `ends[toward]`,
@@ -78,10 +92,11 @@ pub(super) fn walk_dummies(timeline: Res<LocalTimeline>, mut dummies: Query<(&mu
 /// slows, roots and haste gone); its hits still show.
 pub(super) fn restore_dummies(
     mut commands: Commands,
-    mut dummies: Query<(Entity, &Dummy, &MaxHealth, &mut Pos, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, (&mut Cooldowns, &mut Dashing)), With<Dead>>,
+    mut dummies: Query<(Entity, &Dummy, &MaxHealth, &mut Pos, &mut Health, (&mut Chilled, &mut Hasted), &mut AttackState, (&mut Cooldowns, &mut Dashing, &mut Motion)), With<Dead>>,
 ) {
-    for (entity, dummy, max, mut pos, mut health, (mut chilled, mut hasted), mut attack, (mut cooldowns, mut dashing)) in &mut dummies {
+    for (entity, dummy, max, mut pos, mut health, (mut chilled, mut hasted), mut attack, (mut cooldowns, mut dashing, mut motion)) in &mut dummies {
         pos.set_if_neq(Pos(dummy.home));
+        motion.set_if_neq(Motion { height: dummy.feet, ..default() });
         health.0 = max.0;
         chilled.set_if_neq(Chilled::default());
         hasted.set_if_neq(Hasted::default());

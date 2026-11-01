@@ -2,22 +2,22 @@
 //! (so it's exactly what blocks movement), every fighter as a dot in its ring color, every
 //! pickup as its icon while it's lying there or the seconds until it's back, every waygate end
 //! as a ring (dim while it's closed), where we're walking to as a small ring in our color, and
-//! a frame showing what the camera sees. Drawn again when
-//! the map changes.
+//! which way we look: over the shoulder, a cone out from our dot; from above, a frame round what
+//! the camera sees. Drawn again when the map changes.
+//!
+//! In the corner it shows the ground round us, zoomed in, following us (`MinimapView`); M opens
+//! the whole map big in the middle of the screen, and closes it again.
 
 use arena_shared::config::TICK_HZ;
 use arena_shared::map::Map;
 use arena_shared::protocol::*;
-use bevy::asset::RenderAssetUsages;
-use bevy::image::ImageSampler;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::Me;
 use crate::camera::{CameraMode, CameraPlaced};
 use crate::feedback::AttackClock;
 use crate::arena::{self, palette};
-use crate::render::{HudButton, Relation, button_fill, clicked, ground_at, key_chip, pixel_art, shown, ui_text};
+use crate::render::{HudButton, Relation, button_fill, clicked, crisp_image, ground_at, key_chip, pixel_art, ui_text};
 use crate::tooltip::{Side, hover_shows, tip, tip_text, tip_title};
 use crate::rooms::CurrentMap;
 
@@ -25,16 +25,15 @@ pub struct MinimapPlugin;
 
 impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<MinimapView>();
         app.add_systems(Startup, spawn_minimap);
         app.add_systems(
             Update,
             (
                 draw_map.run_if(resource_changed::<CurrentMap>),
-                (spawn_dots, color_dots).chain(),
-                place_dots,
-                (spawn_markers, update_markers).chain(),
-                (spawn_gate_marks, update_gate_marks).chain(),
-                frame_view.in_set(CameraPlaced),
+                (frame_minimap, (draw_dots, frame_view, point_cone)).chain().in_set(CameraPlaced),
+                (spawn_markers, update_markers).chain().after(frame_minimap),
+                (spawn_gate_marks, update_gate_marks).chain().after(frame_minimap),
                 (click_lock, show_lock).chain(),
                 (left_fullscreen, click_fullscreen, show_fullscreen).chain(),
             ),
@@ -42,8 +41,46 @@ impl Plugin for MinimapPlugin {
     }
 }
 
-/// The most room the minimap's picture takes, in screen pixels: a map is drawn as big as fits.
+/// The most room the minimap's picture takes in the corner, in screen pixels (as big as the
+/// whole map fits), and how much closer than that whole map it shows the ground round us there.
 const ROOM: Vec2 = Vec2::new(384.0, 264.0);
+const ZOOM: f32 = 2.5;
+/// How much of the screen the whole map (M) takes, at most.
+const FULL_ROOM: f32 = 0.85;
+/// The cone showing which way we look: how big its picture is (screen pixels), and how wide it
+/// opens (radians either side of straight ahead).
+const CONE: f32 = 64.0;
+const CONE_HALF: f32 = 0.6;
+
+/// What of the map the minimap shows, and how big: in the corner, the ground round us, zoomed
+/// in; or (M) the whole of it, big, in the middle of the screen. Worked out every frame
+/// (`frame_minimap`); dots, marks and clicks (`ground_on_minimap`) go by it.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct MinimapView {
+    /// Screen pixels per tile.
+    scale: f32,
+    /// The top-left corner of what it shows, in tiles from the map's top-left corner.
+    corner: Vec2,
+    /// How big it shows it, in screen pixels.
+    size: Vec2,
+    /// The whole map, big (M).
+    full: bool,
+}
+
+impl MinimapView {
+    /// Where a gameplay position is on the minimap, in whole pixels from its top-left corner (so
+    /// a dot or the view frame only moves, and the UI is only laid out again, when it moves a
+    /// pixel).
+    fn on_minimap(&self, map: &Map, p: Vec2) -> Vec2 {
+        let half = map.half_extents();
+        ((Vec2::new(p.x + half.x, half.y - p.y) - self.corner) * self.scale).round()
+    }
+
+    /// Whether a point on the minimap (`on_minimap`) is on what it shows.
+    fn shows(&self, at: Vec2) -> bool {
+        at.cmpge(Vec2::ZERO).all() && at.cmple(self.size).all()
+    }
+}
 /// The gap from the screen corner, a dot's size, a pickup marker's (and its text's), and a
 /// waygate end's ring.
 const MARGIN: f32 = 12.0;
@@ -61,16 +98,13 @@ const GATE_MARK: f32 = 14.0;
 #[derive(Component)]
 pub(crate) struct Minimap;
 
-/// A fighter's dot, `size` across (a monster's smaller).
-#[derive(Component)]
-struct Dot {
-    player: Entity,
-    size: f32,
-}
-
 /// What the camera sees.
 #[derive(Component)]
 struct ViewFrame;
+
+/// Which way we look, over the shoulder: a cone out from our dot.
+#[derive(Component)]
+struct LookCone;
 
 /// Where we're walking to (`DesiredInput::move_to`), shown with the ground's marker
 /// (`render::input::show_destination`).
@@ -120,33 +154,36 @@ struct PickupMarker {
     showing: Option<u32>,
 }
 
-/// Screen pixels per tile for `map`: as many as fit the minimap's room.
-fn scale(map: &Map) -> f32 {
-    (ROOM / map.size.as_vec2()).min_element()
-}
-
-/// Where a gameplay position is on `map`'s minimap, in whole pixels from its top-left corner (so
-/// a dot or the view frame only moves, and the UI is only laid out again, when it moves a pixel).
-fn on_minimap(map: &Map, p: Vec2) -> Vec2 {
-    let half = map.half_extents();
-    (Vec2::new(p.x + half.x, half.y - p.y) * scale(map)).round()
-}
-
 /// Where on `map` the screen point `at` (physical pixels) is, if it's on the minimap's picture
-/// (`node`, at `transform`): `on_minimap` the other way.
-pub(crate) fn ground_on_minimap(node: &ComputedNode, transform: UiGlobalTransform, map: &Map, at: Vec2) -> Option<Vec2> {
+/// (`node`, at `transform`, showing `view`): `MinimapView::on_minimap` the other way.
+pub(crate) fn ground_on_minimap(node: &ComputedNode, transform: UiGlobalTransform, map: &Map, view: &MinimapView, at: Vec2) -> Option<Vec2> {
     let from_corner = (node.normalize_point(transform, at)? + 0.5) * node.size() - node.border().min_inset;
     let on_picture = from_corner * node.inverse_scale_factor;
-    if on_picture.cmplt(Vec2::ZERO).any() || on_picture.cmpgt(picture_size(map)).any() {
+    if !view.shows(on_picture) {
         return None;
     }
-    let (half, tiles) = (map.half_extents(), on_picture / scale(map));
+    let (half, tiles) = (map.half_extents(), on_picture / view.scale + view.corner);
     Some(Vec2::new(tiles.x - half.x, half.y - tiles.y))
 }
 
-/// The minimap's size in pixels.
-fn picture_size(map: &Map) -> Vec2 {
-    (map.size.as_vec2() * scale(map)).round()
+/// The cone's picture: pointing up from its middle, fading out toward its rim and its sides.
+fn cone_picture() -> Image {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let side = 64u32;
+    let mut pixels = vec![0; (side * side * 4) as usize];
+    let middle = Vec2::splat(side as f32 / 2.0);
+    for y in 0..side {
+        for x in 0..side {
+            let out = Vec2::new(x as f32 + 0.5, y as f32 + 0.5) - middle;
+            let (reach, off) = (out.length() / middle.x, Vec2::NEG_Y.angle_to(out).abs());
+            let inside = (1.0 - reach).clamp(0.0, 1.0) * ((CONE_HALF - off) / 0.15).clamp(0.0, 1.0);
+            let at = ((y * side + x) * 4) as usize;
+            pixels[at..at + 4].copy_from_slice(&[255, 255, 255, (inside * 150.0) as u8]);
+        }
+    }
+    let size = Extent3d { width: side, height: side, depth_or_array_layers: 1 };
+    Image::new(size, TextureDimension::D2, pixels, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD)
 }
 
 /// `map` drawn a pixel per tile, in the scene's colors.
@@ -160,20 +197,12 @@ fn picture(map: &Map) -> Image {
         let at = ((row * map.size.x + column) * 4) as usize;
         pixels[at..at + 4].copy_from_slice(&arena::tile_color(arena::Theme::of(map.id), kind).to_srgba().to_u8_array());
     }
-    let mut image = Image::new(
-        Extent3d { width: size.x, height: size.y, depth_or_array_layers: 1 },
-        TextureDimension::D2,
-        pixels,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    // Crisp tiles, not blurred.
-    image.sampler = ImageSampler::nearest();
-    image
+    crisp_image(size.x, size.y, pixels)
 }
 
 /// The minimap, empty: `draw_map` puts the map in it.
-fn spawn_minimap(mut commands: Commands) {
+fn spawn_minimap(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    let cone = images.add(cone_picture());
     commands
         .spawn((
             Minimap,
@@ -192,6 +221,14 @@ fn spawn_minimap(mut commands: Commands) {
             ViewFrame,
             Node { position_type: PositionType::Absolute, border: UiRect::all(px(1.0)), ..default() },
             BorderColor::all(palette::ui::TEXT),
+        ))
+        .with_child((
+            LookCone,
+            Node { position_type: PositionType::Absolute, width: px(CONE), height: px(CONE), ..default() },
+            ImageNode { image: cone, color: palette::YOU.with_alpha(0.9), ..default() },
+            UiTransform::default(),
+            Visibility::Hidden,
+            ZIndex(-1),
         ))
         .with_child((
             DestinationDot,
@@ -287,16 +324,19 @@ fn left_fullscreen(mut window: Single<&mut Window, With<bevy::window::PrimaryWin
     let _ = (&mut window, &mut was_full);
 }
 
-/// The full screen button shows which way a click goes: out to full screen, or back in.
+/// The full screen button shows which way a click goes: out to full screen, or back in. Drawn
+/// anew only when that changes (the window is changed for much else, every frame).
 fn show_fullscreen(
     mut commands: Commands,
-    window: Single<Ref<Window>, With<bevy::window::PrimaryWindow>>,
+    window: Single<&Window, With<bevy::window::PrimaryWindow>>,
     button: Single<Ref<FullscreenButton>>,
+    mut shown: Local<Option<bool>>,
 ) {
-    if !window.is_changed() && !button.is_added() {
+    let full = window.mode != bevy::window::WindowMode::Windowed;
+    if *shown == Some(full) && !button.is_added() {
         return;
     }
-    let full = window.mode != bevy::window::WindowMode::Windowed;
+    *shown = Some(full);
     commands.entity(button.art).despawn_children().with_children(|art| pixel_art(art, FULLSCREEN_ART[full as usize], PADLOCK_PIXEL, palette::ui::TEXT));
 }
 
@@ -308,118 +348,169 @@ fn click_lock(lock: Single<Ref<Interaction>, With<CameraLock>>, mut mode: ResMut
 }
 
 /// The lock shows the camera's: shut and plain while it follows you, open and lit while it's
-/// unlocked.
-fn show_lock(mut commands: Commands, mode: Res<CameraMode>, lock: Single<(Ref<CameraLock>, &mut BorderColor)>) {
+/// unlocked. Drawn anew only when that changes (the camera's mode is changed for much else,
+/// every frame).
+fn show_lock(mut commands: Commands, mode: Res<CameraMode>, lock: Single<(Ref<CameraLock>, &mut BorderColor)>, mut shown: Local<Option<bool>>) {
     let (lock, mut border) = lock.into_inner();
-    if !mode.is_changed() && !lock.is_added() {
+    if *shown == Some(mode.unlocked) && !lock.is_added() {
         return;
     }
+    *shown = Some(mode.unlocked);
     let color = if mode.unlocked { palette::ui::ACCENT } else { palette::ui::TEXT };
     border.set_if_neq(BorderColor::all(if mode.unlocked { palette::ui::ACCENT } else { palette::ui::MUTED }));
     commands.entity(lock.art).despawn_children().with_children(|art| pixel_art(art, PADLOCK[mode.unlocked as usize], PADLOCK_PIXEL, color));
 }
 
-/// Puts the destination's ring on `at`, on `map`'s minimap.
-pub(crate) fn place_destination(node: &mut Node, map: &Map, at: Vec2) {
-    place(node, map, at, DESTINATION);
+/// Puts the destination's ring on `at`, on `map`'s minimap showing `view`.
+pub(crate) fn place_destination(node: &mut Node, map: &Map, view: &MinimapView, at: Vec2) {
+    place(node, map, view, at, DESTINATION);
 }
 
-/// The map, drawn in the minimap at the size it takes there: the node is that and its frame (a
-/// node's size takes its border in), so the picture is drawn at exactly `picture_size`, as dots,
-/// marks and clicks (`ground_on_minimap`) count on.
-fn draw_map(current: Res<CurrentMap>, mut images: ResMut<Assets<Image>>, minimap: Single<(&mut Node, &mut ImageNode), With<Minimap>>) {
+/// The map, drawn into the minimap (what of it it shows, and how big, is `frame_minimap`'s).
+fn draw_map(current: Res<CurrentMap>, mut images: ResMut<Assets<Image>>, mut image: Single<&mut ImageNode, With<Minimap>>) {
+    image.image = images.add(picture(current.map()));
+}
+
+/// What the minimap shows (`MinimapView`), every frame: the ground round us in the corner, or
+/// (M, again to close it) the whole map big in the middle of the screen. The node is the picture
+/// and its frame (a node's size takes its border in), so the picture is drawn at exactly the
+/// view's size, as dots, marks and clicks count on; the picture shows just the tiles in view.
+#[allow(clippy::too_many_arguments)]
+fn frame_minimap(
+    keys: Res<ButtonInput<KeyCode>>,
+    typing: Option<Res<crate::browser::Typing>>,
+    current: Res<CurrentMap>,
+    window: Single<&Window, With<bevy::window::PrimaryWindow>>,
+    me: Query<&Pos, (With<Me>, With<PlayerId>)>,
+    mut view: ResMut<MinimapView>,
+    minimap: Single<(&mut Node, &mut ImageNode), With<Minimap>>,
+) {
     let map = current.map();
+    let tiles = map.size.as_vec2();
+    let full = view.full != (keys.just_pressed(KeyCode::KeyM) && !typing.is_some_and(|t| t.0));
+    let screen = Vec2::new(window.width(), window.height());
+    let wanted = if full {
+        let scale = (screen * FULL_ROOM / tiles).min_element();
+        MinimapView { scale, corner: Vec2::ZERO, size: (tiles * scale).round(), full }
+    } else {
+        let fit = (ROOM / tiles).min_element();
+        let (size, scale) = ((tiles * fit).round(), fit * ZOOM);
+        let shown = size / scale;
+        let half = map.half_extents();
+        let middle = me.single().map_or(tiles / 2.0, |pos| Vec2::new(pos.0.x + half.x, half.y - pos.0.y));
+        // On whole screen pixels, so the picture and the dots on it step together.
+        let corner = ((middle - shown / 2.0).clamp(Vec2::ZERO, (tiles - shown).max(Vec2::ZERO)) * scale).round() / scale;
+        MinimapView { scale, corner, size, full }
+    };
+    view.set_if_neq(wanted);
     let (mut node, mut image) = minimap.into_inner();
-    let size = picture_size(map);
-    node.width = px(size.x + 2.0 * FRAME);
-    node.height = px(size.y + 2.0 * FRAME);
-    image.image = images.add(picture(map));
-}
-
-/// Puts a mark `size` across centered on `at` on `map`'s minimap, writing only what changed (so
-/// the UI is only laid out again when it moves a pixel). Every frame: the map can change after a
-/// mark arrives.
-fn place(node: &mut Node, map: &Map, at: Vec2, size: f32) {
-    let at = on_minimap(map, at) - Vec2::splat(size / 2.0);
-    let (left, top) = (px(at.x), px(at.y));
-    if node.left != left || node.top != top {
-        node.left = left;
-        node.top = top;
+    let outer = wanted.size + 2.0 * FRAME;
+    let (left, top, right, bottom) = if full {
+        let at = ((screen - outer) / 2.0).round();
+        (px(at.x), px(at.y), Val::Auto, Val::Auto)
+    } else {
+        (Val::Auto, Val::Auto, px(MARGIN), px(MARGIN))
+    };
+    if [node.width, node.height, node.left, node.top, node.right, node.bottom] != [px(outer.x), px(outer.y), left, top, right, bottom] {
+        [node.width, node.height, node.left, node.top, node.right, node.bottom] = [px(outer.x), px(outer.y), left, top, right, bottom];
+    }
+    let rect = Some(Rect::from_corners(wanted.corner, wanted.corner + wanted.size / wanted.scale));
+    if image.rect != rect {
+        image.rect = rect;
     }
 }
 
-/// A dot in its own color whoever its fighter is to us (the merchant's gold).
-#[derive(Component)]
-struct KeepsColor;
-
-/// Each fighter gets a dot once it has a body.
-fn spawn_dots(
-    mut commands: Commands,
-    minimap: Single<Entity, With<Minimap>>,
-    new: Query<(Entity, &ClassId, Has<Me>, Has<Shopkeeper>), (With<PlayerId>, Added<Mesh3d>)>,
+/// Which way we look, over the shoulder (`CameraMode::free`): the cone out from our dot, turned
+/// the way the camera faces. Hidden looking down from above, or off what the minimap shows.
+fn point_cone(
+    current: Res<CurrentMap>,
+    view: Res<MinimapView>,
+    mode: Res<CameraMode>,
+    camera: Single<&GlobalTransform, With<crate::camera::CameraRig>>,
+    me: Query<&Pos, (With<Me>, With<PlayerId>)>,
+    cone: Single<(&mut Node, &mut UiTransform, &mut Visibility), With<LookCone>>,
 ) {
-    for (player, class, is_me, shopkeeper) in &new {
+    let (mut node, mut turn, mut visibility) = cone.into_inner();
+    let Some(pos) = me.single().ok().filter(|_| mode.free) else {
+        visibility.set_if_neq(Visibility::Hidden);
+        return;
+    };
+    visibility.set_if_neq(Visibility::Inherited);
+    place(&mut node, current.map(), &view, pos.0, CONE);
+    // The camera's facing on the ground; up the picture is north, and the cone turns clockwise.
+    let ahead = camera.forward();
+    let rotation = Rot2::radians(ahead.x.atan2(-ahead.z));
+    if turn.rotation != rotation {
+        turn.rotation = rotation;
+    }
+}
+
+/// Puts a mark `size` across centered on `at` on `map`'s minimap showing `view` (hidden while
+/// that's off what it shows), writing only what changed (so the UI is only laid out again when it
+/// moves a pixel). Every frame: the map can change after a mark arrives.
+fn place(node: &mut Node, map: &Map, view: &MinimapView, at: Vec2, size: f32) {
+    let middle = view.on_minimap(map, at);
+    let display = if view.shows(middle) { Display::Flex } else { Display::None };
+    let at = middle - Vec2::splat(size / 2.0);
+    let (left, top) = (px(at.x), px(at.y));
+    if node.left != left || node.top != top || node.display != display {
+        node.left = left;
+        node.top = top;
+        node.display = display;
+    }
+}
+
+/// Every living fighter with a body as a dot on the minimap, round, in its `Relation` color
+/// (ours, an ally's, an enemy's or a monster's; the merchant's gold), ringed: on whole pixels, as
+/// `place`'s are, ours over the rest. Drawn as round rectangles (`Rects`) just over the minimap's
+/// picture, under its marks: a crowd's dots as nodes made Bevy go over every one of them every
+/// frame.
+#[allow(clippy::type_complexity)]
+fn draw_dots(
+    current: Res<CurrentMap>,
+    view: Res<MinimapView>,
+    minimap: Single<(Entity, &ComputedNode, &UiGlobalTransform, &InheritedVisibility), With<Minimap>>,
+    fighters: Query<(&Pos, &ClassId, Option<&Health>, Option<&Relation>, Has<Me>, Has<Shopkeeper>), (With<PlayerId>, With<Mesh3d>)>,
+    mut rects: ResMut<crate::rects::Rects>,
+) {
+    let (minimap, node, transform, visible) = *minimap;
+    if !visible.get() {
+        return;
+    }
+    rects.over(minimap);
+    let scale = node.inverse_scale_factor.recip();
+    let corner = transform.translation - node.size() / 2.0 + node.border().min_inset;
+    let ring = scale.round().max(1.0);
+    let mut dot = |at: Vec2, size: f32, fill: Color| {
+        let middle = view.on_minimap(current.map(), at);
+        if !view.shows(middle) {
+            return;
+        }
+        let from = corner + (middle - Vec2::splat(size / 2.0)).round() * scale;
+        let to = from + Vec2::splat(size * scale);
+        rects.round(from.into(), to.into(), size * scale, palette::ui::PANEL);
+        rects.round((from + ring).into(), (to - ring).into(), size * scale, fill);
+    };
+    let mut me = None;
+    for (pos, class, health, relation, is_me, shopkeeper) in &fighters {
+        if !health.is_none_or(Health::alive) {
+            continue;
+        }
         // The merchant and bosses stand out: bigger, the merchant in gold.
-        let boss = class.def().is_boss();
         let size = match () {
-            _ if shopkeeper || boss => DOT * 1.6,
+            _ if shopkeeper || class.def().is_boss() => DOT * 1.6,
             _ if class.def().playable => DOT,
             _ => MONSTER_DOT,
         };
-        let fill = if shopkeeper { palette::GOLD } else { Relation::of(is_me, false).color() };
-        let dot = commands
-            .spawn((
-                Dot { player, size },
-                Node {
-                    position_type: PositionType::Absolute,
-                    width: px(size),
-                    height: px(size),
-                    border: UiRect::all(px(1.0)),
-                    border_radius: BorderRadius::MAX,
-                    ..default()
-                },
-                BackgroundColor(fill),
-                BorderColor::all(palette::ui::PANEL),
-            ))
-            .id();
-        if shopkeeper {
-            commands.entity(dot).insert(KeepsColor);
-        }
-        commands.entity(*minimap).add_child(dot);
-    }
-}
-
-/// A dot is in its fighter's `Relation` color: ours, an ally's, an enemy's or a monster's.
-fn color_dots(
-    players: Query<&Relation>,
-    changed: Query<(), Changed<Relation>>,
-    mut dots: Query<(Ref<Dot>, &mut BackgroundColor), Without<KeepsColor>>,
-) {
-    for (dot, mut fill) in &mut dots {
-        if !(changed.contains(dot.player) || dot.is_added()) {
-            continue;
-        }
-        if let Ok(relation) = players.get(dot.player) {
-            fill.set_if_neq(BackgroundColor(relation.color()));
+        let fill = if shopkeeper { palette::GOLD } else { relation.copied().unwrap_or(Relation::of(is_me, false)).color() };
+        if is_me {
+            me = Some((pos.0, size, fill));
+        } else {
+            dot(pos.0, size, fill);
         }
     }
-}
-
-/// Keep dots on their fighters (only writing what changed); the dead's are hidden, the gone's
-/// removed.
-fn place_dots(
-    mut commands: Commands,
-    current: Res<CurrentMap>,
-    players: Query<(&Pos, Option<&Health>)>,
-    mut dots: Query<(Entity, &Dot, &mut Node, &mut Visibility)>,
-) {
-    for (dot, owner, mut node, mut visibility) in &mut dots {
-        let Ok((pos, health)) = players.get(owner.player) else {
-            commands.entity(dot).despawn();
-            continue;
-        };
-        visibility.set_if_neq(shown(health.is_none_or(Health::alive)));
-        place(&mut node, current.map(), pos.0, owner.size);
+    if let Some((at, size, fill)) = me {
+        dot(at, size, fill);
     }
 }
 
@@ -459,6 +550,7 @@ fn update_markers(
     mut commands: Commands,
     clock: AttackClock,
     current: Res<CurrentMap>,
+    view: Res<MinimapView>,
     pickups: Query<&Pickup>,
     mut markers: Query<(Entity, &mut PickupMarker, &mut Node, &mut BackgroundColor)>,
     mut texts: Query<(&mut Text, &mut TextColor)>,
@@ -469,7 +561,7 @@ fn update_markers(
             commands.entity(entity).despawn();
             continue;
         };
-        place(&mut node, current.map(), pickup.at, MARKER);
+        place(&mut node, current.map(), &view, pickup.at, MARKER);
         let wanted = pickup.back_at.map(|back_at| ((back_at as f32 - now) / TICK_HZ as f32).ceil().max(1.0) as u32);
         if marker.showing == wanted {
             continue;
@@ -523,6 +615,7 @@ fn update_gate_marks(
     mut commands: Commands,
     clock: AttackClock,
     current: Res<CurrentMap>,
+    view: Res<MinimapView>,
     gates: Query<&Waygate>,
     mut marks: Query<(Entity, &GateMark, &mut Node, &mut BorderColor)>,
 ) {
@@ -532,19 +625,29 @@ fn update_gate_marks(
             commands.entity(entity).despawn();
             continue;
         };
-        place(&mut node, current.map(), gate.ends[mark.end], GATE_MARK);
+        place(&mut node, current.map(), &view, gate.ends[mark.end], GATE_MARK);
         let open = gate.closed_for(now) == 0.0;
         let color = if open { palette::SPIRIT } else { palette::SPIRIT.with_alpha(0.3) };
         border.set_if_neq(BorderColor::all(color));
     }
 }
 
-/// Frame the ground the camera sees: where the screen's corners hit the ground, boxed.
+/// Frame the ground the camera sees: where the screen's corners hit the ground, boxed. Not for
+/// the action camera (`CameraMode::free`): it looks out to the horizon, over the ground's end.
 fn frame_view(
     current: Res<CurrentMap>,
-    camera: Single<(&Camera, &GlobalTransform), Changed<GlobalTransform>>,
+    view: Res<MinimapView>,
+    mode: Res<CameraMode>,
+    camera: Single<(&Camera, &GlobalTransform), (With<crate::camera::CameraRig>, Changed<GlobalTransform>)>,
     mut frame: Single<&mut Node, With<ViewFrame>>,
 ) {
+    let display = if mode.free { Display::None } else { Display::Flex };
+    if frame.display != display {
+        frame.display = display;
+    }
+    if mode.free {
+        return;
+    }
     let map = current.map();
     let (camera, transform) = *camera;
     let Some(size) = camera.logical_viewport_size() else { return };
@@ -552,11 +655,10 @@ fn frame_view(
     let (mut min, mut max) = (Vec2::MAX, Vec2::MIN);
     for corner in corners {
         let Some(ground) = ground_at(camera, transform, corner) else { return };
-        let at = on_minimap(map, ground);
+        let at = view.on_minimap(map, ground);
         (min, max) = (min.min(at), max.max(at));
     }
-    let picture = picture_size(map);
-    let (min, max) = (min.clamp(Vec2::ZERO, picture), max.clamp(Vec2::ZERO, picture));
+    let (min, max) = (min.clamp(Vec2::ZERO, view.size), max.clamp(Vec2::ZERO, view.size));
     let wanted = [px(min.x), px(min.y), px(max.x - min.x), px(max.y - min.y)];
     if [frame.left, frame.top, frame.width, frame.height] != wanted {
         [frame.left, frame.top, frame.width, frame.height] = wanted;

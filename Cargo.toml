@@ -10,7 +10,8 @@ edition = "2024"
 arena-shared = { path = "shared" }
 arena-client = { path = "client", default-features = false }
 # Pinned together: Lightyear 0.30 targets Bevy 0.19.
-bevy = { version = "0.19", default-features = false }
+# tonemapping_luts (with ktx2+zstd, its decoders): filmic tonemapping for the HDR camera.
+bevy = { version = "0.19", default-features = false, features = ["tonemapping_luts", "ktx2", "zstd_rust"] }
 lightyear = { version = "=0.30.1", default-features = false }
 serde = { version = "1", features = ["derive"] }
 

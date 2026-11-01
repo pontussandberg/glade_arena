@@ -8,7 +8,7 @@
     blurb: "Swollen to bursting. Do not be there when it does.",
     playable: false,
     max_hp: 80,
-    move_speed: 2.3,
+    move_speed: 2.65,
     attack: (
         damage: 10,
         attack_ticks: 48,

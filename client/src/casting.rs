@@ -1,4 +1,4 @@
-//! Quick cast and normal cast, LoL-style, for every ability (Q, W, E, R). Quick cast sends an
+//! Quick cast and normal cast, LoL-style, for every ability (1, 2, 3, 4). Quick cast sends an
 //! ability off toward the cursor the moment its key is pressed; normal cast first shows where it
 //! will go (its aim indicator, on the ground at your feet) and casts it on the next left click (a
 //! right click drops it, without walking). The quick cast switch, in the key hints, picks which
@@ -9,6 +9,7 @@
 use arena_shared::protocol::*;
 use bevy::prelude::*;
 
+use crate::plain::PlainMaterial;
 use crate::{DesiredInput, Me};
 use crate::arena::{self, palette};
 use crate::render::{HudButton, clicked, shown, ui_text};
@@ -53,7 +54,7 @@ pub(crate) struct Aiming(pub Option<AbilitySlot>);
 /// The key each ability slot is on, and how players read it. As many as a class may have
 /// abilities (`MAX_ABILITIES`, checked as the class files load).
 const ABILITY_KEYS: [(KeyCode, &str); MAX_ABILITIES] =
-    [(KeyCode::KeyQ, "Q"), (KeyCode::KeyW, "W"), (KeyCode::KeyE, "E"), (KeyCode::KeyR, "R")];
+    [(KeyCode::Digit1, "1"), (KeyCode::Digit2, "2"), (KeyCode::Digit3, "3"), (KeyCode::Digit4, "4")];
 
 /// The key the ability in `slot` is on.
 pub(crate) fn ability_key(slot: AbilitySlot) -> KeyCode {
@@ -63,11 +64,6 @@ pub(crate) fn ability_key(slot: AbilitySlot) -> KeyCode {
 /// The key the ability in `slot` is on, as players read it.
 pub(crate) fn key_label(slot: AbilitySlot) -> &'static str {
     ABILITY_KEYS[slot.0 as usize].1
-}
-
-/// Whether the ability in `slot` can be cast with its key: with the free camera, W walks.
-pub(crate) fn key_casts(slot: AbilitySlot, free_camera: bool) -> bool {
-    !(free_camera && ability_key(slot) == KeyCode::KeyW)
 }
 
 /// The quick cast switch and its label, the last row of the key hints
@@ -170,7 +166,7 @@ const INDICATOR_HEIGHT: f32 = 0.06;
 fn spawn_indicator(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PlainMaterial>>,
     me: Query<&ClassId, Added<Me>>,
     indicators: Query<Entity, With<AimIndicator>>,
 ) {
@@ -192,11 +188,14 @@ fn spawn_indicator(
     }
 }
 
-/// Shows the indicator of the ability being aimed at our feet, turned toward the cursor. Dropped
-/// (aiming ends) once we're dead.
+/// Shows the indicator of the ability being aimed at our feet, turned toward the cursor; a
+/// strike's where it would land (`CameraMode::strike_aim`). Dropped (aiming ends) once we're
+/// dead.
 fn show_indicator(
     mut aiming: ResMut<Aiming>,
     desired: Res<DesiredInput>,
+    mode: Res<crate::camera::CameraMode>,
+    map: Res<crate::rooms::CurrentMap>,
     me: Query<(&Transform, &Health, &ClassId), (With<Me>, With<PlayerId>, Without<AimIndicator>)>,
     mut indicators: Query<(&AimIndicator, &mut Transform, &mut Visibility)>,
 ) {
@@ -211,7 +210,12 @@ fn show_indicator(
         let Some(ability) = class.def().ability(indicator.slot) else { continue };
         let turn = if indicator.aimed { desired.0.aim.to_angle() } else { 0.0 };
         let length = crate::abilities::indicator_length(&ability.kind, desired.0.aim);
-        let wanted = Transform::from_xyz(at.translation.x, INDICATOR_HEIGHT, at.translation.z)
+        let feet = arena::to_gameplay(at.translation);
+        let place = match ability.kind {
+            arena_shared::abilities::AbilityKind::Strike(strike) => feet + mode.strike_aim(feet, strike.range),
+            _ => feet,
+        };
+        let wanted = Transform::from_translation(arena::to_world(place, map.map().height_at(place) + INDICATOR_HEIGHT))
             .with_rotation(Quat::from_rotation_y(turn))
             .with_scale(Vec3::new(length, 1.0, 1.0));
         transform.set_if_neq(wanted);

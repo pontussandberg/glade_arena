@@ -50,6 +50,11 @@ fn wander(seed: u32, k: u32, from: Vec3, dir: Vec3, length: f32, width: f32, ste
 /// A ragged blob 1 across its radius: solid inside, its rim wavering in and out and fading to
 /// clear a little past it: scorched earth, a splash, a glaze of frost.
 pub(super) fn splotch(seed: u32, ragged: f32) -> Mesh {
+    splotch_shape(seed, ragged).build()
+}
+
+/// `splotch`, its triangles not yet made a mesh (to lay over what's under it).
+pub(super) fn splotch_shape(seed: u32, ragged: f32) -> FlatMesh {
     let mut b = FlatMesh::default();
     let points = 40;
     let rim = |i: usize, out: f32| {
@@ -63,7 +68,7 @@ pub(super) fn splotch(seed: u32, ragged: f32) -> Mesh {
         b.tri_faded_both([rim(i, 0.0), rim(i, 0.18), rim(j, 0.18)], [0.9, 0.0, 0.0]);
         b.tri_faded_both([rim(i, 0.0), rim(j, 0.18), rim(j, 0.0)], [0.9, 0.0, 0.9]);
     }
-    b.build()
+    b
 }
 
 /// Streaks running out from the middle, 1 long at most, like soot thrown out round a blast, or
@@ -113,6 +118,11 @@ pub(super) fn cracks(seed: u32, count: u32) -> Mesh {
 /// branches like a fern of rime, side shoots off them at a sixth of a turn, finer shoots off
 /// those, each frond tapering to nothing.
 pub(super) fn frost(seed: u32) -> Mesh {
+    frost_shape(seed).build()
+}
+
+/// `frost`, its triangles not yet made a mesh (to lay over what's under it).
+pub(super) fn frost_shape(seed: u32) -> FlatMesh {
     let mut b = FlatMesh::default();
     // A frond from `from` along `dir`, `length` long, `width` at its root, shooting off sides
     // `depth` more times.
@@ -140,7 +150,7 @@ pub(super) fn frost(seed: u32) -> Mesh {
         let length = 0.6 + 0.4 * noise(seed, 20 + k);
         frond(&mut b, seed, 1000 + k * 97, dir * 0.04, dir, length, 0.045, 2);
     }
-    b.build()
+    b
 }
 
 /// A disc lying flat, 1 out (radius 1): solid in the middle, fading to clear at its

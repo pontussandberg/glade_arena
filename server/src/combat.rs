@@ -149,7 +149,9 @@ pub(super) fn damage(
     }
     let crit = blow.sure_crit || blow.crit_roll.is_some_and(|roll| roll < class.def().crit.chance_against(chilled.rooted_at(now), blow.empowered));
     let amount = if crit { (blow.amount as f32 * common().crit_multiplier).round() as i32 } else { blow.amount };
-    health.0 = (health.0 - amount).max(0);
+    // Measuring a crowd (`waves::HORDE`), a player is never brought down.
+    let least = i32::from(crate::waves::HORDE.is_some() && matches!(id, PeerId::Netcode(_)));
+    health.0 = (health.0 - amount).max(least);
     // A blow of crowd control alone (a slow, a freeze) shows no number.
     if amount > 0 {
         hits.push(amount, if crit { HitKind::Crit } else { HitKind::Damage });
@@ -183,8 +185,9 @@ pub(super) type Targets<'w, 's> = Query<
         &'static mut Chilled,
         &'static mut RecentHits,
         &'static MaxHealth,
-        // Kept from harm (just back), and whose decoy it is if it's one: never its owner's foe.
-        (Has<Sheltered>, Option<&'static crate::items::Decoy>),
+        // Kept from harm (just back), and whose decoy it is if it's one: never its owner's foe;
+        // and how high its feet are (every fighter has a motion: `spawning::fighter`).
+        (Has<Sheltered>, Option<&'static crate::items::Decoy>, &'static arena_shared::protocol::Motion),
     ),
     (InPlay, Without<Untouchable>),
 >;
@@ -207,16 +210,36 @@ pub(super) fn hit_foes(
     attacker: Attacker,
     (side, source): (Side, Source),
     blow: Blow,
-    mut hits: impl FnMut(PeerId, Vec2) -> bool,
+    mut hits: impl FnMut(PeerId, Vec2, f32) -> bool,
+) -> usize {
+    hit_foes_each(commands, log, now, targets, attacker, (side, source), |id, at, feet| hits(id, at, feet).then_some(blow))
+}
+
+/// `hit_foes`, with a blow of its own for each foe (`blow_for`, by who and where they are, and
+/// how high their feet are: `None` for one not hit).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn hit_foes_each(
+    commands: &mut Commands,
+    log: &mut HitLog,
+    now: u32,
+    targets: &mut Targets,
+    attacker: Attacker,
+    (side, source): (Side, Source),
+    mut blow_for: impl FnMut(PeerId, Vec2, f32) -> Option<Blow>,
 ) -> usize {
     let mut count = 0;
-    for (target, target_id, (room, team), target_pos, mut health, mut chilled, mut recent, _, (sheltered, decoy)) in targets {
+    for (target, target_id, (room, team), target_pos, mut health, mut chilled, mut recent, _, (sheltered, decoy, motion)) in targets {
         if owns(attacker.0, decoy) {
             continue;
         }
         // One killed already this tick (`damage`) isn't hit: a swing that only struck a body
         // didn't land. Nor is one just back and sheltered.
-        if health.0 > 0 && !sheltered && target_id.0 != attacker.0 && foes(side, (*room, *team)) && hits(target_id.0, target_pos.0) {
+        if health.0 > 0
+            && !sheltered
+            && target_id.0 != attacker.0
+            && foes(side, (*room, *team))
+            && let Some(blow) = blow_for(target_id.0, target_pos.0, motion.height)
+        {
             let hit = (&mut *health, &mut *chilled, &mut *recent);
             damage(commands, log, now, (target, target_id.0, target_pos.0), hit, blow, attacker, (side, source, None));
             count += 1;
@@ -224,6 +247,24 @@ pub(super) fn hit_foes(
     }
     count
 }
+
+/// Server-only: the second cut of an attack that cuts twice (`AttackDef::twice`), still to come
+/// at `at`: the swing it follows, how hard, and with what chill.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct SecondCut {
+    at: u32,
+    swing: LastSwing,
+    amount: i32,
+    chill: Chill,
+}
+
+/// Server-only: when each attacker last hit each victim with an auto-attack, for the classes
+/// whose first hit into someone not hit lately is sure to crit (`Crit::ambush_ticks`).
+#[derive(Resource, Default)]
+pub(crate) struct Ambushes(std::collections::HashMap<(PeerId, PeerId), u32>);
+
+/// How often (ticks) the ambush memory forgets hits too old to matter.
+const AMBUSH_FORGET_EVERY: u32 = 256;
 
 /// Auto-attacks, as they go off after their windup: projectiles are spawned; melee swings are
 /// resolved right here. Starting an attack drops the destination: afterwards the fighter stands
@@ -235,15 +276,20 @@ pub(super) fn attack(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut attackers: Query<
-        (Entity, &PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), (&Frenzy, Option<&Fury>), (&mut Cooldowns, Option<&Might>, Option<&arena_shared::items::Satchel>)),
+        (Entity, &PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), (&Frenzy, Option<&Fury>), (&mut Cooldowns, Option<&Might>, Option<&arena_shared::items::Satchel>), Has<crate::ActionMode>, Option<&arena_shared::protocol::Motion>),
         InPlay,
     >,
     mut targets: Targets,
     mut rifts: ResMut<Rifts>,
     mut log: ResMut<HitLog>,
+    mut ambushes: ResMut<Ambushes>,
 ) {
     let now = timeline.tick();
-    for (entity, id, class, pos, mut input, mut state, mut last_swing, (room, team), (frenzy, fury), (mut cooldowns, might, satchel)) in &mut attackers {
+    if now.0.is_multiple_of(AMBUSH_FORGET_EVERY) {
+        let longest = ClassId::all().map(|c| c.def().crit.ambush_ticks).max().unwrap_or(0);
+        ambushes.0.retain(|_, last| now.0.saturating_sub(*last) <= longest);
+    }
+    for (entity, id, class, pos, mut input, mut state, mut last_swing, (room, team), (frenzy, fury), (mut cooldowns, might, satchel), action, motion) in &mut attackers {
         let might = might_of(might);
         let side = (*room, *team);
         // Knocked up: no attacking; one winding up is lost.
@@ -252,11 +298,21 @@ pub(super) fn attack(
             state.set_if_neq(sim::cancel_attack(*state));
             continue;
         }
+        // In action mode an attack winding up follows the aim (and the line of sight beside it)
+        // until it goes off (`PlayerCommand::Aim`); the MOBA's locks it on the click.
+        if action
+            && let Some(swing) = state.winding_up()
+            && let Some(dir) = input.aim.try_normalize()
+            && (swing.dir != dir || swing.aside != input.aside)
+            && let Some(swing) = state.swing.as_mut()
+        {
+            (swing.dir, swing.aside) = (dir, input.aside);
+        }
         // A primed attack going off this tick is a sure crit (`primer`: the ability that readied it).
         let primer = state.primed.filter(|_| state.winding_up().is_some_and(|swing| swing.primed)).map(|(slot, _)| slot);
         let primed = primer.is_some();
         // In two halves (`sim::step_attack`): a swing that lands arms a quick attack in between.
-        let (mut next, released) = sim::release_attack(now.0, id.0, *class, pos.0, *state);
+        let (mut next, released) = sim::release_attack(now.0, id.0, *class, pos.0, input.draw, *state);
         // The prime that readied it is used up now: its cooldown starts.
         if released.is_some()
             && let Some(slot) = primer
@@ -264,17 +320,29 @@ pub(super) fn attack(
         {
             cooldowns.start_own(slot, ability, now.0);
         }
+        // How high the attacker's feet are just now (the ground, a jump): a shot's thrown from
+        // there, a swing sweeps round there.
+        let feet = motion.map_or_else(|| lobby.map(room).height_at(pos.0), |motion| motion.height);
         match released {
             None => {}
             Some(sim::Attack::Projectile(projectile)) => {
-                spawn_projectile(&mut commands, Projectile { crit: primed, ..projectile }, side, might);
+                // Pitched as the aim is now (action mode's; level in the MOBA), and in action mode
+                // let go from the raised hand onto the crosshair's line.
+                let projectile = Projectile { crit: primed, climb: input.climb, lift: feet, ..projectile };
+                let projectile = if action { sim::onto_sight(lobby.map(room), projectile, pos.0, input.aside, feet) } else { projectile };
+                spawn_projectile(&mut commands, projectile, side, might);
             }
             Some(sim::Attack::Melee(mut swing)) => {
+                // In action mode its lane runs along the crosshair's line, as far out to the
+                // right as a wall beside lets the camera's (`sim::shoulder_room`); in the MOBA
+                // straight out from the striker.
+                let right = Vec2::new(swing.dir.y, -swing.dir.x).normalize_or_zero();
+                swing.aside = if action { swing.aside.clamp(0.0, sim::shoulder_room(lobby.map(room), pos.0, right, feet)) } else { 0.0 };
                 // An empowered strike grows with a Gravecaller Rift.
                 let level = satchel.map_or(0, |s| s.level(arena_shared::items::Item::GravecallerRift));
                 swing.grown = if swing.empowered && level > 0 { arena_shared::items::gravecaller_rift(level) } else { 0.0 };
                 *last_swing = swing;
-                if let Some(rift) = sim::Rift::torn(id.0, *class, pos.0, &swing) {
+                if let Some(rift) = sim::Rift::torn(id.0, *class, pos.0, feet, &swing) {
                     rifts.0.push((*room, rift));
                 }
                 let amount = mighty(class.def().attack.damage, might);
@@ -285,9 +353,20 @@ pub(super) fn attack(
                 }
                 let blow = Blow::attack(amount, chill, swing.empowered, primed);
                 let with = (id.0, *class, "auto-attack");
-                let landed = hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Attack), blow, |_, at| {
-                    sim::melee_hits(lobby.map(room), pos.0, swing.dir, (swing.empowered, swing.grown), *class, at)
+                // An ambush (`Crit::ambush_ticks`): the first hit into someone not hit lately is
+                // sure to crit. Each hit is noted as it lands.
+                let ambush = class.def().crit.ambush_ticks;
+                let landed = hit_foes_each(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Attack), |target, at, target_feet| {
+                    if !sim::melee_hits(lobby.map(room), (swing.lane_from(pos.0), feet), swing.dir, (swing.empowered, swing.grown), *class, (at, target_feet)) {
+                        return None;
+                    }
+                    let fresh = ambush > 0 && ambushes.0.insert((id.0, target), now.0).is_none_or(|last| now.0 - last > ambush);
+                    Some(Blow { sure_crit: blow.sure_crit || fresh, ..blow })
                 });
+                // The second cut, a beat behind.
+                if let Some(gap) = class.def().attack.twice {
+                    commands.entity(entity).insert(SecondCut { at: now.0 + gap, swing, amount, chill });
+                }
                 if landed > 0
                     && let Some(follow_up) = class.def().attack.follow_up
                 {
@@ -305,17 +384,57 @@ pub(super) fn attack(
         if next.swing.is_some_and(|w| w.started_at == now.0) {
             input.move_to = None;
         }
+        // Unstoppable: nothing applied through the windup takes (`Chilled::steady`), from the
+        // click to the blow going off.
+        if class.def().attack.unstoppable
+            && let Ok((.., mut chilled, _, _, _)) = targets.get_mut(entity)
+        {
+            let steady = next.winding_up().map_or(Span::default(), |swing| Span { from: swing.started_at, until: swing.releases_at(&class.def().attack) });
+            if chilled.steady != steady {
+                chilled.steady = steady;
+            }
+        }
         // Only on change: AttackState is replicated.
         state.set_if_neq(next);
     }
 }
 
-/// Server-only: knocked back along `dir` (a monster hit by a player's auto-attack), `left` meters
-/// of it still to go.
+/// The second cut of an attack that cuts twice (`SecondCut`), as its time comes: the same lane,
+/// from where its striker stands now. Never an ambush (the first cut was the ambush), and never
+/// from one who has fallen since.
+pub(super) fn second_cuts(
+    mut commands: Commands,
+    timeline: Res<LocalTimeline>,
+    lobby: Res<Lobby>,
+    cutters: Query<(Entity, &PlayerId, &ClassId, (&Pos, &arena_shared::protocol::Motion), (&InRoom, &Team), &SecondCut)>,
+    mut targets: Targets,
+    mut log: ResMut<HitLog>,
+) {
+    let now = timeline.tick().0;
+    for (entity, id, class, (pos, motion), (room, team), cut) in &cutters {
+        if cut.at > now {
+            continue;
+        }
+        commands.entity(entity).remove::<SecondCut>();
+        if !targets.get(entity).is_ok_and(|(_, _, _, _, health, ..)| health.0 > 0) {
+            continue;
+        }
+        let blow = Blow::attack(cut.amount, cut.chill, cut.swing.empowered, false);
+        let with = (id.0, *class, "auto-attack");
+        hit_foes(&mut commands, &mut log, now, &mut targets, with, ((*room, *team), Source::Attack), blow, |_, at, feet| {
+            sim::melee_hits(lobby.map(room), (cut.swing.lane_from(pos.0), motion.height), cut.swing.dir, (cut.swing.empowered, cut.swing.grown), *class, (at, feet))
+        });
+    }
+}
+
+/// Server-only: knocked back along `dir` (a monster hit by a player's auto-attack, anyone hit by
+/// an attack that shoves), `left` meters of it still to go. Meeting a wall before then with
+/// `slam` ticks of stun to give, it's stunned there (`ShoveDef::wall_root_ticks`).
 #[derive(Component)]
 pub(crate) struct Shoved {
     pub(crate) dir: Vec2,
     pub(crate) left: f32,
+    pub(crate) slam: u32,
 }
 
 /// How far a player's auto-attack knocks a monster back (a bigger one less; bosses not at all),
@@ -323,9 +442,19 @@ pub(crate) struct Shoved {
 pub(crate) const KNOCKBACK: f32 = 0.55;
 const SHOVE_SPEED: f32 = 7.0;
 
-/// The knocked back slide, a step a tick, until it's gone its way or meets a wall.
-pub(super) fn shove(mut commands: Commands, lobby: Res<Lobby>, mut shoved: Query<(Entity, &mut Pos, &InRoom, &mut Shoved)>) {
-    for (entity, mut pos, room, mut shove) in &mut shoved {
+/// How far round someone slammed into a wall the wallop shows.
+const WALLOP_RADIUS: f32 = 0.7;
+
+/// The knocked back slide, a step a tick, until it's gone its way or meets a wall: slammed into
+/// it, if the shove had a slam in it, stunned there, the wallop shown.
+pub(super) fn shove(
+    mut commands: Commands,
+    timeline: Res<LocalTimeline>,
+    lobby: Res<Lobby>,
+    mut shoved: Query<(Entity, &mut Pos, &InRoom, &mut Shoved, &mut Chilled)>,
+) {
+    let now = timeline.tick().0;
+    for (entity, mut pos, room, mut shove, mut chilled) in &mut shoved {
         let step = shove.left.min(SHOVE_SPEED * TICK_DT);
         let next = pos.0 + shove.dir * step;
         if lobby.map(room).line_walkable(pos.0, next) {
@@ -333,6 +462,10 @@ pub(super) fn shove(mut commands: Commands, lobby: Res<Lobby>, mut shoved: Query
             shove.left -= step;
         } else {
             shove.left = 0.0;
+            if shove.slam > 0 {
+                chilled.apply(Chill { root_ticks: shove.slam, ..Chill::default() }, now);
+                crate::fx::spawn_fx(&mut commands, *room, Fx::at(FxKind::Wallop, pos.0, WALLOP_RADIUS, now, shove.slam));
+            }
         }
         if shove.left <= 1e-4 {
             commands.entity(entity).remove::<Shoved>();
@@ -352,6 +485,7 @@ pub(super) struct Rifts(pub(super) Vec<(InRoom, sim::Rift)>);
 pub(super) fn burn_rifts(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
+    lobby: Res<Lobby>,
     rifts: Res<Rifts>,
     mut targets: Targets,
     classes: Query<&ClassId>,
@@ -371,8 +505,9 @@ pub(super) fn burn_rifts(
         let Ok(class) = classes.get(entity).copied() else { continue };
         let theirs: Vec<sim::Rift> = rifts.0.iter().filter(|(room, rift)| *room == side.0 && rift.owner == owner && rift.until > now).map(|(_, rift)| *rift).collect();
         let (burn, leech) = (theirs[0].burn, theirs[0].leech);
-        let burned = hit_foes(&mut commands, &mut log, now, &mut targets, (owner, class, "rift"), (side, Source::Passive), Blow::ability(burn, Chill::default()), |_, at| {
-            theirs.iter().any(|rift| rift.holds(at, now))
+        let map = lobby.map(&side.0);
+        let burned = hit_foes(&mut commands, &mut log, now, &mut targets, (owner, class, "rift"), (side, Source::Passive), Blow::ability(burn, Chill::default()), |_, at, feet| {
+            theirs.iter().any(|rift| rift.holds(map, at, feet, now))
         });
         let owed = owed.entry(owner).or_default();
         *owed += burn as f32 * burned as f32 * leech;

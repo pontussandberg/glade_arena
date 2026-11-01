@@ -8,9 +8,10 @@ use crate::arena;
 
 pub(super) const JAVELINIST: Moves = Moves {
     // Overhand: carried straight up, cocked up behind the shoulder (the hand over it, the spear
-    // over the shoulder, the arm under it), the spear let go just as the arm starts forward
-    // (`contact`), the empty arm whipping on over the top after it (not down past the hip) and
-    // down in front. After the throw it reaches back up over the shoulder for the next.
+    // over the shoulder, the arm under it), driven up and forward and let go at the top, the hand
+    // up over the shoulder (`contact`), the empty arm whipping on over the top after it (not down
+    // past the hip) and down in front. After the throw it reaches back up over the shoulder for
+    // the next.
     weapon_arm: [-2.9, -2.6, -5.45, -2.1],
     weapon_arm_untwist: 1.0,
     // A long arm, reaching mid-thigh.
@@ -23,10 +24,17 @@ pub(super) const JAVELINIST: Moves = Moves {
     // hand by the left hip.
     elbow: [0.3, -0.35, 0.8, 0.3],
     elbow_turn: [FRAC_PI_2, 0.0, 1.78, FRAC_PI_2],
-    arm_yaw: [0.0, 0.0, 1.56, 0.0],
+    // Drawn a little out to the right, over that shoulder, not round behind the back; after the
+    // throw, come in across the body.
+    arm_yaw: [0.0, -0.4, 1.56, 0.0],
     windmill: false,
     // One-armed: the empty sleeve hangs nearly limp.
     lead_arm: [0.0, 0.1, -0.1, 0.0],
+    lead_elbow: [0.0; 4],
+    lead_elbow_turn: [0.0; 4],
+    lead_yaw: [0.0; 4],
+    lead_grip: 0.0,
+    lead_hold: [0.0; 4],
     // Sinking low into the windup, knees bent: the lead thigh well forward over an upright shin,
     // the back leg stretched out behind, a little bent, both feet down; still low through the
     // throw.
@@ -37,28 +45,42 @@ pub(super) const JAVELINIST: Moves = Moves {
     // The hips turning a little with the shoulders, back into the windup and round through the
     // throw.
     hip_turn: 0.3,
+    back_leg_turn: [0.0; 4],
+    lead_leg_turn: [0.0; 4],
     // Drawn: the shoulder turned back only so far that the javelin, held on target, stays clear
     // of the head. Released: the whole shoulder driven round after the arm and on past the
     // facing, the throwing side leading, held there through the follow-through.
-    twist: [0.0, -0.8, 1.15, 0.0],
+    twist: [0.0, -0.5, 1.15, 0.0],
     // Leaning back at full draw (sunk low on bent knees), then pitching forward through the
     // throw and over into the follow-through.
     lean: [0.0, 0.5, -0.8, -0.45],
+    side_lean: [0.0; 4],
     standing_lean: 0.0,
     standing_arm: 0.0,
     rests: false,
     stride: 1.0,
+    gait: EVEN,
+    // Shifting easily from foot to foot, and now and then hitching the javelin higher on the
+    // shoulder, the elbow working, with a roll of the neck.
+    idle: Idle {
+        shift: 0.14,
+        every: 5.0,
+        hold: 0.35,
+        gesture: Angles { weapon_arm: -0.4, elbow: 0.3, twist: 0.2, head_dip: 0.2, lean: 0.04, ..STILL },
+    },
     head_dip: [0.0, 0.3, -0.15, 0.0],
-    // Tipped up a little over the aim carried; cocked, its point dipped toward the target, down
-    // to the height it flies at, right over the thrower's middle: it leaves the hand just where
-    // its real path starts (`render::THROWN_HEIGHT`).
-    held: Held::OnTarget([0.12, -0.3, 0.0, 0.12]),
+    head_turn: [0.0; 4],
+    // Tipped up a little over the aim carried; cocked and thrown level along the aim, so it
+    // leaves the hand pointing the way it flies, just where its real path starts
+    // (`config::RELEASE_HEIGHT`, `config::RELEASE_ASIDE`).
+    held: Held::OnTarget([0.12, 0.0, 0.0, 0.12]),
     throws: true,
     scale: 1.16,
     stretch: 0.0,
-    // Drawn back, a short hold at full draw, then snapped out of it, quick.
+    // Drawn back, a short hold at full draw, then driven out of it, long enough that the arm gets
+    // up to the top of the throw (its joints on their springs) by the time the spear goes.
     draw_end: 0.553,
-    strike_ticks: 1.5,
+    strike_ticks: 3.5,
     heavy: false,
     // After the arm has carried on down through the throw, held there bent over it a while
     // (unless walking off cuts it short), then standing calmly back up, the next spear drawn
@@ -68,8 +90,14 @@ pub(super) const JAVELINIST: Moves = Moves {
     damping: JOINT_DAMPING,
     head_follow: HEAD_FOLLOW,
     swing_yaw: 0.0,
-    // Let go early, just as the arm starts forward out of the cock (the spear's point over the
-    // thrower's middle then): the arm whips on through after it (`WHIP_TICKS`), the shoulder
-    // and the lean carrying on, a whole-body throw.
-    contact: 0.2,
+    lands_on_lane: false,
+    body_leads: 0.0,
+    // Turned only a touch toward the crosshair as it draws and throws: the shot flies along the
+    // facing, so the lunge and the bend over into the follow-through go that way too, toward the
+    // middle of the screen, not out past it to the right.
+    aim_turn: 0.1,
+    // Let go at the top of the throw, the hand up over the shoulder and the spear's point out in
+    // front at the height of the crosshair's line: the arm whips on through after it
+    // (`WHIP_TICKS`), the shoulder and the lean carrying on, a whole-body throw.
+    contact: 0.8,
 };

@@ -64,6 +64,11 @@ exception to "no autumn oranges" below, kept dull enough that Enemy red still st
    still, lighter than real cloth (`client/src/cloth/`). Energy only at the edges: a thin
    glowing hem, ends that burn away into light, motes rising off them, in the class's own light
    (the javelinist's white, the revenant's wisp green). The rest stays dark.
+7. **What looks solid is solid.** Anything in the world that reads as something you'd bump into
+   (posts, merlons, beams, railings, stones, barrels) blocks a body exactly where it's
+   drawn. Only clutter is walked through: grass, flowers, reeds, pebbles, loose rubble, small
+   floor debris, all low enough to read as underfoot. Keep the tops people run along clear (a wall
+   walk, a lookout): a post or a merlon there only snags a jump or a strafe.
 
 ## Palette
 

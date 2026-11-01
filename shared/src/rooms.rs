@@ -24,7 +24,7 @@ pub enum Mode {
     /// Two teams; members pick their side.
     Teams,
     /// Everyone together against endless waves of monsters, buying items between them
-    /// (`RunView`). On its own map (`MapId::Wilds`).
+    /// (`RunView`). On its own maps (`Mode::maps`), Ravenhold first.
     Waves,
 }
 
@@ -63,17 +63,19 @@ impl Mode {
     pub const PVP: [Mode; 2] = [Mode::Ffa, Mode::Teams];
     pub const PVE: [Mode; 1] = [Mode::Waves];
 
-    /// The maps it may be played on: the waves have theirs.
+    /// The maps it may be played on: the waves have theirs, the first the one it's played on
+    /// unless another is picked.
     pub fn maps(self) -> &'static [MapId] {
         match self {
-            Mode::Waves => &[MapId::Wilds],
+            Mode::Waves => &[MapId::Hold, MapId::Wilds, MapId::Bastion],
             _ => &MapId::PVP,
         }
     }
 
-    /// `map` if it may be played on, else the first that may.
+    /// `map` if it may be played on, else the first that may. A staged map counts as its base:
+    /// fitting never turns a mid-run bastion into another map.
     pub fn fit_map(self, map: MapId) -> MapId {
-        if self.maps().contains(&map) { map } else { self.maps()[0] }
+        if self.maps().contains(&map.base()) { map } else { self.maps()[0] }
     }
 }
 

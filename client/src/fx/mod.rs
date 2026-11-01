@@ -4,17 +4,29 @@
 //! smoke rising, lightning, a vortex, thorns bursting up. An effect arriving spawns its parts
 //! (`recipes.rs`), each living on by itself (a scorch mark lingers after its blast): appearing,
 //! holding, fading, moving as it's thrown or whirled, then gone. Their shapes are in
-//! `shapes.rs`, drawn in shared see-through materials that fade in steps (`Ink`).
+//! `shapes.rs`, colored by their `Ink`; they're all drawn together, laid out anew every frame
+//! (`draw_parts`) into buffers kept on the GPU (`draw.rs`), so hundreds of them cost one draw.
+
+use std::f32::consts::{FRAC_PI_2, TAU};
 
 use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
+use bevy::asset::AssetEventSystems;
+use bevy::camera::primitives::{Frustum, Sphere as Ball};
+use bevy::camera::visibility::VisibilitySystems;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
+use bevy::math::Affine3A;
+use bevy::mesh::VertexAttributeValues;
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use crate::arena::{self, palette};
 use crate::feedback::AttackClock;
+use crate::plain::PlainMaterial;
 
+mod death;
 mod downed;
+pub(crate) mod draw;
 mod recipes;
 mod shapes;
 
@@ -22,16 +34,117 @@ pub struct FxPlugin;
 
 impl Plugin for FxPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<Parts>();
+        draw::plugin(app);
         app.add_systems(Startup, load_art);
-        app.add_systems(Update, ((recipes::play_new, downed::mark_downed), drive_parts).chain());
+        app.add_systems(Update, (recipes::play_new, strike_fx, burning_flames, downed::mark_downed, death::burst_deaths, death::spark_hits));
+        // Sorted from the camera once it has moved for the frame, and culled by its view as it is
+        // then: after its frustum's worked out, and before Bevy hands out the frame's mesh asset
+        // news (it reads the meshes, and that news), so it runs alongside the UI's layout instead
+        // of holding up the frustum, and with it the visibility checks, the layout and the rest.
+        app.add_systems(PostUpdate, draw_parts.in_set(DrawParts).after(VisibilitySystems::UpdateFrusta).before(AssetEventSystems));
     }
+}
+
+/// Where the parts are laid out to be drawn for the frame (`draw_parts`).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct DrawParts;
+
+/// How often (seconds) a burning fighter sheds a new round of flames.
+const FLAME_EVERY: f32 = 0.08;
+
+/// Fire on the burning (`Burning`): tongues of flame licking up off them, more the more stacks,
+/// and embers rising, for as long as the fire lasts, on the timeline each fighter is drawn on.
+fn burning_flames(
+    mut commands: Commands,
+    time: Res<Time>,
+    clock: AttackClock,
+    art: Res<FxArt>,
+    fighters: Query<(&Pos, &Burning, Has<crate::Me>)>,
+    mut next: Local<f32>,
+) {
+    let now = time.elapsed_secs();
+    if now < *next {
+        return;
+    }
+    *next = now + FLAME_EVERY;
+    for (pos, burning, is_me) in &fighters {
+        let stacks = burning.at(clock.now(is_me));
+        if stacks == 0 {
+            continue;
+        }
+        let at = arena::to_world(pos.0, 0.0);
+        let seed = (now * 997.0) as u32 ^ pos.0.x.to_bits().rotate_left(7) ^ pos.0.y.to_bits();
+        for i in 0..2 + 2 * stacks {
+            let r = |n: u32| crate::swish::noise(seed, i * 8 + n);
+            let angle = r(1) * TAU;
+            let out = 0.12 + 0.25 * r(2);
+            let from = at + Vec3::new(angle.cos() * out, 0.1 + 1.0 * r(3), -angle.sin() * out);
+            // The tongue lies along +X: stood up, leaning a little, turned any way.
+            let lick = Quat::from_rotation_y(r(4) * TAU) * Quat::from_rotation_z(FRAC_PI_2 - 0.4 * r(5));
+            let length = 0.35 + 0.35 * r(6);
+            let rise = Motion::Thrown { velocity: Vec3::Y * (1.0 + 0.7 * r(7)), gravity: -0.6, tumble: Vec3::ZERO };
+            let tongue = Part::new(now, [0.05, 0.18, 0.45], Ink::Flame, from).sized(Vec3::new(length, 1.0, length * 0.6));
+            put(&mut commands, &art.tongue, tongue.turn(lick).grow(0.3).shrink(0.2).flicker(0.3).motion(rise));
+            if r(0) < 0.4 {
+                let ember = Motion::Thrown { velocity: Vec3::new(r(1) - 0.5, 1.5 + r(2), r(3) - 0.5), gravity: -0.3, tumble: Vec3::ZERO };
+                put(&mut commands, &art.mote, Part::new(now, [0.02, 0.3, 0.7], Ink::Spark, from + Vec3::Y * 0.3).size(0.03 + 0.02 * r(4)).motion(ember).flicker(0.5).shrink(0.2));
+            }
+        }
+    }
+}
+
+/// Each hero's auto-attack lands with a contact effect of its own, where its swing went
+/// (`LastSwing`): the warden's shield shoving the air ahead of it, the breaker's maul breaking
+/// the ground. Once per swing, by the swing's own tick, never by the component's change flag
+/// (replication marks it changed every update).
+fn strike_fx(
+    mut commands: Commands,
+    time: Res<Time>,
+    art: Res<FxArt>,
+    map: Res<crate::rooms::CurrentMap>,
+    swings: Query<(Entity, &Pos, &ClassId, &LastSwing, (Option<&arena_shared::protocol::Motion>, Option<&crate::render::PredictedWalk>)), (Changed<LastSwing>, With<PlayerId>)>,
+    mut seen: Local<bevy::platform::collections::HashMap<Entity, u32>>,
+) {
+    let now = time.elapsed_secs();
+    for (entity, pos, class, swing, (motion, predicted)) in &swings {
+        // The first sighting only notes the swing: it may be long past.
+        match seen.insert(entity, swing.tick) {
+            Some(before) if before != swing.tick => {}
+            _ => continue,
+        }
+        let dir = swing.dir.normalize_or(Vec2::X);
+        let at = (pos.0, crate::render::ground_under(map.map(), motion, predicted, pos.0));
+        match class.def().figure() {
+            "warden" => recipes::shield_push(&mut commands, &art, now, at, dir, swing.tick),
+            "breaker" => recipes::tremor(&mut commands, &art, now, at, dir, swing.tick),
+            _ => {}
+        }
+    }
+}
+
+/// A nova going off at `at` (on the plane, and how high what it's on is; `radius` round) now, cast by a figure of `figure`, drawn as its own
+/// burst, if it has one: the pyre witch's ring of cinders, the breaker's and the warden's quake.
+/// Whether it did (the frost mage's, and anyone else's, is a burst of ice: `render::show_novas`).
+pub(crate) fn cast_nova(commands: &mut Commands, art: &FxArt, now: f32, figure: &str, at: (Vec2, f32), radius: f32, seed: u32) -> bool {
+    match figure {
+        "pyre_witch" => recipes::cinder_ring(commands, art, now, at, radius, seed),
+        "breaker" | "warden" => recipes::quake(commands, art, now, at, radius, seed),
+        _ => return false,
+    }
+    true
 }
 
 /// How many steps a fading material goes through, from its full opacity to clear.
 const FADE_STEPS: usize = 12;
 
+/// The inks that are also laid on meshes of their own (the downed's marks), and so have materials
+/// (`FxArt::ink`): parts are drawn in their inks' colors without one.
+const MESHED: [Ink; 2] = [Ink::Heal, Ink::HealMist];
+
 /// What a part is drawn in: a color, how see-through at most, how brightly it glows, and which
-/// layer it's drawn on among others in the same place (higher over lower).
+/// layer it's drawn on among others in the same place (higher over lower). (The glow is for
+/// the materials of `FxArt::ink`: the parts themselves are drawn unlit, as those are.)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Ink {
     /// Scorched earth, soot, ash.
@@ -62,15 +175,21 @@ pub(crate) enum Ink {
     PoisonLight,
     PoisonMist,
     Blood,
+    /// Bone chips and splinters off the slain.
+    Bone,
     Heal,
     /// A heal's glow pooled on the ground, faint.
     HealMist,
     Wisp,
     Haste,
+    /// Dust and grit kicked up: pale, see-through.
+    Dust,
+    /// The faint line a blade's point scuffs, dragged along the ground (`swish/drag.rs`).
+    Scuff,
 }
 
 impl Ink {
-    const ALL: [Ink; 27] = [
+    const ALL: [Ink; 30] = [
         Ink::Scorch,
         Ink::Smoke,
         Ink::Earth,
@@ -94,10 +213,13 @@ impl Ink {
         Ink::PoisonLight,
         Ink::PoisonMist,
         Ink::Blood,
+        Ink::Bone,
         Ink::Heal,
         Ink::HealMist,
         Ink::Wisp,
         Ink::Haste,
+        Ink::Dust,
+        Ink::Scuff,
     ];
 
     /// (color, opacity at most, glow, layer).
@@ -127,10 +249,13 @@ impl Ink {
             Ink::PoisonLight => (rgb(0xA4, 0xE6, 0x54), 0.9, 3.0, 3),
             Ink::PoisonMist => (rgb(0x8C, 0xC8, 0x50), 0.22, 1.5, 1),
             Ink::Blood => (rgb(0x6E, 0x0E, 0x16), 0.85, 0.4, 1),
+            Ink::Bone => (rgb(0xD8, 0xCE, 0xB0), 1.0, 0.1, 2),
             Ink::Heal => (palette::HEAL, 0.9, 4.0, 3),
             Ink::HealMist => (palette::HEAL, 0.22, 2.0, 1),
             Ink::Wisp => (palette::WISP, 0.85, 6.0, 4),
             Ink::Haste => (palette::HASTE, 0.9, 5.0, 4),
+            Ink::Dust => (rgb(0xC6, 0xB6, 0x96), 0.5, 0.4, 4),
+            Ink::Scuff => (palette::INK, 0.5, 0.0, 0),
         }
     }
 }
@@ -141,8 +266,9 @@ const VARIANTS: u32 = 4;
 /// Everything effects are drawn with.
 #[derive(Resource)]
 pub(crate) struct FxArt {
-    /// Each ink's materials, full first, clearing in `FADE_STEPS`.
-    inks: Vec<Vec<Handle<StandardMaterial>>>,
+    /// The materials of each ink laid on meshes of its own (`MESHED`), full first, clearing in
+    /// `FADE_STEPS`.
+    inks: Vec<(Ink, Vec<Handle<PlainMaterial>>)>,
     splotch: Vec<Handle<Mesh>>,
     streaks: Vec<Handle<Mesh>>,
     cracks: Vec<Handle<Mesh>>,
@@ -166,23 +292,24 @@ pub(crate) struct FxArt {
 }
 
 impl FxArt {
-    fn ink(&self, ink: Ink, faded: f32) -> &Handle<StandardMaterial> {
-        let steps = &self.inks[ink as usize];
+    fn ink(&self, ink: Ink, faded: f32) -> &Handle<PlainMaterial> {
+        let (_, steps) = self.inks.iter().find(|(made, _)| *made == ink).expect("an ink laid on a mesh of its own is in `MESHED`");
         &steps[((faded * FADE_STEPS as f32) as usize).min(FADE_STEPS - 1)]
     }
 }
 
-fn load_art(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
-    let inks = Ink::ALL
+fn load_art(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<PlainMaterial>>) {
+    let inks = MESHED
         .iter()
-        .map(|ink| {
+        .map(|&ink| {
             let (color, alpha, glow, layer) = ink.look();
-            (0..FADE_STEPS)
+            let steps = (0..FADE_STEPS)
                 .map(|i| {
                     let faded = alpha * (1.0 - i as f32 / FADE_STEPS as f32);
-                    materials.add(StandardMaterial { depth_bias: layer as f32, cull_mode: None, ..arena::translucent(color, faded, glow) })
+                    materials.add(PlainMaterial { depth_bias: layer as f32, cull_mode: None, ..arena::translucent(color, faded, glow) })
                 })
-                .collect()
+                .collect();
+            (ink, steps)
         })
         .collect();
     let mut variants = |make: &dyn Fn(u32) -> Mesh| (0..VARIANTS).map(|seed| meshes.add(make(seed * 7919 + 13))).collect::<Vec<_>>();
@@ -230,10 +357,11 @@ pub(crate) enum Motion {
 /// A part of an effect: from `born` (seconds), in `ink`; fully in `life[0]` later, fading from
 /// `life[1]`, gone at `life[2]`. It grows in from `grow` times its `size` and shrinks to `shrink`
 /// times it as it fades, turns `spin` (rad/s) about the up, flickers by up to `flicker` of its
-/// opacity, and moves by `motion` from `at` (in the world). With `frames`, its mesh flicks
-/// through them.
-#[derive(Component, Clone, Debug)]
+/// opacity, and moves by `motion` from `at` (in the world). Its shape is `mesh` (set by `put`),
+/// or with `frames`, it flicks through them.
+#[derive(Clone, Debug)]
 pub(crate) struct Part {
+    mesh: Handle<Mesh>,
     born: f32,
     life: [f32; 3],
     ink: Ink,
@@ -246,11 +374,19 @@ pub(crate) struct Part {
     flicker: f32,
     motion: Motion,
     frames: Vec<Handle<Mesh>>,
+    /// How high what it comes down on is, thrown.
+    floor: f32,
 }
 
 impl Part {
     pub(crate) fn new(born: f32, life: [f32; 3], ink: Ink, at: Vec3) -> Part {
-        Part { born, life, ink, at, turn: Quat::IDENTITY, size: Vec3::ONE, grow: 1.0, shrink: 1.0, spin: 0.0, flicker: 0.0, motion: Motion::Still, frames: Vec::new() }
+        Part { mesh: Handle::default(), born, life, ink, at, turn: Quat::IDENTITY, size: Vec3::ONE, grow: 1.0, shrink: 1.0, spin: 0.0, flicker: 0.0, motion: Motion::Still, frames: Vec::new(), floor: 0.0 }
+    }
+
+    /// Thrown, it comes down on something `floor` high (a court, a roof), not the gameplay
+    /// plane.
+    pub(crate) fn floor(self, floor: f32) -> Part {
+        Part { floor, ..self }
     }
 
     pub(crate) fn size(self, size: f32) -> Part {
@@ -311,7 +447,7 @@ impl Part {
             Motion::Still => (self.at, spun),
             Motion::Thrown { velocity, gravity, tumble } => {
                 let flown = self.at + velocity * age - Vec3::Y * gravity * age * age / 2.0;
-                let floor = size.y / 2.0;
+                let floor = self.floor + size.y / 2.0;
                 if flown.y <= floor && gravity > 0.0 {
                     // Landed: lying where it came down, as it last turned.
                     let land = landing(self.at.y - floor, velocity.y, gravity);
@@ -353,55 +489,173 @@ fn landing(above: f32, up: f32, gravity: f32) -> f32 {
     (up + (up * up + 2.0 * gravity * above.max(0.0)).sqrt()) / gravity
 }
 
-/// Puts a part in the world, `mesh` drawn in its ink (hidden until it's born).
-pub(crate) fn put(commands: &mut Commands, art: &FxArt, mesh: &Handle<Mesh>, part: Part) {
-    let transform = part.place(0.0);
-    commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(art.ink(part.ink, 1.0).clone()), transform, Visibility::Hidden, NotShadowCaster, NotShadowReceiver, part));
+/// Every part in the world (`put` there), until it's gone: played out and drawn by `draw_parts`.
+#[derive(Resource, Default)]
+pub(crate) struct Parts(pub(crate) Vec<Part>);
+
+/// Puts a part in the world, `mesh` drawn in its ink (from when it's born).
+pub(crate) fn put(commands: &mut Commands, mesh: &Handle<Mesh>, part: Part) {
+    let part = Part { mesh: mesh.clone(), ..part };
+    commands.queue(move |world: &mut World| world.resource_mut::<Parts>().0.push(part));
 }
 
-/// Parts play out their lives: moving, growing and fading, flickering, and gone at the end.
-fn drive_parts(
-    mut commands: Commands,
+/// A part's shape as `draw_parts` copies it: its corners, how opaque each is (white, colored by
+/// the ink) and how many times over its triangles are laid, its triangles, and the ball it fits
+/// in. Each corner is in it once, however many triangles share it (the shapes are made of
+/// triangles of their own), and a triangle laid again straight after itself (the other way round,
+/// as one facing both ways is) is in it once, laid over twice (`draw::layered`): the same drawn,
+/// at half the triangles.
+struct Shape {
+    positions: Vec<Vec3>,
+    colors: Vec<Vec4>,
+    overs: Vec<u32>,
+    indices: Vec<u32>,
+    center: Vec3,
+    radius: f32,
+}
+
+impl Shape {
+    fn of(mesh: &Mesh) -> Option<Shape> {
+        let Ok(VertexAttributeValues::Float32x3(positions)) = mesh.try_attribute(Mesh::ATTRIBUTE_POSITION) else { return None };
+        let positions: Vec<Vec3> = positions.iter().map(|&p| Vec3::from_array(p)).collect();
+        let colors = match mesh.try_attribute(Mesh::ATTRIBUTE_COLOR) {
+            Ok(VertexAttributeValues::Float32x4(colors)) => colors.iter().map(|&c| Vec4::from_array(c)).collect(),
+            _ => vec![Vec4::ONE; positions.len()],
+        };
+        let corners: Vec<usize> = match mesh.try_indices_option().ok()? {
+            Some(indices) => indices.iter().collect(),
+            None => (0..positions.len()).collect(),
+        };
+        // Each triangle, and how many times over it's laid.
+        let corner = |i: usize| (positions[i].to_array().map(f32::to_bits), colors[i].to_array().map(f32::to_bits));
+        let same = |a: &[usize; 3], b: &[usize; 3]| {
+            let key = |t: &[usize; 3]| {
+                let mut key = t.map(corner);
+                key.sort_unstable();
+                key
+            };
+            key(a) == key(b)
+        };
+        let mut laid: Vec<([usize; 3], u32)> = Vec::new();
+        for triangle in corners.as_chunks::<3>().0 {
+            match laid.last_mut() {
+                Some((last, over)) if same(last, triangle) => *over += 1,
+                _ => laid.push((*triangle, 1)),
+            }
+        }
+        let mut seen: HashMap<(([u32; 3], [u32; 4]), u32), u32> = HashMap::default();
+        let (mut unique, mut unique_colors, mut overs) = (Vec::new(), Vec::new(), Vec::new());
+        let indices = laid
+            .into_iter()
+            .flat_map(|(triangle, over)| triangle.map(|i| (i, over)))
+            .map(|(i, over)| {
+                *seen.entry((corner(i), over)).or_insert_with(|| {
+                    unique.push(positions[i]);
+                    unique_colors.push(colors[i]);
+                    overs.push(over);
+                    unique.len() as u32 - 1
+                })
+            })
+            .collect();
+        let (positions, colors) = (unique, unique_colors);
+        let (low, high) = positions.iter().fold((Vec3::MAX, Vec3::MIN), |(low, high), &p| (low.min(p), high.max(p)));
+        let center = (low + high) / 2.0;
+        let radius = positions.iter().map(|p| p.distance(center)).fold(0.0, f32::max);
+        Some(Shape { positions, colors, overs, indices, center, radius })
+    }
+}
+
+/// Parts play out their lives (moving, growing and fading, flickering, gone at the end), laid
+/// out together for drawing every frame (`draw::Drawn`): their shapes put where they are,
+/// colored by their inks and hazed with distance as everything else is, nearest last, as Bevy
+/// sorts see-through things drawn one by one (a higher layer counting as nearer). Those off
+/// screen are left out.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn draw_parts(
     time: Res<Time>,
-    art: Res<FxArt>,
-    mut parts: Query<(Entity, &Part, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d)>,
+    mut parts: ResMut<Parts>,
+    camera: Single<(&GlobalTransform, &Frustum, Option<&DistanceFog>), With<crate::camera::CameraRig>>,
+    meshes: Res<Assets<Mesh>>,
+    mut changed: MessageReader<AssetEvent<Mesh>>,
+    mut shapes: Local<HashMap<AssetId<Mesh>, Shape>>,
+    mut drawn: ResMut<draw::Drawn>,
+    mut inks: Local<Vec<(Vec3, f32, u8)>>,
     mut seed: Local<u32>,
+    mut shown: Local<Vec<(f32, AssetId<Mesh>, Affine3A, Vec4, f32)>>,
 ) {
+    if inks.is_empty() {
+        // Each ink's color (linear), opacity at most and layer, in its place (`Ink as usize`),
+        // worked out once.
+        *inks = vec![(Vec3::ZERO, 0.0, 0); Ink::ALL.len()];
+        for ink in Ink::ALL {
+            let (color, alpha, _, layer) = ink.look();
+            inks[ink as usize] = (Vec4::from_array(color.to_linear().to_f32_array()).truncate(), alpha, layer);
+        }
+    }
+    for event in changed.read() {
+        if let AssetEvent::Modified { id } | AssetEvent::Removed { id } | AssetEvent::Unused { id } = event {
+            shapes.remove(id);
+        }
+    }
     let now = time.elapsed_secs();
+    parts.0.retain(|part| now - part.born < part.life[2]);
     let mut random = || {
         *seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         (*seed >> 8) as f32 / (1u32 << 24) as f32
     };
-    for (entity, part, mut transform, mut visibility, mut material, mut mesh) in &mut parts {
+    let (eye, frustum, fog) = *camera;
+    let depth = eye.to_matrix().inverse().row(2);
+    let haze_color = fog.map_or(Vec3::ZERO, |fog| Vec4::from_array(fog.color.to_linear().to_f32_array()).truncate());
+    shown.clear();
+    let mut middle = Vec3::ZERO;
+    for part in &parts.0 {
         let age = now - part.born;
-        if age >= part.life[2] {
-            commands.entity(entity).despawn();
-            continue;
-        }
         if age < 0.0 {
-            visibility.set_if_neq(Visibility::Hidden);
             continue;
         }
-        visibility.set_if_neq(Visibility::Inherited);
-        *transform = part.place(age);
-        let opacity = part.opacity(age) * (1.0 - part.flicker * random());
-        let ink = art.ink(part.ink, 1.0 - opacity);
-        if material.0 != *ink {
-            material.0 = ink.clone();
+        let (color, alpha, layer) = inks[part.ink as usize];
+        let alpha = alpha * part.opacity(age) * (1.0 - part.flicker * random());
+        let mesh = if part.frames.is_empty() { &part.mesh } else { &part.frames[(age * 24.0) as usize % part.frames.len()] };
+        let id = mesh.id();
+        if !shapes.contains_key(&id) {
+            let Some(shape) = meshes.get(id).and_then(Shape::of) else { continue };
+            shapes.insert(id, shape);
         }
-        if !part.frames.is_empty() {
-            let frame = &part.frames[(age * 24.0) as usize % part.frames.len()];
-            if mesh.0 != *frame {
-                mesh.0 = frame.clone();
-            }
+        let shape = &shapes[&id];
+        let placed = part.place(age);
+        let center = placed.transform_point(shape.center);
+        let ball = Ball { center: center.into(), radius: shape.radius * placed.scale.abs().max_element() };
+        if alpha <= 0.0 || !frustum.intersects_sphere(&ball, false) {
+            continue;
         }
+        let tint = color.extend(alpha);
+        // The haze worked out once for the whole part, small as each is.
+        let haze = fog.map_or(0.0, |fog| draw::haze(fog, eye.translation().distance(center)));
+        shown.push((depth.dot(center.extend(1.0)) + layer as f32, id, placed.compute_affine(), tint, haze));
+        middle += center;
     }
+    shown.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let draw::Drawn { corners, triangles, center } = &mut *drawn;
+    corners.clear();
+    triangles.clear();
+    for (_, id, placed, tint, haze) in shown.iter() {
+        let shape = &shapes[id];
+        let first = corners.len() as u32;
+        corners.extend(shape.positions.iter().zip(&shape.colors).zip(&shape.overs).map(|((&p, &c), &over)| {
+            let [x, y, z] = placed.transform_point3(p).to_array();
+            let color = c * *tint;
+            let [r, g, b] = color.truncate().lerp(haze_color, *haze).to_array();
+            [x, y, z, r, g, b, draw::layered(color.w, over)]
+        }));
+        triangles.extend(shape.indices.iter().map(|&i| first + i));
+    }
+    *center = middle / shown.len().max(1) as f32;
 }
 
 /// A wisp's wake: a mote of its light left `at` (in the world), drifting up as it fades.
 pub(crate) fn wisp_wake(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3) {
     let rise = Motion::Thrown { velocity: Vec3::Y * 0.3, gravity: -0.2, tumble: Vec3::ZERO };
-    put(commands, art, &art.mote, Part::new(now, [0.0, 0.08, 0.4], Ink::Wisp, at).size(0.09).motion(rise).shrink(0.2));
+    put(commands, &art.mote, Part::new(now, [0.0, 0.08, 0.4], Ink::Wisp, at).size(0.09).motion(rise).shrink(0.2));
 }
 
 /// What a pickup lying out gives off (`sparkle`).
@@ -445,7 +699,7 @@ pub(crate) fn sparkle(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3, 
         Sparkle::Burn => {
             let from = at.with_y(0.05) + round(1, 0.3 * r(2).sqrt());
             let rise = Motion::Thrown { velocity: Vec3::Y * (0.8 + 0.5 * r(3)), gravity: -0.2, tumble: Vec3::ZERO };
-            put(commands, art, &art.mote, Part::new(now, [0.05, 0.3, 0.7], Ink::PoisonLight, from + Vec3::Y * 0.2).size(0.04 + 0.03 * r(5)).motion(rise).flicker(0.4).shrink(0.3));
+            put(commands, &art.mote, Part::new(now, [0.05, 0.3, 0.7], Ink::PoisonLight, from + Vec3::Y * 0.2).size(0.04 + 0.03 * r(5)).motion(rise).flicker(0.4).shrink(0.3));
             // The tongue lies along +X: stood up, leaning a little.
             let lick = Quat::from_rotation_y(r(6) * std::f32::consts::TAU) * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2 - 0.3 * r(7));
             let length = 0.3 + 0.25 * r(4);
@@ -456,7 +710,7 @@ pub(crate) fn sparkle(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3, 
             (art.glint.clone(), Part::new(now, [0.08, 0.1, 0.35], Ink::Glint, from).size(0.25 + 0.15 * r(3)).facing(r(4) * std::f32::consts::TAU).grow(0.2).shrink(0.2).spin(3.0))
         }
     };
-    put(commands, art, &part.0, part.1);
+    put(commands, &part.0, part.1);
 }
 
 /// Seconds `ticks` server ticks are.
