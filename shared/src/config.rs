@@ -48,6 +48,9 @@ pub const RELEASE_HEIGHT: f32 = 2.07;
 pub const GRAVITY: f32 = 9.81;
 /// How high a jump goes at the top (meters), from flat ground (`sim::jump_speed`).
 pub const JUMP_HEIGHT: f32 = 1.3;
+/// How hard a jump is pulled back while it's still going up (m/s²): harder than anything falls
+/// (`GRAVITY`), so it leaves the ground fast and eases into its top, then falls as anything does.
+pub const RISE_GRAVITY: f32 = 18.0;
 /// Walking has momentum (`sim::move_player`): how hard the ground accelerates a walker toward
 /// the speed its keys ask for (per second, as a share of that speed); how hard it slows one
 /// whose keys ask for nothing, or for another way (per second, as a share of its speed: high,

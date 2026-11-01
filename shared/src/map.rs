@@ -7,6 +7,8 @@
 //!   arch and two rope bridges, and by waygates that jump a fighter to the far side.
 //! - `wilds`: the waves mode's map, far bigger: a camp in the middle and places to explore all
 //!   round it, monsters coming out of lairs out there.
+//! - `hold`: the waves mode's third map: a village by a river under a fortress on its crag,
+//!   walls and towers to climb, bridges to cross and gaps to leap.
 //! - `yard`: practice's: a flat field with two target dummies standing on it from the start.
 //!
 //! Every PvP layout (`MapId::PVP`) is point-symmetric, (x, y) -> (-x, -y), so both halves are
@@ -30,12 +32,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::protocol::PickupKind;
 
-pub use colliders::{COUNTER_TOP, Collider, ROCK_LIFT, ROCK_RADIUS, Roof, Ruin, WELL_HEIGHT, WELL_RING, WELL_ROOF, boulder, ruin};
+pub use colliders::{COUNTER_TOP, Collider, ROCK_LIFT, ROCK_RADIUS, Roof, Ruin, STALL_BACK, STALL_EAVES, STALL_ROOF, ShotEnd, Stall, TREAD, WELL_HEIGHT, WELL_RING, WELL_ROOF, boulder, ruin};
 
 mod bastion;
 mod colliders;
 mod crossing;
 mod gorge;
+mod hold;
 mod keep;
 mod wilds;
 mod yard;
@@ -71,6 +74,11 @@ pub enum Tile {
 }
 
 impl Tile {
+    /// Water or a chasm: what bridges cross, and banks or cliffs drop into.
+    pub fn is_gap(self) -> bool {
+        matches!(self, Tile::Water | Tile::Ford | Tile::Chasm)
+    }
+
     pub fn walkable(self) -> bool {
         matches!(self, Tile::Grass | Tile::Path | Tile::Ford | Tile::Bridge | Tile::Planks | Tile::Marsh)
     }
@@ -122,6 +130,8 @@ pub enum MapId {
     Bastion2,
     Bastion3,
     Bastion4,
+    /// The waves mode's third: a fortress on its crag over a village, built in levels.
+    Hold,
     /// Practice's own: open ground with target dummies on it from the start.
     Yard,
 }
@@ -129,7 +139,7 @@ pub enum MapId {
 impl MapId {
     /// Every pickable map (the bastion's staged variants aren't: they're reached through
     /// `at_stage` alone).
-    pub const ALL: [MapId; 6] = [MapId::Crossing, MapId::Keep, MapId::Gorge, MapId::Wilds, MapId::Bastion, MapId::Yard];
+    pub const ALL: [MapId; 7] = [MapId::Crossing, MapId::Keep, MapId::Gorge, MapId::Wilds, MapId::Bastion, MapId::Hold, MapId::Yard];
     /// The maps for fighting each other: mirrored, of a size for it.
     pub const PVP: [MapId; 3] = [MapId::Crossing, MapId::Keep, MapId::Gorge];
 
@@ -142,6 +152,7 @@ impl MapId {
         static BASTION2: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion2, 1).finished());
         static BASTION3: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion3, 2).finished());
         static BASTION4: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion4, 3).finished());
+        static HOLD: LazyLock<Map> = LazyLock::new(|| hold::build().finished());
         static YARD: LazyLock<Map> = LazyLock::new(|| yard::build().finished());
         match self {
             MapId::Crossing => &CROSSING,
@@ -152,6 +163,7 @@ impl MapId {
             MapId::Bastion2 => &BASTION2,
             MapId::Bastion3 => &BASTION3,
             MapId::Bastion4 => &BASTION4,
+            MapId::Hold => &HOLD,
             MapId::Yard => &YARD,
         }
     }
@@ -207,6 +219,7 @@ impl MapId {
             MapId::Keep => "Sunken Keep",
             MapId::Gorge => "Riven Gorge",
             MapId::Wilds => "Hollow Wilds",
+            MapId::Hold => "Ravenhold",
             MapId::Yard => "Practice Yard",
             _ => "Sunken Bastion",
         }
@@ -219,6 +232,7 @@ impl MapId {
             MapId::Keep => "A moated keep; marshes slow you",
             MapId::Gorge => "A chasm to shoot across; waygates",
             MapId::Wilds => "A camp in the wilds; monsters all round",
+            MapId::Hold => "A fortress over a village; walls to climb, gaps to leap",
             MapId::Yard => "Open ground; target dummies to hit",
             _ => "A drowned fortress; its courts unlock as you survive",
         }
@@ -253,17 +267,28 @@ pub struct Map {
     pub counter: Vec<IVec2>,
     /// Houses: wall tiles under each, drawn as a house (`House`).
     pub houses: Vec<House>,
+    /// Stone towers: wall tiles under each, standing in the way as high as they stand
+    /// (`Tower`).
+    pub towers: Vec<Tower>,
     /// Fences (from, to): rails in the way up to their tops (`FENCE_TOP`).
     pub fences: Vec<(Vec2, Vec2)>,
     /// A village well (a rock tile, drawn as the well).
     pub well: Option<Vec2>,
     /// Flower beds (tile centers): decoration.
     pub gardens: Vec<Vec2>,
+    /// Where a drop is left open to leap from (boxes, meters): no parapet along a tile's side
+    /// whose middle lies in one (`Map::parapet`).
+    pub leaps: Vec<(Vec2, Vec2)>,
+    /// Loose stones lying about (where, how big across): fallen masonry, decoration only;
+    /// nothing stands on them or is stopped by them.
+    pub rubble: Vec<(Vec2, f32)>,
     /// Stacks of crates (tile, how many high): wall tiles under each, stood on (`CRATE`).
     pub crates: Vec<(IVec2, u8)>,
-    /// Its water is shallow: no one walks into it from the bank, but a body can jump out over
-    /// it, and one that comes down in it wades (`MARSH_SPEED`) wherever it likes in it and out.
-    /// Its ground dips under the water (the map's relief), so a body in it stands in it.
+    /// A waterfall out in the wilds, scenery (`Falls`).
+    pub falls: Option<Falls>,
+    /// Its water is shallow: a body walks (or jumps) into it off the bank and wades
+    /// (`MARSH_SPEED`) wherever it likes in it and out. Its ground dips under the water (the
+    /// map's relief), so a body in it stands in it.
     pub wades: bool,
     /// Everything that stands in the way, as boxes (`colliders`, worked out in `finished`), the
     /// ones near each tile (by tile index), and where on each tile a body stands, if anywhere
@@ -290,13 +315,25 @@ pub fn flat(_: Vec2) -> f32 {
     0.0
 }
 
-/// A house: its footprint of tiles (`lo` inclusive to `hi` exclusive), walls to the sim, and
-/// which way its door faces (a unit direction on the grid).
+/// A waterfall out in the wilds past the playable area's edge, scenery: the river comes over a
+/// cliff whose edge runs north and south at `lip` (x), the land west of it high (the map's relief
+/// raises it), and falls east into the river below between the rows `river` (y). `lookout` is a
+/// bare spot on the cliff top by the falls, with the whole map below it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Falls {
+    pub lip: f32,
+    pub river: (f32, f32),
+    pub lookout: Vec2,
+}
+
+/// A house: its footprint of tiles (`lo` inclusive to `hi` exclusive), walls to the sim, which
+/// way its door faces (a unit direction on the grid), and how many storeys it stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct House {
     pub lo: IVec2,
     pub hi: IVec2,
     pub door: IVec2,
+    pub storeys: u8,
 }
 
 impl House {
@@ -313,8 +350,10 @@ impl House {
         (self.hi - self.lo).as_vec2()
     }
 
-    /// How high its walls stand, to the eaves (meters over its ground).
+    /// How high a house of one storey's walls stand, to the eaves (meters over its ground), and
+    /// how much higher each storey over that one takes them.
     pub const WALLS: f32 = 2.7;
+    pub const STOREY: f32 = 2.3;
     /// How steeply its roof rises from the eaves to the ridge (meters up for each meter in).
     pub const SLOPE: f32 = 0.716;
     /// How thick the roof lies over its slope.
@@ -326,6 +365,19 @@ impl House {
     /// gable ends.
     pub const EAVES: f32 = 0.5;
     pub const GABLE_EAVES: f32 = 0.4;
+    /// How far its upper storeys jut out over its gable ends, and how far under their floor
+    /// the joists holding them hang.
+    pub const JETTY: f32 = 0.3;
+    pub const JOISTS: f32 = 0.15;
+    /// The hood of tiles over its door: how wide, how far out from the wall, and how high its
+    /// underside (at its outer edge, leaning out and down) and its top are over the ground.
+    pub const HOOD: (f32, f32, f32, f32) = (1.6, 0.76, 2.19, 2.55);
+
+    /// The middle of the side its door is in, at the foot of the wall.
+    pub fn door_face(&self) -> Vec2 {
+        let door = self.door.as_vec2();
+        self.center() + door * self.size().dot(door.abs()) / 2.0
+    }
 
     /// Where its chimney stands, on the roof near one gable end.
     pub fn chimney(&self) -> Vec2 {
@@ -342,7 +394,12 @@ impl House {
 
     /// How high the top of its roof's ridge is (meters over the house's ground).
     pub fn ridge(&self) -> f32 {
-        Self::WALLS + Self::ROOF_THICK + self.rise()
+        self.walls() + Self::ROOF_THICK + self.rise()
+    }
+
+    /// How high its walls stand, to the eaves (meters over its ground).
+    pub fn walls(&self) -> f32 {
+        Self::WALLS + Self::STOREY * (self.storeys.max(1) - 1) as f32
     }
 
     /// Whether its ridge runs along x: along its long side.
@@ -351,6 +408,39 @@ impl House {
         size.x >= size.y
     }
 
+}
+
+/// A stone tower: its footprint of tiles (`lo` inclusive to `hi` exclusive), walls to the sim
+/// all the way up from its foot (`base`, meters: as low as the ground round it goes, or lower,
+/// down a chasm) to its top (`top`), and whether a pointed roof stands on it (else a battlement
+/// round its top). Never stood on: its top is out of anyone's reach.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tower {
+    pub lo: IVec2,
+    pub hi: IVec2,
+    pub base: f32,
+    pub top: f32,
+    pub roof: bool,
+}
+
+impl Tower {
+    pub fn covers(&self, t: IVec2) -> bool {
+        t.x >= self.lo.x && t.y >= self.lo.y && t.x < self.hi.x && t.y < self.hi.y
+    }
+
+    /// Its middle, and its size (meters), on the gameplay plane.
+    pub fn center(&self) -> Vec2 {
+        (self.lo + self.hi).as_vec2() / 2.0
+    }
+
+    pub fn size(&self) -> Vec2 {
+        (self.hi - self.lo).as_vec2()
+    }
+
+    /// Its footing's steps, battered out round its foot, the lower first: how far each juts out
+    /// past its walls, and how high its top is over the lowest ground round it
+    /// (`Map::tower_ground`).
+    pub const FOOTING: [(f32, f32); 2] = [(0.2, 0.65), (0.1, 1.1)];
 }
 
 /// How high a fence's top rail is, a parapet over the drop it runs along, and a standing
@@ -419,9 +509,13 @@ impl Map {
             shop_faces: Vec2::NEG_Y,
             counter: Vec::new(),
             houses: Vec::new(),
+            towers: Vec::new(),
             fences: Vec::new(),
             well: None,
             gardens: Vec::new(),
+            leaps: Vec::new(),
+            rubble: Vec::new(),
+            falls: None,
             crates: Vec::new(),
             wades: false,
             colliders: Vec::new(),
@@ -468,10 +562,10 @@ impl Map {
         }
     }
 
-    /// A house with its lower-left tile at `lo`, `size` tiles, its door facing `door`: walls
-    /// under it (no mirror).
-    fn house(&mut self, lo: IVec2, size: IVec2, door: IVec2) {
-        let house = House { lo, hi: lo + size, door };
+    /// A house with its lower-left tile at `lo`, `size` tiles, its door facing `door`, `storeys`
+    /// high: walls under it (no mirror).
+    fn house(&mut self, lo: IVec2, size: IVec2, door: IVec2, storeys: u8) {
+        let house = House { lo, hi: lo + size, door, storeys };
         for y in lo.y..house.hi.y {
             for x in lo.x..house.hi.x {
                 if let Some(i) = self.index(IVec2::new(x, y)) {
@@ -482,9 +576,23 @@ impl Map {
         self.houses.push(house);
     }
 
+    /// A tower with its lower-left tile at `lo`, `size` tiles, from `base` up to `top` (meters):
+    /// walls under it (no mirror).
+    fn tower(&mut self, lo: IVec2, size: IVec2, base: f32, top: f32, roof: bool) {
+        let tower = Tower { lo, hi: lo + size, base, top, roof };
+        for y in lo.y..tower.hi.y {
+            for x in lo.x..tower.hi.x {
+                if let Some(i) = self.index(IVec2::new(x, y)) {
+                    self.tiles[i] = Tile::Wall;
+                }
+            }
+        }
+        self.towers.push(tower);
+    }
+
     /// The map with its colliders worked out from what's on it (`colliders::build`): its walls,
-    /// rocks, houses and roofs, crates, fences, a parapet along every drop of `PARAPET_DROP` or
-    /// more, torch posts and chimneys.
+    /// rocks, houses and roofs, towers, crates, fences, a parapet along every drop of
+    /// `PARAPET_DROP` or more, torch posts and chimneys.
     fn finished(mut self) -> Map {
         self.colliders = colliders::build(&self);
         self.index_colliders();
@@ -666,19 +774,18 @@ impl Map {
     }
 
     /// `line_walkable` for a body with its feet `feet` high, on the ground or up in the air:
-    /// water (unless it wades it, `wades`: in it or up over it), chasms, trees and the forest
-    /// block it at any height; anything else is a collider,
+    /// water (unless the map's is waded, `wades`), chasms, trees and the forest block it at any
+    /// height; anything else is a collider,
     /// in its way only below its top (`colliders_block`), and stood on over it. Where it ends up
     /// may be no higher over its feet than `CLIMB` lets it step, and the edge of its square
     /// comes over no ground rising more steeply than that either: come at a terrace's face
     /// straight, at a slant or round its corner, the body stops at it, not in it. A body already
     /// reaching into a blocked tile may move out of it, never further in.
     pub fn line_walkable_at(&self, a: Vec2, b: Vec2, feet: f32) -> bool {
-        // Wading water: already in it, or off the ground (jumped out over it).
-        let wading = self.wades && (self.get(Map::tile_of(a)) == Tile::Water || feet > self.floor_at(a, feet) + 1e-3);
         let blocks = |t: IVec2| {
             let tile = self.get(t);
-            if wading && tile == Tile::Water {
+            // Shallow water is walked into and waded: only what stands in it is in the way.
+            if self.wades && tile == Tile::Water {
                 return self.colliders_on(t).any(|collider| collider.blocks(a, b, feet));
             }
             // What blocks at any height: its tile as a box as tall as there is.
@@ -1367,6 +1474,45 @@ mod tests {
         assert!(count(Tile::Water) > 100 && count(Tile::Chasm) > 50 && count(Tile::Marsh) > 100 && count(Tile::Planks) > 0);
     }
 
+    /// The hold is all levels: every walkable tile on it, however high, can be walked up to from
+    /// where the party starts (the steps a walker takes, up ramps, never a jump), so a monster
+    /// can always come for whoever is up there; its lairs and chests lie on open ground.
+    #[test]
+    fn the_hold_is_walked_up_to_everywhere() {
+        let m = MapId::Hold.map();
+        assert!(m.lairs.len() >= 6 && m.chests.len() >= 8);
+        for &p in m.lairs.iter().chain(&m.chests).chain(m.pickups.iter().map(|(p, _)| p)) {
+            assert!(m.walkable_at(p), "{p} isn't on open ground");
+            assert_eq!(p, Map::center(Map::tile_of(p)), "{p} isn't a tile center");
+        }
+        for &lair in &m.lairs {
+            assert!(m.spawn_points.iter().all(|s| s.distance(lair) > 25.0), "a lair at {lair} is too near the square");
+        }
+        let start = Map::tile_of(m.spawn_points[0]);
+        let mut seen = std::collections::HashSet::from([start]);
+        let mut todo = vec![start];
+        while let Some(t) = todo.pop() {
+            for (next, _) in m.steps(t) {
+                if seen.insert(next) {
+                    todo.push(next);
+                }
+            }
+        }
+        for (t, tile) in m.tiles() {
+            assert!(!m.walkable(t) || seen.contains(&t), "{t} ({tile:?}, {} m up) can't be walked to", m.height_at(Map::center(t)));
+        }
+        // Its broken ends are open to leap from: the bridge's either side of its gap, the walk's
+        // either side of the breach.
+        for (p, d) in [(Vec2::new(24.5, -10.5), IVec2::Y), (Vec2::new(24.5, -6.5), IVec2::NEG_Y), (Vec2::new(-24.5, 7.5), IVec2::X), (Vec2::new(-20.5, 7.5), IVec2::NEG_X)] {
+            assert!(m.parapet(Map::tile_of(p), d).is_none(), "a parapet stands across the leap from {p}");
+        }
+        // Its high places are as high as they're meant to be: the inner ward, the walks, the
+        // barbican.
+        for (p, high) in [(Vec2::new(0.5, 38.5), 9.0), (Vec2::new(-34.5, 30.5), 6.5), (Vec2::new(-54.5, 20.5), 6.5)] {
+            assert!((m.height_at(p) - high).abs() < 1e-5, "{p} is {} m up", m.height_at(p));
+        }
+    }
+
     #[test]
     fn the_bastion_opens_court_by_court() {
         let stages = [MapId::Bastion, MapId::Bastion2, MapId::Bastion3, MapId::Bastion4];
@@ -1490,3 +1636,4 @@ mod tests {
         }
     }
 }
+

@@ -51,17 +51,19 @@ pub(super) struct Frost {
 /// two rings as the wave passes them. `Cooldowns` comes from the server (others' on the same
 /// delayed timeline as their positions); each nova is drawn once, and one cast before we saw its
 /// caster isn't (`SeenCasts`).
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(super) fn show_novas(
     mut commands: Commands,
     time: Res<Time>,
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<PlainMaterial>>,
     art: Res<crate::fx::FxArt>,
-    mut casters: Query<(&ClassId, &Pos, &Cooldowns, &mut SeenCasts), (With<PlayerId>, Changed<Cooldowns>)>,
+    mut casters: Query<(&ClassId, &Pos, &Cooldowns, &mut SeenCasts, (Option<&Motion>, Option<&PredictedWalk>)), (With<PlayerId>, Changed<Cooldowns>)>,
     me: Query<&Pos, With<crate::Me>>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
+    map: Res<crate::rooms::CurrentMap>,
 ) {
-    for (class, pos, cooldowns, mut seen) in &mut casters {
+    for (class, pos, cooldowns, mut seen, (motion, predicted)) in &mut casters {
         for slot in seen.new_casts(cooldowns) {
             let Some(AbilityKind::Nova(def)) = class.def().ability(slot).map(|ability| ability.kind) else { continue };
             let Some(nova) = visuals.novas.get(&(*class, slot)).cloned() else { continue };
@@ -75,22 +77,25 @@ pub(super) fn show_novas(
                 sounds.push(sfx, 0.8 * crate::audio::earshot(pos.0.distance(my.0), 18.0));
             }
             let seed = cooldowns.used_at(slot).unwrap_or(0).wrapping_mul(2_654_435_761) ^ pos.0.x.to_bits();
-            if crate::fx::cast_nova(&mut commands, &art, time.elapsed_secs(), class.def().figure(), pos.0, def.radius, seed) {
+            // On what the caster stands on.
+            let at = (pos.0, ground_under(map.map(), motion, predicted, pos.0));
+            if crate::fx::cast_nova(&mut commands, &art, time.elapsed_secs(), class.def().figure(), at, def.radius, seed) {
                 continue;
             }
-            burst_nova(&mut commands, &time, &mut visuals, &mut materials, pos.0, def.radius, nova);
+            burst_nova(&mut commands, &time, &mut visuals, &mut materials, (map.map(), at), def.radius, nova);
         }
     }
 }
 
-/// One nova's burst of ice, `radius` around `at`.
+/// One nova's burst of ice, `radius` around `at` (on the plane, and how high what it's on is on
+/// `map`), its shards each on what's under it.
 #[allow(clippy::too_many_arguments)]
 fn burst_nova(
     commands: &mut Commands,
     time: &Time,
     visuals: &mut Visuals,
     materials: &mut Assets<PlainMaterial>,
-    at: Vec2,
+    (map, (at, ground)): (&arena_shared::map::Map, (Vec2, f32)),
     radius: f32,
     nova: arena::NovaMeshes<Handle<Mesh>>,
 ) {
@@ -110,16 +115,17 @@ fn burst_nova(
         ));
     };
     let at_once = |grow| Burst { started: now, grow, size: Vec3::ONE };
-    burst(&nova.disc, &frost, to_world(at, 0.05), Vec2::X, NOVA_SECONDS, at_once(NOVA_WAVE_SECONDS));
-    burst(&nova.ring, &wave, to_world(at, 0.07), Vec2::X, NOVA_WAVE_SECONDS + 0.06, at_once(NOVA_WAVE_SECONDS));
-    burst(&nova.eruption, &frost, to_world(at, 0.0), Vec2::X, NOVA_SECONDS * 0.6, at_once(0.07));
+    burst(&nova.disc, &frost, to_world(at, ground + 0.05), Vec2::X, NOVA_SECONDS, at_once(NOVA_WAVE_SECONDS));
+    burst(&nova.ring, &wave, to_world(at, ground + 0.07), Vec2::X, NOVA_WAVE_SECONDS + 0.06, at_once(NOVA_WAVE_SECONDS));
+    burst(&nova.eruption, &frost, to_world(at, ground), Vec2::X, NOVA_SECONDS * 0.6, at_once(0.07));
     // Shards in two rings, the outer one taller; each bursts up as the wave reaches it.
     for (count, out, tall, turn) in [(9, 0.5, 0.45, 0.35), (18, 0.92, 0.7, 0.0)] {
         for i in 0..count {
             let dir = Vec2::from_angle(i as f32 / count as f32 * std::f32::consts::TAU + turn);
             let height = tall * (0.75 + 0.5 * ((i * 7) % 4) as f32 / 3.0);
             let reached = Burst { started: now + NOVA_WAVE_SECONDS * out * 0.9, grow: NOVA_GROW_SECONDS, size: Vec3::splat(height) };
-            burst(&nova.shard, &frost, to_world(at + dir * radius * out, 0.0), dir, NOVA_SECONDS, reached);
+            let p = at + dir * radius * out;
+            burst(&nova.shard, &frost, to_world(p, map.surface_under(p, ground + arena_shared::sim::REACH_UP)), dir, NOVA_SECONDS, reached);
         }
     }
 }

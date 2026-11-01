@@ -5,11 +5,13 @@
 //! the body fits beneath (`Map::colliders_block`, `Map::floor_at`, `Map::ceiling_at`); it stops a
 //! shot that flies into it, and one over its top clears it (`Map::shot_meets`). The scene
 //! draws each from the same numbers (`Map::ruin_at`, `boulder`, `Map::parapet`,
-//! `Map::torch_post`, the `House` and well constants), so what's drawn is what's hit.
+//! `Map::torch_post`, `Map::stall`, `Map::tower_ground`, the `House`, `Tower` and well
+//! constants), so what's drawn is what's hit: anything that looks solid is (only clutter, the
+//! grass and pebbles and rubble underfoot, is walked through).
 
 use bevy::math::{IVec2, Vec2, Vec3};
 
-use super::{CRATE, FENCE_TOP, House, Map, NAV_RADIUS, PARAPET_DROP, PARAPET_HEIGHT, PARAPET_IN, PARAPET_THICK, SIDES, STEP_UP, STEPS, TORCH_POST, TORCH_STAKE, Tile};
+use super::{CLIMB, CRATE, FENCE_TOP, House, Map, NAV_RADIUS, Tower, PARAPET_DROP, PARAPET_HEIGHT, PARAPET_IN, PARAPET_THICK, SIDES, STEP_UP, STEPS, TORCH_POST, TORCH_STAKE, Tile};
 use crate::config::BODY_HEIGHT;
 
 /// A box standing in the way (on the gameplay plane, `lo` to `hi`; heights in meters), or a
@@ -52,6 +54,13 @@ impl Collider {
         p.distance(p.clamp(self.lo, self.hi))
     }
 
+    /// How far `p` is from it along whichever axis it's farther off along: within `NAV_RADIUS`
+    /// of it this way is within the box it's grown by a body's reach, square-cornered, as a
+    /// move is judged against (`blocks`).
+    fn reach_square(&self, p: Vec2) -> f32 {
+        (p - p.clamp(self.lo, self.hi)).abs().max_element()
+    }
+
     /// Whether it stands in the way of a body with its feet `feet` high near `p`: it isn't under
     /// the body (its top no more than `STEP_UP` over the feet) nor over its head (its bottom no
     /// lower than `BODY_HEIGHT` over them).
@@ -71,7 +80,11 @@ impl Collider {
         if !super::segment_hits_box(a, b, self.lo - grown, self.hi + grown) {
             return false;
         }
-        !(self.reach(a) < NAV_RADIUS && self.reach(b) >= self.reach(a))
+        // Reaching into it as the grown box is (so a body off a corner of it, in the grown box
+        // but more than its reach from the box itself, may move off too), and getting no closer
+        // either way it's measured (round a corner, it may come closer along one axis).
+        let off = |reach: &dyn Fn(Vec2) -> f32| reach(b) >= reach(a);
+        !(self.reach_square(a) < NAV_RADIUS && (off(&|p| self.reach(p)) || off(&|p| self.reach_square(p))))
     }
 
     /// Whether something going straight from `a`, `from` high, to `b`, `to` high, meets it on
@@ -160,6 +173,38 @@ pub const WELL_RING: f32 = 0.77;
 pub const WELL_HEIGHT: f32 = 0.9;
 pub const WELL_ROOF: (Vec2, f32, f32) = (Vec2::new(1.0, 0.75), 2.2, 2.7);
 
+/// The merchant's stall round the counter (`Map::stall`): how far behind the counter's middle
+/// its tall back posts stand, how high its awning is at them and at its front edge, and how far
+/// in front of the counter's middle that edge reaches.
+pub const STALL_BACK: f32 = 1.3;
+pub const STALL_ROOF: (f32, f32) = (2.95, 2.25);
+pub const STALL_EAVES: f32 = 0.95;
+
+/// Where the merchant's stall stands (`Map::stall`): the middle of its counter, which way its
+/// front faces (where the merchant does), the way along the counter, and half its length.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stall {
+    pub middle: Vec2,
+    pub front: Vec2,
+    pub side: Vec2,
+    pub half: f32,
+}
+
+impl Stall {
+    /// Where its barrels stand, one at each side, out past the torch at each end of the counter.
+    pub fn barrels(&self) -> [Vec2; 2] {
+        [(-1.0, 0.1), (1.0, -0.4)].map(|(s, out)| self.middle + self.side * s * (self.half + 1.2) + self.front * out)
+    }
+
+    /// Where its stack of crates stands, at one side near the back.
+    pub fn crates(&self) -> Vec2 {
+        self.middle - self.side * (self.half + 0.6) + self.front * (0.4 - STALL_BACK)
+    }
+}
+
+/// How deep a stair's tread is (`Map::stairs_up`).
+pub const TREAD: f32 = 0.5;
+
 /// How high the merchant's counter's top is.
 pub const COUNTER_TOP: f32 = 1.08;
 
@@ -174,19 +219,41 @@ pub(super) fn build(map: &Map) -> Vec<Collider> {
     for house in &map.houses {
         let g = ground(house.center());
         let (lo, hi) = (house.lo.as_vec2(), house.hi.as_vec2());
-        out.push(Collider::block(lo, hi, g, g + House::WALLS));
+        out.push(Collider::block(lo, hi, g, g + house.walls()));
         let reach = if house.long_x() { Vec2::new(House::GABLE_EAVES, House::EAVES) } else { Vec2::new(House::EAVES, House::GABLE_EAVES) };
         let ridge = if house.long_x() { house.center().y } else { house.center().x };
         out.push(Collider {
             lo: lo - reach,
             hi: hi + reach,
-            bottom: g + House::WALLS - House::EAVES * House::SLOPE - 0.05,
+            bottom: g + house.walls() - House::EAVES * House::SLOPE - 0.05,
             top: g + house.ridge(),
             roof: Some(Roof { along_x: house.long_x(), ridge, slope: House::SLOPE }),
         });
         let chimney = house.chimney();
         let half = Vec2::splat(House::CHIMNEY / 2.0);
-        out.push(Collider::block(chimney - half, chimney + half, g + House::WALLS, g + House::WALLS + house.rise() + House::CHIMNEY_TOP));
+        out.push(Collider::block(chimney - half, chimney + half, g + house.walls(), g + house.walls() + house.rise() + House::CHIMNEY_TOP));
+    }
+    for house in map.houses.iter().filter(|house| house.storeys > 1) {
+        // Its upper storey jutting out over the gable ends, the joists under it.
+        let g = ground(house.center());
+        let jut = if house.long_x() { Vec2::X } else { Vec2::Y } * House::JETTY;
+        out.push(Collider::block(house.lo.as_vec2() - jut, house.hi.as_vec2() + jut, g + House::WALLS - House::JOISTS, g + house.walls()));
+    }
+    for house in &map.houses {
+        // The hood over its door, leaning out from the wall over anyone's head.
+        let (face, d) = (house.door_face(), house.door.as_vec2());
+        let (width, out_to, under, top) = House::HOOD;
+        let g = ground(face + d * out_to / 2.0);
+        let (a, b) = (face + d.perp() * width / 2.0, face + d * out_to - d.perp() * width / 2.0);
+        out.push(Collider::block(a.min(b), a.max(b), g + under, g + top));
+    }
+    for tower in &map.towers {
+        let (lo, hi) = (tower.lo.as_vec2(), tower.hi.as_vec2());
+        out.push(Collider::block(lo, hi, tower.base, tower.top));
+        let ground = map.tower_ground(tower);
+        for (out_by, top) in Tower::FOOTING {
+            out.push(Collider::block(lo - Vec2::splat(out_by), hi + Vec2::splat(out_by), tower.base, ground + top));
+        }
     }
     for &(t, high) in &map.crates {
         let g = ground(Map::center(t));
@@ -195,6 +262,51 @@ pub(super) fn build(map: &Map) -> Vec<Collider> {
     for &t in &map.counter {
         let g = ground(Map::center(t));
         out.push(tile_box(t, g, g + COUNTER_TOP));
+    }
+    if let Some(stall) = map.stall() {
+        // The rest of the merchant's stall round the counter, as `Props::stall` draws it: its
+        // back wall of shelves between the tall posts, the awning over the counter (low enough
+        // at its scalloped front that nobody stands on the counter under it), the barrels and
+        // crates at its sides, the sign out on its post.
+        let g = ground(stall.middle);
+        let span = |across: (f32, f32), from: f32, to: f32| {
+            let (a, b) = (stall.middle + stall.side * across.0 + stall.front * from, stall.middle + stall.side * across.1 + stall.front * to);
+            (a.min(b), a.max(b))
+        };
+        let wide = |by: f32| (-stall.half - by, stall.half + by);
+        let (lo, hi) = span(wide(0.12), -STALL_BACK - 0.1, -0.5);
+        out.push(Collider::block(lo, hi, g, g + STALL_ROOF.0));
+        let (lo, hi) = span(wide(0.25), -0.5, STALL_EAVES + 0.05);
+        out.push(Collider::block(lo, hi, g + STALL_ROOF.1 - 0.13, g + STALL_ROOF.0));
+        for p in stall.barrels() {
+            out.push(Collider::block(p - Vec2::splat(0.31), p + Vec2::splat(0.31), ground(p), ground(p) + 0.8));
+        }
+        let p = stall.crates();
+        out.push(Collider::block(p - Vec2::splat(0.25), p + Vec2::splat(0.25), ground(p), ground(p) + 0.8));
+        let post = stall.half + 0.05;
+        let (lo, hi) = span((post, post + 0.72), 0.45, 0.55);
+        out.push(Collider::block(lo, hi, g + 1.65, g + 2.2));
+    }
+    for (t, tile) in map.tiles() {
+        if tile != Tile::Bridge {
+            continue;
+        }
+        // A bridge's sides going down into the water (or a chasm), and a pillar at each end of
+        // them, as `Props::bridges` draws them: in the way of anyone wading by under it.
+        let c = Map::center(t);
+        for d in SIDES.into_iter().filter(|&d| map.scene_tile(t + d).is_gap()) {
+            let (out_dir, along) = (d.as_vec2(), d.perp().as_vec2());
+            let side = c + out_dir * 0.68;
+            let (a, b) = (side - out_dir * 0.18 - along * 0.51, side + out_dir * 0.18 + along * 0.51);
+            out.push(Collider::block(a.min(b), a.max(b), ground(side) - 0.1, ground(side) + 0.6));
+            for s in [d.perp(), -d.perp()] {
+                if map.get(t + s) == Tile::Bridge && map.scene_tile(t + s + d).is_gap() {
+                    continue;
+                }
+                let at = side + s.as_vec2() * 0.5;
+                out.push(Collider::block(at - Vec2::splat(0.25), at + Vec2::splat(0.25), ground(at) - 0.1, ground(at) + 1.0));
+            }
+        }
     }
     if let Some(well) = map.well {
         let g = ground(well);
@@ -244,11 +356,73 @@ pub(super) fn build(map: &Map) -> Vec<Collider> {
 }
 
 impl Map {
-    /// The ruined wall on tile `t`, if there is one (`ruin`): a wall tile that isn't a house's,
-    /// a stack of crates or the merchant's counter.
+    /// The merchant's stall, if there's a counter.
+    pub fn stall(&self) -> Option<Stall> {
+        if self.counter.is_empty() {
+            return None;
+        }
+        let tiles: Vec<Vec2> = self.counter.iter().map(|t| Map::center(*t)).collect();
+        let middle = tiles.iter().sum::<Vec2>() / tiles.len() as f32;
+        let front = self.shop_faces.normalize_or(Vec2::NEG_Y);
+        let side = front.perp();
+        let half = tiles.iter().map(|t| (*t - middle).dot(side).abs()).fold(0.0f32, f32::max) + 0.5;
+        Some(Stall { middle, front, side, half })
+    }
+
+    /// The ground round `tower`'s foot at its lowest (no lower than the tower's own foot): where
+    /// its footing's steps are measured from (`Tower::FOOTING`).
+    pub fn tower_ground(&self, tower: &Tower) -> f32 {
+        let (c, lo, hi) = (tower.center(), tower.lo.as_vec2(), tower.hi.as_vec2());
+        let corners = [lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)];
+        (0..32)
+            .map(|k| {
+                let u = (k % 8) as f32 / 8.0;
+                let edge = corners[k / 8].lerp(corners[(k / 8 + 1) % 4], u);
+                self.height_at(edge + (edge - c).normalize_or_zero() * 0.3)
+            })
+            .fold(f32::INFINITY, f32::min)
+            .max(tower.base)
+    }
+
+    /// The ruined wall on tile `t`, if there is one (`ruin`): a wall tile that isn't a house's, a
+    /// tower's, a stack of crates or the merchant's counter.
     pub fn ruin_at(&self, t: IVec2) -> Option<Ruin> {
-        let taken = self.houses.iter().any(|house| house.covers(t)) || self.crates.iter().any(|(at, _)| *at == t) || self.counter.contains(&t);
+        let taken = self.houses.iter().any(|house| house.covers(t))
+            || self.towers.iter().any(|tower| tower.covers(t))
+            || self.crates.iter().any(|(at, _)| *at == t)
+            || self.counter.contains(&t);
         (self.get(t) == Tile::Wall && !taken).then(|| ruin(t))
+    }
+
+    /// Which way the stairs on tile `t` go up, if it has any: a paved ramp (a path's or a
+    /// bridge's tile, `Map::height_at` sloping across it) going up one way only, not where it
+    /// meets level ground or another ramp at its side. The scene lays them in treads `TREAD`
+    /// deep, each as high as the slope's top under it (`Map::tread_top`).
+    pub fn stairs_up(&self, t: IVec2) -> Option<Vec2> {
+        if !matches!(self.get(t), Tile::Path | Tile::Bridge) {
+            return None;
+        }
+        let c = Map::center(t);
+        let rise = |d: Vec2| self.height_at(c + d * 0.45) - self.height_at(c - d * 0.45);
+        let (x, y) = (rise(Vec2::X), rise(Vec2::Y));
+        if x.abs() > 0.1 && y.abs() < 0.02 {
+            Some(Vec2::X * x.signum())
+        } else if y.abs() > 0.1 && x.abs() < 0.02 {
+            Some(Vec2::Y * y.signum())
+        } else {
+            None
+        }
+    }
+
+    /// How high the top of the stair tread under `p` is, if it's on stairs (`Map::stairs_up`):
+    /// over the slope the sim walks, as the scene draws it, so what lies on the stairs lies on
+    /// their treads.
+    pub fn tread_top(&self, p: Vec2) -> Option<f32> {
+        let t = Map::tile_of(p);
+        let up = self.stairs_up(t)?;
+        let c = Map::center(t);
+        let k = (((p - c).dot(up) + 0.5) / TREAD).floor().clamp(0.0, 1.0 / TREAD - 1.0);
+        Some(self.height_at(c + up * (TREAD * (k + 1.0) - 0.5) - up * 0.002))
     }
 
     /// How high over the ground at `p` a torch there stands its post, and how tall the post is:
@@ -258,16 +432,33 @@ impl Map {
     }
 
     /// The parapet along side `d` (`SIDES`) of tile `t`, if the ground drops `PARAPET_DROP` or more
-    /// past it (but not into the forest): the side's length, on the high tile's edge.
+    /// past it (but not into the forest), runs level along it and isn't left open to leap from
+    /// (`Map::leaps`): the side's length, on the high tile's edge. Not along a ramp's side: its top is level, so it would stand in the way of
+    /// the walker coming up the ramp beside it.
     pub fn parapet(&self, t: IVec2, d: IVec2) -> Option<Collider> {
         let c = Map::center(t);
         let here = self.height_at(c);
-        if self.get(t) == Tile::Forest || here - self.height_at(Map::center(t + d)) < PARAPET_DROP || self.scene_tile(t + d) == Tile::Forest {
+        if self.get(t) == Tile::Forest || here - self.height_at(Map::center(t + d)) < PARAPET_DROP || self.scene_tile(t + d) == Tile::Forest || !self.level_along(t, d) || self.leap_from(t, d) {
             return None;
         }
         let mid = c + d.as_vec2() * (0.5 - PARAPET_IN);
         let half = d.as_vec2().abs() * (PARAPET_THICK / 2.0) + d.as_vec2().perp().abs() * 0.5;
         Some(Collider::block(mid - half, mid + half, here, here + PARAPET_HEIGHT))
+    }
+
+    /// Whether side `d` (`SIDES`) of tile `t` is left open to leap from (`Map::leaps`).
+    pub(crate) fn leap_from(&self, t: IVec2, d: IVec2) -> bool {
+        let mid = Map::center(t) + d.as_vec2() * 0.5;
+        self.leaps.iter().any(|&(lo, hi)| mid.cmpge(lo).all() && mid.cmple(hi).all())
+    }
+
+    /// Whether the ground on tile `t` is as high at both ends of its side `d` (`SIDES`) as in its
+    /// middle: not sloping along it, up a ramp.
+    pub(crate) fn level_along(&self, t: IVec2, d: IVec2) -> bool {
+        let c = Map::center(t);
+        let here = self.height_at(c);
+        let along = d.as_vec2().perp() * 0.45;
+        [along, -along].iter().all(|&s| (self.height_at(c + d.as_vec2() * 0.45 + s) - here).abs() < 0.05)
     }
 
     /// The colliders near tile `t`: those reaching within a body's reach of it (`index_colliders`).
@@ -371,6 +562,66 @@ impl Map {
         self.line_meets(a, b, 0.25, true)
     }
 
+    /// Where a shot flying straight from `a` to `b` (each with how high it is) ends, if it meets
+    /// something on the way (`shot_meets`): on top of what it came down on (the ground, a slope,
+    /// a roof, a crate, a step), or against the side of what it flew into (a wall, a terrace's
+    /// face, a tree), just short of it.
+    pub fn shot_end(&self, a: (Vec2, f32), b: (Vec2, f32)) -> Option<ShotEnd> {
+        if !self.shot_meets(a, b) {
+            return None;
+        }
+        let along = |k: f32| (a.0.lerp(b.0, k), a.1 + (b.1 - a.1) * k);
+        // The first short stretch of the way that meets it, narrowed down to where it does.
+        let steps = (a.0.distance(b.0).max((b.1 - a.1).abs()) / SHOT_END_STEP).ceil().max(1.0) as i32;
+        let (mut last, mut next) = (a, b);
+        for s in 1..=steps {
+            next = along(s as f32 / steps as f32);
+            if self.shot_meets(last, next) {
+                break;
+            }
+            last = next;
+        }
+        for _ in 0..SHOT_END_NARROWING {
+            let mid = (last.0.lerp(next.0, 0.5), (last.1 + next.1) / 2.0);
+            if self.shot_meets(last, mid) { next = mid } else { last = mid }
+        }
+        // Came down onto it if its top there is between where the shot was and where it is
+        // (or as far over that as a slope climbs): else it flew into its side.
+        let top = self.surface_under(next.0, last.1 + 1e-3);
+        if top >= next.1 - 1e-3 && top <= last.1 + CLIMB * last.0.distance(next.0) + 1e-3 {
+            return Some(ShotEnd { at: next.0, height: top, wall: None });
+        }
+        Some(ShotEnd { at: last.0, height: last.1, wall: Some(self.struck_side(last, next)) })
+    }
+
+    /// Which way the side a shot struck flying from `last` into `next` faces (unit, on the
+    /// plane): the side of the box it went into, or the face of the ground it went into (a
+    /// terrace's, a cliff's); back the way it came from a tree.
+    fn struck_side(&self, last: (Vec2, f32), next: (Vec2, f32)) -> Vec2 {
+        let back = (last.0 - next.0).normalize_or(Vec2::X);
+        let boxed = [last.0, next.0].into_iter().flat_map(|p| self.colliders_on(Map::tile_of(p))).find(|collider| collider.cut_by(last, next));
+        if let Some(collider) = boxed {
+            let off = last.0 - last.0.clamp(collider.lo, collider.hi);
+            return if off.length_squared() < 1e-8 {
+                back
+            } else if off.x.abs() >= off.y.abs() {
+                Vec2::X * off.x.signum()
+            } else {
+                Vec2::Y * off.y.signum()
+            };
+        }
+        let d = next.0 - last.0;
+        if self.height_at(next.0) <= next.1 {
+            back
+        } else if self.height_at(Vec2::new(next.0.x, last.0.y)) > next.1 {
+            Vec2::new(-d.x.signum(), 0.0)
+        } else if self.height_at(Vec2::new(last.0.x, next.0.y)) > next.1 {
+            Vec2::new(0.0, -d.y.signum())
+        } else {
+            back
+        }
+    }
+
     /// Whether the line from an eye at `a`, `from` high, to `b`, `to` high is hidden by something
     /// solid on the way: a collider (a wall, a roof, a rock: `Collider::cut_by`) or the ground (a
     /// hillside). Not by a tree or the forest, seen between. For what's drawn over the scene, as
@@ -401,13 +652,69 @@ impl Map {
     }
 }
 
+/// Where a shot ended (`Map::shot_end`): where on the plane and how high; and against the side of
+/// something, which way that side faces (unit, on the plane), `None` on top of something.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShotEnd {
+    pub at: Vec2,
+    pub height: f32,
+    pub wall: Option<Vec2>,
+}
+
+/// How long (meters) the stretches are that `Map::shot_end` looks along a shot's way in for the
+/// first to meet something, and how many times it halves that one to narrow down where.
+const SHOT_END_STEP: f32 = 0.1;
+const SHOT_END_NARROWING: usize = 6;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::map::MapId;
 
+    /// A shot ends on top of what it comes down on (the ground, a crate), and on the side of what
+    /// it flies into (a crate's, a terrace's face), facing back out of it.
+    #[test]
+    fn a_shot_ends_on_what_it_comes_down_on_or_against_what_it_flies_into() {
+        let yard = MapId::Yard.map();
+        // Down onto level ground.
+        let p = Vec2::new(-34.5, -0.5);
+        let end = yard.shot_end((p, 1.0), (p + Vec2::X * 0.3, -0.2)).expect("it meets the ground");
+        assert!(end.wall.is_none() && end.height.abs() < 1e-3, "{end:?}");
+        // Down onto a crate's top, and into its side.
+        let (t, _) = *yard.crates.iter().find(|&&(_, high)| high == 1).unwrap();
+        let c = Map::center(t);
+        let end = yard.shot_end((c, CRATE + 1.0), (c + Vec2::X * 0.1, CRATE - 0.5)).expect("it meets the crate's top");
+        assert!(end.wall.is_none() && (end.height - CRATE).abs() < 1e-3, "{end:?}");
+        let end = yard.shot_end((c - Vec2::X * 1.5, CRATE / 2.0), (c, CRATE / 2.0)).expect("it meets the crate's side");
+        assert_eq!(end.wall, Some(Vec2::NEG_X), "{end:?}");
+        assert!(end.at.x < c.x && (end.height - CRATE / 2.0).abs() < 1e-3, "{end:?}");
+        // North into the south terrace's face (y = -9), under its parapet.
+        let end = yard.shot_end((Vec2::new(2.5, -7.0), 1.0), (Vec2::new(2.5, -10.0), 1.0)).expect("it meets the terrace");
+        assert_eq!(end.wall, Some(Vec2::Y), "{end:?}");
+        assert!(end.at.y > -9.0 && end.at.y < -8.95, "{end:?}");
+        // Over open ground, it meets nothing.
+        assert!(yard.shot_end((p, 1.0), (p + Vec2::Y * 0.5, 1.0)).is_none());
+    }
+
     fn maps() -> impl Iterator<Item = &'static Map> {
         MapId::ALL.into_iter().map(MapId::map)
+    }
+
+    /// A body that's come down off a corner of a post (in the box grown by its reach, not within
+    /// its reach of the post itself) walks off it every way that doesn't take it closer.
+    #[test]
+    fn a_body_off_a_posts_corner_walks_off_it() {
+        let post = Collider::block(Vec2::splat(-0.07), Vec2::splat(0.07), 0.0, 2.5);
+        for corner in [Vec2::new(-1.0, -1.0), Vec2::new(1.0, -1.0), Vec2::new(-1.0, 1.0), Vec2::new(1.0, 1.0)] {
+            let at = corner * (0.07 + NAV_RADIUS * 0.85);
+            for away in [corner, corner.with_y(0.0), corner.with_x(0.0)] {
+                assert!(!post.blocks(at, at + away * 0.1, 0.0), "off the corner at {at}, stepping {away}");
+            }
+            assert!(post.blocks(at, at - corner * 0.05, 0.0), "off the corner at {at}, stepping in");
+        }
+        // Round the corner: further from it, though closer along one axis.
+        let at = Vec2::new(0.07 + 0.1, 0.07 + 0.25);
+        assert!(!post.blocks(at, Vec2::new(0.07 + 0.2, 0.07 + 0.2), 0.0), "rounding the corner at {at}");
     }
 
     /// Sight (`sight_meets`) is hidden by a house between, and by the ground, but not by a tree
@@ -539,7 +846,7 @@ mod tests {
             for house in &m.houses {
                 let g = m.height_at(house.center());
                 let (lo, hi) = (house.lo.as_vec2(), house.hi.as_vec2());
-                assert!(m.colliders().iter().any(|c| c.lo == lo && c.hi == hi && c.bottom == g && c.top == g + House::WALLS && c.roof.is_none()), "{:?}: no walls for {house:?}", m.id);
+                assert!(m.colliders().iter().any(|c| c.lo == lo && c.hi == hi && c.bottom == g && c.top == g + house.walls() && c.roof.is_none()), "{:?}: no walls for {house:?}", m.id);
                 let roof = m.colliders().iter().find(|c| c.roof.is_some() && c.lo.cmple(lo).all() && c.hi.cmpge(hi).all()).expect("a roof");
                 let ridge = roof.roof.unwrap();
                 // Its ridge down its middle, along its long side, as high as the house says.
@@ -551,7 +858,7 @@ mod tests {
                 let edge = if house.long_x() { Vec2::new(house.center().x, lo.y - House::EAVES) } else { Vec2::new(lo.x - House::EAVES, house.center().y) };
                 assert!((roof.top_at(edge) - (roof.top - House::SLOPE * (half + House::EAVES))).abs() < 1e-4);
                 // The eaves' underside is over the walls' tops' edge, under the roof's top there.
-                assert!(roof.bottom < g + House::WALLS && roof.bottom < roof.top_at(edge));
+                assert!(roof.bottom < g + house.walls() && roof.bottom < roof.top_at(edge));
                 let chimney = house.chimney();
                 assert!(m.colliders().iter().any(|c| (c.lo + c.hi) / 2.0 == chimney && c.top > roof.top), "{:?}: no chimney over the ridge of {house:?}", m.id);
                 // No ruin stands in a house's walls.
@@ -593,13 +900,13 @@ mod tests {
     }
 
     #[test]
-    fn a_parapet_runs_along_every_sheer_drop_and_nowhere_else() {
+    fn a_parapet_runs_along_every_sheer_drop_off_level_ground_and_nowhere_else() {
         for m in maps() {
             let mut parapets = 0;
             for (t, tile) in m.tiles() {
                 for d in SIDES {
                     let drop = m.height_at(Map::center(t)) - m.height_at(Map::center(t + d));
-                    let expected = tile != Tile::Forest && drop >= PARAPET_DROP && m.scene_tile(t + d) != Tile::Forest;
+                    let expected = tile != Tile::Forest && drop >= PARAPET_DROP && m.scene_tile(t + d) != Tile::Forest && m.level_along(t, d) && !m.leap_from(t, d);
                     let parapet = m.parapet(t, d);
                     assert_eq!(parapet.is_some(), expected, "{:?}: the side {d} of {t}, a drop of {drop}", m.id);
                     if let Some(parapet) = parapet {
@@ -656,9 +963,12 @@ mod tests {
         let house = &m.houses[0];
         let roof = m.colliders().iter().find(|c| c.roof.is_some() && c.lo.cmple(house.lo.as_vec2()).all()).unwrap();
         let g = m.height_at(house.center());
-        let eaves = if house.long_x() { Vec2::new(house.center().x, house.lo.y as f32 - House::EAVES / 2.0) } else { Vec2::new(house.lo.x as f32 - House::EAVES / 2.0, house.center().y) };
+        // Under the eaves of the side without the door (whose hood hangs lower).
+        let across = if house.long_x() { Vec2::Y } else { Vec2::X };
+        let out = if house.door.as_vec2().dot(across) > 0.0 { -across } else { across };
+        let eaves = house.center() + out * (house.size().dot(across) / 2.0 + House::EAVES / 2.0);
         assert_eq!(m.ceiling_at(eaves, g), roof.bottom - BODY_HEIGHT);
-        let away = eaves - (house.center() - eaves).normalize() * 3.0;
+        let away = eaves + out * 3.0;
         assert_eq!(m.ceiling_at(away, m.height_at(away)), f32::INFINITY);
     }
 }

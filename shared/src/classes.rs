@@ -280,7 +280,7 @@ pub struct AttackDef {
     /// Its shots fly on through monsters (never players), hitting each once (no by default).
     #[serde(default)]
     pub pierces: bool,
-    /// Its shots burst where they hit, hitting the struck one's foes round it too (none by
+    /// Its shots burst where they hit or end, hitting the shooter's foes round there too (none by
     /// default).
     #[serde(default)]
     pub burst: Option<BurstDef>,
@@ -336,8 +336,9 @@ pub struct ShoveDef {
     pub wall_root_ticks: u32,
 }
 
-/// A shot's burst where it hits (`AttackDef::burst`): everyone else within `radius` of the one
-/// struck takes `share` of the shot's damage, and its chill.
+/// A shot's burst where it hits, or where it ends unspent (its range, a wall) (`AttackDef::burst`):
+/// everyone else within `radius` of the one struck, or of where it ended, takes `share` of the
+/// shot's damage, and its chill.
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct BurstDef {
     pub radius: f32,

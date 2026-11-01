@@ -103,13 +103,13 @@ pub(super) fn show_fighter(mut commands: Commands, mut lobby: ResMut<Lobby>, vis
     let fighter = commands
         .spawn((
             selected,
-            Pos(STAGE),
+            Pos(lobby.stage.spot),
             AttackState::default(),
             Cooldowns::default(),
             Dashing::default(),
             Mesh3d(visuals.fighter(selected)),
             MeshMaterial3d(materials.add(arena::matte(Color::WHITE))),
-            Transform::from_translation(to_world(STAGE, 0.0)),
+            Transform::from_translation(to_world(lobby.stage.spot, 0.0)),
             ChildOf(lobby.lift),
         ))
         .id();

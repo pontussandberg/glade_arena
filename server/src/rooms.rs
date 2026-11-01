@@ -164,6 +164,9 @@ struct Room {
     started: bool,
     /// Never listed, no one joins.
     practice: bool,
+    /// Where its members start, instead of a spawn point ("Practice Ravenhold at 10 -4"): for
+    /// looking a map over from anywhere on it.
+    start: Option<Vec2>,
     /// A run against the waves of one's own: never listed, no one joins.
     solo: bool,
     /// Only those who give it join.
@@ -211,6 +214,12 @@ impl Lobby {
     /// The map `room` plays on (the default one if it's gone).
     pub fn map(&self, room: &InRoom) -> &'static Map {
         self.rooms.get(&room.key).map_or(MapId::default(), |r| r.map).map()
+    }
+
+    /// Where a player in `room` starts, away from `others` there: its spawn point farthest from
+    /// them, or where it was asked to start (`Room::start`).
+    pub fn spawn_point(&self, room: &InRoom, others: impl IntoIterator<Item = Vec2> + Clone) -> Vec2 {
+        self.rooms.get(&room.key).and_then(|r| r.start).unwrap_or_else(|| arena_shared::sim::pick_spawn_point(self.map(room), others))
     }
 
     /// Who's in `room`, and how many on each team.
@@ -641,7 +650,21 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             join(lobby, ctx, link, key)?;
         }
         RoomRequest::QuickJoin(name) => {
+            // "Practice <map>" (its label, e.g. "Practice Ravenhold"): a practice room of one's
+            // own on that map, to walk it in peace; "Practice Ravenhold at 10 -4" starts there
+            // (read before the name is cut to length: the room is only ever called "Practice").
+            if let Some(wanted) = name.to_lowercase().strip_prefix("practice ") {
+                let (wanted, at) = wanted.split_once(" at ").unwrap_or((wanted, ""));
+                if let Some(map) = MapId::ALL.into_iter().find(|map| map.label().to_lowercase() == wanted.trim()) {
+                    let at: Vec<f32> = at.split_whitespace().filter_map(|n| n.parse().ok()).collect();
+                    handle(lobby, allocator, ctx, link, RoomRequest::Practice(map))?;
+                    let key = lobby.guests[&link].room.expect("just joined");
+                    lobby.rooms.get_mut(&key).expect("just made").start = at.get(..2).map(|xy| Vec2::new(xy[0], xy[1]));
+                    return Ok(());
+                }
+            }
             let name = clean_room_name(&name).ok_or("Give the room a name")?;
+            let lower = name.to_lowercase();
             let found = lobby
                 .rooms
                 .iter()
@@ -658,14 +681,17 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                 None => {
                     // One called "Waves..." is a run against the waves, on from the off; "Waves 10"
                     // starts at wave 10 (for trying later waves out). "Bastion..." likewise, on
-                    // the bastion ("Bastion 9" starts at wave 9, its armory already open).
-                    let lower = name.to_lowercase();
+                    // the bastion ("Bastion 9" starts at wave 9, its armory already open), and
+                    // "Ravenhold..." on the hold.
                     let bastion = lower.starts_with("bastion");
-                    let mode = if lower.starts_with("waves") || bastion { Mode::Waves } else { Mode::Ffa };
+                    let hold = lower.starts_with("ravenhold");
+                    let mode = if lower.starts_with("waves") || bastion || hold { Mode::Waves } else { Mode::Ffa };
                     let from_wave = name.split_whitespace().nth(1).and_then(|n| n.parse::<u32>().ok()).filter(|n| (1..=200).contains(n));
                     // The default map, if it's one of the mode's; else the mode's own (the wilds).
                     let map = if bastion {
                         MapId::Bastion
+                    } else if hold {
+                        MapId::Hold
                     } else {
                         mode.maps().iter().copied().find(|&map| map == MapId::default()).unwrap_or(mode.maps()[0])
                     };
@@ -993,6 +1019,7 @@ fn create(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, leade
         leader,
         started: false,
         practice: false,
+        start: None,
         solo: false,
         password: None,
         members: Vec::new(),

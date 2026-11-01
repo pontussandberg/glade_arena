@@ -34,6 +34,8 @@ pub struct Theme {
     pub sun_from: Vec3,
     /// What lies around the clearing, and what its trees are.
     pub wilds: Wilds,
+    /// Whether its high stone faces are a fortress's walls: laid in courses (`Props::coursed`).
+    pub battlements: bool,
 }
 
 /// The land around a map's clearing out to the haze, and what grows on it (the map's own trees
@@ -61,6 +63,7 @@ impl Theme {
             MapId::Gorge => &HIGHLANDS,
             MapId::Wilds => &HOLLOW,
             MapId::Yard => &YARD,
+            MapId::Hold => &RAVENHOLD,
             _ => &BASTION,
         }
     }
@@ -91,6 +94,7 @@ const GLADE: Theme = Theme {
     sun_illuminance: 2_050.0,
     sun_from: SUN_FROM,
     wilds: Wilds::Forest,
+    battlements: false,
 };
 
 /// Practice Yard: open meadow all around instead of the glade's forest, at sunset: the sun just
@@ -133,6 +137,7 @@ const FEN: Theme = Theme {
     sun_illuminance: 1_700.0,
     sun_from: SUN_FROM,
     wilds: Wilds::Fen,
+    battlements: false,
 };
 
 /// Sunken Bastion: a drowned fortress as the light fails. Grey-green turf between cold stone,
@@ -161,6 +166,38 @@ const BASTION: Theme = Theme {
     sun_illuminance: 1_800.0,
     sun_from: SUN_FROM,
     wilds: Wilds::Fen,
+    battlements: false,
+};
+
+/// Ravenhold: a fortress over its village in the late afternoon, an hour or two before the sun
+/// sets. Damp turf, pale limestone gone grey-blue in the shade, dark slate spires; the sun well
+/// down the sky in the south-west, warm on the walls' faces; the torches and lit windows carry
+/// the rest of the warmth.
+const RAVENHOLD: Theme = Theme {
+    grass: Color::srgb_u8(0x4C, 0x60, 0x3E),
+    meadow: Color::srgb_u8(0x5C, 0x6C, 0x44),
+    fern: Color::srgb_u8(0x37, 0x50, 0x37),
+    pine: Color::srgb_u8(0x23, 0x36, 0x2C),
+    slate: Color::srgb_u8(0x58, 0x5C, 0x66),
+    stone: Color::srgb_u8(0x8C, 0x88, 0x80),
+    wall: Color::srgb_u8(0x68, 0x68, 0x6C),
+    bark: Color::srgb_u8(0x46, 0x36, 0x2A),
+    path: Color::srgb_u8(0x70, 0x68, 0x5A),
+    bank: Color::srgb_u8(0x45, 0x3D, 0x33),
+    riverbed: Color::srgb_u8(0x2A, 0x33, 0x38),
+    pond: Color::srgb_u8(0x34, 0x54, 0x68),
+    bloom: Color::srgb_u8(0x9C, 0x6A, 0x8E),
+    marsh: Color::srgb_u8(0x46, 0x52, 0x40),
+    abyss: Color::srgb_u8(0x1E, 0x21, 0x2B),
+    rope: Color::srgb_u8(0x5E, 0x54, 0x44),
+    haze: Color::srgb_u8(0x56, 0x58, 0x6A),
+    sky: Color::srgb_u8(0x66, 0x70, 0x9C),
+    sky_brightness: 520.0,
+    sun: Color::srgb_u8(0xFF, 0xD8, 0xB4),
+    sun_illuminance: 2_900.0,
+    sun_from: Vec3::new(-30.0, 25.0, 26.0),
+    wilds: Wilds::Forest,
+    battlements: true,
 };
 
 /// Hollow Wilds: a haunted wood in failing light. Deep mossy greens, violet heather, a dim
@@ -189,6 +226,7 @@ const HOLLOW: Theme = Theme {
     sun_illuminance: 2_200.0,
     sun_from: SUN_FROM,
     wilds: Wilds::Forest,
+    battlements: false,
 };
 
 /// Riven Gorge: dusky moorland as the sun dies. Dry grass gone umber in terraces of dark
@@ -217,4 +255,5 @@ const HIGHLANDS: Theme = Theme {
     sun_illuminance: 2_400.0,
     sun_from: SUN_FROM,
     wilds: Wilds::Highlands,
+    battlements: false,
 };

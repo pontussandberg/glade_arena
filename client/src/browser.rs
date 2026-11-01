@@ -208,7 +208,7 @@ fn open_home(mut commands: Commands, me: Option<Res<Me>>, mut map: ResMut<Curren
     // The first name only: a whole one with its byname can be too long for a lobby's.
     let first = me.as_ref().map_or("Guest", |me| first_name(&me.name));
     commands.insert_resource(Home { name: format!("{first}'s lobby"), mode: Mode::Waves, map: HOME_MAP, password: None, form_open: false });
-    // Home shows Hollow Wilds again, whatever the last room was on.
+    // Home shows its own map again, whatever the last room was on.
     map.set_if_neq(CurrentMap(HOME_MAP));
 }
 

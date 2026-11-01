@@ -64,23 +64,26 @@ pub enum Sfx {
     Step(Surface),
     /// A dash, as the figure dashes.
     Dash(DashVoice),
-    /// The revenant's glaive landing as its lead foot stomps down: the edge biting into the
-    /// ground, a heavy dull thump with real weight under it, and the earth shuddering low a
-    /// moment after.
+    /// The revenant's glaive landing as its lead foot stomps down: one short, heavy thunk of
+    /// blade and foot into the ground, and on its heels the rift opening where it struck: the
+    /// earth groaning open like a heavy gate, briefly.
     GlaiveSwing,
     /// The revenant's glaive coming over and down, just before it lands (`strike_whoosh`): a
     /// long, heavy haft pushing through the air, the coat flapping with it.
     GlaiveWhoosh,
-    /// The revenant gathering: its coat heaving as the glaive goes up, the air beginning to move
-    /// behind the blade, and under it a breath drawn from the other side.
+    /// The revenant gathering: silent, its strike's whoosh (`GlaiveWhoosh`) is all that's heard
+    /// before the blow lands.
     GlaiveReady,
     /// The javelinist gathering: the spear drawn back over the shoulder, cloth shifting and the
     /// shaft groaning in the grip.
     JavReady,
-    /// The javelinist's throw: the body coming through and the arm lashing the spear away.
+    /// The javelinist's throw: the arm lashing the spear away (Pontus's own recording).
     SpearThrow,
-    /// The frost mage gathering: cold crystallizing round the staff, a glassy shimmer and ticks.
+    /// The frost mage gathering: frost creeping crackling over the staff, a crystal ticking as
+    /// it sets.
     FrostReady,
+    /// The frost mage's staff thrust out: a breath of cold air pushed out with it.
+    FrostCast,
     /// The warden's thrust: the shield's face driven in first, the sword's steel a beat behind.
     ShieldThrust,
     /// The warden gathering: the shield coming up, the sword drawn back behind its rim.
@@ -114,7 +117,8 @@ pub enum Sfx {
     KindleReady,
     /// A burning fighter going up all at once.
     Ignite,
-    /// A frostbolt leaving the hand: a glassy shiver.
+    /// A frostbolt leaving the hand: a hard close snap of ice with a deep crack and a thump of
+    /// weight under it, crackling trailing after, the snap coming back off the walls.
     FrostLoose,
     /// A storm bolt let go: one hard crack, a buzz of charge under it, a fizz of static after.
     StormLoose,
@@ -146,7 +150,8 @@ pub enum Sfx {
     FrostNova,
     /// A ring of cinders: fire going up all round.
     FireNova,
-    /// A frostbolt shattering on what it hit.
+    /// A frostbolt shattering where it hit or ended: a big crack with weight under it, the ice
+    /// going to pieces, splinters ringing down, and a long soft settle of frost.
     Shatter,
     /// A wave starting.
     Horn,
@@ -210,7 +215,7 @@ fn attack_voice(class: arena_shared::protocol::ClassId) -> (Sfx, Sfx, f32) {
     match class.def().figure() {
         "revenant" => (Sfx::GlaiveReady, Sfx::GlaiveSwing, 1.0),
         "javelinist" => (Sfx::JavReady, Sfx::SpearThrow, 1.0),
-        "frost_mage" => (Sfx::FrostReady, Sfx::Swing, 1.0),
+        "frost_mage" => (Sfx::FrostReady, Sfx::FrostCast, 1.0),
         "warden" => (Sfx::ShieldReady, Sfx::ShieldThrust, 1.0),
         "breaker" => (Sfx::MaulReady, Sfx::MaulSwing, 1.0),
         // Casters' shots sound as they leave the hand (`loose_sounds`): only the gather is theirs here.
@@ -227,7 +232,7 @@ fn attack_voice(class: arena_shared::protocol::ClassId) -> (Sfx, Sfx, f32) {
 /// plays as it goes off, too late for the air the blade pushes on the way down.
 fn strike_whoosh(class: arena_shared::protocol::ClassId) -> Option<(Sfx, f32)> {
     match class.def().figure() {
-        "revenant" => Some((Sfx::GlaiveWhoosh, 0.2)),
+        "revenant" => Some((Sfx::GlaiveWhoosh, 0.3)),
         _ => None,
     }
 }
@@ -406,7 +411,7 @@ mod web {
     use web_sys::{AudioBuffer, AudioContext, AudioContextState, AudioNode, BiquadFilterType, DynamicsCompressorNode, GainNode, OscillatorType, Response};
 
     /// The recordings, by file, under `sfx/` next to the page (see `sfx/CREDITS.txt` for where
-    /// each is from; all CC0). A sound names one by its stem.
+    /// each is from; all CC0 but the author's own). A sound names one by its stem.
     const SAMPLES: &[&str] = &[
         // Air: swishes and swings (artisticdude), a rush of air (rubberduck).
         "swish_light_1.wav", "swish_light_2.wav", "swish_light_3.wav", "swish_heavy_1.wav", "swish_heavy_2.wav", "swish_heavy_3.wav",
@@ -414,6 +419,8 @@ mod web {
         // Weapons in the air (Still North Media): spear swings, a long blade's slice slowed to a
         // glaive, a bow drawn, a heavy arrow going by slowed to a spear.
         "spear_swing_1.wav", "spear_swing_2.wav", "spear_swing_3.wav", "blade_swing_1.wav", "blade_swing_2.wav", "blade_swing_3.wav",
+        // A javelin thrown (Pontus's own recording).
+        "jav_throw.wav",
         "bow_draw_1.wav", "bow_draw_2.wav", "bow_draw_3.wav", "spear_flight_1.wav", "spear_flight_2.wav", "spear_flight_3.wav",
         // Breath and the other side (qubodup; made from the above): a slowed breath, air drawn
         // back, a tear between worlds.
@@ -437,8 +444,11 @@ mod web {
         "fire_whoosh.wav", "fire_pop.wav", "fire_bed.wav", "flame.ogg",
         // Storm (faxcorp, rubberduck).
         "zap_hit.wav", "zap_bloom.wav", "crackle.wav", "charge.wav", "boom.wav", "thunder_01.ogg",
-        // Frost (bart, IgnasD, artisticdude).
-        "ice.wav", "coldsnap.wav", "shatter_1.ogg", "shatter_2.ogg", "magic.wav",
+        // Frost (bart, IgnasD, artisticdude, rubberduck): ice crackling, snapping, cracking and
+        // breaking; a puff of cold air; splinters of ice ringing.
+        "ice.wav", "coldsnap.wav", "shatter_1.ogg", "shatter_2.ogg", "magic.wav", "ice_crack_1.wav", "ice_crack_2.wav", "ice_crack_3.wav",
+        "ice_break_1.wav", "ice_break_2.wav", "frost_air.wav", "ice_tinkle_1.wav", "ice_tinkle_2.wav", "ice_deep_1.wav", "ice_deep_2.wav",
+        "ice_deep_3.wav", "ice_thump.wav",
         // Footsteps (Kenney).
         "step_grass_0.ogg", "step_grass_1.ogg", "step_grass_2.ogg", "step_grass_3.ogg", "step_grass_4.ogg",
         "step_wood_0.ogg", "step_wood_1.ogg", "step_wood_2.ogg", "step_wood_3.ogg", "step_wood_4.ogg",
@@ -678,6 +688,16 @@ mod web {
             }
         }
 
+        /// A sharp sound at `peak` from `when` coming back off the walls round it: twice, each
+        /// time quieter and duller. The mix has no reverb; this gives a hit some room.
+        fn echo(&mut self, key: &str, when: f64, rate: f32, peak: f32) {
+            for (after, share, dull) in [(0.09, 0.14, 2500.0), (0.2, 0.07, 1500.0)] {
+                if let Some(e) = self.held(when + after, peak * share, 0.03, 0.12) {
+                    self.clip_through(key, when + after, 0.0, None, rate, BiquadFilterType::Lowpass, dull, &e);
+                }
+            }
+        }
+
         /// A whole recording at `peak`, from `when`, `rate` times its speed, held `hold` seconds
         /// and let go over `release`: the plain way most layers go in.
         fn sample(&mut self, key: &str, when: f64, peak: f32, rate: f32, hold: f64, release: f64) {
@@ -740,27 +760,6 @@ mod web {
             }
         }
 
-        /// Noise through a filter gliding `from` to `to` Hz into `into`, from `when` for `dur`.
-        fn noise(&mut self, kind: BiquadFilterType, from: f32, to: f32, q: f32, when: f64, dur: f64, into: &AudioNode) {
-            let Ok(source) = self.ctx.create_buffer_source() else { return };
-            source.set_buffer(Some(&self.noise));
-            source.set_loop(true);
-            let _ = source.set_loop_start(0.0);
-            let offset = (self.r() * 0.8) as f64;
-            let Ok(filter) = self.ctx.create_biquad_filter() else { return };
-            filter.set_type(kind);
-            let f = filter.frequency();
-            let _ = f.set_value_at_time(from.max(10.0), when);
-            let _ = f.exponential_ramp_to_value_at_time(to.max(10.0), when + dur);
-            filter.q().set_value(q);
-            if source.connect_with_audio_node(&filter).is_ok() && filter.connect_with_audio_node(into).is_ok() {
-                let _ = source.start_with_when_and_grain_offset(when, offset);
-                // web-sys deprecated this spelling, but it's the one way to schedule the stop.
-                #[allow(deprecated)]
-                let _ = source.stop_with_when(when + dur + 0.05);
-            }
-        }
-
         /// A quiet bed of wind under everything: looped noise through a low filter, swelling and
         /// dying on a slow breath, so the world is never dead silent. Skips the compressor: the
         /// fights shouldn't pump the wind.
@@ -802,9 +801,11 @@ mod web {
             use OscillatorType::{Sine, Triangle};
             let now = self.ctx.current_time() + 0.01 + delay;
             let g = gain;
-            // A small random spread keeps a flurry from repeating; the revenant's voice is
-            // pinned instead, tuned by ear to one speed.
-            let p = if matches!(kind, Sfx::GlaiveReady | Sfx::GlaiveSwing | Sfx::GlaiveWhoosh) { pitch } else { self.vary(0.08) * pitch };
+            // A small random spread keeps a flurry from repeating. A voice tuned by ear to one
+            // speed (the revenant's, the javelin's throw) only drifts off it very slightly, so
+            // no two of its attacks are twins either.
+            let tuned = matches!(kind, Sfx::GlaiveReady | Sfx::GlaiveSwing | Sfx::GlaiveWhoosh | Sfx::SpearThrow);
+            let p = self.vary(if tuned { 0.03 } else { 0.08 }) * pitch;
             const SWISH_LIGHT: [&str; 3] = ["swish_light_1", "swish_light_2", "swish_light_3"];
             const SWISH_HEAVY: [&str; 3] = ["swish_heavy_1", "swish_heavy_2", "swish_heavy_3"];
             const SPEAR_SWINGS: [&str; 3] = ["spear_swing_1", "spear_swing_2", "spear_swing_3"];
@@ -818,6 +819,9 @@ mod web {
             const STONES: [&str; 2] = ["stones_01", "stones_02"];
             const SWORDS: [&str; 3] = ["sword_1", "sword_2", "sword_3"];
             const CLASHES: [&str; 3] = ["clash_1", "clash_2", "clash_3"];
+            const ICE_CRACKS: [&str; 3] = ["ice_crack_1", "ice_crack_2", "ice_crack_3"];
+            const ICE_TINKLES: [&str; 2] = ["ice_tinkle_1", "ice_tinkle_2"];
+            const ICE_DEEP: [&str; 3] = ["ice_deep_1", "ice_deep_2", "ice_deep_3"];
             match kind {
                 Sfx::Swing => {
                     // A blade through the air: a real swish, a heavy weapon's lower and longer.
@@ -897,17 +901,7 @@ mod web {
                     // A shot leaving the hand: a short swing of air.
                     self.sample("swing_2", now, 0.34 * g, p * 1.05, 0.1, 0.1);
                 }
-                Sfx::GlaiveReady => {
-                    // The glaive heaved back and up: the coat heaving, the air beginning to move
-                    // behind the blade (a heavy swish slowed right down), and under it a breath
-                    // drawn from the other side, soft and swelling.
-                    self.sample("cloth_heavy", now, 0.22 * g, 0.9 * p, 0.2, 0.1);
-                    let haul = self.pick(&SWISH_HEAVY);
-                    self.sample(haul, now + 0.08, 0.15 * g, 0.5 * p, 0.25, 0.15);
-                    if let Some(e) = self.held(now, 0.09 * g, 0.3, 0.15) {
-                        self.clip_through("ghost_breath", now, 0.3, Some(0.5), p, Lowpass, 1800.0, &e);
-                    }
-                }
+                Sfx::GlaiveReady => {}
                 Sfx::GlaiveWhoosh => {
                     // A long haft and a heavy blade shoving through the air (a staff's swing
                     // slowed down, its whistle dulled away), the coat flapping with it.
@@ -918,25 +912,26 @@ mod web {
                     self.sample("cloth_heavy", now + 0.02, 0.12 * g, 0.85 * p, 0.2, 0.1);
                 }
                 Sfx::GlaiveSwing => {
-                    // In the order the ground takes it (recordings only, nothing synthesized,
-                    // nothing that bounces, no scatter of debris: it reads as a splash): the
-                    // edge biting in, the blade's and the stomping foot's thump, a slowed heavy
-                    // blow's weight under it, and the earth shuddering low, briefly, after.
-                    if let Some(e) = self.held(now, 0.28 * g, 0.05, 0.1) {
-                        self.clip_through("chop", now, 0.0, None, 0.7 * p, Lowpass, 2600.0, &e);
-                    }
-                    if let Some(e) = self.held(now, 0.42 * g, 0.1, 0.2) {
+                    // Recordings only, nothing synthesized, nothing that bounces, no scatter of
+                    // debris (it reads as a splash). The thunk, all at once and cut short: the
+                    // blade's and the stomping foot's thump, a slowed heavy blow's weight under
+                    // it, and a low body to it.
+                    if let Some(e) = self.held(now, 0.42 * g, 0.06, 0.1) {
                         self.clip_through("groundhit", now, 0.0, None, 0.7 * p, Lowpass, 1400.0, &e);
                     }
                     let weight = self.pick(&["impactPunch_heavy_000", "impactPunch_heavy_001"]);
-                    if let Some(e) = self.held(now, 0.35 * g, 0.15, 0.3) {
+                    if let Some(e) = self.held(now, 0.35 * g, 0.05, 0.1) {
                         self.clip_through(weight, now, 0.0, None, 0.55 * p, Lowpass, 600.0, &e);
                     }
-                    if let Some(e) = self.held(now, 0.55 * g, 0.18, 0.35) {
+                    if let Some(e) = self.held(now, 0.5 * g, 0.05, 0.12) {
                         self.clip_through("boom", now, 0.0, None, 0.6 * p, Lowpass, 180.0, &e);
                     }
-                    if let Some(e) = self.held(now + 0.04, 0.26 * g, 0.15, 0.35) {
-                        self.clip_through("thunder_01", now + 0.04, 0.85, Some(0.6), 0.55 * p, Lowpass, 260.0, &e);
+                    // Then the rift opening where it struck, right on the thunk's heels: a roll of
+                    // thunder slowed right down into the earth groaning open like a heavy gate,
+                    // short.
+                    let tear = now + 0.03;
+                    if let Some(e) = self.held(tear, 0.6 * g, 0.15, 0.25) {
+                        self.clip_through("thunder_01", tear, 0.75, Some(0.7), 0.55 * p, Lowpass, 400.0, &e);
                     }
                 }
                 Sfx::ShieldReady => {
@@ -1019,10 +1014,8 @@ mod web {
                     self.sample("draw_air", now + 0.08, 0.12 * g, 1.3 * p, 0.1, 0.08);
                 }
                 Sfx::SpearThrow => {
-                    // The body coming through, cloth with it, and the arm lashing the spear away.
-                    self.sample("cloth_heavy", now, 0.12 * g, p, 0.1, 0.1);
-                    let lash = self.pick(&SPEAR_SWINGS);
-                    self.sample(lash, now, 0.5 * g, 1.1 * p, 0.1, 0.1);
+                    // The arm lashing the spear away: one recording, as it is.
+                    self.sample("jav_throw", now, 0.5 * g, p, 0.15, 0.15);
                 }
                 Sfx::SpearLoose => {
                     // The heavy shaft droning away through the air.
@@ -1030,28 +1023,38 @@ mod web {
                     self.sample(flight, now + 0.04, 0.45 * g, p, 0.25, 0.25);
                 }
                 Sfx::FrostReady => {
-                    // Cold crystallizing round the staff: glass ticking as ice forms, and a
-                    // glassy shimmer.
-                    if let Some(e) = self.held(now, 0.16 * g, 0.2, 0.15) {
-                        self.clip("ice", now, 0.0, Some(0.35), 1.3 * p, &e);
+                    // Frost creeping over the staff: ice crackling, swelling as it spreads, and
+                    // a crystal ticking as it sets.
+                    // Quiet, so the release lands.
+                    if let Some(e) = self.env(now, 0.2, 0.2 * g, 0.4) {
+                        self.clip("ice", now, 0.0, Some(0.4), p, &e);
                     }
-                    self.sample("glass_01", now + 0.1, 0.1 * g, 1.4 * p, 0.1, 0.15);
-                    for f in [3200.0, 4800.0] {
-                        if let Some(e) = self.env(now, 0.12, 0.01 * g, 0.24) {
-                            self.osc(Triangle, f * p, f * p, now, 0.24, &e);
-                        }
-                    }
+                    let tick = self.pick(&ICE_TINKLES);
+                    self.sample(tick, now + 0.18, 0.05 * g, 1.5 * p, 0.05, 0.1);
+                }
+                Sfx::FrostCast => {
+                    // The staff thrust out, a breath of cold air pushed out with it, trailing
+                    // under the bolt's snap.
+                    let v = 0.92 + 0.16 * self.r();
+                    self.sample("frost_air", now + 0.03, 0.09 * g, v * p, 0.08, 0.25);
                 }
                 Sfx::FrostLoose => {
-                    // A frostbolt let go: a snap of cold, ice crystallizing out along it, a
-                    // chime of glass, and a breath of cold air going out with it.
-                    self.sample("coldsnap", now, 0.36 * g, 1.2 * p, 0.1, 0.15);
-                    self.sample("ice", now + 0.01, 0.5 * g, 1.1 * p, 0.3, 0.3);
-                    let glass = self.pick(&["impactGlass_light_000", "impactGlass_light_001"]);
-                    self.sample(glass, now + 0.02, 0.28 * g, 1.1 * p, 0.15, 0.2);
-                    if let Some(e) = self.env(now + 0.02, 0.02, 0.05 * g, 0.16) {
-                        self.noise(Lowpass, 900.0 * p, 500.0, 0.7, now + 0.02, 0.16, &e);
+                    // A frostbolt let go. The front: a hard close snap of ice, the loudest of
+                    // it, a deep crack and a thump of weight under it (the thump's peak is a
+                    // little way in, so the snap waits for it). Then crackling trailing off,
+                    // and the snap coming back quieter and duller off the walls.
+                    let v = 0.92 + 0.16 * self.r();
+                    let knock = 0.95 + 0.1 * self.r();
+                    self.sample("ice_thump", now, 0.3 * g, knock * p, 0.05, 0.12);
+                    let crack = self.pick(&ICE_CRACKS);
+                    self.sample(crack, now + 0.018, 0.65 * g, 1.15 * v * p, 0.03, 0.12);
+                    let deep = self.pick(&ICE_DEEP);
+                    self.sample(deep, now + 0.02, 0.32 * g, v * p, 0.06, 0.15);
+                    if let Some(e) = self.held(now + 0.07, 0.09 * g, 0.2, 0.4) {
+                        let from = 0.04 + 0.16 * self.r() as f64;
+                        self.clip("ice", now + 0.07, from, Some(0.6), 1.1 * v * p, &e);
                     }
+                    self.echo(crack, now + 0.018, 1.15 * v * p, 0.65 * g);
                 }
                 Sfx::KindleReady => {
                     // Fire catching in the hand: a lick of burning (one of the recording's two
@@ -1219,13 +1222,29 @@ mod web {
                     }
                 }
                 Sfx::Shatter => {
-                    // A frostbolt breaking on what it hit: glass, and splinters of ice flying.
-                    self.sample("impactGlass_medium_000", now, 0.5 * g, 1.1 * p, 0.15, 0.3);
-                    let shatter = self.pick(&["shatter_1", "shatter_2"]);
-                    if let Some(e) = self.held(now + 0.01, 0.45 * g, 0.25, 0.3) {
-                        self.clip(shatter, now + 0.01, 0.0, Some(0.6), 1.2 * p, &e);
+                    // A frostbolt breaking apart: a big crack with a deep crack and a thump of
+                    // weight under it, the ice going to pieces and dying away, the crack back
+                    // off the walls, splinters ringing down one after another, and frost
+                    // settling softly for a long while after.
+                    let v = 0.92 + 0.16 * self.r();
+                    let knock = 0.9 + 0.1 * self.r();
+                    self.sample("ice_thump", now, 0.36 * g, knock * p, 0.06, 0.15);
+                    let crack = self.pick(&ICE_CRACKS);
+                    self.sample(crack, now + 0.018, 0.61 * g, 0.95 * v * p, 0.03, 0.12);
+                    let deep = self.pick(&ICE_DEEP);
+                    self.sample(deep, now + 0.02, 0.4 * g, 0.95 * v * p, 0.06, 0.18);
+                    let breaking = self.pick(&["ice_break_1", "ice_break_2", "shatter_1", "shatter_2"]);
+                    if let Some(e) = self.held(now + 0.045, 0.29 * g, 0.06, 0.35) {
+                        self.clip(breaking, now + 0.045, 0.0, Some(0.6), v * p, &e);
                     }
-                    self.sample("coldsnap", now, 0.36 * g, 1.1 * p, 0.1, 0.15);
+                    self.echo(crack, now + 0.018, 0.95 * v * p, 0.61 * g);
+                    let splinters = self.pick(&ICE_TINKLES);
+                    let last = if splinters == ICE_TINKLES[0] { ICE_TINKLES[1] } else { ICE_TINKLES[0] };
+                    self.sample(splinters, now + 0.16, 0.12 * g, 1.1 * v * p, 0.12, 0.25);
+                    self.sample(last, now + 0.4, 0.065 * g, 1.3 * v * p, 0.1, 0.3);
+                    if let Some(e) = self.env(now + 0.2, 0.08, 0.07 * g, 1.1) {
+                        self.clip("ice", now + 0.2, 0.05, Some(0.8), 0.8 * v * p, &e);
+                    }
                 }
                 Sfx::Wallop => {
                     // A body driven into stone: plate and flesh meeting a wall at once, and grit

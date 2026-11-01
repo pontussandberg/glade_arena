@@ -9,7 +9,7 @@ pub use crate::abilities::dash::{Dash, Dashing};
 pub use crate::abilities::{AbilitySlot, CastOrder, Cooldowns, MAX_ABILITIES};
 pub use crate::classes::ClassId;
 use crate::classes::{AttackDef, Chill};
-use crate::map::MapId;
+use crate::map::{MapId, ShotEnd};
 use crate::rooms::{LeaveReason, Mode, NO_TEAM, RoomKey, RoomSummary, RoomView};
 
 /// Marks a player entity and says which client controls it. Projectiles don't carry it (their
@@ -533,17 +533,34 @@ pub struct Fx {
     pub radius: f32,
     pub from: u32,
     pub until: u32,
+    /// How high (meters) it happens at `at`: on a roof, a crate, a step, or up a wall it struck.
+    /// `None` on the ground there (`Map::height_at`).
+    pub height: Option<f32>,
+    /// Which way the side of what it struck faces (a wall, a terrace's face: unit, on the plane),
+    /// for one that happens on that side, `height` up it, rather than on top of something.
+    pub wall: Option<Vec2>,
 }
 
 impl Fx {
     /// An effect at one spot, out to `radius`, from `now` for `ticks`.
     pub fn at(kind: FxKind, at: Vec2, radius: f32, now: u32, ticks: u32) -> Fx {
-        Fx { kind, at, to: at, radius, from: now, until: now + ticks }
+        Fx { kind, at, to: at, radius, from: now, until: now + ticks, height: None, wall: None }
     }
 
     /// An effect from `at` to `to` (an arc, a lob), from `now` for `ticks`.
     pub fn between(kind: FxKind, at: Vec2, to: Vec2, radius: f32, now: u32, ticks: u32) -> Fx {
-        Fx { kind, at, to, radius, from: now, until: now + ticks }
+        Fx { kind, at, to, radius, from: now, until: now + ticks, height: None, wall: None }
+    }
+
+    /// Happening `height` up at `at`: on what's there that high (a roof, a body's feet).
+    pub fn on(self, height: f32) -> Fx {
+        Fx { height: Some(height), ..self }
+    }
+
+    /// Happening where a shot ended (`ShotEnd`): on top of what it came down on, or on the side
+    /// of what it struck.
+    pub fn ended(self, end: ShotEnd) -> Fx {
+        Fx { at: end.at, to: end.at, height: Some(end.height), wall: end.wall, ..self }
     }
 }
 

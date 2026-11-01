@@ -29,7 +29,7 @@ pub(crate) use hud::*;
 mod input;
 pub(crate) use input::*;
 mod glide;
-pub(crate) use glide::{PredictedWalk, shown_height};
+pub(crate) use glide::{PredictedWalk, ground_under, shown_height};
 use glide::*;
 mod aim;
 use aim::*;

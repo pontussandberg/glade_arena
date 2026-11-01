@@ -7,7 +7,7 @@ use lightyear::prelude::PeerId;
 
 use crate::classes::{AbilityKind, ClassId};
 use crate::map::{Map, STEP_UP};
-use crate::config::{AIR_ACCEL, AIR_CONTROL_SPEED, GRAVITY, GROUND_ACCEL, GROUND_FRICTION, JUMP_HEIGHT, STEP_DOWN, STOP_SPEED};
+use crate::config::{AIR_ACCEL, AIR_CONTROL_SPEED, GRAVITY, GROUND_ACCEL, GROUND_FRICTION, JUMP_HEIGHT, RISE_GRAVITY, STEP_DOWN, STOP_SPEED};
 use crate::protocol::{AttackState, Chilled, Dashing, Hasted, LastSwing, Motion, PlayerInput, Waygate};
 
 /// Advance a player one tick on `map`: straight the way its keys walk it, or else toward the
@@ -66,8 +66,9 @@ pub fn move_player(
 /// to that in a few steps, the air hardly at all. Whatever blocks a step stops that part of the
 /// motion. Up and down: on the ground it follows the ground, up a slope and down one (not off a
 /// ledge: `STEP_DOWN`); `input.jumping()` on the ground sends it up (`jump_speed`); in the air it
-/// falls (`GRAVITY`) until the ground. A dash or a click-to-walk sets the motion by where it
-/// went, so a dash off a ledge flies on out; a click-to-walk goes on at its speed, not sliding
+/// falls (`GRAVITY`) until the ground. A dash carries on the way it was going when it set out
+/// (`Dash::carry`), the dash on top. A dash or a click-to-walk sets the motion by where it
+/// went, so a dash off a ledge flies on out, and one out of a run comes out of it faster; a click-to-walk goes on at its speed, not sliding
 /// on what it went the tick before, and slides to a stop only once it's dropped.
 #[allow(clippy::too_many_arguments)]
 pub fn move_player_boosted(
@@ -98,6 +99,9 @@ pub fn move_player_boosted(
             Some(AbilityKind::Dash(def)) => def.pace(),
             _ => 0.0,
         };
+        if dash.left == dash.length {
+            dash.carry = motion.along;
+        }
         next = dash.step(map, pos, pace * speed, tick, feet);
         motion.along = (next - pos) / TICK_DT;
     } else if attack.winding_up().is_some() {
@@ -117,7 +121,12 @@ pub fn move_player_boosted(
         }
         if wish != Vec2::ZERO {
             let (cap, accel) = if grounded { (wish_speed, GROUND_ACCEL) } else { (wish_speed.min(AIR_CONTROL_SPEED), AIR_ACCEL) };
-            v += wish * (cap - v.dot(wish)).clamp(0.0, accel * wish_speed * TICK_DT);
+            let push = wish * (cap - v.dot(wish)).clamp(0.0, accel * wish_speed * TICK_DT);
+            // Taking off, the ground only brings it up to its walking speed, never past it: a
+            // key held sideways through a run of jumps turns it less the faster it already
+            // goes (and not at all past walking speed: only the air steers it then), instead
+            // of a shove each jump that adds up to a sidestep.
+            v += if jumps { push * within(v, push, v.length().max(wish_speed)) } else { push };
         }
         // The step, or each axis of it that's open; a blocked axis stops that part of the motion.
         let step = v * TICK_DT;
@@ -147,7 +156,8 @@ pub fn move_player_boosted(
         motion.height = under;
         motion.rise = 0.0;
     } else {
-        motion.rise -= GRAVITY * TICK_DT;
+        // Going up it's pulled back harder than it falls: a quick leap, the same fall.
+        motion.rise -= if motion.rise > 0.0 { RISE_GRAVITY } else { GRAVITY } * TICK_DT;
         motion.height += motion.rise * TICK_DT;
         // Its head meeting the underside of something over it (eaves): no higher.
         let ceiling = map.ceiling_at(next, feet);
@@ -163,9 +173,21 @@ pub fn move_player_boosted(
     next
 }
 
-/// How fast a jump leaves the ground (m/s): enough to reach `JUMP_HEIGHT` against `GRAVITY`.
+/// How much of `push` (0 to 1) can be added to `v` with it still no faster than `most`.
+fn within(v: Vec2, push: Vec2, most: f32) -> f32 {
+    let (a, b, c) = (push.length_squared(), v.dot(push), v.length_squared() - most * most);
+    if a <= 0.0 {
+        return 1.0;
+    }
+    ((-b + (b * b - a * c).max(0.0).sqrt()) / a).clamp(0.0, 1.0)
+}
+
+/// How fast a jump leaves the ground (m/s): enough to reach `JUMP_HEIGHT` against
+/// `RISE_GRAVITY`, as it's stepped tick by tick (each tick's pull taken before its rise, which
+/// would otherwise cost it about half a tick's rise of its height).
 pub fn jump_speed() -> f32 {
-    (2.0 * GRAVITY * JUMP_HEIGHT).sqrt()
+    let half_tick = RISE_GRAVITY * TICK_DT / 2.0;
+    half_tick + (half_tick * half_tick + 2.0 * RISE_GRAVITY * JUMP_HEIGHT).sqrt()
 }
 
 /// Ground a strike tore open (`RiftDef`), hasting `owner` while its body is in it, until `until`

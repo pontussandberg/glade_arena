@@ -280,8 +280,8 @@ fn relief(p: Vec2) -> f32 {
         h = h.max(ARCH_TOP * up.clamp(0.0, 1.0).min(1.0 - down.clamp(0.0, 1.0)));
     }
     // The stream's and the river's beds, under the water (and the ford) and not its bridges,
-    // sloping down from either bank, so what comes down in them stands in the water and can wade
-    // back out.
+    // sloping down from either bank, so whoever wades in stands in the water and walks back
+    // out.
     if h <= 0.0 {
         let stream = (p.x - STREAM.0 as f32).min(STREAM.1 as f32 - p.x);
         let river = (p.y - RIVER.0 as f32).min(RIVER.1 as f32 + 1.0 - p.y).min(p.x - RIVER.2 as f32);
@@ -330,7 +330,7 @@ pub(super) fn build() -> Map {
         map.fill(Vec2::new(x - BRIDGE_HALF + 0.5, river_lo.y), Vec2::new(x + BRIDGE_HALF - 0.5, river_hi.y), Tile::Bridge);
     }
     for &(lo, size, door) in HOUSES {
-        map.house(lo, size, door);
+        map.house(lo, size, door, 1);
     }
     // Crates stacked along the lane's edge below the east house's eaves, a step at a time, up
     // onto its roof.

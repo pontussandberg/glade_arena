@@ -30,6 +30,7 @@ const CHAIN_SECONDS: f32 = 2.0;
 const CHAIN_STEP: f32 = 0.059;
 const CHAIN_TOP: u32 = 8;
 
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(super) fn burst_deaths(
     mut commands: Commands,
     time: Res<Time>,
@@ -37,12 +38,13 @@ pub(super) fn burst_deaths(
     mut shake: ResMut<Shake>,
     mut sounds: ResMut<SoundQueue>,
     me: Query<&Pos, With<Me>>,
-    mut fighters: Query<(Entity, &ClassId, &Pos, &Health, Option<&mut SeenAlive>, Has<Elite>), Changed<Health>>,
+    map: Res<crate::rooms::CurrentMap>,
+    mut fighters: Query<(Entity, &ClassId, &Pos, &Health, Option<&mut SeenAlive>, Has<Elite>, Option<&arena_shared::protocol::Motion>), Changed<Health>>,
     mut seed: Local<u32>,
     mut chain: Local<(f32, u32)>,
 ) {
     let now = time.elapsed_secs();
-    for (fighter, class, pos, health, seen, elite) in &mut fighters {
+    for (fighter, class, pos, health, seen, elite, motion) in &mut fighters {
         let Some(mut seen) = seen else {
             commands.entity(fighter).insert(SeenAlive(health.alive()));
             continue;
@@ -56,7 +58,9 @@ pub(super) fn burst_deaths(
         let def = class.def();
         let size = crate::rig::drawn_size(*class, elite);
         let bounty = def.mob.as_ref().is_some_and(|mob| mob.bounty > 0);
-        burst(&mut commands, &art, now, to_world(pos.0, 0.0), size, def.is_boss(), bounty, *seed);
+        // On what it fell on.
+        let feet = crate::render::shown_height(map.map(), motion, None, pos.0);
+        burst(&mut commands, &art, now, to_world(pos.0, map.map().surface_under(pos.0, feet + 1e-3)), size, def.is_boss(), bounty, *seed);
         let (amount, reach) = match () {
             _ if def.is_boss() => (BOSS_SHAKE, BOSS_SHAKE_REACH),
             _ if elite => (ELITE_SHAKE, SHAKE_REACH),
@@ -82,19 +86,21 @@ pub(super) fn burst_deaths(
 
 /// A blow striking home: a short-lived glint or two at the victim's body, so the impact has a
 /// place, not just a number. Rides on `HitSquash`, which `feedback` refreshes per confirmed hit.
+#[allow(clippy::type_complexity)]
 pub(super) fn spark_hits(
     mut commands: Commands,
     time: Res<Time>,
     art: Res<FxArt>,
-    hit: Query<(&Pos, &ClassId, Has<Elite>), Changed<crate::rig::HitSquash>>,
+    map: Res<crate::rooms::CurrentMap>,
+    hit: Query<(&Pos, &ClassId, Has<Elite>, (Option<&arena_shared::protocol::Motion>, Option<&crate::render::PredictedWalk>)), Changed<crate::rig::HitSquash>>,
     mut seed: Local<u32>,
 ) {
     let now = time.elapsed_secs();
-    for (pos, class, elite) in &hit {
+    for (pos, class, elite, (motion, predicted)) in &hit {
         *seed = seed.wrapping_add(1);
         let r = |k: u32| noise(*seed, k);
         let s = crate::rig::drawn_size(*class, elite);
-        let at = to_world(pos.0, 0.0) + Vec3::Y * 0.9 * s;
+        let at = to_world(pos.0, crate::render::shown_height(map.map(), motion, predicted, pos.0)) + Vec3::Y * 0.9 * s;
         for k in 0..2 {
             let n = |i: u32| r(k * 7 + i);
             let off = Vec3::new(n(0) - 0.5, n(1) - 0.5, n(2) - 0.5) * 0.5 * s;
@@ -109,18 +115,19 @@ pub(super) fn spark_hits(
     }
 }
 
-/// The burst itself, `size` the monster's drawn size, bigger and longer for a boss. A kill that
+/// The burst itself, on the ground (or whatever it fell on) at `at`, `size` the monster's drawn
+/// size, bigger and longer for a boss. A kill that
 /// pays (`bounty`) also tosses up a coin or two, so every kill visibly pays.
 fn burst(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3, size: f32, boss: bool, bounty: bool, seed: u32) {
     let r = |k: u32| noise(seed, k);
     let s = size * if boss { 1.4 } else { 1.0 };
     // A puff of dust where it fell.
     let dust = art.splotch[(r(0) * VARIANTS as f32) as usize % VARIANTS as usize].clone();
-    put(commands, &dust, Part::new(now, [0.04, 0.16, 0.5], Ink::Smoke, at.with_y(0.06)).size(2.2 * s).grow(0.35).facing(r(1) * TAU));
+    put(commands, &dust, Part::new(now, [0.04, 0.16, 0.5], Ink::Smoke, at + Vec3::Y * 0.06).size(2.2 * s).grow(0.35).facing(r(1) * TAU));
     // A dark splotch that stays a while, sunk into the grass.
     let splotch = art.splotch[(r(2) * VARIANTS as f32) as usize % VARIANTS as usize].clone();
     let linger = if boss { [0.06, 9.0, 14.0] } else { [0.06, 4.5, 8.0] };
-    put(commands, &splotch, Part::new(now, linger, Ink::Blood, at.with_y(0.02)).size((1.5 + 0.5 * r(3)) * s).grow(0.4).facing(r(4) * TAU));
+    put(commands, &splotch, Part::new(now, linger, Ink::Blood, at + Vec3::Y * 0.02).size((1.5 + 0.5 * r(3)) * s).grow(0.4).facing(r(4) * TAU));
     // Gore and bone flung up and out, tumbling, lying where they land as they fade.
     let chunks = if boss { 18 } else { 6 + (r(5) * 3.0) as u32 };
     for k in 0..chunks {
@@ -134,6 +141,7 @@ fn burst(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3, size: f32, bo
         let part = Part::new(now, life, ink, at + Vec3::Y * 0.5 * s)
             .size((0.07 + 0.09 * n(0)) * s.min(1.6))
             .motion(Motion::Thrown { velocity, gravity: 9.0, tumble })
+            .floor(at.y)
             .shrink(0.5);
         put(commands, &art.chunk, part);
     }
@@ -147,6 +155,7 @@ fn burst(commands: &mut Commands, art: &FxArt, now: f32, at: Vec3, size: f32, bo
             let part = Part::new(now + 0.05, [0.03, 0.55, 0.75], Ink::Gold, at + Vec3::Y * 0.6 * s)
                 .size(0.14)
                 .motion(toss)
+                .floor(at.y)
                 .shrink(0.4);
             put(commands, &art.coin, part);
         }

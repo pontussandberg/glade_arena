@@ -33,10 +33,10 @@ use lightyear::prelude::*;
 use crate::ChosenClass;
 use crate::camera::{CameraControl, CameraMoves, Orbit};
 use crate::arena::palette::ui::ACCENT;
-use crate::arena::{self, palette, to_world};
+use crate::arena::{self, palette};
 use crate::plain::PlainMaterial;
 use crate::render::{ButtonFill, GameUi, ui_text};
-use crate::rooms::{Me, Picking, Screen};
+use crate::rooms::{CurrentMap, Me, Picking, Screen};
 
 mod stage;
 use stage::*;
@@ -62,7 +62,7 @@ impl Plugin for LobbyPlugin {
         app.add_systems(
             Update,
             (
-                (pick_fighter, fold_details, show_fighter, show_details, (fold_room, show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena, scroll_panel).chain(),
+                (move_stage, pick_fighter, fold_details, show_fighter, show_details, (fold_room, show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena, scroll_panel).chain(),
                 show_status,
                 (turn_stage_camera, place_name_tag).chain().in_set(CameraMoves),
                 liven_stage,
@@ -94,6 +94,8 @@ struct Lobby {
     /// ground facing +x, as in the fight (the rig keeps its feet there and sets its facing), so
     /// it goes under this.
     lift: Entity,
+    /// Where the stage stands, for the map shown (`Stage::of`).
+    stage: Stage,
     view: Orbit,
     /// Which way the camera looks from, before its sway; dragging turns it.
     facing: f32,
@@ -148,6 +150,7 @@ struct Status;
 
 fn open_lobby(
     mut commands: Commands,
+    current: Res<CurrentMap>,
     chosen: Res<ChosenClass>,
     me: Option<Res<Me>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -157,15 +160,12 @@ fn open_lobby(
     **shadows = arena::sun_shadows(VISTA_SHADOWS);
     // The fighter we last went in as.
     let selected = chosen.0.unwrap_or_else(|| ClassId::playable().next().expect("at least one class"));
-    let front = FRONT + stage_turn();
-    let view = Orbit { yaw: front, pitch: STAGE_RISE.atan2(STAGE_BACK), distance: STAGE_BACK.hypot(STAGE_RISE) };
-    // The fighter stands at `STAGE` under the lift, facing +x as every fighter starts out: the
-    // lift raises it onto the dais and turns it about where it stands.
-    let turn = Quat::from_rotation_y(stage_turn());
-    let lift = Transform::from_translation(stage_at(arena::DAIS_HEIGHT) - turn * to_world(STAGE, 0.0)).with_rotation(turn);
-    let lift = commands.spawn((LobbyPart, lift, Visibility::default())).id();
-    commands.insert_resource(Lobby { selected, shown: None, lift, view, facing: front });
-    spawn_stage(&mut commands, &mut meshes, &mut materials);
+    let stage = Stage::of(current.0);
+    let front = FRONT + stage_turn(&stage);
+    let view = stage.view(front);
+    let lift = commands.spawn((LobbyPart, lift_at(&stage), Visibility::default())).id();
+    commands.insert_resource(Lobby { selected, shown: None, lift, stage, view, facing: front });
+    spawn_stage(&mut commands, &mut meshes, &mut materials, &stage);
     spawn_screen(&mut commands, me.as_ref().map_or("", |me| &me.name));
 }
 

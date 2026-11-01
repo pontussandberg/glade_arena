@@ -44,7 +44,7 @@ pub(super) fn read_local_input(
     window: Option<Single<&Window>>,
     camera: Single<(&Camera, &GlobalTransform), With<crate::camera::CameraRig>>,
     me: Query<(&Pos, &ClassId, &Cooldowns, &AttackState), (With<Me>, With<PlayerId>)>,
-    (mode, cast_mode, clock, map): (Res<CameraMode>, Res<CastMode>, AttackClock, Res<crate::rooms::CurrentMap>),
+    (mode, cast_mode, clock, map, minimap_view): (Res<CameraMode>, Res<CastMode>, AttackClock, Res<crate::rooms::CurrentMap>, Res<crate::minimap::MinimapView>),
     hud: Query<
         (&ComputedNode, &UiGlobalTransform, &InheritedVisibility, Option<&AbilityIcon>),
         Or<(With<HudButton>, With<AbilityIcon>)>,
@@ -77,7 +77,7 @@ pub(super) fn read_local_input(
     // The point on the map under the cursor on the minimap, if it's there.
     let on_minimap = minimap
         .filter(|minimap| minimap.2.get())
-        .and_then(|minimap| crate::minimap::ground_on_minimap(minimap.0, *minimap.1, map.map(), screen?));
+        .and_then(|minimap| crate::minimap::ground_on_minimap(minimap.0, *minimap.1, map.map(), &minimap_view, screen?));
     let on_control = on_minimap.is_some() || hud.iter().filter(|part| part.3.is_none()).any(|part| under_cursor(&part));
     let on_icon = hud.iter().filter(under_cursor).find_map(|(.., icon)| icon.map(|icon| icon.slot));
     let cursor = window.and_then(|w| w.cursor_position()).and_then(|c| ground_at(camera, camera_transform, c));
@@ -248,6 +248,7 @@ pub(super) fn toggle_range_circle(
 pub(super) fn show_destination(
     desired: Res<DesiredInput>,
     current: Res<crate::rooms::CurrentMap>,
+    minimap_view: Res<crate::minimap::MinimapView>,
     marker: Single<(&mut Transform, &mut Visibility), With<DestinationMarker>>,
     dot: Option<Single<(&mut Node, &mut Visibility), (With<crate::minimap::DestinationDot>, Without<DestinationMarker>)>>,
 ) {
@@ -260,7 +261,7 @@ pub(super) fn show_destination(
         let (mut node, mut visibility) = dot.into_inner();
         visibility.set_if_neq(shown(desired.0.move_to.is_some()));
         if let Some(point) = desired.0.move_to {
-            crate::minimap::place_destination(&mut node, current.map(), point);
+            crate::minimap::place_destination(&mut node, current.map(), &minimap_view, point);
         }
     }
 }

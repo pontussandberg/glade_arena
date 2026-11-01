@@ -310,6 +310,12 @@ pub(crate) fn shown_height(map: &arena_shared::map::Map, motion: Option<&Motion>
     predicted.map(|predicted| predicted.height).or(motion.map(|motion| motion.height)).unwrap_or_else(|| map.height_at(p))
 }
 
+/// What a fighter at `p` stands on, how high (`shown_height` in the air, what's under it): where
+/// what it sets off on the ground (a nova, a quake) is shown.
+pub(crate) fn ground_under(map: &arena_shared::map::Map, motion: Option<&Motion>, predicted: Option<&PredictedWalk>, p: Vec2) -> f32 {
+    map.surface_under(p, shown_height(map, motion, predicted, p) + 1e-3)
+}
+
 /// Knocked up (`Chilled::lifted`): off the ground, up and back down over the knock-up, on the
 /// timeline it's shown on; set down again once it's over. (The rig places the figure's body
 /// over this: `rig::pose_rigs`.)

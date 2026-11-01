@@ -414,8 +414,9 @@ mod tests {
     fn projectile_expires_at_its_range_and_at_walls() {
         let proj = Projectile { owner: PeerId::Netcode(1), class: bolter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
         let lifetime = bolter().def().shot(None).unwrap().lifetime_ticks();
-        // Flying high over everything, only its range spends it.
-        let high = Projectile { lift: 50.0, ..proj };
+        // Flying high over everything, only its range spends it: from the map's west end, so its
+        // whole range lies over the map.
+        let high = Projectile { lift: 50.0, origin: Vec2::new(-map().size.x as f32 / 2.0 + 2.0, 0.0), ..proj };
         let at = |tick: u32| projectile_pos(&high, tick as f32);
         assert!(!projectile_expired(map(), at(5 + lifetime - 1), &high, 5 + lifetime - 1));
         assert!(projectile_expired(map(), at(5 + lifetime), &high, 5 + lifetime));
@@ -635,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn the_yards_water_is_jumped_into_and_waded_out_of_but_never_walked_into() {
+    fn the_yards_water_is_walked_or_jumped_into_and_waded_across() {
         use crate::map::Tile;
         let yard = crate::map::MapId::Yard.map();
         // Its ground dips under its water (and the ford through it) alone, not its bridges or its
@@ -655,10 +656,10 @@ mod tests {
             })
             .expect("a crossing of the stream");
         let (west, east) = (Vec2::new(17.5, row as f32 + 0.5), Vec2::new(24.5, row as f32 + 0.5));
-        let (at, height) = climb(west, &[east], false, 200);
-        assert!(at.x < 20.0 && height == 0.0, "walked into the stream: at {at}, {height} m high");
-        let (at, height) = climb(west, &[east], true, 200);
-        assert!(at.distance(east) < 0.3 && height == 0.0, "never got across: at {at}, {height} m high");
+        for jumping in [false, true] {
+            let (at, height) = climb(west, &[east], jumping, 200);
+            assert!(at.distance(east) < 0.3 && height == 0.0, "never got across (jumping: {jumping}): at {at}, {height} m high");
+        }
     }
 
     /// The yard's crate stack, lowest first (tile, how many high), and where on the lane beside
@@ -737,6 +738,21 @@ mod tests {
             }
         }
         assert!(takeoffs >= 3, "held for four seconds, jumped {takeoffs} times");
+    }
+
+    #[test]
+    fn a_key_held_sideways_through_a_run_of_jumps_hardly_turns_a_fast_run() {
+        let from = spawns()[0];
+        let way = open_way(from, 25.0);
+        let (side, going) = (way.perp(), 10.0);
+        let (mut pos, mut motion) = (from, Motion { along: way * going, height: map().height_at(from), ..default() });
+        for tick in 1..=2 * TICK_HZ as u32 {
+            let input = PlayerInput { walk: side, jump_held: true, ..default() };
+            pos = move_player(map(), pos, &input, fighter(), &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick);
+        }
+        let (across, on) = (motion.along.dot(side), motion.along.dot(way));
+        assert!(across <= crate::config::AIR_CONTROL_SPEED + 1e-3, "turned aside {across} m/s by the key alone");
+        assert!(on > going - 0.5, "lost its run ({on} m/s)");
     }
 
     /// Coming at a terrace's face at a slant, sliding along it, or round its corner, no part of
@@ -1013,17 +1029,35 @@ mod tests {
 
     /// A dash from `from` toward `dir` run to its end: where it ended, and how many ticks it moved.
     fn dash_run(from: Vec2, dir: Vec2, chilled: &Chilled, hasted: &Hasted) -> (Vec2, u32) {
+        let (end, took, _) = dash_run_going(from, dir, chilled, hasted, Vec2::ZERO);
+        (end, took)
+    }
+
+    /// `dash_run`, setting out already going `along` (m/s); and the motion it came out of it with.
+    fn dash_run_going(from: Vec2, dir: Vec2, chilled: &Chilled, hasted: &Hasted, along: Vec2) -> (Vec2, u32, Motion) {
         let class = dasher();
         let (mut state, _) = step_kit(1, class, from, &press_q(dir), chilled, default());
         let (mut pos, mut tick) = (from, 1);
+        let mut motion = Motion { along, height: map().height_at(from), ..default() };
         while state.dashing.0.is_some() {
             tick += 1;
             assert!(tick < 1000, "the dash never ended");
-            pos = move_player(map(), pos, &PlayerInput::default(), class, &AttackState::default(), &mut state.dashing, &mut Motion::default(), chilled, hasted, tick);
+            pos = move_player(map(), pos, &PlayerInput::default(), class, &AttackState::default(), &mut state.dashing, &mut motion, chilled, hasted, tick);
             assert!(map().walkable_at(pos), "dashed into a wall at {pos}");
             state = step_kit(tick, class, pos, &PlayerInput::default(), chilled, state).0;
         }
-        (pos, tick - 1)
+        (pos, tick - 1, motion)
+    }
+
+    #[test]
+    fn a_dash_out_of_a_run_carries_the_run_on_and_comes_out_faster() {
+        let distance = dash_def().distance;
+        let going = 10.0;
+        let (from, dir) = dash_starts()
+            .find(|&(from, dir)| dash_run_going(from, dir, &default(), &default(), dir * going).0.distance(from) > distance + 0.5)
+            .expect("no open dash carried its run on past its own distance");
+        let (_, _, motion) = dash_run_going(from, dir, &default(), &default(), dir * going);
+        assert!(motion.along.dot(dir) > going, "came out of it no faster than it went in ({})", motion.along);
     }
 
     /// Every way out of every spawn point.

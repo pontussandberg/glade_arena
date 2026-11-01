@@ -2,13 +2,14 @@
 //! under the strike's lane, followed out from the striker (`struck_surface`): on up a slope
 //! however high it goes, short of a step too high for its blade, and down off a drop onto
 //! whatever's below. Each mark is laid over it in pieces, one on each surface it comes over,
-//! none of it out in the air.
+//! none of it out in the air. A splash's marks (a frostbolt's) are laid so too, followed out
+//! every way from where it landed (`Underfoot::round`).
 
 use std::f32::consts::SQRT_2;
 
-use arena_shared::map::CLIMB;
+use arena_shared::map::{CLIMB, STEP_UP};
 use arena_shared::sim::{STRUCK_STEP, surface_on};
-use bevy::platform::collections::HashMap;
+use bevy::platform::collections::{HashMap, HashSet};
 
 use super::*;
 
@@ -21,20 +22,32 @@ const LOOK_STEP: f32 = STRUCK_STEP;
 
 /// The surfaces under a strike's lane, from `origin` (in the world's plane) along `dir` and
 /// across it to its right, for a striker with its feet `feet` high: followed out along the lane
-/// from beside the striker (`surface_on`), looked up as they're needed, each look kept.
+/// from beside the striker (`surface_on`), looked up as they're needed, each look kept. Or
+/// (`round`) round a splash at `origin`, `feet` high, followed out every way from it.
 #[derive(Clone)]
 pub(crate) struct Underfoot {
     map: &'static Map,
     origin: Vec2,
     dir: Vec2,
     feet: f32,
+    round: bool,
     /// How high the surface is at each grid point looked at (`LOOK_STEP` apart).
     looked: HashMap<IVec2, f32>,
+    /// Round a splash, the grid points looked at that are past a drop on the way out to them
+    /// (down off an edge, more than a step).
+    fallen: HashSet<IVec2>,
 }
 
 impl Underfoot {
     pub(crate) fn new(map: &'static Map, origin: Vec2, dir: Vec2, feet: f32) -> Self {
-        Underfoot { map, origin, dir: dir.normalize_or(Vec2::X), feet, looked: HashMap::default() }
+        Underfoot { map, origin, dir: dir.normalize_or(Vec2::X), feet, round: false, looked: HashMap::default(), fallen: HashSet::default() }
+    }
+
+    /// Round a splash landed at `origin` on a surface `feet` high (its marks turned toward
+    /// `dir`): followed out from there every way, on up a slope or a step and down one, but
+    /// not down off an edge (`reaches`).
+    pub(crate) fn round(map: &'static Map, origin: Vec2, dir: Vec2, feet: f32) -> Self {
+        Underfoot { round: true, ..Underfoot::new(map, origin, dir, feet) }
     }
 
     /// How high the striker's feet are.
@@ -47,27 +60,65 @@ impl Underfoot {
         self.origin + self.dir * local.x + Vec2::new(self.dir.y, -self.dir.x) * local.y
     }
 
-    /// How high the surface is at the grid point `k`: followed out to it along the lane from the
-    /// last point looked at before it (or from beside the striker).
+    /// The grid point looked at just before `k` on the way out to it: along the lane, or (round)
+    /// a step in toward the middle; none for one beside the striker, or the middle.
+    fn before(&self, k: IVec2) -> Option<IVec2> {
+        match self.round {
+            true => (k != IVec2::ZERO).then(|| k - k.signum()),
+            false => (k.x > 0).then(|| k - IVec2::X),
+        }
+    }
+
+    /// How high the surface is at the grid point `k`: followed out to it from the last point
+    /// looked at on the way (or from beside the striker, or the middle).
     fn look(&mut self, k: IVec2) -> f32 {
         if let Some(&h) = self.looked.get(&k) {
             return h;
         }
-        let mut from = k.x;
-        while from > 0 && !self.looked.contains_key(&IVec2::new(from - 1, k.y)) {
-            from -= 1;
+        // The way back in to the last point looked at, then out along it.
+        let mut way = vec![k];
+        let (mut before, mut fallen) = (f32::NEG_INFINITY, false);
+        while let Some(back) = self.before(way[way.len() - 1]) {
+            if let Some(&h) = self.looked.get(&back) {
+                (before, fallen) = (h, self.fallen.contains(&back));
+                break;
+            }
+            way.push(back);
         }
-        let mut before = if from > 0 { self.looked[&IVec2::new(from - 1, k.y)] } else { f32::NEG_INFINITY };
-        for i in from..=k.x {
-            let at = IVec2::new(i, k.y);
-            before = surface_on(self.map, self.at(at.as_vec2() * LOOK_STEP), self.feet, before, LOOK_STEP);
-            self.looked.insert(at, before);
+        for at in way.into_iter().rev() {
+            let step = self.before(at).map_or(LOOK_STEP, |back| (at - back).as_vec2().length() * LOOK_STEP);
+            let h = surface_on(self.map, self.at(at.as_vec2() * LOOK_STEP), self.feet, before, step);
+            fallen |= self.round && h < before - STEP_UP - CLIMB * step;
+            if fallen {
+                self.fallen.insert(at);
+            }
+            self.looked.insert(at, h);
+            before = h;
         }
         before
     }
 
+    /// Whether a mark lies on the surface under its point `local` (looked at already): round
+    /// a splash, not past a drop on the way out to it, so none of it falls off a roof or a wall's
+    /// top onto the ground far below. Under a lane, always.
+    fn reaches(&self, local: Vec2) -> bool {
+        let k = (local / LOOK_STEP).floor().as_ivec2();
+        !self.round || [k, k + IVec2::X, k + IVec2::Y, k + IVec2::ONE].iter().all(|corner| !self.fallen.contains(corner))
+    }
+
     /// How high the surface under the lane's point `local` is.
     pub(crate) fn height(&mut self, local: Vec2) -> f32 {
+        let h = self.surface(local);
+        // On the ground of a stair's slope, up on the tread drawn over it.
+        let p = self.at(local);
+        match self.map.tread_top(p) {
+            Some(top) if (h - self.map.height_at(p)).abs() < 0.05 => top,
+            _ => h,
+        }
+    }
+
+    /// `height`, on the surfaces the sim knows (a stair's slope, not its treads).
+    fn surface(&mut self, local: Vec2) -> f32 {
         let g = local / LOOK_STEP;
         let k = g.floor().as_ivec2();
         let f = g - k.as_vec2();
@@ -76,8 +127,13 @@ impl Underfoot {
         if a.max(b).max(c).max(d) - a.min(b).min(c).min(d) <= CLIMB * LOOK_STEP * SQRT_2 + 1e-3 {
             return a.lerp(b, f.x).lerp(c.lerp(d, f.x), f.y);
         }
-        // Afresh, on out from the looks just before it along the lane.
-        surface_on(self.map, self.at(local), self.feet, a.max(c), LOOK_STEP * SQRT_2)
+        // Afresh, on out from the looks just before it along the lane (round, the one nearest
+        // the middle).
+        let before = match self.round {
+            true => [(k, a), (k + IVec2::X, b), (k + IVec2::Y, c), (k + IVec2::ONE, d)].into_iter().min_by_key(|(corner, _)| corner.length_squared()).map_or(a, |(_, h)| h),
+            false => a.max(c),
+        };
+        surface_on(self.map, self.at(local), self.feet, before, LOOK_STEP * SQRT_2)
     }
 }
 
@@ -88,6 +144,11 @@ impl Underfoot {
 /// another, so the mark breaks there into pieces.
 /// In the world.
 pub(crate) fn lay(shape: &FlatMesh, under: &mut Underfoot, lift: f32, edge: f32, place: impl Fn(Vec3) -> Vec3) -> Mesh {
+    lay_flat(shape, under, lift, edge, place).build()
+}
+
+/// `lay`, its triangles not yet made a mesh.
+pub(crate) fn lay_flat(shape: &FlatMesh, under: &mut Underfoot, lift: f32, edge: f32, place: impl Fn(Vec3) -> Vec3) -> FlatMesh {
     let mut laid = FlatMesh::default();
     let mut left: Vec<([Vec3; 3], [f32; 3])> = shape.faded_triangles().map(|(corners, alphas)| (corners.map(&place), alphas)).collect();
     while let Some((corners, alphas)) = left.pop() {
@@ -105,13 +166,13 @@ pub(crate) fn lay(shape: &FlatMesh, under: &mut Underfoot, lift: f32, edge: f32,
             continue;
         }
         let [a, b, c] = flat.map(|p| under.height(p));
-        if a.max(b).max(c) - a.min(b).min(c) > CLIMB * longest + 1e-3 {
+        let heights = [a, b, c];
+        if a.max(b).max(c) - a.min(b).min(c) > CLIMB * longest + 1e-3 || flat.iter().any(|&p| !under.reaches(p)) {
             continue;
         }
-        let heights = [a, b, c];
         laid.tri_faded([0, 1, 2].map(|k| to_world(under.at(flat[k]), heights[k] + lift + corners[k].y)), alphas);
     }
-    laid.build()
+    laid
 }
 
 /// How a laid mark was last laid (`Laid`): which of its shapes, stretched how (to a fortieth).
@@ -177,14 +238,23 @@ mod tests {
         [rubble_shape(length, width, 7), rift_shape(length, width, 7, CORE_THICKNESS)]
     }
 
+    /// The surface `under` a point `p` as it's drawn: on a stair's slope, its tread's top.
+    fn drawn(map: &Map, p: Vec2, under: f32) -> f32 {
+        match map.tread_top(p) {
+            Some(top) if (under - map.height_at(p)).abs() < 0.05 => top,
+            _ => under,
+        }
+    }
+
     /// Every bit of it lies on what's under it, struck from `pos`: its corners and its middle on
-    /// the surface the blade meets there (to within how much a crease, a ridge or a ramp's foot,
-    /// is rounded off between the looks), none of it in the air or sunk into anything.
+    /// the surface the blade meets there, as it's drawn (to within how much a crease, a ridge or
+    /// a ramp's foot, is rounded off between the looks), none of it in the air or sunk into
+    /// anything.
     fn lies_on_what_is_under_it(laid: &[[Vec3; 3]], pos: Vec2, feet: f32, place: &str) {
         let yard = MapId::Yard.map();
         for t in laid {
             for p in [t[0], t[1], t[2], (t[0] + t[1] + t[2]) / 3.0] {
-                let under = struck_surface(yard, pos, to_gameplay(p), feet);
+                let under = drawn(yard, to_gameplay(p), struck_surface(yard, pos, to_gameplay(p), feet));
                 assert!((p.y - under).abs() < 0.03, "{place}: laid at {} m over {} where the surface is {under} m", p.y, to_gameplay(p));
             }
         }
@@ -270,6 +340,44 @@ mod tests {
         lies_on_what_is_under_it(&laid, pos, 6.0, "off the tower");
         assert!(laid.iter().flatten().all(|p| p.y < 0.5), "some of it up in the air");
         assert!((area(&laid) - whole()).abs() < whole() * 0.01, "laid {} m2 of {} m2", area(&laid), whole());
+    }
+
+    /// A splash's round mark, 1.5 across its radius, laid round where it landed at `pos` on a
+    /// surface `feet` high (`Underfoot::round`): its triangles in the world.
+    fn splashed(pos: Vec2, feet: f32) -> Vec<[Vec3; 3]> {
+        let mut under = Underfoot::round(MapId::Yard.map(), pos, Vec2::X, feet);
+        let rim = |i: u32| {
+            let p = Vec2::from_angle(i as f32 / 24.0 * std::f32::consts::TAU) * 1.5;
+            Vec3::new(p.x, 0.0, p.y)
+        };
+        let mut disc = FlatMesh::default();
+        for i in 0..24 {
+            disc.tri_faded([Vec3::ZERO, rim(i), rim(i + 1)], [1.0; 3]);
+        }
+        let mesh = lay(&disc, &mut under, 0.0, 0.05, |p| p);
+        let Some(positions) = mesh.attribute(Mesh::ATTRIBUTE_POSITION).and_then(|a| a.as_float3()) else { panic!("no positions") };
+        positions.chunks_exact(3).map(|t| [0, 1, 2].map(|i| Vec3::from_array(t[i]))).collect()
+    }
+
+    #[test]
+    fn a_splash_lies_along_a_ramp_and_stays_on_a_terrace_at_its_edge() {
+        let yard = MapId::Yard.map();
+        // On a ramp: on it all round, up and down its slope.
+        let pos = Vec2::new(-9.5, 5.5);
+        let laid = splashed(pos, yard.height_at(pos));
+        assert!(area(&laid) > 6.0, "laid {} m2", area(&laid));
+        for p in laid.iter().flatten() {
+            let ramp = drawn(yard, to_gameplay(*p), yard.height_at(to_gameplay(*p)));
+            assert!((p.y - ramp).abs() < 0.03, "laid at {} m over {} where the ramp is {ramp} m", p.y, to_gameplay(*p));
+        }
+        let heights = laid.iter().flatten().map(|p| p.y);
+        let (low, high) = heights.clone().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), h| (lo.min(h), hi.max(h)));
+        assert!(high - low > 0.3, "only {low} to {high} m on the ramp");
+        // By the south terrace's edge (y = -9): none of it down on the square below.
+        let pos = Vec2::new(2.5, -9.6);
+        let laid = splashed(pos, yard.height_at(pos));
+        assert!(area(&laid) > 2.0, "laid {} m2", area(&laid));
+        assert!(laid.iter().flatten().all(|p| p.y > 1.0), "some of it fell onto the square");
     }
 
     #[test]

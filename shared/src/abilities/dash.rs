@@ -2,13 +2,15 @@
 //! walls. Until the dasher's body reaches the cursor (`DashDef::length`), at least
 //! `min_distance` (if given; without it, always all the way) and at most `distance`. Covers
 //! `distance` in `ticks` at normal speed (longer slowed, shorter hasted), so a shorter one is
-//! over sooner; eased out, most of the way is covered early and it comes to rest softly.
+//! over sooner; eased out, most of the way is covered early and it comes to rest softly. It
+//! comes on top of the way the dasher was already going (`Dash::carry`), so it adds to a run's
+//! or a jump's speed instead of taking it away.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::AbilitySlot;
-use crate::config::{BODY_HEIGHT, PLAYER_RADIUS};
+use crate::config::{BODY_HEIGHT, PLAYER_RADIUS, TICK_DT};
 use crate::map::Map;
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -39,13 +41,15 @@ impl DashDef {
     /// The dash the ability in `slot` starts at `tick`, toward `dir`, aimed `aim`.
     pub fn start(&self, slot: AbilitySlot, dir: Vec2, aim: Vec2, tick: u32) -> Dash {
         let length = self.length(aim);
-        Dash { started_at: tick, dir, length, left: length, slot }
+        Dash { started_at: tick, dir, length, left: length, slot, carry: Vec2::ZERO }
     }
 }
 
 /// A dash in progress: moving toward `dir` from `started_at` until it has covered its `length`
 /// (`left` is how much of it is still to go). Started by the ability in `slot`: its pace, and
-/// the damage it cuts for.
+/// the damage it cuts for. `carry` is how fast (m/s) the dasher was already going when it set
+/// out (`move_player`): it goes on going that way all through the dash, the dash on top of it,
+/// and comes out of it going that fast plus the dash's last stride.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Dash {
     pub started_at: u32,
@@ -53,15 +57,17 @@ pub struct Dash {
     pub length: f32,
     pub left: f32,
     pub slot: AbilitySlot,
+    pub carry: Vec2,
 }
 
 impl Dash {
     /// One tick of it (`tick`) from `pos`, at `pace` (its own, slowed or hasted): where the
     /// dasher is after it. It takes as many ticks as its length at that pace would, but eased
     /// out: the way covered by each tick falls off (quadratically) toward the end, so it sets
-    /// out fast and comes to rest softly. Counted whether or not a wall (or water's edge,
-    /// anything unwalkable) stops it; one whose top is under the dasher's `feet` doesn't
-    /// (`Map::line_walkable_at`).
+    /// out fast and comes to rest softly. With it, the way it carries on (`carry`); a wall in
+    /// the way of that stops it, leaving the dash on its own. The dash is counted whether or not
+    /// a wall (or water's edge, anything unwalkable) stops it; one whose top is under the
+    /// dasher's `feet` doesn't (`Map::line_walkable_at`).
     pub fn step(&mut self, map: &Map, pos: Vec2, pace: f32, tick: u32, feet: f32) -> Vec2 {
         let ticks = (self.length / pace.max(1e-6)).ceil().max(1.0);
         // Stepped first the tick after it started.
@@ -69,8 +75,13 @@ impl Dash {
         let along = |stepped: f32| 1.0 - (1.0 - (stepped / ticks).min(1.0)).powi(2);
         let step = (self.length * (along(stepped + 1.0) - along(stepped))).min(self.left);
         self.left -= step;
-        let next = pos + self.dir * step;
-        if map.line_walkable_at(pos, next, feet) { next } else { pos }
+        let dashed = pos + self.dir * step;
+        let carried = dashed + self.carry * TICK_DT;
+        if map.line_walkable_at(pos, carried, feet) {
+            return carried;
+        }
+        self.carry = Vec2::ZERO;
+        if map.line_walkable_at(pos, dashed, feet) { dashed } else { pos }
     }
 
     /// Whether it has gone its whole length. Not quite zero: rounding leaves a sliver after the

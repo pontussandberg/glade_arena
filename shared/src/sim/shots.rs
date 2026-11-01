@@ -6,7 +6,7 @@ use super::*;
 
 use crate::classes::{Chill, Shot};
 use crate::config::{ACTION_LOOK_HEIGHT, ACTION_SHOULDER, BODY_HEIGHT, GRAVITY, SHOT_HEIGHT, SHOULDER_WALL_MARGIN};
-use crate::map::Map;
+use crate::map::{Map, ShotEnd};
 use crate::protocol::Projectile;
 
 /// Where a shot starts: at the edge of the shooter, so it doesn't start inside them.
@@ -103,6 +103,16 @@ pub fn projectile_expired(map: &Map, pos: Vec2, projectile: &Projectile, tick: u
     let before = tick as f32 - 1.0;
     let flew = ((projectile_pos(projectile, before), projectile_height(projectile, before)), (pos, projectile_height(projectile, tick as f32)));
     tick.saturating_sub(projectile.spawn_tick) >= shot.lifetime_ticks() || map.shot_meets(flew.0, flew.1)
+}
+
+/// Where a projectile spent at `tick` (`projectile_expired`) ends: on or against what it met on
+/// its way there from the tick before (`Map::shot_end`), or, spent at its range in the air, on
+/// what's under it.
+pub fn projectile_end(map: &Map, projectile: &Projectile, tick: u32) -> ShotEnd {
+    let before = tick as f32 - 1.0;
+    let a = (projectile_pos(projectile, before), projectile_height(projectile, before));
+    let b = (projectile_pos(projectile, tick as f32), projectile_height(projectile, tick as f32));
+    map.shot_end(a, b).unwrap_or_else(|| ShotEnd { at: b.0, height: map.surface_under(b.0, b.1), wall: None })
 }
 
 /// Whether a projectile at `projectile_pos` (at `tick`) hits a body at `player_pos` whose feet

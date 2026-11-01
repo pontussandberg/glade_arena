@@ -102,29 +102,31 @@ fn strike_fx(
     mut commands: Commands,
     time: Res<Time>,
     art: Res<FxArt>,
-    swings: Query<(Entity, &Pos, &ClassId, &LastSwing), (Changed<LastSwing>, With<PlayerId>)>,
+    map: Res<crate::rooms::CurrentMap>,
+    swings: Query<(Entity, &Pos, &ClassId, &LastSwing, (Option<&arena_shared::protocol::Motion>, Option<&crate::render::PredictedWalk>)), (Changed<LastSwing>, With<PlayerId>)>,
     mut seen: Local<bevy::platform::collections::HashMap<Entity, u32>>,
 ) {
     let now = time.elapsed_secs();
-    for (entity, pos, class, swing) in &swings {
+    for (entity, pos, class, swing, (motion, predicted)) in &swings {
         // The first sighting only notes the swing: it may be long past.
         match seen.insert(entity, swing.tick) {
             Some(before) if before != swing.tick => {}
             _ => continue,
         }
         let dir = swing.dir.normalize_or(Vec2::X);
+        let at = (pos.0, crate::render::ground_under(map.map(), motion, predicted, pos.0));
         match class.def().figure() {
-            "warden" => recipes::shield_push(&mut commands, &art, now, pos.0, dir, swing.tick),
-            "breaker" => recipes::tremor(&mut commands, &art, now, pos.0, dir, swing.tick),
+            "warden" => recipes::shield_push(&mut commands, &art, now, at, dir, swing.tick),
+            "breaker" => recipes::tremor(&mut commands, &art, now, at, dir, swing.tick),
             _ => {}
         }
     }
 }
 
-/// A nova going off at `at` (`radius` round) now, cast by a figure of `figure`, drawn as its own
+/// A nova going off at `at` (on the plane, and how high what it's on is; `radius` round) now, cast by a figure of `figure`, drawn as its own
 /// burst, if it has one: the pyre witch's ring of cinders, the breaker's and the warden's quake.
 /// Whether it did (the frost mage's, and anyone else's, is a burst of ice: `render::show_novas`).
-pub(crate) fn cast_nova(commands: &mut Commands, art: &FxArt, now: f32, figure: &str, at: Vec2, radius: f32, seed: u32) -> bool {
+pub(crate) fn cast_nova(commands: &mut Commands, art: &FxArt, now: f32, figure: &str, at: (Vec2, f32), radius: f32, seed: u32) -> bool {
     match figure {
         "pyre_witch" => recipes::cinder_ring(commands, art, now, at, radius, seed),
         "breaker" | "warden" => recipes::quake(commands, art, now, at, radius, seed),
@@ -372,11 +374,19 @@ pub(crate) struct Part {
     flicker: f32,
     motion: Motion,
     frames: Vec<Handle<Mesh>>,
+    /// How high what it comes down on is, thrown.
+    floor: f32,
 }
 
 impl Part {
     pub(crate) fn new(born: f32, life: [f32; 3], ink: Ink, at: Vec3) -> Part {
-        Part { mesh: Handle::default(), born, life, ink, at, turn: Quat::IDENTITY, size: Vec3::ONE, grow: 1.0, shrink: 1.0, spin: 0.0, flicker: 0.0, motion: Motion::Still, frames: Vec::new() }
+        Part { mesh: Handle::default(), born, life, ink, at, turn: Quat::IDENTITY, size: Vec3::ONE, grow: 1.0, shrink: 1.0, spin: 0.0, flicker: 0.0, motion: Motion::Still, frames: Vec::new(), floor: 0.0 }
+    }
+
+    /// Thrown, it comes down on something `floor` high (a court, a roof), not the gameplay
+    /// plane.
+    pub(crate) fn floor(self, floor: f32) -> Part {
+        Part { floor, ..self }
     }
 
     pub(crate) fn size(self, size: f32) -> Part {
@@ -437,7 +447,7 @@ impl Part {
             Motion::Still => (self.at, spun),
             Motion::Thrown { velocity, gravity, tumble } => {
                 let flown = self.at + velocity * age - Vec3::Y * gravity * age * age / 2.0;
-                let floor = size.y / 2.0;
+                let floor = self.floor + size.y / 2.0;
                 if flown.y <= floor && gravity > 0.0 {
                     // Landed: lying where it came down, as it last turned.
                     let land = landing(self.at.y - floor, velocity.y, gravity);
