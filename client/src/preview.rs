@@ -803,15 +803,15 @@ fn preview_idle() {
 }
 
 /// Every map from above, one pixel image per map (`map-<id>.png`): tiles in the theme's colors,
-/// lairs red, chests gold, pickups green, spawns blue, the shop white. The bastion's staged
-/// variants too: the layout and its unlocks, seen without running the game.
+/// lairs red, chests gold, pickups green, spawns blue, the shop white: the layout, seen without
+/// running the game.
 #[test]
 #[ignore = "writes images; run by hand when working on maps"]
 fn preview_maps() {
     use arena_shared::map::{Map, MapId};
 
     let dir = std::env::var("PREVIEW_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
-    for id in [MapId::Crossing, MapId::Keep, MapId::Gorge, MapId::Wilds, MapId::Bastion, MapId::Bastion2, MapId::Bastion3, MapId::Bastion4, MapId::Hold, MapId::Yard] {
+    for id in MapId::ALL {
         let m = id.map();
         let theme = crate::arena::Theme::of(id);
         const S: usize = 4;

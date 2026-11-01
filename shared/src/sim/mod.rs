@@ -406,14 +406,16 @@ mod tests {
             panic!("a projectile class should shoot after its windup");
         };
         let lifetime = proj.class.def().shot(None).unwrap().lifetime_ticks();
-        let hit_tick = (windup..windup + lifetime).find(|&tick| projectile_hits(projectile_pos(&proj, tick as f32), &proj, tick, target, 0.0));
+        let hit_tick = (windup..windup.saturating_add(lifetime)).find(|&tick| projectile_hits(projectile_pos(&proj, tick as f32), &proj, tick, target, 0.0));
         assert!(hit_tick.is_some(), "projectile should hit a target 6 m away in its path");
     }
 
     #[test]
     fn projectile_expires_at_its_range_and_at_walls() {
-        let proj = Projectile { owner: PeerId::Netcode(1), class: bolter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
-        let lifetime = bolter().def().shot(None).unwrap().lifetime_ticks();
+        // A bolt whose range ends within the map (the frost mage's doesn't).
+        let class = ClassId::all().find(|c| matches!(c.def().attack.kind, AttackKind::Projectile { falls: false, range, .. } if range < 30.0)).unwrap();
+        let proj = Projectile { owner: PeerId::Netcode(1), class, origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 5, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
+        let lifetime = class.def().shot(None).unwrap().lifetime_ticks();
         // Flying high over everything, only its range spends it: from the map's west end, so its
         // whole range lies over the map.
         let high = Projectile { lift: 50.0, origin: Vec2::new(-map().size.x as f32 / 2.0 + 2.0, 0.0), ..proj };
@@ -639,11 +641,10 @@ mod tests {
     fn the_yards_water_is_walked_or_jumped_into_and_waded_across() {
         use crate::map::Tile;
         let yard = crate::map::MapId::Yard.map();
-        // Its ground dips under its water (and the ford through it) alone, not its bridges or its
-        // banks.
+        // Its ground dips under its water alone, not its bridges, its ford or its banks.
         for (t, tile) in yard.tiles() {
             let under = yard.height_at(Map::center(t));
-            assert_eq!(matches!(tile, Tile::Water | Tile::Ford), under < 0.0, "{tile:?} at {t} is {under} m high");
+            assert_eq!(tile == Tile::Water, under < 0.0, "{tile:?} at {t} is {under} m high");
         }
         // A row across the stream with open level ground either side of it.
         let row = (-50..50)
@@ -869,7 +870,8 @@ mod tests {
                 // On the line where it starts, and never off to the side of it.
                 let (across, above) = off(-1.0);
                 assert!(across.abs() < 1e-4 && above.abs() < 1e-4, "{class:?} starts {across} m to the right of the line, {above} m above it");
-                for tick in 0..shot.lifetime_ticks() {
+                // Its first few seconds (an uncapped one flies on as far as it's aimed).
+                for tick in 0..TICK_HZ as u32 * 3 {
                     let flown = projectile_flown(&fired, tick as f32);
                     let (across, above) = off(tick as f32);
                     assert!(across.abs() < 1e-4, "{class:?} {across} m off to the side at {flown} m");
@@ -895,7 +897,6 @@ mod tests {
             let down = (0..400).find(|&tick| projectile_expired(map(), projectile_pos(proj, tick as f32), proj, tick)).unwrap();
             let at = projectile_pos(proj, down as f32);
             assert!(!map().get(Map::tile_of(at)).blocks_shots(), "stopped by a wall at {at}, not the ground");
-            assert!(down < shot.lifetime_ticks(), "given up on in the air, not down on the ground");
             assert!(projectile_height(proj, down as f32) < 0.0, "ended on the ground");
             (at - origin).dot(dir)
         };
@@ -1335,25 +1336,25 @@ mod tests {
     #[test]
     fn marsh_slows_walking_not_dashing() {
         use crate::map::{MARSH_SPEED, MapId, Tile};
-        let keep = MapId::Keep.map();
+        let wilds = MapId::Wilds.map();
         // A marsh tile with marsh all around, so a step stays in it.
-        let bog = keep
+        let bog = wilds
             .tiles()
-            .find(|(t, _)| (-1..=1).all(|dy| (-1..=1).all(|dx| keep.get(*t + IVec2::new(dx, dy)) == Tile::Marsh)))
-            .expect("the keep has a marsh")
+            .find(|(t, _)| (-1..=1).all(|dy| (-1..=1).all(|dx| wilds.get(*t + IVec2::new(dx, dy)) == Tile::Marsh)))
+            .expect("the wilds have a marsh")
             .0;
         let from = Map::center(bog);
         let east = PlayerInput { walk: Vec2::X, ..default() };
-        let stepped = step_player(keep, from, &east, SPEED).distance(from);
+        let stepped = step_player(wilds, from, &east, SPEED).distance(from);
         assert!((stepped - SPEED * TICK_DT * MARSH_SPEED).abs() < 1e-5, "stepped {stepped}");
-        let dry = keep.spawn_points[0];
-        assert!((step_player(keep, dry, &east, SPEED).distance(dry) - SPEED * TICK_DT).abs() < 1e-5);
+        let dry = wilds.spawn_points[0];
+        assert!((step_player(wilds, dry, &east, SPEED).distance(dry) - SPEED * TICK_DT).abs() < 1e-5);
         // A dash goes at its own pace, marsh or not.
         let class = dasher();
         let DashDef { distance, ticks, .. } = dash_def();
         let mut dashing = Dashing(Some(dash_def().start(Q, Vec2::X, Vec2::X * 100.0, 10)));
         let warm = Chilled::default();
-        let moved = move_player(keep, from, &PlayerInput::default(), class, &AttackState::default(), &mut dashing, &mut Motion::default(), &warm, &default(), 11);
+        let moved = move_player(wilds, from, &PlayerInput::default(), class, &AttackState::default(), &mut dashing, &mut Motion::default(), &warm, &default(), 11);
         // Its first tick, the longest of an eased-out dash.
         let first = distance * (1.0 - (1.0 - 1.0 / ticks as f32).powi(2));
         assert!((moved.distance(from) - first).abs() < 1e-4, "moved {} the first tick, not {first}", moved.distance(from));
@@ -1382,5 +1383,86 @@ mod tests {
         // A player standing near a spawn point makes it the least attractive one.
         let near_first = spawns()[0] + Vec2::new(0.5, 0.0);
         assert_ne!(pick_spawn_point(map(), [near_first]), spawns()[0]);
+    }
+
+    /// Walks (or jumps, `jump`) toward `way` from `from` going `along` (m/s), the walking key
+    /// held that way, for `ticks`: where it ends up, the lowest its feet went, and whether it fell
+    /// into a chasm.
+    fn run_toward(m: &Map, from: Vec2, way: IVec2, along: f32, jump: bool, ticks: u32) -> (Vec2, f32, bool) {
+        let (mut pos, mut fell) = (from, false);
+        let mut motion = Motion { along: way.as_vec2() * along, height: m.height_at(from), ..default() };
+        let mut lowest = motion.height;
+        for tick in 1..=ticks {
+            let input = PlayerInput { walk: way.as_vec2(), jump: jump && tick == 1, ..default() };
+            pos = move_player(m, pos, &input, fighter(), &AttackState::default(), &mut Dashing::default(), &mut motion, &default(), &default(), tick);
+            fell |= m.fell_in(pos, motion.height);
+            lowest = lowest.min(motion.height);
+        }
+        (pos, lowest, fell)
+    }
+
+    #[test]
+    fn every_maps_water_is_waded_into_off_the_bank() {
+        use crate::map::{MapId, Tile, WADE_DEPTH};
+        let mut waded = Vec::new();
+        for id in MapId::ALL {
+            let m = id.map();
+            // A bank with water off it, two tiles out and three across.
+            let open = |t: IVec2, way: IVec2| (1..=2).all(|k| (-1..=1).all(|j| m.get(t + way * k + way.perp() * j) == Tile::Water));
+            let Some((bank, way)) = m.tiles().find_map(|(t, tile)| {
+                let way = [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y].into_iter().find(|&way| open(t, way))?;
+                let from = Map::center(t);
+                (matches!(tile, Tile::Grass | Tile::Path) && m.walkable(t) && m.line_walkable_at(from, Map::center(t + way), m.height_at(from))).then_some((t, way))
+            }) else {
+                continue;
+            };
+            assert!(m.wades, "{id:?}'s water isn't waded");
+            let (to, feet, _) = run_toward(m, Map::center(bank), way, 0.0, false, TICK_HZ as u32 * 2);
+            assert!((Map::tile_of(to) - bank).dot(way) > 0, "{id:?}: stopped at the bank at {to}");
+            assert!(feet < m.height_at(Map::center(bank)) - WADE_DEPTH * 0.4, "{id:?}: never down in the water on the way to {to} (at most {feet} m)");
+            waded.push(id);
+        }
+        assert!(waded.len() >= 4, "only waded {waded:?}");
+    }
+
+    #[test]
+    fn fords_are_walked_dry() {
+        use crate::map::{MapId, Tile};
+        let mut maps = 0;
+        for m in MapId::ALL.into_iter().map(MapId::map) {
+            let mut fords = m.tiles().filter(|&(_, tile)| tile == Tile::Ford).peekable();
+            maps += fords.peek().is_some() as u32;
+            for (t, _) in fords {
+                for p in [Map::center(t), Map::center(t) + Vec2::splat(0.45), Map::center(t) - Vec2::splat(0.45)] {
+                    assert!(m.height_at(p) >= 0.0, "{:?}: the ford at {t} is sunk at {p} ({} m)", m.id, m.height_at(p));
+                }
+            }
+        }
+        assert!(maps >= 3, "fords on only {maps} maps");
+    }
+
+    #[test]
+    fn the_gorges_crack_is_leapt_not_walked_and_falling_short_falls_in() {
+        use crate::map::{MapId, Tile};
+        let m = MapId::Gorge.map();
+        // A row the crack runs across, banks either side.
+        let (bank, across) = m
+            .tiles()
+            .filter(|&(t, tile)| tile == Tile::Grass && m.walkable(t) && m.get(t + IVec2::X) == Tile::Chasm)
+            .find_map(|(t, _)| {
+                let across = (2..=7).find(|&k| m.get(t + IVec2::X * k) != Tile::Chasm)?;
+                (m.get(t + IVec2::X * across) == Tile::Grass && m.walkable(t + IVec2::X * across) && m.walkable(t + IVec2::X * (across + 1))).then_some((t, across))
+            })
+            .expect("no row across the crack");
+        let from = Map::center(bank);
+        // Walked into, it stops at the edge.
+        let (to, _, fell) = run_toward(m, from, IVec2::X, 5.0, false, TICK_HZ as u32 * 2);
+        assert!(!fell && m.get(Map::tile_of(to)) != Tile::Chasm, "walked off into the crack at {to}");
+        // Leapt at a run, it lands on the far side.
+        let (to, feet, fell) = run_toward(m, from, IVec2::X, 9.0, true, TICK_HZ as u32 * 2);
+        assert!(!fell && Map::tile_of(to).x >= bank.x + across && feet > -0.1, "the leap came down at {to} (down to {feet} m), not across");
+        // Leapt from a standstill, it falls short and falls in.
+        let (to, _, fell) = run_toward(m, from, IVec2::X, 1.0, true, TICK_HZ as u32 * 3);
+        assert!(fell, "a short leap didn't fall in (at {to})");
     }
 }

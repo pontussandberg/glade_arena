@@ -68,6 +68,7 @@ const WEST_TREES: &[Vec2] = &[
 
 pub(super) fn build() -> Map {
     let mut map = Map::blank(MapId::Crossing, SIZE, clearing_margin, beyond);
+    map.shallow();
     map.paint(|c, tile| {
         let in_river = (c.x - river_x(c.y)).abs() < RIVER_HALF_WIDTH;
         if in_river && c.y.abs() < BRIDGE_HALF_WIDTH {

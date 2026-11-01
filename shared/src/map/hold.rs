@@ -195,11 +195,12 @@ const GROUND: &[Ground] = &[
 ];
 
 /// How high the ground is at `p`: the pieces of it (`GROUND`), and under the river (not its
-/// bridges) its bed, sloping down from either bank, so whoever wades in stands in the water and
-/// walks back out.
+/// bridges, nor its ford's stepping stones) its bed, sloping down from either bank and the ford,
+/// so whoever wades in stands in the water and walks back out.
 fn relief(p: Vec2) -> f32 {
     let h = GROUND.iter().fold(0.0, |h, ground| ground.at(p).unwrap_or(h));
-    let inside = (p.y - RIVER.0).min(RIVER.1 - p.y);
+    let ford = (FORD.0 - p.x).max(p.x - FORD.1);
+    let inside = (p.y - RIVER.0).min(RIVER.1 - p.y).min(ford);
     if h <= 0.0 && inside > 0.0 { -WADE_DEPTH * (inside / WADE_SHELF).min(1.0) } else { h }
 }
 

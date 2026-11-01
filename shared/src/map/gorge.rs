@@ -1,6 +1,6 @@
 //! Riven Gorge: highlands split by a chasm running from the south-west to the north-east. No one
-//! walks it, but shots fly over: across its narrows the two sides trade throws without ever
-//! meeting. A stone arch crosses it in the middle and a rope bridge near each end; and two pairs
+//! walks it, but shots fly over: across its narrows the two sides trade throws, and whoever dares
+//! leaps it (falling short, they fall in: `Map::deep_chasms`). A stone arch crosses it in the middle and a rope bridge near each end; and two pairs
 //! of waygates jump a fighter from one side's back line to the other's.
 
 use bevy::math::{IVec2, Vec2};
@@ -102,6 +102,8 @@ const WEST_TREES: &[Vec2] = &[
 
 pub(super) fn build() -> Map {
     let mut map = Map::blank(MapId::Gorge, SIZE, edge, beyond);
+    // Its crack is leapt across: no one walks off into it, but whoever comes down in it falls.
+    map.deep_chasms = true;
     map.paint(|c, tile| {
         if !in_chasm(c) {
             tile

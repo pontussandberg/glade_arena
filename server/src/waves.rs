@@ -49,7 +49,7 @@ const READY_TICKS: u32 = 3 * TICK_HZ as u32;
 const SHELTER_TICKS: u32 = 3 * TICK_HZ as u32;
 const REBIRTH_REACH: f32 = 6.0;
 /// When a downed player comes back by themselves: not until the wave's cleared (or a boss falls).
-const UNTIL_CLEARED: u32 = u32::MAX / 2;
+pub(crate) const UNTIL_CLEARED: u32 = u32::MAX / 2;
 /// How much of their health a player picked up by an ally comes back with.
 const REVIVE_HEALTH: f32 = 0.4;
 /// How near the party a lair may be to send out monsters, and how far (if any are between).
@@ -472,11 +472,6 @@ fn step_run(commands: &mut Commands, lobby: &mut Lobby, party: &mut Party, now: 
             info!(room = key.0, wave, pay, "wave cleared");
             lobby.give_gold(key, pay);
             lobby.note_best(key, wave);
-            // The bastion's next court may open with the coming wave: thunder tears its gate
-            // open while everyone shops.
-            if let Some(gate) = crate::rooms::stage_map(lobby, commands, key, wave + 1) {
-                spawn_fx(commands, room, Fx::at(FxKind::Blast(FxColor::Storm), gate, 3.5, now, 24));
-            }
             bring_back(party, room, now);
             for (_, r, _, mut health, max, dead) in party.iter_mut() {
                 if *r == room && dead.is_none() {

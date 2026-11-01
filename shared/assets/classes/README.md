@@ -37,8 +37,10 @@ Units: meters, meters per second, ticks (32 per second).
     - `Melee(range, width, from)`: a blow: hits everyone whose body a straight lane `width` wide
       reaches, from `from` (optional, 0 by default) out to `range` from your center: where the
       blade comes down, its hitbox (see the practice tools).
-    - `Projectile(speed, radius, range)`: flies straight, stops at walls, rocks and trees.
-      Optional `far_scale`: damage after flying the full range, as a multiple of `damage` (point
+    - `Projectile(speed, radius, range)`: flies straight, stops at walls, rocks and trees, and is
+      spent at its `range`; with no `range`, it flies on until it meets something. With
+      `falls: true` it's thrown: straight out to its `range`, then dropping under gravity until
+      it hits something or the ground. Optional `far_scale`: damage after flying the full range, as a multiple of `damage` (point
       blank), scaling linearly by how far the shot flew.
   - `chill` (optional): crowd control each hit applies on top of its damage: `slow` (fraction of
     speed taken away), `slow_ticks` (for how long), `root_ticks` (frozen in place this long: no
