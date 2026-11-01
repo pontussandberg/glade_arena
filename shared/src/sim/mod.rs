@@ -1029,12 +1029,13 @@ mod tests {
 
     /// A dash from `from` toward `dir` run to its end: where it ended, and how many ticks it moved.
     fn dash_run(from: Vec2, dir: Vec2, chilled: &Chilled, hasted: &Hasted) -> (Vec2, u32) {
-        let (end, took, _) = dash_run_going(from, dir, chilled, hasted, Vec2::ZERO);
+        let (end, took, _) = dash_run_going(from, dir, chilled, hasted, Vec2::ZERO, Vec2::ZERO);
         (end, took)
     }
 
-    /// `dash_run`, setting out already going `along` (m/s); and the motion it came out of it with.
-    fn dash_run_going(from: Vec2, dir: Vec2, chilled: &Chilled, hasted: &Hasted, along: Vec2) -> (Vec2, u32, Motion) {
+    /// `dash_run`, setting out already going `along` (m/s), the walking keys held toward `walk`
+    /// all the while; and the motion it came out of it with.
+    fn dash_run_going(from: Vec2, dir: Vec2, chilled: &Chilled, hasted: &Hasted, along: Vec2, walk: Vec2) -> (Vec2, u32, Motion) {
         let class = dasher();
         let (mut state, _) = step_kit(1, class, from, &press_q(dir), chilled, default());
         let (mut pos, mut tick) = (from, 1);
@@ -1042,7 +1043,7 @@ mod tests {
         while state.dashing.0.is_some() {
             tick += 1;
             assert!(tick < 1000, "the dash never ended");
-            pos = move_player(map(), pos, &PlayerInput::default(), class, &AttackState::default(), &mut state.dashing, &mut motion, chilled, hasted, tick);
+            pos = move_player(map(), pos, &PlayerInput { walk, ..default() }, class, &AttackState::default(), &mut state.dashing, &mut motion, chilled, hasted, tick);
             assert!(map().walkable_at(pos), "dashed into a wall at {pos}");
             state = step_kit(tick, class, pos, &PlayerInput::default(), chilled, state).0;
         }
@@ -1054,10 +1055,27 @@ mod tests {
         let distance = dash_def().distance;
         let going = 10.0;
         let (from, dir) = dash_starts()
-            .find(|&(from, dir)| dash_run_going(from, dir, &default(), &default(), dir * going).0.distance(from) > distance + 0.5)
+            .find(|&(from, dir)| dash_run_going(from, dir, &default(), &default(), dir * going, Vec2::ZERO).0.distance(from) > distance + 0.5)
             .expect("no open dash carried its run on past its own distance");
-        let (_, _, motion) = dash_run_going(from, dir, &default(), &default(), dir * going);
+        let (_, _, motion) = dash_run_going(from, dir, &default(), &default(), dir * going, Vec2::ZERO);
         assert!(motion.along.dot(dir) > going, "came out of it no faster than it went in ({})", motion.along);
+        // Held forward through it, the keys don't slow it either.
+        let (_, _, held) = dash_run_going(from, dir, &default(), &default(), dir * going, dir);
+        assert!(held.along.dot(dir) > going, "holding forward slowed it ({})", held.along);
+    }
+
+    #[test]
+    fn a_dash_strafes_off_its_line_with_a_key_held_sideways() {
+        let distance = dash_def().distance;
+        let (from, dir) = dash_starts()
+            .find(|&(from, dir)| (dash_run(from, dir, &default(), &default()).0.distance(from) - distance).abs() < 1e-3 && {
+                let (end, _, _) = dash_run_going(from, dir, &default(), &default(), Vec2::ZERO, dir.perp());
+                (end - from).perp_dot(dir).abs() > 0.5
+            })
+            .expect("no open dash strafed off its line");
+        let (end, _, motion) = dash_run_going(from, dir, &default(), &default(), Vec2::ZERO, dir.perp());
+        assert!((end - from).dot(dir) > distance - 1e-3, "strafing cut the dash short");
+        assert!(motion.along.dot(dir.perp()) > 0.0, "came out of it not going the way it strafed");
     }
 
     /// Every way out of every spawn point.
@@ -1075,6 +1093,24 @@ mod tests {
             longest = longest.max(from.distance(to));
         }
         assert!((longest - distance).abs() < 1e-3, "no open dash went its full distance ({longest})");
+    }
+
+    #[test]
+    fn a_dash_whose_pace_changes_partway_still_ends_its_whole_length_on() {
+        let def = dash_def();
+        let (from, dir) = dash_starts().find(|&(from, dir)| (dash_run(from, dir, &default(), &default()).0.distance(from) - def.distance).abs() < 1e-3).unwrap();
+        // Slowed setting out, the slow running out halfway (and the other way round: hasted).
+        for (first, then) in [(0.5, 1.0), (1.5, 1.0), (1.0, 0.5)] {
+            let mut dash = def.start(AbilitySlot(0), dir, dir * 100.0, 0);
+            let (mut pos, mut ticks) = (from, 0);
+            while !dash.over() {
+                ticks += 1;
+                assert!(ticks < 1000, "the dash never ended ({first} then {then})");
+                let pace = def.pace() * if dash.left > dash.length / 2.0 { first } else { then };
+                pos = dash.step(map(), pos, pace, map().height_at(from));
+            }
+            assert!((pos.distance(from) - def.distance).abs() < 1e-3, "went {} not its length", pos.distance(from));
+        }
     }
 
     #[test]

@@ -856,8 +856,8 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             }
             let patrol = if walks { Some(Patrol::through(room.map.map(), at).ok_or("No room for a dummy to walk there")?) } else { None };
             let class = dummy_class(room.dummies.len());
-            let in_room = room.in_room(key);
-            let dummy = spawn_dummy(&mut ctx.commands, lobby.next_local(), class, in_room, at);
+            let (in_room, map) = (room.in_room(key), room.map.map());
+            let dummy = spawn_dummy(&mut ctx.commands, map, lobby.next_local(), class, in_room, at);
             let room = lobby.rooms.get_mut(&key).expect("in it");
             if let Some(patrol) = patrol {
                 ctx.commands.entity(dummy).insert(patrol);
@@ -994,9 +994,10 @@ fn stand_dummies(lobby: &mut Lobby, ctx: &mut Ctx, key: RoomKey) {
         return;
     }
     let in_room = room.in_room(key);
-    for &at in &room.map.map().dummies {
+    let map = room.map.map();
+    for &at in &map.dummies {
         let class = dummy_class(lobby.rooms[&key].dummies.len());
-        let dummy = spawn_dummy(&mut ctx.commands, lobby.next_local(), class, in_room, at);
+        let dummy = spawn_dummy(&mut ctx.commands, map, lobby.next_local(), class, in_room, at);
         lobby.rooms.get_mut(&key).expect("in it").dummies.push(dummy);
     }
 }

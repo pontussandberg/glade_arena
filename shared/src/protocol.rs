@@ -808,8 +808,10 @@ impl PlayerCommand {
             PlayerCommand::Cast(slot, aim) => input.order_cast(slot, aim),
             PlayerCommand::Aim(aim, climb, aside) => {
                 input.aim = aim;
-                input.climb = climb;
-                input.aside = aside;
+                // No steeper than the camera looks, no further aside than over the shoulder,
+                // and level and straight behind for anything that isn't a number.
+                input.climb = if climb.is_finite() { climb.clamp(-crate::config::MOST_CLIMB, crate::config::MOST_CLIMB) } else { 0.0 };
+                input.aside = if aside.is_finite() { aside.clamp(0.0, crate::config::ACTION_SHOULDER) } else { 0.0 };
             }
             PlayerCommand::Jump(held, _) => {
                 input.jump |= held;

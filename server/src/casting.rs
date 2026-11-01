@@ -87,8 +87,9 @@ pub(super) fn use_abilities(
         for cast in casts {
             match cast {
                 Cast::Throw(projectile) => {
-                    // In action mode let go from the raised hand onto the crosshair's line, as an
-                    // attack's throw is.
+                    // From as high as the caster's feet are; in action mode let go from the raised
+                    // hand onto the crosshair's line, as an attack's throw is.
+                    let projectile = Projectile { lift: motion.height, ..projectile };
                     let projectile = if action { arena_shared::sim::onto_sight(map, projectile, pos.0, input.aside, motion.height) } else { projectile };
                     spawn_projectile(&mut commands, projectile, side, might);
                 }

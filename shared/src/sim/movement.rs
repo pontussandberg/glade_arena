@@ -67,7 +67,7 @@ pub fn move_player(
 /// motion. Up and down: on the ground it follows the ground, up a slope and down one (not off a
 /// ledge: `STEP_DOWN`); `input.jumping()` on the ground sends it up (`jump_speed`); in the air it
 /// falls (`GRAVITY`) until the ground. A dash carries on the way it was going when it set out
-/// (`Dash::carry`), the dash on top. A dash or a click-to-walk sets the motion by where it
+/// (`Dash::carry`), steered by the walking keys, the dash on top. A dash or a click-to-walk sets the motion by where it
 /// went, so a dash off a ledge flies on out, and one out of a run comes out of it faster; a click-to-walk goes on at its speed, not sliding
 /// on what it went the tick before, and slides to a stop only once it's dropped.
 #[allow(clippy::too_many_arguments)]
@@ -102,7 +102,15 @@ pub fn move_player_boosted(
         if dash.left == dash.length {
             dash.carry = motion.along;
         }
-        next = dash.step(map, pos, pace * speed, tick, feet);
+        // Launched, not on rails: the walking keys steer what it carries on top of the dash as
+        // they steer a walk, so it strafes off the dash's line or brakes, though they never push
+        // it faster than walking; and nothing rubs it down meanwhile, so a run's speed lasts.
+        let wish = input.walk.normalize_or_zero();
+        if wish != Vec2::ZERO {
+            let walk_speed = class.def().move_speed * speed;
+            dash.carry += wish * (walk_speed - dash.carry.dot(wish)).clamp(0.0, GROUND_ACCEL * walk_speed * TICK_DT);
+        }
+        next = dash.step(map, pos, pace * speed, feet);
         motion.along = (next - pos) / TICK_DT;
     } else if attack.winding_up().is_some() {
         motion.along = Vec2::ZERO;

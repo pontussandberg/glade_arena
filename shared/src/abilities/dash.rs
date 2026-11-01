@@ -49,7 +49,8 @@ impl DashDef {
 /// (`left` is how much of it is still to go). Started by the ability in `slot`: its pace, and
 /// the damage it cuts for. `carry` is how fast (m/s) the dasher was already going when it set
 /// out (`move_player`): it goes on going that way all through the dash, the dash on top of it,
-/// and comes out of it going that fast plus the dash's last stride.
+/// steered by the walking keys as it goes (a strafe off the dash's line), and comes out of it
+/// going that fast plus the dash's last stride.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Dash {
     pub started_at: u32,
@@ -61,24 +62,31 @@ pub struct Dash {
 }
 
 impl Dash {
-    /// One tick of it (`tick`) from `pos`, at `pace` (its own, slowed or hasted): where the
-    /// dasher is after it. It takes as many ticks as its length at that pace would, but eased
-    /// out: the way covered by each tick falls off (quadratically) toward the end, so it sets
-    /// out fast and comes to rest softly. With it, the way it carries on (`carry`); a wall in
-    /// the way of that stops it, leaving the dash on its own. The dash is counted whether or not
+    /// One tick of it from `pos`, at `pace` (its own, slowed or hasted): where the dasher is
+    /// after it. It takes as many ticks as its length at that pace would, but eased out: the way
+    /// covered by each tick falls off (quadratically) toward the end, so it sets out fast and
+    /// comes to rest softly. How far along that curve it is comes from what's `left`, so a pace
+    /// that changes mid-dash (a slow running out, a haste) only changes how fast it goes on along
+    /// it: it still ends. With it, the way it carries on (`carry`); a wall in
+    /// the way of that stops it (the part of it the wall blocks), leaving the dash on its own. The dash is counted whether or not
     /// a wall (or water's edge, anything unwalkable) stops it; one whose top is under the
     /// dasher's `feet` doesn't (`Map::line_walkable_at`).
-    pub fn step(&mut self, map: &Map, pos: Vec2, pace: f32, tick: u32, feet: f32) -> Vec2 {
+    pub fn step(&mut self, map: &Map, pos: Vec2, pace: f32, feet: f32) -> Vec2 {
         let ticks = (self.length / pace.max(1e-6)).ceil().max(1.0);
-        // Stepped first the tick after it started.
-        let stepped = tick.saturating_sub(self.started_at + 1) as f32;
-        let along = |stepped: f32| 1.0 - (1.0 - (stepped / ticks).min(1.0)).powi(2);
-        let step = (self.length * (along(stepped + 1.0) - along(stepped))).min(self.left);
+        // The share of its time gone by, from the share of its way still to go: the way gone is
+        // `1 - (1 - time)²` of its length.
+        let gone = 1.0 - (self.left / self.length).clamp(0.0, 1.0).sqrt();
+        let next = (gone + 1.0 / ticks).min(1.0);
+        let step = (self.left - self.length * (1.0 - next).powi(2)).clamp(0.0, self.left);
         self.left -= step;
         let dashed = pos + self.dir * step;
-        let carried = dashed + self.carry * TICK_DT;
-        if map.line_walkable_at(pos, carried, feet) {
-            return carried;
+        // Whatever part of the carry a wall blocks stops, as a walk's does.
+        for carry in [self.carry, self.carry.with_y(0.0), self.carry.with_x(0.0)] {
+            let carried = dashed + carry * TICK_DT;
+            if map.line_walkable_at(pos, carried, feet) {
+                self.carry = carry;
+                return carried;
+            }
         }
         self.carry = Vec2::ZERO;
         if map.line_walkable_at(pos, dashed, feet) { dashed } else { pos }

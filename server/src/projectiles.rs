@@ -80,7 +80,6 @@ pub(super) fn resolve_projectile_hits(
     timeline: Res<LocalTimeline>,
     mut projectiles: Query<(Entity, &Pos, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Spares>, (Option<&Bounces>, Option<&mut Pierced>))>,
     mut targets: Targets,
-    motions: Query<&arena_shared::protocol::Motion>,
     lobby: Res<Lobby>,
     mut log: ResMut<HitLog>,
 ) {
@@ -93,7 +92,7 @@ pub(super) fn resolve_projectile_hits(
     for (projectile_entity, projectile_pos, projectile, room, team, might, spares, (bounces, mut pierced)) in &mut projectiles {
         let pierces = projectile.ability.is_none() && projectile.class.def().attack.pierces;
         let mut through: Vec<PeerId> = pierced.as_ref().map_or_else(Vec::new, |p| p.0.clone());
-        for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent, _, (sheltered, decoy, _)) in &mut targets {
+        for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent, _, (sheltered, decoy, motion)) in &mut targets {
             if target_id.0 == projectile.owner
                 || sheltered
                 || owns(projectile.owner, decoy)
@@ -101,7 +100,7 @@ pub(super) fn resolve_projectile_hits(
                 || through.contains(&target_id.0)
                 || health.0 == 0
                 || !foes((*room, *team), (*target_room, *target_team))
-                || !sim::projectile_hits(projectile_pos.0, projectile, now.0, target_pos.0, feet_of(&motions, target, lobby.map(room).height_at(target_pos.0))) {
+                || !sim::projectile_hits(projectile_pos.0, projectile, now.0, target_pos.0, motion.height) {
                 continue;
             }
             let goes_on = pierces && target_team.0 == arena_shared::rooms::ZOMBIES;
@@ -128,8 +127,7 @@ pub(super) fn resolve_projectile_hits(
             damage(&mut commands, &mut log, now.0, at, hit, blow, (projectile.owner, projectile.class, with), ((*room, *team), source, Some(shot)));
             if let Some(burst) = def.attack.burst.filter(|_| source == Source::Attack) {
                 // On the one struck: where its feet are.
-                let feet = feet_of(&motions, target, lobby.map(room).height_at(target_pos.0));
-                let end = ShotEnd { at: target_pos.0, height: lobby.map(room).surface_under(target_pos.0, feet + 1e-3), wall: None };
+                let end = ShotEnd { at: target_pos.0, height: lobby.map(room).surface_under(target_pos.0, motion.height + 1e-3), wall: None };
                 bursts.push((burst, end, target_id.0, *projectile, mighty(amount, burst.share), (*room, *team)));
             }
             if let Some(chain) = def.attack.chain.filter(|_| source == Source::Attack) {
@@ -175,8 +173,3 @@ pub(super) fn resolve_projectile_hits(
     }
 }
 
-/// How high over the gameplay plane `target`'s feet are: where its motion has it (a jump, a
-/// fall), or on the `ground` for one that has no motion of its own.
-fn feet_of(motions: &Query<&arena_shared::protocol::Motion>, target: Entity, ground: f32) -> f32 {
-    motions.get(target).map_or(ground, |motion| motion.height)
-}

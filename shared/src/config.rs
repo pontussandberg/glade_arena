@@ -37,6 +37,9 @@ pub const SHOT_HEIGHT: f32 = 1.0;
 /// crosshair's) always passes through it; and how near that point comes to a wall beside them
 /// (`sim::shoulder_room`).
 pub const ACTION_SHOULDER: f32 = 0.6;
+/// The steepest a shot is aimed up or down (rise per meter ahead, `PlayerInput::climb`): as
+/// steep as the camera ever looks, through the fighter's own eyes.
+pub const MOST_CLIMB: f32 = 3.6;
 pub const ACTION_LOOK_HEIGHT: f32 = 2.0;
 pub const SHOULDER_WALL_MARGIN: f32 = 0.45;
 /// In action mode a thrower's raised hand lets go of the spear this far to their right and this

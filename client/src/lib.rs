@@ -327,6 +327,7 @@ fn send_commands(
         sent_walks.0.clear();
         sent_draws.0.clear();
         sent_attacks.0.clear();
+        sent_jumps.0.clear();
         // Nothing carries over to our next fighter: not a destination, not a click.
         desired.0 = PlayerInput { aim: desired.0.aim, ..default() };
         stop.0 = false;

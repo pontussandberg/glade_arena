@@ -92,6 +92,9 @@ pub(crate) struct Volley {
     shot: Projectile,
     side: Side,
     might: f32,
+    /// Where the thrower was and how high its feet were as the first went: each after it is
+    /// thrown as that one was, moved with them.
+    from: (Vec2, f32),
 }
 
 /// Server-only: barrages' javelins still to be thrown.
@@ -181,13 +184,13 @@ fn blast_as(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut T
 /// The foe of `side` nearest `at` within `reach`, alive, other than those `skip` says: who and
 /// where. Callers skip whoever's looking too: with no team (practice, a free-for-all), everyone
 /// is everyone's foe, themselves included.
-fn nearest_foe(targets: &Targets, (by, side): (PeerId, Side), at: Vec2, reach: f32, skip: impl Fn(PeerId) -> bool) -> Option<(PeerId, Vec2)> {
+fn nearest_foe(targets: &Targets, (by, side): (PeerId, Side), at: Vec2, reach: f32, skip: impl Fn(PeerId) -> bool) -> Option<(PeerId, Vec2, f32)> {
     targets
         .iter()
         .filter(|(_, id, (room, team), pos, health, .., (sheltered, decoy, _))| {
             health.0 > 0 && !sheltered && id.0 != by && !owns(by, *decoy) && !skip(id.0) && foes(side, (**room, **team)) && pos.0.distance(at) <= reach
         })
-        .map(|(_, id, _, pos, ..)| (id.0, pos.0))
+        .map(|(_, id, _, pos, .., (_, _, motion))| (id.0, pos.0, motion.height))
         .min_by(|a, b| a.1.distance_squared(at).total_cmp(&b.1.distance_squared(at)))
 }
 
@@ -210,7 +213,7 @@ pub(super) fn tick_items(
     mut pending: ResMut<Pending>,
     mut zones: ResMut<Zones>,
     mut barrages: ResMut<Barrages>,
-    mut holders: Query<(&PlayerId, &ClassId, &Pos, (&InRoom, &Team), &Satchel, &mut ItemState), InPlay>,
+    mut holders: Query<(&PlayerId, &ClassId, &Pos, (&InRoom, &Team), &Satchel, &mut ItemState, &Motion), InPlay>,
     thrown: Query<(&Projectile, &InRoom, &Team, Option<&Might>), Added<Projectile>>,
     mut targets: Targets,
     decoys: Query<(Entity, &Decoy, &ClassId, &Pos, (&InRoom, &Team), Has<Dead>)>,
@@ -228,25 +231,35 @@ pub(super) fn tick_items(
         if shot.ability.is_some() || shot.extra {
             continue;
         }
-        let Some(level) = holders.iter().find(|(id, ..)| id.0 == shot.owner).map(|(.., satchel, _)| satchel.level(Item::HydraSpear)).filter(|&l| l > 0) else { continue };
+        let Some((level, from)) = holders
+            .iter()
+            .find(|(id, ..)| id.0 == shot.owner)
+            .map(|(_, _, pos, _, satchel, _, motion)| (satchel.level(Item::HydraSpear), (pos.0, motion.height)))
+            .filter(|&(l, _)| l > 0)
+        else {
+            continue;
+        };
         let (count, keeps, apart) = items::hydra_spear(level);
         for n in 1..count {
-            let volley = Volley { at: now + apart * n, shot: *shot, side: (*room, *team), might: might_of(might) * keeps };
+            let volley = Volley { at: now + apart * n, shot: *shot, side: (*room, *team), might: might_of(might) * keeps, from };
             barrages.0.push(volley);
         }
     }
     let due: Vec<Volley> = barrages.0.iter().filter(|v| v.at <= now).copied().collect();
     barrages.0.retain(|v| v.at > now);
     for volley in due {
-        // From where the thrower is now, if they're still in the fight, all but straight after
-        // the first: just enough scatter that they don't fly as one.
-        let Some((_, _, pos, ..)) = holders.iter().find(|(id, ..)| id.0 == volley.shot.owner) else { continue };
+        // As the first was thrown (from the hand, onto the crosshair's line, in action mode),
+        // moved with the thrower to where they are now, if they're still in the fight; all but
+        // straight after the first: just enough scatter that they don't fly as one.
+        let Some((_, _, pos, .., motion)) = holders.iter().find(|(id, ..)| id.0 == volley.shot.owner) else { continue };
         let dir = Vec2::from_angle((fastrand::f32() - 0.5) * 0.02).rotate(volley.shot.dir);
-        let radius = volley.shot.class.def().shot(None).map_or(0.0, |s| s.radius);
-        let shot = Projectile { origin: pos.0 + dir * (PLAYER_RADIUS + radius), dir, spawn_tick: now, crit: false, extra: true, ..volley.shot };
+        let (was, feet) = volley.from;
+        let origin = volley.shot.origin + pos.0 - was;
+        let lift = volley.shot.lift + motion.height - feet;
+        let shot = Projectile { origin, dir, spawn_tick: now, crit: false, extra: true, lift, ..volley.shot };
         spawn_projectile(&mut commands, shot, volley.side, volley.might);
     }
-    for (id, class, pos, side, satchel, mut state) in &mut holders {
+    for (id, class, pos, side, satchel, mut state, _) in &mut holders {
         let side = (*side.0, *side.1);
         let by = |item| By { id: id.0, class: *class, side, source: Source::Item(item) };
         state.wisp_hits.retain(|&(_, _, until)| now < until);
@@ -270,7 +283,7 @@ pub(super) fn tick_items(
                 }
                 Item::PowderKeg if now >= state.keg_at => {
                     let (every, damage, radius, fuse, reach) = items::powder_keg(level);
-                    let Some((_, at)) = nearest_foe(&targets, (id.0, side), pos.0, reach, |_| false) else { continue };
+                    let Some((_, at, _)) = nearest_foe(&targets, (id.0, side), pos.0, reach, |_| false) else { continue };
                     state.keg_at = now + every;
                     spawn_fx(&mut commands, side.0, Fx::between(FxKind::Lob(FxColor::Fire), pos.0, at, radius, now, fuse));
                     pending.0.push(Delayed { by: by(item), at, radius, damage, chill: Chill::default(), fire_at: now + fuse, look: FxKind::Blast(FxColor::Fire) });
@@ -580,9 +593,13 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                 if left == 0 {
                     continue;
                 }
-                let Some((_, at)) = nearest_foe(&r.targets, (hit.attacker, hit.side), hit.at, reach, |p| p == hit.victim_id) else { continue };
+                let Some((_, at, feet)) = nearest_foe(&r.targets, (hit.attacker, hit.side), hit.at, reach, |p| p == hit.victim_id) else { continue };
                 let Some(dir) = (at - hit.at).try_normalize() else { continue };
-                let projectile = Projectile { origin: hit.at, dir, spawn_tick: now, crit: false, extra: true, ..shot.projectile };
+                // On from as high as it struck, straight at the next one's middle: not on up or
+                // down as the first was aimed.
+                let from = arena_shared::sim::projectile_height(&shot.projectile, now as f32);
+                let climb = (feet + SHOT_HEIGHT - from) / at.distance(hit.at);
+                let projectile = Projectile { origin: hit.at, dir, spawn_tick: now, crit: false, extra: true, lift: from - SHOT_HEIGHT, climb, ..shot.projectile };
                 let spawned = spawn_projectile(&mut r.commands, projectile, hit.side, shot.might * keeps);
                 r.commands.entity(spawned).insert((Bounces(left - 1), Spares(hit.victim_id)));
             }
@@ -592,7 +609,7 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                 let mut struck = vec![hit.victim_id];
                 let mut from = hit.at;
                 for _ in 0..jumps {
-                    let Some((next, at)) = nearest_foe(&r.targets, (hit.attacker, hit.side), from, reach, |p| struck.contains(&p)) else { break };
+                    let Some((next, at, _)) = nearest_foe(&r.targets, (hit.attacker, hit.side), from, reach, |p| struck.contains(&p)) else { break };
                     spawn_fx(&mut r.commands, hit.side.0, Fx::between(FxKind::Arc, from, at, 0.0, now, 8));
                     strike(&mut r.commands, &mut r.log, now, &mut r.targets, by(item), Blow::ability(damage, Chill::default()), |p, _| p == next);
                     struck.push(next);
