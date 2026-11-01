@@ -88,9 +88,14 @@ pub fn move_player_boosted(
     let held = chilled.rooted_at(tick) || chilled.lifted_at(tick);
     // Its feet, and what it stands on there (the ground, a roof, crates), by which it walks.
     let feet = motion.height;
-    let grounded = feet <= map.floor_at(pos, feet) + 1e-3;
+    // Still going up, it's in the air, whatever it brushed the top of on the way.
+    let grounded = feet <= map.floor_at(pos, feet) + 1e-3 && motion.rise <= 0.0;
     // Leaving the ground this tick, it isn't slowed by it: it takes off as fast as it went.
     let jumps = input.jumping() && grounded && !held && dashing.0.is_none();
+    // How high its feet are for what's in its way this tick: going up, as high as they get by
+    // its end (taking off, as high as the jump lifts them), so it's already up off what it's
+    // rising past, and a leap from a chasm's very lip goes out over it.
+    let clear = feet + if jumps { jump_speed() } else { motion.rise.max(0.0) } * TICK_DT;
     let mut next = pos;
     if held {
         motion.along = Vec2::ZERO;
@@ -110,7 +115,7 @@ pub fn move_player_boosted(
             let walk_speed = class.def().move_speed * speed;
             dash.carry += wish * (walk_speed - dash.carry.dot(wish)).clamp(0.0, GROUND_ACCEL * walk_speed * TICK_DT);
         }
-        next = dash.step(map, pos, pace * speed, feet);
+        next = dash.step(map, pos, pace * speed, clear);
         motion.along = (next - pos) / TICK_DT;
     } else if attack.winding_up().is_some() {
         motion.along = Vec2::ZERO;
@@ -138,12 +143,12 @@ pub fn move_player_boosted(
         }
         // The step, or each axis of it that's open; a blocked axis stops that part of the motion.
         let step = v * TICK_DT;
-        if map.line_walkable_at(pos, pos + step, feet) {
+        if map.line_walkable_at(pos, pos + step, clear) {
             next = pos + step;
-        } else if map.line_walkable_at(pos, pos + step.with_y(0.0), feet) {
+        } else if map.line_walkable_at(pos, pos + step.with_y(0.0), clear) {
             next = pos + step.with_y(0.0);
             v.y = 0.0;
-        } else if map.line_walkable_at(pos, pos + step.with_x(0.0), feet) {
+        } else if map.line_walkable_at(pos, pos + step.with_x(0.0), clear) {
             next = pos + step.with_x(0.0);
             v.x = 0.0;
         } else {
@@ -173,9 +178,11 @@ pub fn move_player_boosted(
             motion.height = ceiling.max(under);
             motion.rise = motion.rise.min(0.0);
         }
+        // Down onto what's under it; going up past the top of something low it's stepping over
+        // (a chasm's lip, a crate's edge), up onto it and on up.
         if motion.height <= under {
             motion.height = under;
-            motion.rise = 0.0;
+            motion.rise = motion.rise.max(0.0);
         }
     }
     next

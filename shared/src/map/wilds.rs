@@ -292,6 +292,7 @@ fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> f32 {
 
 pub(super) fn build() -> Map {
     let mut map = Map::blank(MapId::Wilds, SIZE, edge, beyond);
+    map.shallow();
     map.paint(|c, tile| {
         let island = c.distance(ISLAND.0) < ISLAND.1;
         let lake = in_lake(c) && !island;

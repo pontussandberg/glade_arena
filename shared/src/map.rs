@@ -2,12 +2,11 @@
 //! (`MapId`), picked by its leader:
 //!
 //! - `crossing`: a forest clearing split by a river, crossed by a stone bridge and two fords.
-//! - `keep`: a ruined keep on an island in its moat, marshes around it that slow whoever wades in.
-//! - `gorge`: highlands split by a chasm that shots fly over but no one walks, crossed by a stone
+//! - `gorge`: highlands split by a chasm that shots fly over and the bold leap, crossed by a stone
 //!   arch and two rope bridges, and by waygates that jump a fighter to the far side.
 //! - `wilds`: the waves mode's map, far bigger: a camp in the middle and places to explore all
 //!   round it, monsters coming out of lairs out there.
-//! - `hold`: the waves mode's third map: a village by a river under a fortress on its crag,
+//! - `hold`: the waves mode's second map, fought on too: a village by a river under a fortress on its crag,
 //!   walls and towers to climb, bridges to cross and gaps to leap.
 //! - `yard`: practice's: a flat field with two target dummies standing on it from the start.
 //!
@@ -34,12 +33,10 @@ use crate::protocol::PickupKind;
 
 pub use colliders::{COUNTER_TOP, Collider, ROCK_LIFT, ROCK_RADIUS, Roof, Ruin, STALL_BACK, STALL_EAVES, STALL_ROOF, ShotEnd, Stall, TREAD, WELL_HEIGHT, WELL_RING, WELL_ROOF, boulder, ruin};
 
-mod bastion;
 mod colliders;
 mod crossing;
 mod gorge;
 mod hold;
-mod keep;
 mod wilds;
 mod yard;
 
@@ -116,125 +113,63 @@ impl Tile {
 /// Which map a room plays on.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum MapId {
-    Crossing,
     /// Where every game starts, and the map rooms play on unless their leader picks another.
     #[default]
-    Keep,
+    Crossing,
     Gorge,
     /// The waves mode's.
     Wilds,
-    /// The waves mode's second map: a drowned fortress whose courts unlock as the run deepens.
-    /// The staged variants are the same bastion with more of it open (`at_stage`); only the base
-    /// is ever picked, the server advances the stage between waves.
-    Bastion,
-    Bastion2,
-    Bastion3,
-    Bastion4,
-    /// The waves mode's third: a fortress on its crag over a village, built in levels.
+    /// The waves mode's second: a fortress on its crag over a village, built in levels.
     Hold,
     /// Practice's own: open ground with target dummies on it from the start.
     Yard,
 }
 
 impl MapId {
-    /// Every pickable map (the bastion's staged variants aren't: they're reached through
-    /// `at_stage` alone).
-    pub const ALL: [MapId; 7] = [MapId::Crossing, MapId::Keep, MapId::Gorge, MapId::Wilds, MapId::Bastion, MapId::Hold, MapId::Yard];
+    /// Every pickable map.
+    pub const ALL: [MapId; 5] = [MapId::Crossing, MapId::Gorge, MapId::Wilds, MapId::Hold, MapId::Yard];
     /// The maps for fighting each other: mirrored, of a size for it.
-    pub const PVP: [MapId; 3] = [MapId::Crossing, MapId::Keep, MapId::Gorge];
+    pub const PVP: [MapId; 2] = [MapId::Crossing, MapId::Gorge];
 
     pub fn map(self) -> &'static Map {
         static CROSSING: LazyLock<Map> = LazyLock::new(|| crossing::build().finished());
-        static KEEP: LazyLock<Map> = LazyLock::new(|| keep::build().finished());
         static GORGE: LazyLock<Map> = LazyLock::new(|| gorge::build().finished());
         static WILDS: LazyLock<Map> = LazyLock::new(|| wilds::build().finished());
-        static BASTION: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion, 0).finished());
-        static BASTION2: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion2, 1).finished());
-        static BASTION3: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion3, 2).finished());
-        static BASTION4: LazyLock<Map> = LazyLock::new(|| bastion::build(MapId::Bastion4, 3).finished());
         static HOLD: LazyLock<Map> = LazyLock::new(|| hold::build().finished());
         static YARD: LazyLock<Map> = LazyLock::new(|| yard::build().finished());
         match self {
             MapId::Crossing => &CROSSING,
-            MapId::Keep => &KEEP,
             MapId::Gorge => &GORGE,
             MapId::Wilds => &WILDS,
-            MapId::Bastion => &BASTION,
-            MapId::Bastion2 => &BASTION2,
-            MapId::Bastion3 => &BASTION3,
-            MapId::Bastion4 => &BASTION4,
             MapId::Hold => &HOLD,
             MapId::Yard => &YARD,
         }
     }
 
-    /// The map without its stage: what pickers offer, and what records are kept under.
-    pub fn base(self) -> MapId {
-        match self {
-            MapId::Bastion2 | MapId::Bastion3 | MapId::Bastion4 => MapId::Bastion,
-            id => id,
-        }
-    }
-
-    /// This map at the stage `wave` has reached: on the bastion, a court unlocks with waves 5, 9
-    /// and 13; every other map is all there from the start. A stage only ever opens ground, so
-    /// advancing never shuts anyone in.
-    pub fn at_stage(self, wave: u32) -> MapId {
-        if self.base() != MapId::Bastion {
-            return self;
-        }
-        match (wave.max(1) - 1) / 4 {
-            0 => MapId::Bastion,
-            1 => MapId::Bastion2,
-            2 => MapId::Bastion3,
-            _ => MapId::Bastion4,
-        }
-    }
-
-    /// The middle of the gate this staged bastion just opened (none for any base map): where
-    /// the opening's thunder lands.
-    pub fn gate_opened(self) -> Option<Vec2> {
-        bastion::gate_opened(self)
-    }
-
-    /// The court this staged bastion opened, said for the banner.
-    pub fn opened_blurb(self) -> Option<&'static str> {
-        match self {
-            MapId::Bastion2 => Some("THE CISTERN LIES OPEN"),
-            MapId::Bastion3 => Some("THE ARMORY LIES OPEN"),
-            MapId::Bastion4 => Some("THE SANCTUM LIES OPEN"),
-            _ => None,
-        }
-    }
-
     /// The one after it in `ALL`, round to the first.
     pub fn next(self) -> MapId {
-        let at = MapId::ALL.iter().position(|m| *m == self.base()).expect("every map is in ALL");
+        let at = MapId::ALL.iter().position(|m| *m == self).expect("every map is in ALL");
         MapId::ALL[(at + 1) % MapId::ALL.len()]
     }
 
     pub fn label(self) -> &'static str {
-        match self.base() {
+        match self {
             MapId::Crossing => "River Crossing",
-            MapId::Keep => "Sunken Keep",
             MapId::Gorge => "Riven Gorge",
             MapId::Wilds => "Hollow Wilds",
             MapId::Hold => "Ravenhold",
             MapId::Yard => "Practice Yard",
-            _ => "Sunken Bastion",
         }
     }
 
     /// One line on what's special about it.
     pub fn blurb(self) -> &'static str {
-        match self.base() {
+        match self {
             MapId::Crossing => "A river, a bridge and two fords",
-            MapId::Keep => "A moated keep; marshes slow you",
-            MapId::Gorge => "A chasm to shoot across; waygates",
+            MapId::Gorge => "A chasm to shoot across, or leap; waygates",
             MapId::Wilds => "A camp in the wilds; monsters all round",
             MapId::Hold => "A fortress over a village; walls to climb, gaps to leap",
             MapId::Yard => "Open ground; target dummies to hit",
-            _ => "A drowned fortress; its courts unlock as you survive",
         }
     }
 }
@@ -288,8 +223,15 @@ pub struct Map {
     pub falls: Option<Falls>,
     /// Its water is shallow: a body walks (or jumps) into it off the bank and wades
     /// (`MARSH_SPEED`) wherever it likes in it and out. Its ground dips under the water (the
-    /// map's relief), so a body in it stands in it.
+    /// map's relief, or its `riverbeds`), so a body in it stands in it.
     pub wades: bool,
+    /// The ground under its water dips from its banks (`WADE_DEPTH` down, over `WADE_SHELF`),
+    /// from its tiles: for a map whose relief lays no bed of its own (`shallow`). Its fords stay
+    /// up at the banks' height, their stepping stones walked across dry.
+    pub riverbeds: bool,
+    /// Its chasms are deep (`CHASM_DEPTH`): no one walks off into one, but a body in the air goes
+    /// out over it, and one that comes down in it falls in (`Map::fell_in`).
+    pub deep_chasms: bool,
     /// Everything that stands in the way, as boxes (`colliders`, worked out in `finished`), the
     /// ones near each tile (by tile index), and where on each tile a body stands, if anywhere
     /// (`stand`).
@@ -474,6 +416,18 @@ pub const STEP_UP: f32 = 0.45;
 /// off but not up (`Map::line_walkable`, `Map::steps`).
 pub const CLIMB: f32 = 1.0;
 
+/// How deep a waded river's bed lies under its banks (`Map::riverbeds`): a body's feet on the
+/// bed, the water about its shins; and how far in from the bank it slopes down to that.
+pub const WADE_DEPTH: f32 = 0.6;
+pub const WADE_SHELF: f32 = 1.0;
+
+/// How deep a deep chasm goes (`Map::deep_chasms`) under the ground it splits, sheer.
+pub const CHASM_DEPTH: f32 = 6.0;
+
+/// How far over a deep chasm's lip a body's feet must be to go out over it: off the ground, so
+/// no one walks off into it.
+const CHASM_LIP: f32 = 0.05;
+
 /// A rounded square's "radius" through `p`: the same along its sides, smaller across its corners.
 fn squircle(p: Vec2) -> f32 {
     let (x2, y2) = (p.x * p.x, p.y * p.y);
@@ -518,6 +472,8 @@ impl Map {
             falls: None,
             crates: Vec::new(),
             wades: false,
+            riverbeds: false,
+            deep_chasms: false,
             colliders: Vec::new(),
             near: Vec::new(),
             stands: Vec::new(),
@@ -743,9 +699,45 @@ impl Map {
         (self.edge)(p)
     }
 
-    /// How high the ground is at `p` (meters): where whatever stands there stands.
+    /// How high the ground is at `p` (meters): where whatever stands there stands. The map's
+    /// relief, down under its water (`riverbeds`) and down its chasms (`deep_chasms`).
     pub fn height_at(&self, p: Vec2) -> f32 {
-        (self.relief)(p)
+        (self.relief)(p) + self.dip(p)
+    }
+
+    /// How far the ground at `p` dips under the map's relief: a riverbed sloping down from the
+    /// nearest bank, a deep chasm's floor.
+    fn dip(&self, p: Vec2) -> f32 {
+        if !(self.riverbeds || self.deep_chasms) {
+            return 0.0;
+        }
+        let t = Map::tile_of(p);
+        match self.get(t) {
+            Tile::Chasm if self.deep_chasms => -CHASM_DEPTH,
+            Tile::Water if self.riverbeds => {
+                // The nearest bank (or ford) is on a tile round this one (the shelf is no wider
+                // than one).
+                let bank = (-1..=1)
+                    .flat_map(|dy| (-1..=1).map(move |dx| t + IVec2::new(dx, dy)))
+                    .filter(|&n| self.get(n) != Tile::Water)
+                    .map(|n| ((p - Map::center(n)).abs() - Vec2::splat(0.5)).max(Vec2::ZERO).length())
+                    .fold(WADE_SHELF, f32::min);
+                -WADE_DEPTH * bank / WADE_SHELF
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// Whether a body at `p` with its feet `feet` high has fallen into a deep chasm
+    /// (`deep_chasms`): down it, more than a body's height under its lip, past climbing out.
+    pub fn fell_in(&self, p: Vec2, feet: f32) -> bool {
+        self.deep_chasms && self.get(Map::tile_of(p)) == Tile::Chasm && feet < (self.relief)(p) - crate::config::BODY_HEIGHT
+    }
+
+    /// Its water waded (`wades`), its bed sloping down under it from the banks (`riverbeds`).
+    pub(super) fn shallow(&mut self) {
+        self.wades = true;
+        self.riverbeds = true;
     }
 
     /// The lie of the land itself (`height_at`), for the scene to stand its props on.
@@ -774,8 +766,9 @@ impl Map {
     }
 
     /// `line_walkable` for a body with its feet `feet` high, on the ground or up in the air:
-    /// water (unless the map's is waded, `wades`), chasms, trees and the forest block it at any
-    /// height; anything else is a collider,
+    /// water (unless the map's is waded, `wades`), chasms (but a deep one only a body on the
+    /// ground, `deep_chasms`), trees and the forest block it at any height; anything else is a
+    /// collider,
     /// in its way only below its top (`colliders_block`), and stood on over it. Where it ends up
     /// may be no higher over its feet than `CLIMB` lets it step, and the edge of its square
     /// comes over no ground rising more steeply than that either: come at a terrace's face
@@ -788,10 +781,12 @@ impl Map {
             if self.wades && tile == Tile::Water {
                 return self.colliders_on(t).any(|collider| collider.blocks(a, b, feet));
             }
-            // What blocks at any height: its tile as a box as tall as there is.
+            // What blocks at any height: its tile as a box as tall as there is. A deep chasm only
+            // a body on the ground: one in the air goes out over it.
             let void = !tile.walkable() && !matches!(tile, Tile::Wall | Tile::Rock) && {
                 let c = Map::center(t);
-                Collider::block(c - Vec2::splat(0.5), c + Vec2::splat(0.5), f32::NEG_INFINITY, f32::INFINITY).blocks(a, b, feet)
+                let top = if self.deep_chasms && tile == Tile::Chasm { (self.relief)(c) + CHASM_LIP + STEP_UP } else { f32::INFINITY };
+                Collider::block(c - Vec2::splat(0.5), c + Vec2::splat(0.5), f32::NEG_INFINITY, top).blocks(a, b, feet)
             };
             void || self.colliders_on(t).any(|collider| collider.blocks(a, b, feet))
         };
@@ -1239,8 +1234,6 @@ mod tests {
     #[test]
     fn each_map_has_its_features() {
         let count = |id: MapId, tile: Tile| id.map().tiles().filter(|(_, t)| *t == tile).count();
-        assert!(count(MapId::Keep, Tile::Marsh) > 60, "the keep has marshes");
-        assert!(count(MapId::Keep, Tile::Water) > 60, "the keep has its moat");
         assert!(count(MapId::Gorge, Tile::Chasm) > 150, "the gorge has its chasm");
         assert!(count(MapId::Gorge, Tile::Planks) > 0, "the gorge has rope bridges");
         assert!(!MapId::Gorge.map().gates.is_empty(), "the gorge has waygates");
@@ -1514,36 +1507,6 @@ mod tests {
     }
 
     #[test]
-    fn the_bastion_opens_court_by_court() {
-        let stages = [MapId::Bastion, MapId::Bastion2, MapId::Bastion3, MapId::Bastion4];
-        // A spot well inside each court, in the order the gates open: east, west, north.
-        let courts = [Vec2::new(26.5, -24.5), Vec2::new(-26.5, 24.5), Vec2::new(9.5, 26.5)];
-        for (stage, id) in stages.into_iter().enumerate() {
-            let m = id.map();
-            let camp = m.spawn_points[0];
-            assert!(m.shop.is_some_and(|shop| m.walkable_at(shop)), "{id:?}");
-            assert!(!m.lairs.is_empty() && !m.chests.is_empty(), "{id:?}");
-            for &p in m.lairs.iter().chain(&m.chests).chain(m.pickups.iter().map(|(p, _)| p)) {
-                assert!(m.walkable_at(p), "{id:?}: {p} isn't on open ground");
-                assert!(m.find_path(Map::tile_of(camp), Map::tile_of(p)).is_some(), "{id:?}: {p} is cut off");
-            }
-            // The sealed courts really are sealed, and every opened one can be walked into.
-            for (k, &court) in courts.iter().enumerate() {
-                let open = k < stage;
-                let path = m.find_path(Map::tile_of(camp), Map::tile_of(court));
-                assert_eq!(path.is_some(), open, "{id:?}: the court at {court}");
-            }
-        }
-        assert_eq!(MapId::Bastion.at_stage(1), MapId::Bastion);
-        assert_eq!(MapId::Bastion.at_stage(4), MapId::Bastion);
-        assert_eq!(MapId::Bastion.at_stage(5), MapId::Bastion2);
-        assert_eq!(MapId::Bastion4.at_stage(2), MapId::Bastion);
-        assert_eq!(MapId::Bastion.at_stage(13), MapId::Bastion4);
-        assert_eq!(MapId::Wilds.at_stage(13), MapId::Wilds);
-        assert_eq!(MapId::Bastion2.gate_opened(), Some(Vec2::new(11.5, -0.5)));
-    }
-
-    #[test]
     fn a_flow_field_leads_downhill_to_its_sources() {
         let m = MapId::Wilds.map();
         let goal = m.spawn_points[0];
@@ -1636,4 +1599,3 @@ mod tests {
         }
     }
 }
-

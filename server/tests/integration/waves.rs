@@ -374,11 +374,11 @@ fn notice(p: &Party) -> Option<String> {
 #[test]
 fn practice_shops_free_and_deadeye_sets_off_ability_items() {
     let mut p = Party::new(5867, "javelinist", false);
-    p.ask(RoomRequest::Practice(MapId::Keep));
+    p.ask(RoomRequest::Practice(MapId::Crossing));
     p.until(Duration::from_secs(10), "practicing", |p| p.room().is_some_and(|r| r.practice) && p.satchel().is_some());
     p.until(Duration::from_secs(5), "the merchant out", |p| merchant_out(&mut p.server));
-    let shop = MapId::Keep.map().shop.expect("the keep has a merchant");
-    let me = open_near(MapId::Keep, shop + Vec2::new(-1.0, 0.0));
+    let shop = MapId::Crossing.map().shop.expect("the crossing has a merchant");
+    let me = open_near(MapId::Crossing, shop + Vec2::new(-1.0, 0.0));
     for _ in 0..5 {
         place(&mut p.server, 1, me);
         p.update();
@@ -388,8 +388,8 @@ fn practice_shops_free_and_deadeye_sets_off_ability_items() {
     assert_eq!(p.satchel().unwrap().gold, 0, "it wasn't free");
 
     // A dummy straight ahead.
-    let target = open_near(MapId::Keep, me + Vec2::new(4.0, 0.0));
-    let keep = MapId::Keep.map();
+    let target = open_near(MapId::Crossing, me + Vec2::new(4.0, 0.0));
+    let keep = MapId::Crossing.map();
     assert!(keep.shot_clear((me, keep.height_at(me)), (target, keep.height_at(target))), "no clear shot at the dummy");
     p.ask(RoomRequest::PlaceDummy { at: target, walks: false });
     let dummy = |p: &mut Party| {
@@ -432,7 +432,7 @@ fn practice_shops_free_and_deadeye_sets_off_ability_items() {
 #[test]
 fn pvp_has_a_merchant_and_kills_pay_their_killer() {
     let mut p = Party::new(5868, "revenant", false);
-    p.ask(RoomRequest::Create { name: "Brawl".into(), mode: Mode::Ffa, map: MapId::Keep, password: None });
+    p.ask(RoomRequest::Create { name: "Brawl".into(), mode: Mode::Ffa, map: MapId::Crossing, password: None });
     p.until(Duration::from_secs(5), "in the room", |p| p.room().is_some());
     p.ask(RoomRequest::Start);
     p.until(Duration::from_secs(10), "fighting", |p| player::<Health>(&mut p.server, 1).is_some() && p.satchel().is_some());
@@ -440,8 +440,8 @@ fn pvp_has_a_merchant_and_kills_pay_their_killer() {
     p.until(Duration::from_secs(5), "the merchant out", |p| merchant_out(&mut p.server));
 
     // The shop's open, but there's nothing to pay with.
-    let shop = MapId::Keep.map().shop.unwrap();
-    let me = open_near(MapId::Keep, shop + Vec2::new(-1.0, 0.0));
+    let shop = MapId::Crossing.map().shop.unwrap();
+    let me = open_near(MapId::Crossing, shop + Vec2::new(-1.0, 0.0));
     for _ in 0..5 {
         place(&mut p.server, 1, me);
         p.update();
@@ -457,7 +457,7 @@ fn pvp_has_a_merchant_and_kills_pay_their_killer() {
     let world = p.server.world_mut();
     let zombie = world.query::<(Entity, &Team, &Health)>().iter(world).find(|(_, t, h)| t.0 == ZOMBIES && h.alive()).map(|(e, ..)| e).unwrap();
     // Out where the glaive's lane comes down (it starts a way ahead of the revenant).
-    let map = MapId::Keep.map();
+    let map = MapId::Crossing.map();
     let spot = [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y]
         .map(|dir| me + dir * 2.4)
         .into_iter()
@@ -489,10 +489,10 @@ fn pvp_has_a_merchant_and_kills_pay_their_killer() {
 #[test]
 fn bounces_dont_set_off_on_hit_items() {
     let mut p = Party::new(5869, "javelinist", false);
-    p.ask(RoomRequest::Practice(MapId::Keep));
+    p.ask(RoomRequest::Practice(MapId::Crossing));
     p.until(Duration::from_secs(10), "practicing", |p| p.room().is_some_and(|r| r.practice) && p.satchel().is_some());
-    let shop = MapId::Keep.map().shop.unwrap();
-    let me = open_near(MapId::Keep, shop + Vec2::new(-1.0, 0.0));
+    let shop = MapId::Crossing.map().shop.unwrap();
+    let me = open_near(MapId::Crossing, shop + Vec2::new(-1.0, 0.0));
     for _ in 0..5 {
         place(&mut p.server, 1, me);
         p.update();
@@ -504,8 +504,8 @@ fn bounces_dont_set_off_on_hit_items() {
     let (every, ..) = arena_shared::items::thunder_crown(1);
 
     // A dummy straight ahead, and another off to its side for the javelin to bounce on to.
-    let map = MapId::Keep.map();
-    let first = open_near(MapId::Keep, me + Vec2::new(4.0, 0.0));
+    let map = MapId::Crossing.map();
+    let first = open_near(MapId::Crossing, me + Vec2::new(4.0, 0.0));
     let second = [Vec2::Y, Vec2::NEG_Y].map(|side| first + side * 2.5).into_iter().find(|&at| map.walkable_at(at)).expect("room for a second dummy");
     for at in [first, second] {
         p.ask(RoomRequest::PlaceDummy { at, walks: false });
@@ -546,12 +546,12 @@ fn bounces_dont_set_off_on_hit_items() {
 #[test]
 fn practice_places_three_slow_zombies() {
     let mut p = Party::new(5877, "revenant", false);
-    p.ask(RoomRequest::Practice(MapId::Keep));
+    p.ask(RoomRequest::Practice(MapId::Crossing));
     p.until(Duration::from_secs(10), "practicing", |p| p.room().is_some_and(|r| r.practice) && player::<Health>(&mut p.server, 1).is_some());
-    let shop = MapId::Keep.map().shop.unwrap();
-    let me = open_near(MapId::Keep, shop + Vec2::new(-1.0, 0.0));
-    let at = open_near(MapId::Keep, me + Vec2::new(0.0, -6.0));
-    let dummy = open_near(MapId::Keep, at + Vec2::new(0.0, -2.0));
+    let shop = MapId::Crossing.map().shop.unwrap();
+    let me = open_near(MapId::Crossing, shop + Vec2::new(-1.0, 0.0));
+    let at = open_near(MapId::Crossing, me + Vec2::new(0.0, -6.0));
+    let dummy = open_near(MapId::Crossing, at + Vec2::new(0.0, -2.0));
     for _ in 0..5 {
         place(&mut p.server, 1, me);
         p.update();
@@ -637,14 +637,14 @@ fn leaving_practice_leaves_nothing_behind() {
         world.query::<(Entity, &arena_server::rooms::InRoom, Option<&Name>)>().iter(world).filter(|(_, r, _)| r.key == key).map(|(e, _, n)| format!("{e} {n:?}")).collect::<Vec<_>>()
     };
     for round in 0..2 {
-        p.ask(RoomRequest::Practice(MapId::Keep));
+        p.ask(RoomRequest::Practice(MapId::Crossing));
         p.until(Duration::from_secs(10), "practicing", |p| p.room().is_some_and(|r| r.practice) && player::<Health>(&mut p.server, 1).is_some());
         let key = p.room().unwrap().key;
-        let shop = MapId::Keep.map().shop.unwrap();
-        let me = open_near(MapId::Keep, shop + Vec2::new(-1.0, 0.0));
-        let near = open_near(MapId::Keep, me + Vec2::new(0.0, -5.0));
+        let shop = MapId::Crossing.map().shop.unwrap();
+        let me = open_near(MapId::Crossing, shop + Vec2::new(-1.0, 0.0));
+        let near = open_near(MapId::Crossing, me + Vec2::new(0.0, -5.0));
         place(&mut p.server, 1, me);
-        p.ask(RoomRequest::PlaceDummy { at: open_near(MapId::Keep, me + Vec2::new(4.0, 0.0)), walks: true });
+        p.ask(RoomRequest::PlaceDummy { at: open_near(MapId::Crossing, me + Vec2::new(4.0, 0.0)), walks: true });
         p.ask(RoomRequest::PlaceZombies { at: near });
         p.until(Duration::from_secs(3), "zombies out", |p| {
             let world = p.server.world_mut();
@@ -727,10 +727,10 @@ fn unreadying_gives_the_shop_its_time_back() {
 #[test]
 fn your_decoy_is_never_your_foe() {
     let mut p = Party::new(5863, "frost_mage", false);
-    p.ask(RoomRequest::Practice(MapId::Keep));
+    p.ask(RoomRequest::Practice(MapId::Crossing));
     p.until(Duration::from_secs(10), "practicing", |p| p.room().is_some_and(|r| r.practice) && p.satchel().is_some());
-    let shop = MapId::Keep.map().shop.unwrap();
-    let me = open_near(MapId::Keep, shop + Vec2::new(-1.0, 0.0));
+    let shop = MapId::Crossing.map().shop.unwrap();
+    let me = open_near(MapId::Crossing, shop + Vec2::new(-1.0, 0.0));
     for _ in 0..5 {
         place(&mut p.server, 1, me);
         p.update();
@@ -740,7 +740,7 @@ fn your_decoy_is_never_your_foe() {
         p.until(Duration::from_secs(3), "given it", |p| p.satchel().is_some_and(|s| s.level(item) == 1));
     }
     // A dummy beside us, for Frost Nova to hit (its damage leaves the decoy) and the kegs to go for.
-    let map = MapId::Keep.map();
+    let map = MapId::Crossing.map();
     let target = [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y].map(|d| me + d * 2.0).into_iter().find(|s| map.walkable_at(*s)).unwrap();
     p.ask(RoomRequest::PlaceDummy { at: target, walks: false });
     p.until(Duration::from_secs(3), "the dummy", |p| {
@@ -801,14 +801,4 @@ fn a_run_left_under_way_makes_the_leaderboards() {
         p.update();
     }
     assert_eq!(boards(&p)[0].party[0].0, "Tester");
-}
-
-/// Quick-joining "Bastion 5" opens a run on the bastion already at its second stage: the east
-/// gate torn open, the room's map (and so every guest's) the staged variant — and a new class
-/// (the warden) spawns into it like any other.
-#[test]
-fn the_bastion_stages_with_the_run() {
-    let mut p = Party::new(5905, "warden", false);
-    p.ask(RoomRequest::QuickJoin("Bastion 5".into()));
-    p.until(Duration::from_secs(15), "on the staged bastion", |p| p.room().is_some_and(|r| r.map == MapId::Bastion2));
 }

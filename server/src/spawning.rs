@@ -35,6 +35,11 @@ pub(crate) struct Dead {
     pub(crate) killer: PeerId,
 }
 
+/// Server-only: asked to be back on its feet at once (`RoomRequest::RespawnNow`), taken up by
+/// `count_down_respawns`.
+#[derive(Component)]
+pub(crate) struct RespawnNow;
+
 /// A respawning player is moved to its spawn point this long before it comes back to life:
 /// longer than other clients' interpolation delay, so they never see it slide from where it
 /// died to where it respawns (it's still hidden while that happens).
@@ -150,6 +155,40 @@ pub(super) fn respawn(
             *dashing = Dashing::default();
             commands.entity(player).remove::<Dead>();
             debug!(target: "arena_server", ?player, "respawned");
+        }
+    }
+}
+
+/// How long until each dead player is back, for them to see (`Respawning`): none on one down
+/// until the wave's end or an ally's rescue, and gone once it's back, however it came back. One
+/// that asked to be back at once (`RespawnNow`) is, as soon as it's moved to its spawn point.
+pub(super) fn count_down_respawns(
+    mut commands: Commands,
+    timeline: Res<LocalTimeline>,
+    mut players: Query<(Entity, Option<&mut Dead>, Option<&mut Respawning>, Has<RespawnNow>), (Or<(With<Dead>, With<Respawning>, With<RespawnNow>)>, Without<Dummy>, Without<Zombie>, Without<Decoy>)>,
+) {
+    let now = timeline.tick().0;
+    for (player, dead, respawning, hurry) in &mut players {
+        if hurry {
+            commands.entity(player).remove::<RespawnNow>();
+        }
+        let Some(mut dead) = dead.filter(|dead| dead.respawn_at < crate::waves::UNTIL_CLEARED) else {
+            if respawning.is_some() {
+                commands.entity(player).remove::<Respawning>();
+            }
+            continue;
+        };
+        if hurry {
+            dead.respawn_at = dead.respawn_at.min(now + PLACE_BEFORE_RESPAWN_TICKS + 1);
+        }
+        let secs = Respawning { secs: dead.respawn_at.saturating_sub(now).div_ceil(TICK_HZ as u32) };
+        match respawning {
+            Some(mut respawning) => {
+                respawning.set_if_neq(secs);
+            }
+            None => {
+                commands.entity(player).insert(secs);
+            }
         }
     }
 }

@@ -92,6 +92,24 @@ pub(super) fn use_up_clicks(mut players: Query<&mut PlayerInput>) {
     }
 }
 
+/// A fighter that came down in a deep chasm (`Map::fell_in`) falls to its death, its own: no
+/// one's kill.
+pub(super) fn fall_into_chasms(
+    mut commands: Commands,
+    timeline: Res<LocalTimeline>,
+    lobby: Res<Lobby>,
+    mut fighters: Query<(Entity, &PlayerId, &Pos, &InRoom, &arena_shared::protocol::Motion, &mut Health), InPlay>,
+) {
+    let now = timeline.tick().0;
+    for (entity, id, pos, room, motion, mut health) in &mut fighters {
+        if health.0 > 0 && lobby.map(room).fell_in(pos.0, motion.height) {
+            health.0 = 0;
+            info!(victim = ?id.0, "fell into a chasm");
+            commands.entity(entity).insert(Dead { respawn_at: now + RESPAWN_TICKS, placed: false, killer: id.0 });
+        }
+    }
+}
+
 /// Orders whose tick has come (or gone by) take now, in the order they were sent: before the
 /// tick's walking and attacks (`move_players`, `combat::attack`). Every fighter's, in play or
 /// not, so none pile up while it's dead: a click that comes due then is used up with the rest

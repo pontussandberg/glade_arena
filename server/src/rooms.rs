@@ -205,7 +205,7 @@ impl Room {
         let wave = if matches!(run.phase, RunPhase::Shop { .. }) { run.wave - 1 } else { run.wave };
         let party = run.party.iter().map(|(_, name, class)| (name.clone(), *class)).collect();
         // Under the map's base: a run that opened the bastion's courts is still the bastion's.
-        let score = HighScore { wave, map: self.map.base(), party, date: crate::highscores::today(), version: arena_shared::config::GAME_VERSION.to_string() };
+        let score = HighScore { wave, map: self.map, party, date: crate::highscores::today(), version: arena_shared::config::GAME_VERSION.to_string() };
         Some((scores.record(score), run.party.iter().map(|(id, ..)| *id).collect()))
     }
 }
@@ -680,17 +680,13 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                 Some(key) => key,
                 None => {
                     // One called "Waves..." is a run against the waves, on from the off; "Waves 10"
-                    // starts at wave 10 (for trying later waves out). "Bastion..." likewise, on
-                    // the bastion ("Bastion 9" starts at wave 9, its armory already open), and
-                    // "Ravenhold..." on the hold.
-                    let bastion = lower.starts_with("bastion");
+                    // starts at wave 10 (for trying later waves out). "Ravenhold..." likewise, on
+                    // the hold.
                     let hold = lower.starts_with("ravenhold");
-                    let mode = if lower.starts_with("waves") || bastion || hold { Mode::Waves } else { Mode::Ffa };
+                    let mode = if lower.starts_with("waves") || hold { Mode::Waves } else { Mode::Ffa };
                     let from_wave = name.split_whitespace().nth(1).and_then(|n| n.parse::<u32>().ok()).filter(|n| (1..=200).contains(n));
                     // The default map, if it's one of the mode's; else the mode's own (the wilds).
-                    let map = if bastion {
-                        MapId::Bastion
-                    } else if hold {
+                    let map = if hold {
                         MapId::Hold
                     } else {
                         mode.maps().iter().copied().find(|&map| map == MapId::default()).unwrap_or(mode.maps()[0])
@@ -705,10 +701,6 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                     key
                 }
             };
-            // One started mid-list ("Waves 10") begins on that wave's stage of its map.
-            if let Some(wave) = lobby.rooms.get(&key).and_then(|room| room.run.as_ref()).map(|run| run.wave) {
-                stage_map(lobby, &mut ctx.commands, key, wave);
-            }
             lobby.guests.get_mut(&link).expect("a guest").playing = true;
             join(lobby, ctx, link, key)?;
         }
@@ -899,6 +891,14 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             let player = ctx.player_of(link).ok_or("You're not in the arena")?;
             ctx.commands.entity(player).entry::<Cooldowns>().and_modify(move |mut cooldowns| cooldowns.free = on);
         }
+        RoomRequest::RespawnNow => {
+            let key = room_key.ok_or("You're not in a room")?;
+            if !lobby.rooms[&key].practice {
+                return Err("Respawning at once is for practice");
+            }
+            let player = ctx.player_of(link).ok_or("You're not in the arena")?;
+            ctx.commands.entity(player).insert(crate::spawning::RespawnNow);
+        }
         RoomRequest::Buy(item) => {
             let key = room_key.ok_or("You're not in a room")?;
             // For the fighter they are, whatever they've picked to be next.
@@ -964,8 +964,6 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                     guest.satchel = Satchel { gold, ..default() };
                 }
             }
-            // A fresh run starts on the map's base stage (the last run may have opened it up).
-            stage_map(lobby, &mut ctx.commands, key, 1);
             lobby.clear_score(key);
             for member in members {
                 if let Some(guest) = lobby.guests.get_mut(&member) {
@@ -1046,28 +1044,6 @@ fn spawn_room_things(commands: &mut Commands, room: InRoom, map: MapId) -> Vec<E
         things.push(spawn_shopkeeper(commands, room, at));
     }
     things
-}
-
-/// Room `key`'s map onto the stage `wave` has reached (`MapId::at_stage`): on the bastion, a
-/// sealed court's gate opens between waves, and what lies in it (pickups, the court's lairs and
-/// chest spots through the map itself) comes with it. Unlike `switch_map`, fighters stay exactly
-/// where they stand: a stage only ever opens ground. Returns the gate just opened (none going
-/// back to the base for a fresh run), for the thunder at it.
-pub(super) fn stage_map(lobby: &mut Lobby, commands: &mut Commands, key: RoomKey, wave: u32) -> Option<Vec2> {
-    let room = lobby.rooms.get_mut(&key)?;
-    let staged = room.map.at_stage(wave);
-    if staged == room.map {
-        return None;
-    }
-    info!(room = key.0, from = ?room.map, to = ?staged, wave, "the bastion's gate opens");
-    room.map = staged;
-    room.changed = true;
-    lobby.list_changed = true;
-    let room = lobby.rooms.get_mut(&key).expect("still here");
-    room.clear_things(commands);
-    let in_room = room.in_room(key);
-    room.things = spawn_room_things(commands, in_room, staged);
-    staged.gate_opened()
 }
 
 /// Room `key` onto `map`: what lay on the old map goes, and the new one's comes. Practice may

@@ -424,15 +424,17 @@ pub enum AttackKind {
         #[serde(default)]
         from: f32,
     },
-    /// Flies straight until it hits someone, a blocking tile, or runs out of range. With
-    /// `far_scale`, damage scales linearly from the attack's `damage` (point blank) to `far_scale`
-    /// times it (after flying the full range, and no more past it). One that `falls` is thrown:
-    /// straight along the line it was aimed along out to its range, then gravity pulls it down,
-    /// ever further below the line, and it isn't spent at its range but ends where it hits
+    /// Flies straight until it hits someone, a blocking tile, or runs out of range: with no range
+    /// given, uncapped, on until it meets something (past every map's edge is forest, which
+    /// stops it). With `far_scale`, damage scales linearly from the attack's `damage` (point
+    /// blank) to `far_scale` times it (after flying the full range, and no more past it). One that
+    /// `falls` is thrown, and uncapped too: straight along the line it was aimed along out to its
+    /// range, then gravity pulls it down, ever further below the line, and it ends where it hits
     /// something or the ground (`sim::projectile_height`).
     Projectile {
         speed: f32,
         radius: f32,
+        #[serde(default = "uncapped")]
         range: f32,
         #[serde(default)]
         far_scale: Option<f32>,
@@ -450,20 +452,23 @@ pub struct PassiveDef {
     pub description: String,
 }
 
+/// A range that's no limit: a shot with it flies on until it meets something.
+fn uncapped() -> f32 {
+    f32::INFINITY
+}
+
 /// How a projectile flies: the auto-attack's or the ability's.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Shot {
     pub speed: f32,
     pub radius: f32,
+    /// How far it flies before it's spent (`uncapped`: never); one that `falls`, before gravity
+    /// takes it.
     pub range: f32,
     /// Thrown: it drops under gravity past its range, and isn't spent there
     /// (`AttackKind::Projectile`).
     pub falls: bool,
 }
-
-/// How many times its range a thrown shot may fly in all before it's given up on: room for one
-/// lobbed as high as the camera aims to come down (the map's edge stops it sooner).
-const FALL_SPAN: f32 = 14.0;
 
 impl Shot {
     /// How far from its shooter's center a target's body can reach and still be hit: its front
@@ -472,11 +477,14 @@ impl Shot {
         PLAYER_RADIUS + 2.0 * self.radius + self.range
     }
 
-    /// How many ticks it flies before it's out of range; a thrown one, before it's given up on
-    /// (it ends on the ground long before).
+    /// How many ticks it flies before it's out of range: as many as there are for an uncapped
+    /// or a thrown one, which ends only where it meets something (the ground, the forest past
+    /// the map's edge).
     pub fn lifetime_ticks(&self) -> u32 {
-        let span = if self.falls { self.range * FALL_SPAN } else { self.range };
-        (span / self.speed * TICK_HZ as f32).ceil() as u32
+        if self.falls || self.range.is_infinite() {
+            return u32::MAX;
+        }
+        (self.range / self.speed * TICK_HZ as f32).ceil() as u32
     }
 }
 
@@ -836,10 +844,10 @@ mod tests {
                     assert!((0.5..=5.0).contains(&range) && (0.05..=3.0).contains(&width), "{}: melee", c.id);
                     assert!((0.0..range).contains(&from), "{}: melee lane starts past its end", c.id);
                 }
-                AttackKind::Projectile { speed, radius, range, far_scale, .. } => {
+                AttackKind::Projectile { speed, radius, range, far_scale, falls } => {
                     assert!(far_scale.is_none_or(|scale| (1.0..=5.0).contains(&scale)), "{}: far_scale", c.id);
                     assert!((2.0..=60.0).contains(&speed) && (0.05..=1.0).contains(&radius), "{}: projectile", c.id);
-                    assert!((1.0..=30.0).contains(&range), "{}: projectile range", c.id);
+                    assert!((1.0..=30.0).contains(&range) || (range.is_infinite() && far_scale.is_none() && !falls), "{}: projectile range", c.id);
                 }
             }
             let fewest = if c.playable { 1 } else { 0 };

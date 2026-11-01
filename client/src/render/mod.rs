@@ -62,6 +62,7 @@ impl Plugin for RenderPlugin {
             crate::waygates::WaygatesPlugin,
             crate::scoreboard::ScoreboardPlugin,
             crate::waves::WavesPlugin,
+            crate::respawn::RespawnPlugin,
             crate::fx::FxPlugin,
             crate::prompt::PromptPlugin,
             crate::audio::AudioPlugin,
@@ -274,7 +275,9 @@ fn setup_scene(
         fighters: ClassId::all().map(|c| (c, meshes.add(arena::fighter_mesh(c.def().figure())))).collect(),
         // Where an auto-attack stops reaching: a fighter whose body reaches over the circle can be
         // hit.
+        // None for an uncapped shot.
         range_circles: ClassId::all()
+            .filter(|c| c.def().attack.edge_reach(false).is_finite())
             .map(|c| {
                 let mut circle = |empowered| {
                     let outer = c.def().attack.edge_reach(empowered);

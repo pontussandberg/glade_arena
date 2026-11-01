@@ -74,8 +74,9 @@ pub const DRAW_SPEED: f32 = 0.5;
 /// How far below a walker's feet the ground may fall away in a tick and still be walked down
 /// (a slope); farther is a ledge, stepped off into the air.
 pub const STEP_DOWN: f32 = 0.4;
-/// How long a killed player is out of the fight before respawning (3 s).
-pub const RESPAWN_TICKS: u32 = 3 * TICK_HZ as u32;
+/// How long a killed player is out of the fight before respawning (in practice, unless they ask
+/// to be back sooner: `RoomRequest::RespawnNow`).
+pub const RESPAWN_TICKS: u32 = 10 * TICK_HZ as u32;
 
 // Pickups lying in the arena (spots in `map.rs`), used up the moment a fighter touches one.
 /// How long a taken pickup is gone before it's back (15 s), a heal longer (20 s).
