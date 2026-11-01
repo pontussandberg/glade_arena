@@ -54,6 +54,7 @@ pub(super) const JAVELINIST: Moves = Moves {
     // Leaning back at full draw (sunk low on bent knees), then pitching forward through the
     // throw and over into the follow-through.
     lean: [0.0, 0.5, -0.8, -0.45],
+    side_lean: [0.0; 4],
     standing_lean: 0.0,
     standing_arm: 0.0,
     rests: false,

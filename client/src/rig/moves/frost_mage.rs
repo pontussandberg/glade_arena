@@ -40,6 +40,7 @@ pub(super) const FROST_MAGE: Moves = Moves {
     lead_leg_turn: [0.0; 4],
     twist: [0.0, -0.4, 0.35, 0.15],
     lean: [0.0, 0.1, -0.25, -0.35],
+    side_lean: [0.0; 4],
     standing_lean: 0.0,
     standing_arm: 0.0,
     rests: false,

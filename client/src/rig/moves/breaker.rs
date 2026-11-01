@@ -53,6 +53,7 @@ pub(super) const BREAKER: Moves = Moves {
     twist: [-0.6, -1.05, 1.1, 0.0],
     // A touch back as it winds up, then leaning into the sweep; crouched into the quake.
     lean: [-0.15, 0.1, -0.35, -0.6],
+    side_lean: [0.0; 4],
     standing_lean: -0.08,
     standing_arm: 0.2,
     rests: false,

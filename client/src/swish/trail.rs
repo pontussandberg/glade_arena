@@ -14,10 +14,10 @@ use crate::render::shown;
 /// How long the trail lingers (seconds), how fast the blade's tip must move for it to show
 /// (m/s: it fades in from the first to the second), and the stretch of the blade it follows
 /// (from its base, through where it's brightest, to its tip, as fractions of its length).
-const TRAIL_LIFE: f32 = 0.16;
-const TRAIL_SPEED: (f32, f32) = (6.0, 13.0);
+pub(crate) const TRAIL_LIFE: f32 = 0.16;
+pub(crate) const TRAIL_SPEED: (f32, f32) = (6.0, 13.0);
 /// How bright the trail is when the blade isn't quickened (`Blade::quickened`; it's 1 when it is).
-const TRAIL_DIM: f32 = 0.5;
+pub(crate) const TRAIL_DIM: f32 = 0.5;
 
 /// A blade's trail: where the blade has lately been (in the world), drawn by `entity` (a mesh in
 /// world space, rebuilt each frame it shows).

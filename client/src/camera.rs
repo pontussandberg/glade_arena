@@ -62,7 +62,7 @@ const DRAG_PX: f32 = 6.0;
 /// The action camera: how far behind it starts when switched on and how far above level; its
 /// field of view (vertical, radians: wider than the MOBA camera's, as a shooter's); and how far
 /// short of a wall it stops when one is in the way.
-const ACTION_DISTANCE: f32 = 4.0;
+const ACTION_DISTANCE: f32 = 4.4;
 const ACTION_PITCH: f32 = 0.1;
 const ACTION_FOV: f32 = 1.05;
 const WALL_MARGIN: f32 = 0.45;

@@ -77,6 +77,9 @@ impl Phase {
 pub(crate) struct Angles {
     pub(crate) twist: f32,
     pub(crate) lean: f32,
+    /// The whole figure leaning over sideways from its feet, about the facing (positive toward
+    /// the weapon side), its arms and what it swings going over with it.
+    pub(crate) side_lean: f32,
     pub(crate) weapon_arm: f32,
     pub(crate) lead_arm: f32,
     pub(crate) back_leg: f32,
@@ -92,9 +95,9 @@ pub(crate) struct Angles {
     pub(crate) elbow_turn: f32,
     /// The weapon arm's swing turned in across the body.
     pub(crate) arm_yaw: f32,
-    /// The weapon arm lifted out to its side before it swings (positive: away from the body),
-    /// the wrist keeping what it holds upright: the whole blow on a line further out than the
-    /// shoulder (`Moves::lands_on_lane`).
+    /// The plane the weapon arm swings in rolled about the level facing through the shoulder
+    /// (positive: its top in over the head, its bottom out to the weapon side): a blow coming over
+    /// diagonally onto a line further out than the shoulder (`Moves::lands_on_lane`).
     pub(crate) arm_tilt: f32,
     /// The lead arm's elbow (how far it bends, and its plane), and its swing turned in across
     /// the body.
@@ -122,6 +125,7 @@ pub(crate) struct Angles {
 pub(crate) const STILL: Angles = Angles {
     twist: 0.0,
     lean: 0.0,
+    side_lean: 0.0,
     weapon_arm: 0.0,
     lead_arm: 0.0,
     back_leg: 0.0,
@@ -149,9 +153,10 @@ pub(crate) const STILL: Angles = Angles {
 impl Angles {
     /// Adds `by` times every angle of `other` to these: layering a fidget or a flinch on a pose.
     pub(crate) fn add(&mut self, other: &Angles, by: f32) {
-        let Angles { twist, lean, weapon_arm, lead_arm, back_leg, lead_leg, back_knee, lead_knee, head_dip, head_turn, elbow, elbow_turn, arm_yaw, arm_tilt, lead_elbow, lead_elbow_turn, lead_yaw, hold, tip, roll, yaw, sway, back_leg_turn, lead_leg_turn } = other;
+        let Angles { twist, lean, side_lean, weapon_arm, lead_arm, back_leg, lead_leg, back_knee, lead_knee, head_dip, head_turn, elbow, elbow_turn, arm_yaw, arm_tilt, lead_elbow, lead_elbow_turn, lead_yaw, hold, tip, roll, yaw, sway, back_leg_turn, lead_leg_turn } = other;
         self.twist += twist * by;
         self.lean += lean * by;
+        self.side_lean += side_lean * by;
         self.weapon_arm += weapon_arm * by;
         self.lead_arm += lead_arm * by;
         self.back_leg += back_leg * by;
@@ -227,7 +232,12 @@ pub(crate) fn targets(moves: &Moves, phase: Phase, step: Vec2, walking: f32) -> 
             let carry = if phase.draw > 0.0 { carry } else { carry + TAU * ((released - carry) / TAU).round() };
             (pose([carry, drawn, released, dash]), 0.0, 0.0)
         }
-        Held::Gripped { wrist, roll } => (pose(wrist), pose(roll), 0.0),
+        // Settling back after a strike, the forearm turns on the way it turned over drawing up
+        // rather than back, so the blade comes back down the other side.
+        Held::Gripped { wrist, roll: [carry, drawn, released, dash] } => {
+            let carry = if phase.draw > 0.0 || carry == drawn { carry } else { carry - TAU.copysign(carry - drawn) };
+            (pose(wrist), pose([carry, drawn, released, dash]), 0.0)
+        }
         // Swept round, it settles back to the carry the nearest way round from where the strike
         // left it, rather than back through the front.
         Held::Swept { yaw: [carry, drawn, released, dash], tilt } => {
@@ -241,6 +251,9 @@ pub(crate) fn targets(moves: &Moves, phase: Phase, step: Vec2, walking: f32) -> 
     Angles {
         twist: body.pose(moves.twist),
         lean: body.pose(moves.lean) + stand,
+        // Leaning with the arm rather than ahead of it: what the arm's roll takes over from it as the
+        // blow comes down (`Angles::arm_tilt`).
+        side_lean: pose(moves.side_lean),
         // A weapon resting on the ground keeps its arm still as it walks: only the bob moves it.
         weapon_arm: pose([carry, drawn, released, dash]) - swing * if moves.rests { 0.0 } else { 0.3 } - stand + moves.standing_arm * still,
         lead_arm: lead.pose(moves.lead_arm) + swing - stand,
@@ -304,37 +317,42 @@ pub(crate) struct Posed {
     pub(crate) held_on_body: Transform,
 }
 
-/// How far a blow onto its lane's middle line (`Moves::lands_on_lane`) has its arm lifted out
-/// from the weapon shoulder (`Angles::arm_tilt`) for that line to run `aside` (meters) to the
-/// right of its striker, drawn `size` big: as far as puts the struck hand on it, the glaive
-/// coming down along it all the way.
-pub(crate) fn lane_tilt(moves: &'static Moves, aside: f32, size: f32) -> f32 {
+/// How far a blow onto its lane's middle line (`Moves::lands_on_lane`) has the plane its weapon
+/// arm swings in rolled (`Angles::arm_tilt`) for that line to run `aside` (meters) to the right of
+/// its striker, drawn `size` big, its blade `blade` times its size as it strikes: as far as puts
+/// the struck blade's point on it. The arm swings in a plane through its own shoulder, so the
+/// blow comes over diagonally, from in over the head down and out onto the line.
+pub(crate) fn lane_tilt(moves: &'static Moves, aside: f32, size: f32, blade: f32) -> f32 {
     if !moves.lands_on_lane {
         return 0.0;
     }
-    // How far across the struck hand lies untilted (meters, at size 1), and how much further
-    // out each radian of tilt puts it (all but even, over the little it's tilted): worked out
-    // once from the struck pose, bowed as deep as it is.
-    static ACROSS: std::sync::Mutex<Vec<(usize, (f32, f32))>> = std::sync::Mutex::new(Vec::new());
-    let key = moves as *const Moves as usize;
+    // How far across the struck blade's point lies (meters, at size 1) rolled each `TILT_STEP`
+    // further, from not at all: worked out once from the struck pose, bowed and leaning as it is.
+    // Not even: the further it's rolled, the less further out each step puts it.
+    const TILT_STEP: f32 = 0.1;
+    const TILT_STEPS: usize = 15;
+    static ACROSS: std::sync::Mutex<Vec<((usize, u32), [f32; TILT_STEPS])>> = std::sync::Mutex::new(Vec::new());
+    let key = (moves as *const Moves as usize, blade.to_bits());
     let mut known = ACROSS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let (untilted, per_radian) = match known.iter().find(|(k, _)| *k == key) {
+    let across = match known.iter().find(|(k, _)| *k == key) {
         Some(&(_, across)) => across,
         None => {
-            const PROBE: f32 = 0.2;
             let struck = Phase { draw: 0.0, throw: 1.0, dashing: 0.0, second: 1.0 };
-            let across = |tilt: f32| {
-                let angles = Angles { arm_tilt: tilt, ..targets(moves, struck, Vec2::ZERO, 0.0) };
-                let posed = assemble(moves, &angles, &angles, Vec2::Y, 0.0, 0.0, moves.stretch, 1.0, 0.0);
-                arena::to_gameplay(posed.held_on_body.translation).x
-            };
-            let across = (across(0.0), (across(PROBE) - across(0.0)) / PROBE);
+            let across: [f32; TILT_STEPS] = std::array::from_fn(|step| {
+                let angles = Angles { arm_tilt: step as f32 * TILT_STEP, ..targets(moves, struck, Vec2::ZERO, 0.0) };
+                let posed = assemble(moves, &angles, &angles, Vec2::Y, 0.0, 0.0, moves.stretch, blade, 0.0);
+                arena::to_gameplay(posed.held_on_body.transform_point(Vec3::Y * arena::BLADE_LENGTH)).x
+            });
             known.push((key, across));
             across
         }
     };
-    // Only ever out: lifted in, the arm would come over across the head.
-    ((aside / size - untilted) / per_radian).max(0.0)
+    // Between the two steps it lies between (on past the last two, beyond them). Only ever out:
+    // rolled the other way, the blow would come up from under the arm.
+    let wanted = aside / size;
+    let step = across.windows(2).position(|pair| wanted < pair[1]).unwrap_or(TILT_STEPS - 2);
+    let (from, to) = (across[step], across[step + 1]);
+    ((step as f32 + (wanted - from) / (to - from)) * TILT_STEP).max(0.0)
 }
 
 /// Puts a rig together from its `angles` (and from `aimed`, the ones its joints are heading
@@ -347,23 +365,33 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
     // Leaning along the facing, then twisting: leaning back about the twisted body's own axis
     // would tip it sideways, across the line of the strike.
     let leaning = |twist: f32, lean: f32, sway: f32| Quat::from_rotation_z(lean) * Quat::from_rotation_y(twist) * Quat::from_rotation_x(sway);
-    // Lifted out to the side (`Angles::arm_tilt`) before it swings: the swing goes round the
-    // shoulder's own axis across the body, so all the way round the arm keeps as far out.
-    let arm_turn = |angles: &Angles, _lean: Quat| {
-        Quat::from_rotation_y(moves.swing_yaw + angles.arm_yaw - moves.weapon_arm_untwist * angles.twist) * Quat::from_rotation_z(angles.weapon_arm) * Quat::from_rotation_x(-angles.arm_tilt)
+    // Swinging in a plane rolled (`Angles::arm_tilt`) about the level facing through the
+    // shoulder, however the body leans: its top in over the head, its bottom out to the weapon
+    // side.
+    let arm_turn = |angles: &Angles, lean: Quat| {
+        lean.inverse() * Quat::from_rotation_x(-angles.arm_tilt) * lean * Quat::from_rotation_y(moves.swing_yaw + angles.arm_yaw - moves.weapon_arm_untwist * angles.twist) * Quat::from_rotation_z(angles.weapon_arm)
     };
-    // The elbow bending in its plane, the forearm not rolled by it.
+    // The elbow bending in its plane, the forearm not rolled by it; then rolled about its own
+    // length (`Angles::roll`), the hand and what it grips turning with it.
     let bent = |angles: &Angles| {
         let plane = Quat::from_rotation_y(angles.elbow_turn);
-        plane * Quat::from_rotation_z(angles.elbow) * plane.inverse()
+        plane * Quat::from_rotation_z(angles.elbow) * plane.inverse() * Quat::from_rotation_y(angles.roll)
     };
     let facing_turn = Quat::from_rotation_y(look.to_angle());
     // Braced to attack (`rest` short of 1), turned toward the weapon side (`Moves::aim_turn`).
-    let lean = Quat::from_rotation_y(-moves.aim_turn * (1.0 - rest)) * leaning(angles.twist, angles.lean, sway);
+    // Leaning over sideways (`Angles::side_lean`) about the facing itself, however it's bowed and
+    // twisted: a swing in the body's own plane tips over with it, still running along the facing.
+    let lean = Quat::from_rotation_y(-moves.aim_turn * (1.0 - rest)) * Quat::from_rotation_x(angles.side_lean) * leaning(angles.twist, angles.lean, sway);
     // The legs swing along the facing, turned only `hip_turn` of the way with the body twisting
     // above them (the hips turn less than the shoulders): a lunge stays a lunge, not a split.
     // And on that, each turned as far as its own (`Angles::back_leg_turn`, `lead_leg_turn`).
-    let leg_turn = |leg: f32, turn: f32| Quat::from_rotation_y(turn - (1.0 - moves.hip_turn) * angles.twist) * Quat::from_rotation_z(leg);
+    // A side lean (`Angles::side_lean`) bends mostly at the hips, the legs taking only
+    // `SIDE_LEAN_LEGS` of it: the feet stay planted under the body as it leans over them.
+    let planted = {
+        let bowed = leaning(angles.twist, angles.lean, sway);
+        bowed.inverse() * Quat::from_rotation_x(-angles.side_lean * (1.0 - SIDE_LEAN_LEGS)) * bowed
+    };
+    let leg_turn = |leg: f32, turn: f32| planted * Quat::from_rotation_y(turn - (1.0 - moves.hip_turn) * angles.twist) * Quat::from_rotation_z(leg);
     // Standing on the lower foot, however the body leans and the legs spread (the legs are
     // straight, as long as the hips are high, and hang from the leaning body).
     // A knee bends the shin back, in the leg's plane.
@@ -382,7 +410,7 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
     // A gripped blade as its arm holds it: a bigger one tipped up a little, so it still lands
     // along the ground rather than into it.
     let lift = (blade - 1.0) * BIG_BLADE_LIFT;
-    let gripped = |angles: &Angles| Quat::from_rotation_y(angles.roll) * Quat::from_rotation_z(-(FRAC_PI_2 + angles.tip - lift));
+    let gripped = |angles: &Angles| Quat::from_rotation_z(-(FRAC_PI_2 + angles.tip - lift));
     // Its point resting on the ground, still as it walks: where it rests is where the wrist bent
     // as far as puts the blade's lowest point (its tip or its edge's corner) on the ground in the
     // pose the joints are heading for, unbobbed; the wrist then holds it at that height,
@@ -393,7 +421,7 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
         };
         let (tip, corner) = (Vec3::Y * arena::BLADE_LENGTH, arena::glaive_edge(1.0));
         // Where it rests: the aimed pose, standing as it would without the walk's bob.
-        let aimed_lean = leaning(aimed.twist, aimed.lean, 0.0);
+        let aimed_lean = Quat::from_rotation_x(aimed.side_lean) * leaning(aimed.twist, aimed.lean, 0.0);
         let aimed_foot = |hip: Vec3, leg: f32, turn: f32, knee: f32| (aimed_lean * (hip + sole(leg, turn, knee))).y;
         let aimed_height = -soft_min(aimed_foot(RIG_HIP, aimed.back_leg, aimed.back_leg_turn, aimed.back_knee), aimed_foot(RIG_HIP.with_z(-RIG_HIP.z), aimed.lead_leg, aimed.lead_leg_turn, aimed.lead_knee)) * moves.scale;
         let lowest = |wrist: f32| {
@@ -434,12 +462,9 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
         Held::Upright(_) => weapon_arm.inverse() * unlean * Quat::from_rotation_z(-angles.tip),
         // Level, turned `yaw` round from the facing toward the weapon side, then tipped.
         Held::Swept { .. } => weapon_arm.inverse() * unlean * Quat::from_rotation_y(-angles.yaw) * Quat::from_rotation_z(-(FRAC_PI_2 - angles.tip)),
-        // In the arm's plane: it swings with the arm (`Moves::swing_yaw` aims it), the wrist
-        // undoing the arm's lift out to the side (`Angles::arm_tilt`), so it swings upright.
-        Held::Gripped { .. } => {
-            let elbow = bent(angles);
-            elbow.inverse() * Quat::from_rotation_x(angles.arm_tilt) * elbow * gripped(angles)
-        }
+        // In the arm's plane: it swings with the arm (`Moves::swing_yaw` aims it, `Angles::arm_tilt`
+        // rolls it).
+        Held::Gripped { .. } => gripped(angles),
     };
     let held = Transform {
         translation: moves.hand_at - moves.elbow_at + moves.hand_at * SMEAR_REACH * smear,
@@ -478,6 +503,10 @@ pub(crate) fn assemble(moves: &Moves, angles: &Angles, aimed: &Angles, look: Vec
     }
 }
 
+/// How much of a side lean (`Angles::side_lean`) the legs lean with; the rest the body bends
+/// over them at the hips.
+const SIDE_LEAN_LEGS: f32 = 0.35;
+
 /// How high over its feet (meters) a blade's lowest point is when it starts reaching on down
 /// where the ground falls away (`onto_ground`), fully once it's down.
 const GROUND_BAND: f32 = 0.5;
@@ -514,7 +543,7 @@ pub(crate) fn onto_ground(map: &arena_shared::map::Map, at: Vec2, feet: f32, siz
     // The secant method: how fast the lowest point drops as the arm swings, from the try before
     // (the first time, from a nudge).
     let (mut by, mut posed, mut tried) = (0.0, level, None);
-    for _ in 0..3 {
+    for _ in 0..6 {
         let low = lowest(&posed);
         let off = over(low);
         if off.abs() < 0.01 {
@@ -716,28 +745,40 @@ mod tests {
     }
 
     #[test]
-    fn on_the_crosshairs_line_the_blow_comes_down_straight_along_it() {
-        use arena_shared::config::ACTION_SHOULDER;
+    fn on_the_crosshairs_line_the_blow_comes_over_beside_it_and_lands_along_it() {
+        use crate::rig::EMPOWERED_BLADE;
+        use arena_shared::config::{ACTION_LOOK_HEIGHT, ACTION_SHOULDER};
         let class = ClassId::all().find(|class| class.def().figure() == "revenant").unwrap();
         let moves = moves("revenant");
         let size = drawn_size(class, false);
-        let (_, length) = arena::blade_span("revenant");
-        let tilt = lane_tilt(moves, ACTION_SHOULDER, size);
-        // Drawn up overhead as ever, then over and down, the glaive (its grip and its tip) sweeps
-        // steadily out onto that line (facing north: across is east), never back, and lands on it.
-        let mut was = f32::NEG_INFINITY;
-        for k in 0..=10 {
-            let throw = k as f32 / 10.0;
+        let (from, length) = arena::blade_span("revenant");
+        // Grown to strike, as it always is (`rig::pose_rigs`).
+        let tilt = lane_tilt(moves, ACTION_SHOULDER, size, EMPOWERED_BLADE);
+        // Drawn up and brought over and down, the glaive (anywhere along its blade, out in front
+        // of the striker) is never where the crosshair's line runs at about the height it's seen
+        // from (facing north: across is east), but over on the body's side of it.
+        let blade_at = |throw: f32, up: f32| {
             let phase = Phase { draw: 1.0, throw, dashing: 0.0, second: throw };
             let angles = Angles { arm_tilt: tilt * throw, ..targets(moves, phase, Vec2::ZERO, 0.0) };
-            let posed = assemble(moves, &angles, &angles, Vec2::Y, 0.0, 0.0, moves.stretch, 1.0, 0.0);
-            let across = |local: Vec3| arena::to_gameplay(posed.held_on_body.transform_point(local) * size).x;
-            let (grip, tip) = (across(Vec3::ZERO), across(Vec3::Y * length));
-            assert!((grip - tip).abs() < 0.1, "{throw} of the way through: the glaive leans from {grip} m across to {tip} m");
-            assert!(tip > was - 0.02, "{throw} of the way through: swept back in to {tip} m from {was} m");
-            was = tip;
+            let posed = assemble(moves, &angles, &angles, Vec2::Y, 0.0, 0.0, moves.stretch, EMPOWERED_BLADE, 0.0);
+            posed.held_on_body.transform_point(Vec3::Y * (from + (length - from) * up)) * size
+        };
+        let mut nearest = f32::INFINITY;
+        for k in 0..=40 {
+            for j in 0..=10 {
+                let at = blade_at(k as f32 / 40.0, j as f32 / 10.0);
+                let (ahead, across) = (arena::to_gameplay(at).y, arena::to_gameplay(at).x);
+                if ahead > 0.5 && (at.y - ACTION_LOOK_HEIGHT).abs() < 0.5 {
+                    nearest = nearest.min(ACTION_SHOULDER - across);
+                }
+            }
         }
-        assert!((was - ACTION_SHOULDER).abs() < 0.05, "landed {was} m across");
+        assert!(nearest > 0.3, "the blow comes down {nearest} m from the crosshair's line, about as high as it");
+        // And lands along it: its point on it, flat enough on the ground to lie there.
+        let point = blade_at(1.0, 1.0);
+        let across = arena::to_gameplay(point).x;
+        assert!((across - ACTION_SHOULDER).abs() < 0.05, "landed {across} m across");
+        assert!(point.y.abs() < 0.15, "its point lands {} m up", point.y);
     }
 
     #[test]
@@ -769,14 +810,17 @@ mod tests {
 
     #[test]
     fn struck_out_over_a_drop_the_blade_reaches_on_down_as_far_as_it_reaches() {
-        // Off the south terrace's north edge (y = -9), over the square far below.
+        // Off the south terrace's north edge (y = -9), out over the square far below (far enough
+        // out that reaching on down, the blade's point drawing back toward the striker, doesn't
+        // bring it back over the edge).
         let yard = MapId::Yard.map();
-        let at = standing_to_strike(Vec2::new(2.5, -8.5));
+        let at = standing_to_strike(Vec2::new(2.5, -8.2));
         assert!(yard.height_at(at) == 1.5 && at.y < -9.3, "standing at {at} isn't on the terrace");
         let [level, struck] = slammed(STRUCK, at, Vec2::Y);
-        // On down, about as far as it's near the ground, never past its reach.
+        // On down, about as far as it's near the ground (wholly if it goes into it), never past
+        // its reach.
         let reached = level.y - struck.y;
-        assert!(reached > REACH_DOWN * (1.0 - (level.y - 1.5) / GROUND_BAND) - 0.03 && reached < REACH_DOWN + 0.03, "struck down to {} m, posed for level ground to {} m", struck.y, level.y);
+        assert!(reached > REACH_DOWN * (1.0 - (level.y - 1.5) / GROUND_BAND).min(1.0) - 0.03 && reached < REACH_DOWN + 0.03, "struck down to {} m, posed for level ground to {} m", struck.y, level.y);
         // Drawn back, the blade is up over the striker's head, left as it's posed.
         let [level, drawn] = slammed(Phase { draw: 1.0, throw: 0.0, dashing: 0.0, second: 0.0 }, at, Vec2::Y);
         assert!(level.y > yard.height_at(at) + GROUND_BAND && level.distance(drawn) < 1e-4);

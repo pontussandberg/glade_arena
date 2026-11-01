@@ -43,6 +43,7 @@ pub(super) const PYRE_WITCH: Moves = Moves {
     // Bowed down over the staff behind her, then rising up and a touch back as the fire goes;
     // crouched for the ring.
     lean: [0.0, -0.4, 0.15, -0.35],
+    side_lean: [0.0; 4],
     standing_lean: 0.0,
     standing_arm: 0.0,
     rests: false,

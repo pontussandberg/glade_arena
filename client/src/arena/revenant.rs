@@ -270,9 +270,10 @@ pub(super) fn revenant_arm() -> (Mesh, Mesh) {
         (true, true),
     );
     let mut below = vec![fist(palette::DARK_LEATHER, -0.44, 0.064), manacle];
-    // The broken chain, hanging from the back of the manacle.
+    // The broken chain, hanging from the thumb side of the manacle: the back of it as the
+    // forearm rolls over to drag the glaive (`Held::Gripped`'s roll).
     for (i, y) in [-0.41, -0.445, -0.48].into_iter().enumerate() {
-        below.push(chain_link(Vec3::new(-0.092, y, 0.0), i % 2 == 1));
+        below.push(chain_link(Vec3::new(0.092, y, 0.0), i % 2 == 1));
     }
     jointed(RIG_ELBOW, vec![(sleeve, 22, (true, true)), (gauntlet, 20, (true, false))], below)
 }

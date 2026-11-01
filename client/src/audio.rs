@@ -65,8 +65,8 @@ pub enum Sfx {
     /// A dash, as the figure dashes.
     Dash(DashVoice),
     /// The revenant's glaive landing as its lead foot stomps down: the edge biting into the
-    /// ground, a heavy dull thump with real weight under it, and the earth shuddering low for a
-    /// good while after.
+    /// ground, a heavy dull thump with real weight under it, and the earth shuddering low a
+    /// moment after.
     GlaiveSwing,
     /// The revenant's glaive coming over and down, just before it lands (`strike_whoosh`): a
     /// long, heavy haft pushing through the air, the coat flapping with it.
@@ -921,7 +921,7 @@ mod web {
                     // In the order the ground takes it (recordings only, nothing synthesized,
                     // nothing that bounces, no scatter of debris: it reads as a splash): the
                     // edge biting in, the blade's and the stomping foot's thump, a slowed heavy
-                    // blow's weight under it, and the earth shuddering low and rumbling on after.
+                    // blow's weight under it, and the earth shuddering low, briefly, after.
                     if let Some(e) = self.held(now, 0.28 * g, 0.05, 0.1) {
                         self.clip_through("chop", now, 0.0, None, 0.7 * p, Lowpass, 2600.0, &e);
                     }
@@ -932,11 +932,11 @@ mod web {
                     if let Some(e) = self.held(now, 0.35 * g, 0.15, 0.3) {
                         self.clip_through(weight, now, 0.0, None, 0.55 * p, Lowpass, 600.0, &e);
                     }
-                    if let Some(e) = self.held(now, 0.55 * g, 0.35, 0.9) {
+                    if let Some(e) = self.held(now, 0.55 * g, 0.18, 0.35) {
                         self.clip_through("boom", now, 0.0, None, 0.6 * p, Lowpass, 180.0, &e);
                     }
-                    if let Some(e) = self.held(now + 0.04, 0.3 * g, 0.5, 1.0) {
-                        self.clip_through("thunder_01", now + 0.04, 0.85, Some(1.6), 0.55 * p, Lowpass, 260.0, &e);
+                    if let Some(e) = self.held(now + 0.04, 0.26 * g, 0.15, 0.35) {
+                        self.clip_through("thunder_01", now + 0.04, 0.85, Some(0.6), 0.55 * p, Lowpass, 260.0, &e);
                     }
                 }
                 Sfx::ShieldReady => {

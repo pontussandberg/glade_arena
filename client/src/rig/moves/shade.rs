@@ -45,6 +45,7 @@ pub(super) const SHADE: Moves = Moves {
     twist: [-0.3, -0.75, 0.6, 0.0],
     // A low crouch always, lower into the cut.
     lean: [-0.22, -0.25, -0.45, 0.0],
+    side_lean: [0.0; 4],
     standing_lean: -0.18,
     standing_arm: 0.0,
     rests: false,

@@ -52,6 +52,7 @@ pub(super) const WARDEN: Moves = Moves {
     // Upright in the guard, a touch back behind the raised shield, then driving forward into the
     // lunge; crouched into the slam.
     lean: [-0.05, 0.05, -0.4, -0.5],
+    side_lean: [0.0; 4],
     standing_lean: 0.0,
     standing_arm: 0.1,
     rests: false,

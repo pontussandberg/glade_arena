@@ -35,6 +35,7 @@ pub(super) const ZOMBIE: Moves = Moves {
     twist: [0.0, -0.35, 0.3, 0.0],
     // Hunched forward always, lurching into the swipe.
     lean: [-0.3, -0.1, -0.55, 0.0],
+    side_lean: [0.0; 4],
     standing_lean: -0.2,
     standing_arm: 0.0,
     rests: false,

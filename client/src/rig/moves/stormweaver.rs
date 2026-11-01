@@ -46,6 +46,7 @@ pub(super) const STORMWEAVER: Moves = Moves {
     // Arched back under the raised staff, then folded forward over the snap; crouched for the
     // call.
     lean: [0.0, 0.4, -0.5, -0.35],
+    side_lean: [0.0; 4],
     standing_lean: 0.0,
     standing_arm: 0.0,
     rests: false,

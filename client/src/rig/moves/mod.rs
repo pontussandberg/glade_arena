@@ -24,6 +24,7 @@ use shade::*;
 /// How a rigged class moves. Keyframes are (carrying, fully drawn back, released, dashing),
 /// radians. Limbs: positive swings forward. Twist: negative turns the weapon (right, +Z)
 /// shoulder back. Lean: positive leans back (along the facing, whatever the twist).
+#[derive(Clone)]
 pub(crate) struct Moves {
     pub(super) weapon_arm: [f32; 4],
     /// How much of the body's twist the weapon arm undoes (0 to 1), so it swings along the
@@ -71,6 +72,9 @@ pub(crate) struct Moves {
     pub(super) back_knee: [f32; 4],
     pub(super) twist: [f32; 4],
     pub(super) lean: [f32; 4],
+    /// The whole figure leaning over sideways from its feet, about the facing (keyframes,
+    /// positive toward the weapon side): a blow in the body's plane comes over diagonally with it.
+    pub(super) side_lean: [f32; 4],
     /// How it leans standing still while carrying (the carry keyframe is how it leans walking).
     pub(super) standing_lean: f32,
     /// How much further forward its weapon arm hangs standing still while carrying (on top of
@@ -123,8 +127,9 @@ pub(crate) struct Moves {
     pub(super) swing_yaw: f32,
     /// Its blow comes down onto its lane's middle line, wherever that runs beside its striker
     /// (`LastSwing::aside`: in action mode the crosshair's line), lying straight along it: the
-    /// arm lifted out from the weapon shoulder to it as the blow comes over and down
-    /// (`Angles::arm_tilt`), landing along it, not turned in across it (`swing_yaw`).
+    /// plane the arm swings in through its shoulder rolled out onto it as the blow comes over and
+    /// down (`Angles::arm_tilt`), so it comes over diagonally from in over the head, not turned
+    /// in across it (`swing_yaw`).
     pub(crate) lands_on_lane: bool,
     /// How far ahead of its arm the body (its twist, lean, legs and head) goes through the strike
     /// (0: with it): the body's share of the strike is the arm's to the power of one less this,
@@ -144,6 +149,7 @@ pub(crate) struct Moves {
 /// (`STRIDES_PER_METER`), how much its body bobs with each (`BOB`) and sways side to side
 /// (`SWAY`), how far its free arm swings (`ARM_SWING`), and how high its knees lift as its feet
 /// swing through (`KNEE_LIFT`).
+#[derive(Clone)]
 pub(crate) struct Gait {
     pub(crate) cadence: f32,
     pub(crate) bob: f32,
@@ -162,6 +168,7 @@ pub(super) const EVEN: Gait = Gait { cadence: 1.0, bob: 1.0, sway: 1.0, arms: 1.
 /// its own beat) it makes `gesture` of itself, the angles added to its carry (a hitch of the maul
 /// up on the shoulder, a glance over the shoulder, a tap of the staff), held `hold` seconds
 /// before it's let go of.
+#[derive(Clone)]
 pub(crate) struct Idle {
     pub(crate) shift: f32,
     pub(crate) every: f32,
@@ -203,6 +210,7 @@ impl Idle {
 }
 
 /// How the weapon sits in the hand.
+#[derive(Clone)]
 pub(crate) enum Held {
     /// Kept pointing along the aim, tipped up over it this far (radians, keyframes like the
     /// joints'), whatever the arm and body do: a javelin ready to throw.
@@ -220,12 +228,43 @@ pub(crate) enum Held {
     /// Gripped in the fist, the blade coming out of its thumb side, square to the forearm, so it
     /// goes wherever the arm takes it: bent at the wrist (`wrist`, keyframes like the joints':
     /// positive bends the blade toward the forearm's line, negative cocks it back toward the
-    /// shoulder) and turned with the forearm about its own length (`roll`: 0, the blade out
-    /// ahead of a hanging arm; a half turn, out behind it). A heavy blade swung with the arm.
+    /// shoulder) and turned with the forearm, hand and all, about its own length (`roll`: 0, the
+    /// blade out ahead of a hanging arm; a half turn, out behind it), turning on the same way to
+    /// settle back after a strike rather than back the way it came. A heavy blade swung with the
+    /// arm.
     Gripped { wrist: [f32; 4], roll: [f32; 4] },
 }
 
 /// The moves for a class's look (every class has one: `arena::FIGHTER_LOOKS`).
+/// A class's moves with some keyframes changed, for trying poses out in previews (`preview`)
+/// without rebuilding: `changes` has a line per field, `name = a, b, c, d` (or one number for a
+/// field that isn't keyframed; `wrist` and `roll` are a gripped weapon's).
+#[cfg(test)]
+pub(crate) fn tweaked(class_key: &str, changes: &str) -> &'static Moves {
+    let mut moves = moves(class_key).clone();
+    for line in changes.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')) {
+        let (name, values) = line.split_once('=').unwrap_or_else(|| panic!("no = in {line:?}"));
+        let values: Vec<f32> = values.trim().trim_matches(|c| c == '[' || c == ']').split(',').map(|v| v.trim().parse().unwrap_or_else(|_| panic!("not a number in {line:?}"))).collect();
+        let keys = || -> [f32; 4] { values.clone().try_into().unwrap_or_else(|_| panic!("{line:?} wants four keyframes")) };
+        macro_rules! set {
+            ($($keyed:ident),* ; $($single:ident),*) => {
+                match name.trim() {
+                    $(stringify!($keyed) => moves.$keyed = keys(),)*
+                    $(stringify!($single) => moves.$single = values[0],)*
+                    "wrist" | "roll" => match &mut moves.held {
+                        Held::Gripped { wrist, roll } => *if name.trim() == "wrist" { wrist } else { roll } = keys(),
+                        _ => panic!("not gripped"),
+                    },
+                    other => panic!("no such field {other:?}"),
+                }
+            };
+        }
+        set!(weapon_arm, elbow, elbow_turn, arm_yaw, lead_arm, lead_elbow, lead_elbow_turn, lead_yaw, lead_leg, back_leg, back_leg_turn, lead_leg_turn, lead_knee, back_knee, twist, lean, side_lean, head_dip, head_turn;
+            weapon_arm_untwist, hip_turn, head_follow, swing_yaw, body_leads, aim_turn, contact, draw_end, strike_ticks, stretch, stiffness, damping);
+    }
+    Box::leak(Box::new(moves))
+}
+
 pub(crate) fn moves(class_key: &str) -> &'static Moves {
     match class_key {
         "javelinist" => &JAVELINIST,

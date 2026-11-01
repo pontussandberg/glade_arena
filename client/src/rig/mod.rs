@@ -630,9 +630,10 @@ fn pose_rigs(
         // staggers back, arms flung up.
         let mut target = targets(moves, phase, step, rig.walking);
         // A blow onto its lane's middle line (`Moves::lands_on_lane`), as far to the right as the
-        // lane runs (the crosshair's line): drawn up as ever, the arm lifted out from the weapon
-        // shoulder as it comes over and down, so the stroke sweeps onto that line and lands on it.
-        let tilt = lane_tilt(moves, attack.swing.map_or(0.0, |swing| swing.aside), rig.size) * phase.throw;
+        // lane runs (the crosshair's line): the arm's swing rolled as it's drawn up, so the glaive
+        // comes over diagonally from in over the head, down and out onto that line.
+        let struck_blade = if grows { EMPOWERED_BLADE } else { 1.0 };
+        let tilt = lane_tilt(moves, attack.swing.map_or(0.0, |swing| swing.aside), rig.size, struck_blade) * phase.throw;
         target.arm_tilt = tilt;
         let free = 1.0 - phase.braced();
         let breathing = (1.0 - rig.walking) * free * (1.0 - rig.glide);
