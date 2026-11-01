@@ -11,7 +11,8 @@
         damage: 11,
         attack_ticks: 26,
         windup: 0.32,
-        kind: Projectile(speed: 17.0, radius: 0.28, range: 30.0),
+        // No range: a frostbolt flies on until it meets something.
+        kind: Projectile(speed: 17.0, radius: 0.28),
         chill: (slow: 0.4, slow_ticks: 64),
         // A frostbolt shatters where it hits, or where it ends (its range, a wall): the cold bursts
         // out over everyone round its mark.

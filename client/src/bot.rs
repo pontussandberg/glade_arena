@@ -70,6 +70,9 @@ fn stand_ground(
     }
 }
 
+/// How far the bot keeps within to shoot an uncapped shot: about as far as capped ones reach.
+const BOT_SHOT_REACH: f32 = 12.0;
+
 fn think(
     me: Query<(&PlayerId, &ClassId, &Pos, &AttackState, &Cooldowns, Option<&Team>), With<Me>>,
     server: Query<&RemoteTimeline, With<Client>>,
@@ -122,7 +125,11 @@ fn think(
             let lead = |edge: f32| if edge > 0.0 { edge + MELEE_LEAD } else { edge };
             ((nearest + farthest) / 2.0, (lead(nearest), farthest - MELEE_LEAD))
         }
-        None => (attack_def.kind.reach() * 0.6, (0.0, attack_def.kind.reach())),
+        // An uncapped shot from `BOT_SHOT_REACH`.
+        None => {
+            let reach = Some(attack_def.kind.reach()).filter(|reach| reach.is_finite()).unwrap_or(BOT_SHOT_REACH);
+            (reach * 0.6, (0.0, reach))
+        }
     };
     let in_reach = (attack_from..=attack_within).contains(&distance);
     let stand_at = target - to_target.normalize_or_zero() * preferred;

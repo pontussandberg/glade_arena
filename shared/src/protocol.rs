@@ -465,6 +465,14 @@ pub struct Downed {
     pub rescue: f32,
 }
 
+/// A fighter killed and coming back after a while: in how many seconds (rounded up).
+/// Server-authoritative and replicated, gone once it's back; not on one that waits on its allies
+/// or the wave's end instead (`Downed`).
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub struct Respawning {
+    pub secs: u32,
+}
+
 /// How close (center to center) an ally has to stand to pick a downed player up, and for how long.
 pub const REVIVE_RADIUS: f32 = 1.6;
 pub const REVIVE_TICKS: u32 = 3 * crate::config::TICK_HZ as u32;
@@ -868,6 +876,8 @@ pub enum RoomRequest {
     /// Practice only: our abilities with no cooldowns of their own (ready again the moment
     /// they're used), or back to normal.
     NoCooldowns(bool),
+    /// Practice only, while dead: back on our feet now instead of when `Respawning` says.
+    RespawnNow,
     /// Waves only, near the shopkeeper: buy this item, or raise it a level.
     Buy(crate::items::Item),
     /// Waves only, near the shopkeeper: sell the item in this slot.
@@ -935,6 +945,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<Elite>().replicate();
         app.component::<Shopkeeper>().replicate();
         app.component::<Downed>().replicate();
+        app.component::<Respawning>().replicate();
         app.component::<Fx>().replicate();
         app.component::<Waygate>().replicate();
         // Others' fighters are interpolated (smooth, a little in the past); our own isn't: it's

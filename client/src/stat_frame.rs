@@ -1,12 +1,12 @@
 //! A fighter's stat frame: health, move speed, crit chance (hover it for what a crit does), and
-//! the auto-attack's damage, speed and range, in one panel.
+//! the auto-attack's damage and speed, in one panel.
 //! The lobby shows it for the selected fighter; in the arena it sits in the bottom-left corner
 //! for your own, its health live.
 //!
 //! Also the words for a class's passive and Q, which the lobby lists and the action bar shows
 //! as tooltips.
 
-use arena_shared::classes::{AbilityDef, AttackKind, ClassDef, seconds};
+use arena_shared::classes::{AbilityDef, ClassDef, seconds};
 use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
 use bevy::prelude::*;
@@ -55,9 +55,7 @@ fn spawn_corner(mut commands: Commands) {
 pub struct HealthParts {
     pub frame: Entity,
     pub text: Entity,
-    /// The values live in the arena (`update_live_stats`): attack range, crit chance and attack
-    /// speed.
-    pub range: Entity,
+    /// The values live in the arena (`update_live_stats`): crit chance and attack speed.
     pub crit: Entity,
     pub speed: Entity,
     /// And move speed, with every slow and haste on it.
@@ -81,7 +79,7 @@ pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, style: Fra
         FrameStyle::Card => (auto(), lobby::CARD_PADDING, 0.0, lobby::card_fill()),
     };
     let placeholder = Entity::PLACEHOLDER;
-    let mut parts = HealthParts { frame: placeholder, text: placeholder, range: placeholder, crit: placeholder, speed: placeholder, move_speed: placeholder };
+    let mut parts = HealthParts { frame: placeholder, text: placeholder, crit: placeholder, speed: placeholder, move_speed: placeholder };
     parts.frame = parent
         .spawn((
             Node {
@@ -115,7 +113,6 @@ pub fn spawn_frame(parent: &mut ChildSpawnerCommands, class: ClassId, style: Fra
                     .id();
                 let shown = frame.commands().spawn(ui_text(value, 11.0, palette::ui::TEXT)).id();
                 match label {
-                    RANGE_LABEL => parts.range = shown,
                     CRIT_LABEL => parts.crit = shown,
                     SPEED_LABEL => parts.speed = shown,
                     MOVE_LABEL => parts.move_speed = shown,
@@ -158,18 +155,16 @@ fn tooltip(text: String) -> impl Bundle {
 
 /// The frame's rows under health, what players compare: a label, a value, and for some what it
 /// means, shown on hover.
-fn stats(def: &ClassDef) -> [(&'static str, String, Option<String>); 5] {
+fn stats(def: &ClassDef) -> [(&'static str, String, Option<String>); 4] {
     let crit_tip = def.describe("The chance your auto-attacks land a critical strike, dealing {crit_multiplier} of normal damage.");
     [
         (MOVE_LABEL, move_text(def.move_speed), None),
         (CRIT_LABEL, crit_text(def, false, false), Some(crit_tip)),
         ("ATTACK DAMAGE", def.attack.damage.to_string(), None),
         (SPEED_LABEL, speed_text(def, false, 0.0), None),
-        (RANGE_LABEL, range_text(def, false), None),
     ]
 }
 
-const RANGE_LABEL: &str = "ATTACK RANGE";
 const MOVE_LABEL: &str = "MOVE SPEED";
 
 /// A walking speed, as the frame shows it.
@@ -192,22 +187,6 @@ fn crit_text(def: &ClassDef, empowered: bool, primed: bool) -> String {
 fn speed_text(def: &ClassDef, empowered: bool, haste: f32) -> String {
     let per_second = TICK_HZ as f32 / def.attack.period_ticks(def.attack.speed(empowered) + haste) as f32;
     format!("{per_second:.1} hits/s")
-}
-
-/// Meters as players read them: "2.75", "1.1".
-fn meters(m: f32) -> String {
-    format!("{}", (m * 100.0).round() / 100.0)
-}
-
-/// The attack range stat: its base, and while the `follow_up` empowers it, plus the bonus.
-fn range_text(def: &ClassDef, empowered: bool) -> String {
-    let attack = &def.attack;
-    let kind = if matches!(attack.kind, AttackKind::Melee { .. }) { "melee" } else { "ranged" };
-    let (base, now) = match attack.kind {
-        AttackKind::Melee { .. } => (attack.edge_reach(false), attack.edge_reach(empowered)),
-        AttackKind::Projectile { range, .. } => (range, range),
-    };
-    if now > base { format!("{} + {} m, {kind}", meters(base), meters(now - base)) } else { format!("{} m, {kind}", meters(base)) }
 }
 
 /// What a passive or an ability says about itself: its name, its key and cooldown (an
@@ -251,7 +230,7 @@ fn spawn_my_frame(
     });
 }
 
-/// Your attack range, crit chance and attack speed, as your next attack will have them:
+/// Your crit chance and attack speed, as your next attack will have them:
 /// highlighted, each that's changed, while your `follow_up` empowers it, a prime readies it or a
 /// frenzy speeds it up. And how fast you walk now, just as the server moves you: slowed (red),
 /// hasted, in a frenzy, in your own rift (highlighted), in a marsh; or how fast you're going,
@@ -270,7 +249,6 @@ fn update_live_stats(
     let empowered = attack.armed_at(now) && def.attack.follow_up.is_some();
     let haste = attack.primed.map_or(0.0, |(_, speed)| speed) + frenzy.map_or(0.0, |frenzy| frenzy.at(now)) + fury.map_or(0.0, |fury| fury.0.at(now));
     let shown = [
-        (frame.0.range, range_text(def, empowered), range_text(def, false)),
         (frame.0.crit, crit_text(def, empowered, attack.primed.is_some()), crit_text(def, false, false)),
         (frame.0.speed, speed_text(def, empowered, haste), speed_text(def, false, 0.0)),
     ];

@@ -6,9 +6,9 @@ are interpolated.
 
 The fight happens on one of three maps on a 1 m tile grid, picked by the room's leader (or
 switched in practice): River Crossing, a forest clearing with a river through the middle crossed
-by a stone bridge and two fords; Sunken Keep, a moated keep with marshes that slow you; and Riven
-Gorge, a chasm that shots fly over but no one walks, with rope bridges and waygates that jump you
-to the far side. Ruined walls, boulders and trees give cover. Movement is
+by a stone bridge and two fords; Riven Gorge, a chasm that shots fly over and the bold leap (fall
+short and you fall in), with rope bridges and waygates that jump you to the far side; and
+Ravenhold, a fortress over a village by a river. Ruined walls, boulders and trees give cover. Movement is
 point-and-click like LoL or OSRS: **right click** walks to a tile (pathfinding around obstacles),
 **left click** auto-attacks toward the cursor (a skillshot), **Q** uses your class's ability
 toward the cursor, **S** stops, **A** rings how far your shots fly (until the next key or

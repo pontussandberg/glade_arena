@@ -33,7 +33,6 @@ pub fn tile_color(theme: &Theme, tile: Tile) -> Color {
         Tile::Tree => theme.pine,
         Tile::Forest => match theme.wilds {
             Wilds::Forest => theme.pine.mix(&INK, 0.4),
-            Wilds::Fen => theme.pond.mix(&INK, 0.45),
             Wilds::Highlands => theme.wall.mix(&INK, 0.35),
             Wilds::Field => theme.meadow.mix(&INK, 0.2),
         },
@@ -60,8 +59,8 @@ impl Plugin for ArenaPlugin {
 
 const WATER_LEVEL: f32 = -0.3;
 const RIVERBED_LEVEL: f32 = -0.65;
-/// The bottom of a chasm.
-const CHASM_FLOOR: f32 = -6.0;
+/// The bottom of a chasm: as deep as a deep one is in the sim (`Map::deep_chasms`).
+const CHASM_FLOOR: f32 = -arena_shared::map::CHASM_DEPTH;
 
 /// The lobby's dais, on top of its crag.
 pub const DAIS_RADIUS: f32 = 1.3;
@@ -233,7 +232,7 @@ fn build_arena(
     let vertex_colored = materials.add(matte(Color::WHITE));
     commands.spawn((ArenaScene, Mesh3d(meshes.add(terrain_mesh(m, &scene, theme, &mut rng))), MeshMaterial3d(vertex_colored.clone())));
     commands.spawn((ArenaScene, Mesh3d(meshes.add(ground_mesh(m, theme, &mut rng))), MeshMaterial3d(vertex_colored.clone())));
-    if let Some(water) = water_mesh(m, &scene, theme.wilds == Wilds::Fen) {
+    if let Some(water) = water_mesh(m, &scene) {
         let material = PlainMaterial { perceptual_roughness: 0.18, reflectance: 0.6, ..matte(theme.pond) };
         commands.spawn((ArenaScene, Mesh3d(meshes.add(water)), MeshMaterial3d(materials.add(material))));
     }
@@ -262,16 +261,12 @@ fn build_arena(
     props.bridges(m, &mut rng);
     props.rope_bridges(m, &mut rng);
     props.fords(m, &mut rng);
-    if theme.wilds == Wilds::Fen {
-        props.flagstones(m, &mut rng);
-    }
     for (t, tile) in m.tiles() {
         let c = Map::center(t);
         match tile {
             Tile::Rock if m.well.is_some_and(|well| Map::tile_of(well) == t) => {}
             Tile::Rock if theme.wilds == Wilds::Highlands => props.sandstone(&mut rng, t),
             Tile::Rock => props.boulder(t, c),
-            Tile::Grass if theme.wilds == Wilds::Fen => props.fen_grass(&mut rng, c),
             Tile::Grass => props.floor_detail(m, &mut rng, t, c),
             Tile::Path if rng.next() < 0.12 => props.pebbles(&mut rng, c),
             Tile::Tree => props.map_tree(&mut rng, c),
@@ -284,7 +279,6 @@ fn build_arena(
     let open = |p: Vec2| [Vec2::ZERO, Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y].iter().all(|d| scene.get(Map::tile_of(p + *d * 1.5)) == Tile::Forest);
     let density = match theme.wilds {
         Wilds::Forest => 0.055,
-        Wilds::Fen => 0.04,
         Wilds::Highlands => 0.02,
         Wilds::Field => 0.0,
     };
@@ -677,7 +671,8 @@ impl Props {
                     .map(|s| m.height_at(side(s) - d.as_vec2() * 0.002) - m.height_at(side(s) + d.as_vec2() * 0.002))
                     .into_iter()
                     .fold(f32::NEG_INFINITY, f32::max);
-                if sheer < 0.05 || m.scene_tile(t + d) == Tile::Forest {
+                // A chasm's sides are its own rock (`ground_mesh`), no wall's.
+                if sheer < 0.05 || matches!(m.scene_tile(t + d), Tile::Forest | Tile::Chasm) {
                     continue;
                 }
                 // The wall stands just inside the side's edge, its foot on the ground past it, its
@@ -1107,7 +1102,6 @@ impl Props {
                     self.understory(rng, c, 0.0);
                 }
             }
-            Wilds::Fen => self.willow(rng, c, 0.0, 1.5),
             Wilds::Highlands => self.round_tree(rng, c, 0.0, 1.4),
             Wilds::Field => self.tree(rng, c, 0.0, 1.7),
         }
@@ -1125,9 +1119,6 @@ impl Props {
                     self.understory(rng, p, ground);
                 }
             }
-            Wilds::Fen if pick < 0.1 => self.snag(rng, p, ground, s),
-            Wilds::Fen if pick < 0.18 => self.willow(rng, p, ground, s * 0.8),
-            Wilds::Fen => self.reed_bed(rng, p, ground),
             Wilds::Highlands if pick < 0.2 => self.round_tree(rng, p, ground, s * 0.75),
             Wilds::Highlands if pick < 0.32 => self.pillar(rng, p, ground),
             Wilds::Highlands if pick < 0.37 => self.spire(rng, p, ground),
@@ -1143,47 +1134,6 @@ impl Props {
             Wilds::Highlands => self.shrub(rng, p, ground),
             // Nothing grows on the field (none are asked for: its density is zero).
             Wilds::Field => {}
-        }
-    }
-
-    /// A dead tree: a grey, bare trunk with a few crooked branches.
-    fn snag(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
-        let wood = self.theme.bark.mix(&self.theme.slate, 0.5);
-        let tall = 2.0 * s;
-        let lean = Quat::from_euler(EulerRot::XYZ, rng.range(-0.12, 0.12), 0.0, rng.range(-0.12, 0.12));
-        self.add(Shape::Trunk, wood, Transform::from_translation(to_world(p, ground + 0.6 * tall)).with_rotation(lean).with_scale(Vec3::new(0.7 * s, tall, 0.7 * s)));
-        for _ in 0..2 + (rng.next() * 2.0) as usize {
-            let from = to_world(p, ground + tall * rng.range(0.6, 1.1));
-            let out = Quat::from_rotation_y(rng.range(0.0, std::f32::consts::TAU)) * Quat::from_rotation_z(rng.range(0.6, 1.1));
-            let long = rng.range(0.7, 1.2) * s;
-            let t = Transform::from_translation(from + out * Vec3::Y * long / 2.0).with_rotation(out).with_scale(Vec3::new(s, long, s));
-            self.add(Shape::Stick, wood, t);
-        }
-    }
-
-    /// A low, wide willow: a short trunk under a heap of dark, drooping foliage.
-    fn willow(&mut self, rng: &mut Lcg, p: Vec2, ground: f32, s: f32) {
-        self.add(Shape::Trunk, self.theme.bark, Transform::from_translation(to_world(p, ground + 0.6 * s)).with_scale(Vec3::new(1.2 * s, s, 1.2 * s)));
-        for k in 0..3 {
-            let off = Vec2::from_angle(k as f32 * 2.1 + rng.range(0.0, 1.0)) * 0.5 * s;
-            let t = Transform::from_translation(to_world(p + off, ground + rng.range(1.3, 1.7) * s))
-                .with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0)))
-                .with_scale(Vec3::new(1.2, 0.85, 1.2) * s);
-            self.add(Shape::Ball, if k % 2 == 0 { self.theme.pine } else { self.theme.fern }, t);
-        }
-    }
-
-    /// A clump of tall reeds standing in the shallows.
-    fn reed_bed(&mut self, rng: &mut Lcg, p: Vec2, ground: f32) {
-        for _ in 0..3 + (rng.next() * 4.0) as usize {
-            let c = p + Vec2::new(rng.range(-0.9, 0.9), rng.range(-0.9, 0.9));
-            for _ in 0..5 {
-                let at = c + Vec2::new(rng.range(-0.15, 0.15), rng.range(-0.15, 0.15));
-                let h = rng.range(0.9, 1.5);
-                let lean = Quat::from_euler(EulerRot::XYZ, rng.range(-0.2, 0.2), 0.0, rng.range(-0.2, 0.2));
-                let color = [self.theme.fern, self.theme.path.mix(&self.theme.fern, 0.5), self.theme.marsh][(rng.next() * 3.0) as usize % 3];
-                self.add(Shape::Reed, color, Transform::from_translation(to_world(at, ground + h / 2.0)).with_rotation(lean).with_scale(Vec3::new(1.4, h, 1.4)));
-            }
         }
     }
 
@@ -1312,7 +1262,7 @@ impl Props {
         }
     }
 
-    /// What litters the fight floor's grass (forest and highlands; the fen has `fen_grass`):
+    /// What litters the fight floor's grass:
     /// tufts, pebbles, a flower, a patch of bare earth — and in the lee of cover (trees, walls,
     /// rock, the forest's edge) thicker growth, mushrooms and a stump or two, so the clearing
     /// reads as a lived-in place and not an empty board. Everything is below the ankle: detail,
@@ -1402,61 +1352,14 @@ impl Props {
         self.add(Shape::Puddle, self.theme.path.lighter(0.08), top);
     }
 
-    /// What grows on the fen's fight floor here and there: tufts of sedge, bog cotton and pads of
-    /// moss, all below the ankle.
-    fn fen_grass(&mut self, rng: &mut Lcg, c: Vec2) {
-        let pick = rng.next();
-        let p = c + Vec2::new(rng.range(-0.3, 0.3), rng.range(-0.3, 0.3));
-        if pick < 0.06 {
-            self.bog_reeds(rng, p, self.theme.fern, self.theme.marsh);
-        } else if pick < 0.1 {
-            self.flower(rng, c);
-        } else if pick < 0.15 {
-            let size = Vec3::new(rng.range(0.3, 0.5), 0.05, rng.range(0.25, 0.4));
-            let t = Transform::from_translation(to_world(p, 0.0)).with_rotation(Quat::from_rotation_y(rng.range(0.0, 3.0))).with_scale(size);
-            self.add(Shape::Ball, self.theme.fern.mix(&self.theme.meadow, 0.3), t);
-        }
-    }
-
-    /// Worn paving on the fen's path tiles: each tile two to four slabs, uneven, some sunk or
-    /// gone, moss showing between them.
-    fn flagstones(&mut self, m: &Map, rng: &mut Lcg) {
-        for (t, tile) in m.tiles() {
-            if tile != Tile::Path {
-                continue;
-            }
-            let c = Map::center(t);
-            let split = if rng.next() < 0.5 { Vec2::X } else { Vec2::Y };
-            let pieces = 1 + (rng.next() * 2.0) as usize;
-            for k in 0..pieces {
-                if rng.next() < 0.12 {
-                    continue;
-                }
-                let len = 1.0 / pieces as f32;
-                let along = (k as f32 + 0.5) * len - 0.5;
-                let size = split * (len - 0.07) + split.perp().abs() * 0.92;
-                let color = self.theme.stone.mix(&self.theme.wall, rng.range(0.2, 0.7)).darker(rng.range(0.0, 0.12));
-                let turn = Quat::from_rotation_y(rng.range(-0.04, 0.04));
-                let at = to_world(c + split * along, rng.range(0.005, 0.025));
-                self.block(Vec3::new(size.x, 0.05, size.y), color, Transform::from_translation(at).with_rotation(turn));
-            }
-        }
-    }
 }
 
 /// Height of the land outside the clearing (0 at its edge), before roughness: the forest rolls
-/// up into low hills, a fen sinks under the water with tussocks breaking it, highlands climb in
-/// terraces, a field rises gently.
+/// up into low hills, highlands climb in terraces, a field rises gently.
 fn wild_height(theme: &Theme, m: &Map, p: Vec2) -> f32 {
     let out = -m.edge_margin(p);
     match theme.wilds {
         Wilds::Forest => (out * 0.3).clamp(0.0, 3.0),
-        Wilds::Fen => {
-            // Broad, low tussocks: where slow waves running four ways crest together.
-            let hump = (waves(p, [0.31, 0.27, 0.19, 0.23], [0.7, 1.3, 0.0, 2.0]) - 0.15).clamp(0.0, 0.5) * 2.0;
-            let deep = (out / 3.0).clamp(0.0, 1.0);
-            (-0.7 + hump * 0.95) * deep
-        }
         Wilds::Highlands => {
             let rise = (out * 0.32).clamp(0.0, 14.0);
             let f = (rise / TERRACE).fract();
@@ -1484,9 +1387,6 @@ fn wild_color(theme: &Theme, height: f32, flat: f32, pick: f32) -> Color {
         Wilds::Forest if pick < 0.15 => theme.path,
         Wilds::Forest if pick < 0.6 => theme.grass,
         Wilds::Forest => theme.fern,
-        Wilds::Fen if pick < 0.4 => theme.marsh,
-        Wilds::Fen if pick < 0.8 => theme.grass.mix(&theme.marsh, 0.4),
-        Wilds::Fen => theme.fern,
         // Sheer faces in bands of rock by height; dry grass on the shelves.
         Wilds::Highlands if flat < 0.8 => rock_band(theme, (height / 1.3).floor().max(0.0) as usize),
         Wilds::Highlands if pick < 0.5 => theme.grass,
@@ -1524,10 +1424,9 @@ fn terrain_mesh(m: &Map, scene: &SceneTiles, theme: &Theme, rng: &mut Lcg) -> Me
             } else if around.iter().all(|t| *t != Tile::Forest) {
                 -0.05
             } else if around.iter().all(|t| *t == Tile::Forest) && m.edge_margin(p) < -1.0 {
-                // Forest floor is rough; the fen's tussocks and the highlands' shelves smoother.
+                // Forest floor is rough; the highlands' shelves smoother.
                 let (shift, rough) = match theme.wilds {
                     Wilds::Forest => (0.5, (-0.3, 0.6)),
-                    Wilds::Fen => (0.3, (-0.05, 0.05)),
                     Wilds::Highlands => (0.3, (-0.15, 0.15)),
                     Wilds::Field => (0.3, (-0.04, 0.04)),
                 };
@@ -1625,12 +1524,8 @@ fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
         // Faint: just enough for distances to read, well under the patches' wander.
         let checker = if (t.x + t.y) % 2 == 0 { 1.006 } else { 0.994 };
         let base = match tile {
-            // Paved: the slabs go on top (`Props::flagstones`); this is the moss between them.
-            Tile::Path if theme.wilds == Wilds::Fen => theme.fern.mix(&theme.marsh, rng.next() * 0.4),
             Tile::Path => theme.path.mix(&theme.grass, rng.next() * 0.25),
             Tile::Marsh => theme.marsh.mix(&theme.bank, rng.next() * 0.35),
-            // Damp ground: wet hollows and drier rises wandering across the grass.
-            _ if theme.wilds == Wilds::Fen => theme.meadow.mix(&theme.marsh, patches(c)).mix(&theme.grass, rng.next() * 0.3),
             // Lusher and drier sweeps wandering across the lawn, not a tile-by-tile dither.
             _ => theme.grass.mix(&theme.meadow, (patches(c) * 0.75 + rng.next() * 0.25).clamp(0.0, 1.0) * 0.6),
         };
@@ -1678,17 +1573,11 @@ fn ground_mesh(m: &Map, theme: &Theme, rng: &mut Lcg) -> Mesh {
 
 /// The water's surface: over every water tile of the scene (the map's and the wilds' beyond it),
 /// and over the wilds within a terrain cell of those too, so where the land rises out of it the
-/// water runs in under its slope; if the wilds are `flooded`, one sheet over the whole scene (the
-/// land rises out of it). `None` if there's no water.
-fn water_mesh(m: &Map, scene: &SceneTiles, flooded: bool) -> Option<Mesh> {
+/// water runs in under its slope. `None` if there's no water.
+fn water_mesh(m: &Map, scene: &SceneTiles) -> Option<Mesh> {
     let covers = |tile: Tile| matches!(tile, Tile::Water | Tile::Ford);
     let extent = scene.extent;
     let mut b = FlatMesh::default();
-    if flooded {
-        let (lo, hi) = ((-extent).as_vec2(), extent.as_vec2());
-        b.quad([lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)].map(|p| to_world(p, WATER_LEVEL)), Color::WHITE);
-        return Some(b.build());
-    }
     for y in -extent.y..extent.y {
         for x in -extent.x..extent.x {
             let t = IVec2::new(x, y);

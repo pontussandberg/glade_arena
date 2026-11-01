@@ -64,18 +64,19 @@ impl Mode {
     pub const PVE: [Mode; 1] = [Mode::Waves];
 
     /// The maps it may be played on: the waves have theirs, the first the one it's played on
-    /// unless another is picked.
+    /// unless another is picked. Fighting each other, the mirrored ones (`MapId::PVP`) and
+    /// Ravenhold, which has no sides.
     pub fn maps(self) -> &'static [MapId] {
         match self {
-            Mode::Waves => &[MapId::Hold, MapId::Wilds, MapId::Bastion],
-            _ => &MapId::PVP,
+            Mode::Waves => &[MapId::Hold, MapId::Wilds],
+            _ => &[MapId::Crossing, MapId::Gorge, MapId::Hold],
         }
     }
 
     /// `map` if it may be played on, else the first that may. A staged map counts as its base:
     /// fitting never turns a mid-run bastion into another map.
     pub fn fit_map(self, map: MapId) -> MapId {
-        if self.maps().contains(&map.base()) { map } else { self.maps()[0] }
+        if self.maps().contains(&map) { map } else { self.maps()[0] }
     }
 }
 

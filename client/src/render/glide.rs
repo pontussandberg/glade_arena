@@ -185,18 +185,29 @@ pub(super) fn predict_me(
     (sends, draws, attacks, jumps): (Res<crate::SentWalks>, Res<crate::SentDraws>, Res<crate::SentAttacks>, Res<crate::SentJumps>),
     mut schedule: ResMut<crate::WalkSchedule>,
     link: Query<&Link, With<Client>>,
-    mut me: Query<(Entity, &mut Pos, (&Motion, Option<&AttackState>), &ClassId, Option<&Dashing>, Option<&Chilled>, Option<&Hasted>, (Option<&Frenzy>, Option<&Fury>), Option<&Walking>, Option<&mut PredictedWalk>), With<Me>>,
+    mut me: Query<(Entity, &mut Pos, (&Motion, Option<&AttackState>), &ClassId, Option<&Dashing>, Option<&Chilled>, Option<&Hasted>, (Option<&Frenzy>, Option<&Fury>), Option<&Walking>, Option<&mut PredictedWalk>, Option<&Health>), With<Me>>,
 ) {
     let Some(latest) = clock.latest_tick() else { return };
     let rtt = link.single().map_or(0.0, |link| link.stats.rtt.as_secs_f32());
     let guessed_lead = rtt * TICK_HZ as f32 + PREDICT_SLACK_TICKS;
     let (map, draws, attacks, jumps) = (map.map(), &*draws, &*attacks, &*jumps);
-    for (entity, mut pos, (motion, attack), class, dashing, chilled, hasted, (frenzy, fury), walking, predicted) in &mut me {
+    for (entity, mut pos, (motion, attack), class, dashing, chilled, hasted, (frenzy, fury), walking, predicted, health) in &mut me {
         let Some(mut predicted) = predicted else {
             commands.entity(entity).insert(PredictedWalk { drawn: pos.0, motion_seen: *motion, height: motion.height, server_walk: walking.map_or(Vec2::ZERO, |w| w.0), ..default() });
             schedule.0 = 0;
             continue;
         };
+        // Dead, nothing of ours is stepped (the server doesn't step the dead): shown where the
+        // server last had it, not falling on away from that and pulled back to it with each word
+        // from the server. Back, it's predicted again from where the server puts it.
+        if health.is_some_and(|health| health.0 == 0) {
+            let at = if pos.0 != predicted.drawn { pos.0 } else { predicted.base.map_or(pos.0, |(_, p, ..)| p) };
+            *predicted = PredictedWalk { drawn: at, motion_seen: *motion, height: motion.height, server_walk: predicted.server_walk, lead: predicted.lead, ..default() };
+            if pos.0 != at {
+                pos.0 = at;
+            }
+            continue;
+        }
         let sends = &sends.0;
         let lead_before = predicted.lead.unwrap_or(guessed_lead);
         let mut lead = lead_before;

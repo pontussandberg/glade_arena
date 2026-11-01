@@ -133,11 +133,12 @@ fn the_dead_sit_out_then_respawn_at_full_health() {
 
     // After the respawn delay: full health, on a spawn point.
     let max = class_id(B_CLASS).def().max_hp;
-    d.until(Duration::from_secs(5), "B respawns", |d| b_health(d) == max);
+    let delay = arena_shared::config::RESPAWN_TICKS as f32 / arena_shared::config::TICK_HZ as f32;
+    d.until(Duration::from_secs_f32(delay + 2.0), "B respawns", |d| b_health(d) == max);
     let waited = died_at.elapsed().as_secs_f32();
     let (pos, _) = server_player(&mut d.server, B);
     println!("B respawned after {waited:.2}s at {pos}");
-    assert!(waited > 2.5, "respawned too early");
+    assert!(waited > delay - 0.5, "respawned too early");
     assert!(map().spawn_points.contains(&pos));
 }
 

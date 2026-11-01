@@ -279,11 +279,12 @@ fn relief(p: Vec2) -> f32 {
         let down = (p.y - north) / (ARCH_TOP * ARCH_RUN);
         h = h.max(ARCH_TOP * up.clamp(0.0, 1.0).min(1.0 - down.clamp(0.0, 1.0)));
     }
-    // The stream's and the river's beds, under the water (and the ford) and not its bridges,
-    // sloping down from either bank, so whoever wades in stands in the water and walks back
-    // out.
+    // The stream's and the river's beds, under the water and not its bridges nor the ford's
+    // stepping stones, sloping down from either bank and the ford, so whoever wades in stands in
+    // the water and walks back out.
     if h <= 0.0 {
-        let stream = (p.x - STREAM.0 as f32).min(STREAM.1 as f32 - p.x);
+        let ford = (p.y - FORD_Y).abs() - 0.5;
+        let stream = (p.x - STREAM.0 as f32).min(STREAM.1 as f32 - p.x).min(ford);
         let river = (p.y - RIVER.0 as f32).min(RIVER.1 as f32 + 1.0 - p.y).min(p.x - RIVER.2 as f32);
         let inside = stream.max(river);
         if inside > 0.0 {

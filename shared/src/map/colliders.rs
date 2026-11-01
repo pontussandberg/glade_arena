@@ -434,11 +434,12 @@ impl Map {
     /// The parapet along side `d` (`SIDES`) of tile `t`, if the ground drops `PARAPET_DROP` or more
     /// past it (but not into the forest), runs level along it and isn't left open to leap from
     /// (`Map::leaps`): the side's length, on the high tile's edge. Not along a ramp's side: its top is level, so it would stand in the way of
-    /// the walker coming up the ramp beside it.
+    /// the walker coming up the ramp beside it. Nor along a chasm's lip: a chasm is leapt from.
     pub fn parapet(&self, t: IVec2, d: IVec2) -> Option<Collider> {
         let c = Map::center(t);
         let here = self.height_at(c);
-        if self.get(t) == Tile::Forest || here - self.height_at(Map::center(t + d)) < PARAPET_DROP || self.scene_tile(t + d) == Tile::Forest || !self.level_along(t, d) || self.leap_from(t, d) {
+        let past = self.scene_tile(t + d);
+        if self.get(t) == Tile::Forest || here - self.height_at(Map::center(t + d)) < PARAPET_DROP || matches!(past, Tile::Forest | Tile::Chasm) || !self.level_along(t, d) || self.leap_from(t, d) {
             return None;
         }
         let mid = c + d.as_vec2() * (0.5 - PARAPET_IN);
@@ -906,7 +907,7 @@ mod tests {
             for (t, tile) in m.tiles() {
                 for d in SIDES {
                     let drop = m.height_at(Map::center(t)) - m.height_at(Map::center(t + d));
-                    let expected = tile != Tile::Forest && drop >= PARAPET_DROP && m.scene_tile(t + d) != Tile::Forest && m.level_along(t, d) && !m.leap_from(t, d);
+                    let expected = tile != Tile::Forest && drop >= PARAPET_DROP && !matches!(m.scene_tile(t + d), Tile::Forest | Tile::Chasm) && m.level_along(t, d) && !m.leap_from(t, d);
                     let parapet = m.parapet(t, d);
                     assert_eq!(parapet.is_some(), expected, "{:?}: the side {d} of {t}, a drop of {drop}", m.id);
                     if let Some(parapet) = parapet {
