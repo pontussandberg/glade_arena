@@ -4,7 +4,6 @@
 use super::*;
 
 use arena_shared::items::Satchel;
-use arena_shared::sim;
 
 use crate::rooms::{InRoom, Lobby};
 
@@ -57,8 +56,8 @@ pub(super) fn fighter(id: PeerId, class: ClassId, room: InRoom, team: Team, at: 
         (class, team, room, room.rooms()),
         Pos(at),
         (Health(class.def().max_hp), MaxHealth(class.def().max_hp)),
-        (Chilled::default(), Hasted::default(), Frenzy::default(), Fury::default(), RecentHits::default()),
-        (AttackState::default(), Cooldowns::default(), Dashing::default(), LastSwing::default()),
+        (Chilled::default(), Burning::default(), Hasted::default(), Frenzy::default(), Fury::default(), RecentHits::default()),
+        (AttackState::default(), Cooldowns::default(), Dashing::default(), arena_shared::protocol::Motion::default(), LastSwing::default(), Walking::default(), WalkOrders::default()),
     )
 }
 
@@ -74,6 +73,7 @@ pub(super) fn spawn_player(commands: &mut Commands, link: Entity, id: PeerId, cl
             OnGate::default(),
             PlayerInput::default(),
             (Satchel::default(), ItemState::default()),
+            crate::ActionMode,
             // Replication starts in `place_players`, once it has a real position.
             ControlledBy { owner: link, lifetime: default() },
         ))
@@ -109,7 +109,7 @@ pub(super) fn place_players(
         if !waiting {
             continue;
         }
-        pos.0 = sim::pick_spawn_point(lobby.map(room), placed.iter().filter(|(r, _)| r == room).map(|(_, p)| *p));
+        pos.0 = lobby.spawn_point(room, placed.iter().filter(|(r, _)| r == room).map(|(_, p)| *p));
         placed.push((*room, pos.0));
         // Wherever it was walking to before, it doesn't walk there from here.
         if let Some(mut input) = input {

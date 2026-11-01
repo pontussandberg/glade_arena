@@ -20,12 +20,12 @@ pub struct Throw {
 
 impl Throw {
     pub fn shot(&self) -> Shot {
-        Shot { speed: self.speed, radius: self.radius, range: self.range }
+        Shot { speed: self.speed, radius: self.radius, range: self.range, falls: false }
     }
 
     /// Thrown by `owner` (of `class`, with the ability in `slot`) from `pos` toward `dir` at
     /// `tick`.
     pub fn projectile(&self, owner: PeerId, class: ClassId, slot: AbilitySlot, pos: Vec2, dir: Vec2, tick: u32) -> Projectile {
-        Projectile { owner, class, origin: shot_spawn(pos, dir, self.radius), dir, spawn_tick: tick, ability: Some(slot), crit: false, extra: false }
+        Projectile { owner, class, origin: shot_spawn(pos, dir, self.radius), dir, spawn_tick: tick, ability: Some(slot), crit: false, extra: false, climb: 0.0, lift: 0.0 }
     }
 }

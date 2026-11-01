@@ -5,6 +5,7 @@
 mod dash;
 mod nova;
 mod prime;
+mod strike;
 mod throw;
 
 use arena_shared::abilities::{AbilityKind, MAX_ABILITIES};
@@ -26,6 +27,7 @@ pub(crate) fn indicator(kind: &AbilityKind) -> Indicator {
         AbilityKind::Dash(dash) => dash::indicator(dash),
         AbilityKind::Nova(nova) => nova::indicator(nova),
         AbilityKind::Prime(_) => prime::indicator(),
+        AbilityKind::Strike(strike) => strike::indicator(strike),
     }
 }
 
@@ -34,7 +36,7 @@ pub(crate) fn indicator(kind: &AbilityKind) -> Indicator {
 pub(crate) fn indicator_length(kind: &AbilityKind, aim: Vec2) -> f32 {
     match kind {
         AbilityKind::Dash(dash) => dash::length(dash, aim),
-        AbilityKind::Projectile(_) | AbilityKind::Nova(_) | AbilityKind::Prime(_) => 1.0,
+        AbilityKind::Projectile(_) | AbilityKind::Nova(_) | AbilityKind::Prime(_) | AbilityKind::Strike(_) => 1.0,
     }
 }
 
@@ -45,6 +47,7 @@ pub(crate) fn icon(commands: &mut Commands, kind: &AbilityKind) -> Entity {
         AbilityKind::Dash(_) => dash::icon(commands),
         AbilityKind::Nova(_) => nova::icon(commands),
         AbilityKind::Prime(_) => prime::icon(commands),
+        AbilityKind::Strike(_) => strike::icon(commands),
     }
 }
 
@@ -54,8 +57,16 @@ pub(crate) fn icon(commands: &mut Commands, kind: &AbilityKind) -> Entity {
 pub(crate) struct SeenCasts(Option<[Option<u32>; MAX_ABILITIES]>);
 
 impl SeenCasts {
-    /// The abilities used since this was last asked, going by `cooldowns`. None the first time:
-    /// those were used before we saw the fighter.
+    /// Starting from what `cooldowns` show as the fighter is first seen: those casts are old
+    /// news, and the next one counts, even if it's the fighter's first (a fighter that casts
+    /// before anything else changes its cooldowns would otherwise have that cast swallowed as
+    /// the baseline).
+    pub(crate) fn seen(cooldowns: Option<&Cooldowns>) -> SeenCasts {
+        SeenCasts(cooldowns.map(|cooldowns| std::array::from_fn(|i| cooldowns.used_at(AbilitySlot(i as u8)))))
+    }
+
+    /// The abilities used since this was last asked, going by `cooldowns`. None the first time,
+    /// if it started from nothing: those were used before we saw the fighter.
     pub(crate) fn new_casts(&mut self, cooldowns: &Cooldowns) -> impl Iterator<Item = AbilitySlot> + use<> {
         let now: [Option<u32>; MAX_ABILITIES] = std::array::from_fn(|i| cooldowns.used_at(AbilitySlot(i as u8)));
         let before = self.0.replace(now);

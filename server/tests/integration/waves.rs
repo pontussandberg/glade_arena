@@ -28,7 +28,7 @@ impl Party {
         let server = start_server(port, |_| {});
         let client = start_guest_with(1, port, class, |client| {
             if bot {
-                client.add_plugins(BotPlugin);
+                client.add_plugins(BotPlugin { stand: false });
             }
         });
         let mut party = Party { server, client };
@@ -208,7 +208,7 @@ fn long_run() {
 fn coop_picks_the_fallen_up() {
     let port = 5864;
     let mut server = start_server(port, |_| {});
-    let mut clients: Vec<App> = (1..=2).map(|id| start_guest_with(id, port, "revenant", |c| { c.add_plugins(BotPlugin); })).collect();
+    let mut clients: Vec<App> = (1..=2).map(|id| start_guest_with(id, port, "revenant", |c| { c.add_plugins(BotPlugin { stand: false }); })).collect();
     let step = |server: &mut App, clients: &mut Vec<App>| {
         server.update();
         for c in clients.iter_mut() {
@@ -389,7 +389,8 @@ fn practice_shops_free_and_deadeye_sets_off_ability_items() {
 
     // A dummy straight ahead.
     let target = open_near(MapId::Keep, me + Vec2::new(4.0, 0.0));
-    assert!(MapId::Keep.map().shot_clear(me, target), "no clear shot at the dummy");
+    let keep = MapId::Keep.map();
+    assert!(keep.shot_clear((me, keep.height_at(me)), (target, keep.height_at(target))), "no clear shot at the dummy");
     p.ask(RoomRequest::PlaceDummy { at: target, walks: false });
     let dummy = |p: &mut Party| {
         let world = p.server.world_mut();
@@ -800,4 +801,14 @@ fn a_run_left_under_way_makes_the_leaderboards() {
         p.update();
     }
     assert_eq!(boards(&p)[0].party[0].0, "Tester");
+}
+
+/// Quick-joining "Bastion 5" opens a run on the bastion already at its second stage: the east
+/// gate torn open, the room's map (and so every guest's) the staged variant — and a new class
+/// (the warden) spawns into it like any other.
+#[test]
+fn the_bastion_stages_with_the_run() {
+    let mut p = Party::new(5905, "warden", false);
+    p.ask(RoomRequest::QuickJoin("Bastion 5".into()));
+    p.until(Duration::from_secs(15), "on the staged bastion", |p| p.room().is_some_and(|r| r.map == MapId::Bastion2));
 }

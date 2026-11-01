@@ -151,7 +151,7 @@ impl CurrentRoom {
 }
 
 /// The map shown and played: our room's; at home, the one picked for a new lobby (`browser.rs`),
-/// Hollow Wilds until one is. Changes only when it does, so what's built from it is rebuilt only
+/// Ravenhold until one is. Changes only when it does, so what's built from it is rebuilt only
 /// then.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CurrentMap(pub MapId);
@@ -162,8 +162,10 @@ impl Default for CurrentMap {
     }
 }
 
-/// The map shown at home, and practiced on.
-pub const HOME_MAP: MapId = MapId::Wilds;
+/// The map shown at home.
+pub const HOME_MAP: MapId = MapId::Hold;
+/// The map practice starts on (its tools switch to the others).
+pub const PRACTICE_MAP: MapId = MapId::Hold;
 
 impl CurrentMap {
     pub fn map(&self) -> &'static Map {

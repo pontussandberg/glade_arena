@@ -78,6 +78,12 @@ pub(crate) struct Doomed {
 #[derive(Component, Clone, Copy)]
 pub(crate) struct Bounces(pub(crate) u8);
 
+/// Server-only: who set a fighter ablaze (`Burning`), credited with what it burns for.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct Kindled {
+    by: By,
+}
+
 /// A javelin of a Hydra Spear's barrage, to be thrown at `at` by the first's thrower, the way it was
 /// (`shot`), `might` as hard.
 #[derive(Clone, Copy, Debug)]
@@ -86,6 +92,9 @@ pub(crate) struct Volley {
     shot: Projectile,
     side: Side,
     might: f32,
+    /// Where the thrower was and how high its feet were as the first went: each after it is
+    /// thrown as that one was, moved with them.
+    from: (Vec2, f32),
 }
 
 /// Server-only: barrages' javelins still to be thrown.
@@ -154,8 +163,8 @@ pub(crate) struct Zone {
 pub(crate) struct Zones(Vec<Zone>);
 
 /// `blow` from `by` to its foes `hits` says are hit (`hit_foes`). How many it hit.
-fn strike(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut Targets, by: By, blow: Blow, hits: impl FnMut(PeerId, Vec2) -> bool) -> usize {
-    hit_foes(commands, log, now, targets, (by.id, by.class, by.name()), (by.side, by.source), blow, hits)
+fn strike(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut Targets, by: By, blow: Blow, mut hits: impl FnMut(PeerId, Vec2) -> bool) -> usize {
+    hit_foes(commands, log, now, targets, (by.id, by.class, by.name()), (by.side, by.source), blow, |id, at, _| hits(id, at))
 }
 
 /// Deals `damage` (and `chill`) to `by`'s foes within `radius` of `at`, shown as a blast in `color`.
@@ -175,13 +184,13 @@ fn blast_as(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut T
 /// The foe of `side` nearest `at` within `reach`, alive, other than those `skip` says: who and
 /// where. Callers skip whoever's looking too: with no team (practice, a free-for-all), everyone
 /// is everyone's foe, themselves included.
-fn nearest_foe(targets: &Targets, (by, side): (PeerId, Side), at: Vec2, reach: f32, skip: impl Fn(PeerId) -> bool) -> Option<(PeerId, Vec2)> {
+fn nearest_foe(targets: &Targets, (by, side): (PeerId, Side), at: Vec2, reach: f32, skip: impl Fn(PeerId) -> bool) -> Option<(PeerId, Vec2, f32)> {
     targets
         .iter()
-        .filter(|(_, id, (room, team), pos, health, .., (sheltered, decoy))| {
+        .filter(|(_, id, (room, team), pos, health, .., (sheltered, decoy, _))| {
             health.0 > 0 && !sheltered && id.0 != by && !owns(by, *decoy) && !skip(id.0) && foes(side, (**room, **team)) && pos.0.distance(at) <= reach
         })
-        .map(|(_, id, _, pos, ..)| (id.0, pos.0))
+        .map(|(_, id, _, pos, .., (_, _, motion))| (id.0, pos.0, motion.height))
         .min_by(|a, b| a.1.distance_squared(at).total_cmp(&b.1.distance_squared(at)))
 }
 
@@ -204,7 +213,7 @@ pub(super) fn tick_items(
     mut pending: ResMut<Pending>,
     mut zones: ResMut<Zones>,
     mut barrages: ResMut<Barrages>,
-    mut holders: Query<(&PlayerId, &ClassId, &Pos, (&InRoom, &Team), &Satchel, &mut ItemState), InPlay>,
+    mut holders: Query<(&PlayerId, &ClassId, &Pos, (&InRoom, &Team), &Satchel, &mut ItemState, &Motion), InPlay>,
     thrown: Query<(&Projectile, &InRoom, &Team, Option<&Might>), Added<Projectile>>,
     mut targets: Targets,
     decoys: Query<(Entity, &Decoy, &ClassId, &Pos, (&InRoom, &Team), Has<Dead>)>,
@@ -222,24 +231,35 @@ pub(super) fn tick_items(
         if shot.ability.is_some() || shot.extra {
             continue;
         }
-        let Some(level) = holders.iter().find(|(id, ..)| id.0 == shot.owner).map(|(.., satchel, _)| satchel.level(Item::HydraSpear)).filter(|&l| l > 0) else { continue };
+        let Some((level, from)) = holders
+            .iter()
+            .find(|(id, ..)| id.0 == shot.owner)
+            .map(|(_, _, pos, _, satchel, _, motion)| (satchel.level(Item::HydraSpear), (pos.0, motion.height)))
+            .filter(|&(l, _)| l > 0)
+        else {
+            continue;
+        };
         let (count, keeps, apart) = items::hydra_spear(level);
         for n in 1..count {
-            let volley = Volley { at: now + apart * n, shot: *shot, side: (*room, *team), might: might_of(might) * keeps };
+            let volley = Volley { at: now + apart * n, shot: *shot, side: (*room, *team), might: might_of(might) * keeps, from };
             barrages.0.push(volley);
         }
     }
     let due: Vec<Volley> = barrages.0.iter().filter(|v| v.at <= now).copied().collect();
     barrages.0.retain(|v| v.at > now);
     for volley in due {
-        // From where the thrower is now, if they're still in the fight, fanning out a touch.
-        let Some((_, _, pos, ..)) = holders.iter().find(|(id, ..)| id.0 == volley.shot.owner) else { continue };
-        let dir = Vec2::from_angle((fastrand::f32() - 0.5) * 0.14).rotate(volley.shot.dir);
-        let radius = volley.shot.class.def().shot(None).map_or(0.0, |s| s.radius);
-        let shot = Projectile { origin: pos.0 + dir * (PLAYER_RADIUS + radius), dir, spawn_tick: now, crit: false, extra: true, ..volley.shot };
+        // As the first was thrown (from the hand, onto the crosshair's line, in action mode),
+        // moved with the thrower to where they are now, if they're still in the fight; all but
+        // straight after the first: just enough scatter that they don't fly as one.
+        let Some((_, _, pos, .., motion)) = holders.iter().find(|(id, ..)| id.0 == volley.shot.owner) else { continue };
+        let dir = Vec2::from_angle((fastrand::f32() - 0.5) * 0.02).rotate(volley.shot.dir);
+        let (was, feet) = volley.from;
+        let origin = volley.shot.origin + pos.0 - was;
+        let lift = volley.shot.lift + motion.height - feet;
+        let shot = Projectile { origin, dir, spawn_tick: now, crit: false, extra: true, lift, ..volley.shot };
         spawn_projectile(&mut commands, shot, volley.side, volley.might);
     }
-    for (id, class, pos, side, satchel, mut state) in &mut holders {
+    for (id, class, pos, side, satchel, mut state, _) in &mut holders {
         let side = (*side.0, *side.1);
         let by = |item| By { id: id.0, class: *class, side, source: Source::Item(item) };
         state.wisp_hits.retain(|&(_, _, until)| now < until);
@@ -263,7 +283,7 @@ pub(super) fn tick_items(
                 }
                 Item::PowderKeg if now >= state.keg_at => {
                     let (every, damage, radius, fuse, reach) = items::powder_keg(level);
-                    let Some((_, at)) = nearest_foe(&targets, (id.0, side), pos.0, reach, |_| false) else { continue };
+                    let Some((_, at, _)) = nearest_foe(&targets, (id.0, side), pos.0, reach, |_| false) else { continue };
                     state.keg_at = now + every;
                     spawn_fx(&mut commands, side.0, Fx::between(FxKind::Lob(FxColor::Fire), pos.0, at, radius, now, fuse));
                     pending.0.push(Delayed { by: by(item), at, radius, damage, chill: Chill::default(), fire_at: now + fuse, look: FxKind::Blast(FxColor::Fire) });
@@ -284,7 +304,7 @@ pub(super) fn tick_items(
     for zone in &zones.0 {
         if zone.pull > 0.0 {
             // Only its maker's foes, as its pulse hurts (never them, nor the sheltered).
-            for (entity, id, (room, team), pos, health, .., (sheltered, decoy)) in targets.iter() {
+            for (entity, id, (room, team), pos, health, .., (sheltered, decoy, _)) in targets.iter() {
                 if health.0 > 0 && !sheltered && id.0 != zone.by.id && !owns(zone.by.id, decoy) && foes(zone.by.side, (*room, *team)) && pos.0.distance(zone.at) <= zone.radius + PLAYER_RADIUS {
                     let next = pos.0.move_towards(zone.at, zone.pull * TICK_DT);
                     if lobby.map(room).line_walkable(pos.0, next) {
@@ -346,6 +366,8 @@ pub(super) struct Reacting<'w, 's> {
     doomed: Query<'w, 's, &'static mut Doomed>,
     fighters: Query<'w, 's, (Entity, &'static PlayerId)>,
     zombies: Query<'w, 's, &'static ClassId, With<Zombie>>,
+    classes: Query<'w, 's, &'static ClassId>,
+    burning: Query<'w, 's, &'static mut Burning>,
     /// Every fighter by its id, made once a tick: hits name who dealt them by id.
     ids: Local<'s, HashMap<PeerId, Entity>>,
 }
@@ -404,7 +426,7 @@ fn ability_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (E
             Item::VoidOrb => {
                 let (radius, pull, damage, lasts) = items::void_orb(level);
                 let map = r.lobby.map(&hit.side.0);
-                let at = map.nearest_walkable(Map::tile_of(hit.at), 3).map_or(hit.at, Map::center);
+                let at = map.nearest_walkable(Map::tile_of(hit.at), 3).map_or(hit.at, |t| map.stand(t));
                 r.zones.0.push(Zone { by: by(item), at, radius, damage, slow: 0.0, pull, until: now + lasts });
                 spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Zone(FxColor::Void), at, radius, now, lasts));
             }
@@ -445,6 +467,7 @@ fn on_hit(r: &mut Reacting, now: u32, hit: Landed) {
     // Monsters' own: an elite's twist, a bloater's last burst, a split.
     monster_hit(r, now, &hit);
     knock_back(r, &hit);
+    kindle(r, now, &hit);
     if let Some(holder) = holder(r, hit.attacker) {
         ability_items(r, now, &hit, holder);
         attacker_items(r, now, &hit, holder);
@@ -457,13 +480,17 @@ fn on_hit(r: &mut Reacting, now: u32, hit: Landed) {
 }
 
 /// A player's auto-attack knocks a monster (a zombie, or one of the waves') back a little, away
-/// from them (along a shot's flight), a bigger one less; bosses stand firm.
+/// from them (along a shot's flight), a bigger one less; bosses stand firm. An attack that shoves
+/// (`AttackDef::shove`, a warden's) shoves anyone it hits, player or monster, as far as it says,
+/// and one driven into a wall is stunned there.
 fn knock_back(r: &mut Reacting, hit: &Landed) {
-    if hit.source != Source::Attack || hit.killed || !matches!(hit.attacker, PeerId::Netcode(_)) {
+    if hit.source != Source::Attack || hit.killed {
         return;
     }
-    let Ok(class) = r.zombies.get(hit.victim) else { return };
-    if class.def().is_boss() {
+    let shove = hit.class.def().attack.shove;
+    let Ok(class) = r.classes.get(hit.victim) else { return };
+    let monster = r.zombies.contains(hit.victim);
+    if class.def().is_boss() || (shove.is_none() && !(monster && matches!(hit.attacker, PeerId::Netcode(_)))) {
         return;
     }
     let from = r.ids.get(&hit.attacker).and_then(|e| r.targets.get(*e).ok()).map(|(.., pos, _, _, _, _, _)| pos.0);
@@ -472,7 +499,62 @@ fn knock_back(r: &mut Reacting, hit: &Landed) {
         None => from.map_or(Vec2::ZERO, |from| (hit.at - from).normalize_or_zero()),
     };
     if dir != Vec2::ZERO {
-        r.commands.entity(hit.victim).try_insert(Shoved { dir, left: KNOCKBACK / class.def().size().max(0.5) });
+        let (distance, slam) = shove.map_or((KNOCKBACK, 0), |shove| (shove.distance, shove.wall_root_ticks));
+        r.commands.entity(hit.victim).try_insert(Shoved { dir, left: distance / class.def().size().max(0.5), slam });
+    }
+}
+
+/// An attack that burns (`AttackDef::burn`, a pyre witch's bolts) sets the one it struck ablaze
+/// (`Burning`, pulsed by `burn_kindled`), a stack more each hit with the fire's time starting
+/// over, until at full stacks it ignites instead: a blast of fire on the struck one's foes round
+/// it (not the struck one: it's had the hit), and the fire is out.
+fn kindle(r: &mut Reacting, now: u32, hit: &Landed) {
+    if hit.source != Source::Attack || hit.killed {
+        return;
+    }
+    let Some(burn) = hit.class.def().attack.burn else { return };
+    let Ok(mut burning) = r.burning.get_mut(hit.victim) else { return };
+    let stacks = if burning.until > now { burning.stacks + 1 } else { 1 };
+    if stacks < burn.stacks {
+        burning.set_if_neq(Burning { stacks, until: now + burn.ticks });
+        let by = By { id: hit.attacker, class: hit.class, side: hit.side, source: Source::Passive };
+        r.commands.entity(hit.victim).try_insert(Kindled { by });
+        return;
+    }
+    burning.set_if_neq(Burning::default());
+    r.commands.entity(hit.victim).remove::<Kindled>();
+    let struck = hit.victim_id;
+    let (at, reach) = (hit.at, burn.ignite_radius + PLAYER_RADIUS);
+    let amount = (hit.class.def().attack.damage as f32 * burn.ignite_share).round() as i32;
+    let by = By { id: hit.attacker, class: hit.class, side: hit.side, source: Source::Splash };
+    spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Ignite, at, burn.ignite_radius, now, 8));
+    strike(&mut r.commands, &mut r.log, now, &mut r.targets, by, Blow::ability(amount, Chill::default()), |id, p| id != struck && p.distance(at) <= reach);
+}
+
+/// Fire on the burning (`Burning`, lit by `kindle`): every `ZONE_PULSE_TICKS`, each burns for
+/// its stacks' worth, credited to whoever lit it; out when its time is up, or when it falls.
+pub(super) fn burn_kindled(
+    mut commands: Commands,
+    timeline: Res<LocalTimeline>,
+    mut targets: Targets,
+    mut burning: Query<(Entity, &mut Burning, &Kindled)>,
+    mut log: ResMut<HitLog>,
+) {
+    let now = timeline.tick().0;
+    for (entity, mut burning, kindled) in &mut burning {
+        let Ok((_, id, _, pos, mut health, mut chilled, mut hits, _, _)) = targets.get_mut(entity) else { continue };
+        if burning.until <= now || health.0 <= 0 {
+            burning.set_if_neq(Burning::default());
+            commands.entity(entity).remove::<Kindled>();
+            continue;
+        }
+        let Some(burn) = kindled.by.class.def().attack.burn else { continue };
+        if !now.is_multiple_of(items::ZONE_PULSE_TICKS) {
+            continue;
+        }
+        let blow = Blow::ability(burn.damage * burning.stacks as i32, Chill::default());
+        let by = kindled.by;
+        damage(&mut commands, &mut log, now, (entity, id.0, pos.0), (&mut health, &mut chilled, &mut hits), blow, (by.id, by.class, "kindling"), (by.side, Source::Passive, None));
     }
 }
 
@@ -511,9 +593,13 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                 if left == 0 {
                     continue;
                 }
-                let Some((_, at)) = nearest_foe(&r.targets, (hit.attacker, hit.side), hit.at, reach, |p| p == hit.victim_id) else { continue };
+                let Some((_, at, feet)) = nearest_foe(&r.targets, (hit.attacker, hit.side), hit.at, reach, |p| p == hit.victim_id) else { continue };
                 let Some(dir) = (at - hit.at).try_normalize() else { continue };
-                let projectile = Projectile { origin: hit.at, dir, spawn_tick: now, crit: false, extra: true, ..shot.projectile };
+                // On from as high as it struck, straight at the next one's middle: not on up or
+                // down as the first was aimed.
+                let from = arena_shared::sim::projectile_height(&shot.projectile, now as f32);
+                let climb = (feet + SHOT_HEIGHT - from) / at.distance(hit.at);
+                let projectile = Projectile { origin: hit.at, dir, spawn_tick: now, crit: false, extra: true, lift: from - SHOT_HEIGHT, climb, ..shot.projectile };
                 let spawned = spawn_projectile(&mut r.commands, projectile, hit.side, shot.might * keeps);
                 r.commands.entity(spawned).insert((Bounces(left - 1), Spares(hit.victim_id)));
             }
@@ -523,7 +609,7 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                 let mut struck = vec![hit.victim_id];
                 let mut from = hit.at;
                 for _ in 0..jumps {
-                    let Some((next, at)) = nearest_foe(&r.targets, (hit.attacker, hit.side), from, reach, |p| struck.contains(&p)) else { break };
+                    let Some((next, at, _)) = nearest_foe(&r.targets, (hit.attacker, hit.side), from, reach, |p| struck.contains(&p)) else { break };
                     spawn_fx(&mut r.commands, hit.side.0, Fx::between(FxKind::Arc, from, at, 0.0, now, 8));
                     strike(&mut r.commands, &mut r.log, now, &mut r.targets, by(item), Blow::ability(damage, Chill::default()), |p, _| p == next);
                     struck.push(next);

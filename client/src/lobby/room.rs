@@ -353,8 +353,7 @@ pub(super) fn enter_arena(
     if way == WayIn::Solo && clicked(practice_click) {
         // In on the press, as the big button goes: forget the held button.
         mouse.reset(MouseButton::Left);
-        // Always on Hollow Wilds (its tools switch maps).
-        request(&mut sender, RoomRequest::Practice(crate::rooms::HOME_MAP));
+        request(&mut sender, RoomRequest::Practice(crate::rooms::PRACTICE_MAP));
     }
     let text = match way {
         WayIn::Solo => "PLAY SOLO",

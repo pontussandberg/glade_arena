@@ -7,7 +7,7 @@ use std::fmt::Write;
 
 use crate::Me;
 use crate::camera::CameraMode;
-use crate::casting::{CastMode, key_casts, key_label};
+use crate::casting::{CastMode, key_label};
 use crate::rooms::save_setting;
 use crate::arena::palette;
 
@@ -167,17 +167,41 @@ pub(super) const HOUSE: &[&str] = &[
     ".##...##.",
 ];
 
+/// A picture `width` by `height` of `texels` (sRGB, four bytes each, row by row from the top
+/// left), only on the GPU, its pixels crisp, not blurred, however big it's drawn.
+pub(crate) fn crisp_image(width: u32, height: u32, texels: Vec<u8>) -> Image {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::image::ImageSampler;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let size = Extent3d { width, height, depth_or_array_layers: 1 };
+    let mut image = Image::new(size, TextureDimension::D2, texels, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
+    image.sampler = ImageSampler::nearest();
+    image
+}
+
 /// Pixel art drawn from `rows` (`#` a pixel, anything else see-through), each pixel `pixel`
-/// pixels square, in `color`.
+/// pixels square, in `color`: one picture, crisp at any size. (A node for each pixel made Bevy
+/// go over hundreds of them every frame.)
 pub(crate) fn pixel_art(parent: &mut ChildSpawnerCommands, rows: &[&str], pixel: f32, color: Color) {
-    parent.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|art| {
-        for row in rows {
-            art.spawn(Node::default()).with_children(|line| {
-                for c in row.chars() {
-                    let fill = if c == '#' { color } else { Color::NONE };
-                    line.spawn((Node { width: px(pixel), height: px(pixel), ..default() }, BackgroundColor(fill), Pickable::IGNORE));
-                }
-            });
+    let width = rows.iter().map(|row| row.chars().count()).max().unwrap_or(0);
+    if width == 0 {
+        return;
+    }
+    let [r, g, b, a] = color.to_srgba().to_u8_array();
+    let texels = rows
+        .iter()
+        .flat_map(|row| {
+            let row: Vec<char> = row.chars().collect();
+            (0..width).flat_map(move |x| if row.get(x) == Some(&'#') { [r, g, b, a] } else { [0; 4] })
+        })
+        .collect();
+    let image = crisp_image(width as u32, rows.len() as u32, texels);
+    let node = Node { width: px(width as f32 * pixel), height: px(rows.len() as f32 * pixel), ..default() };
+    let art = parent.spawn(node).id();
+    parent.commands().queue(move |world: &mut World| {
+        let image = world.resource_mut::<Assets<Image>>().add(image);
+        if let Ok(mut art) = world.get_entity_mut(art) {
+            art.insert(ImageNode { image_mode: NodeImageMode::Stretch, ..ImageNode::new(image) });
         }
     });
 }
@@ -218,7 +242,7 @@ pub(super) struct FrameRate {
     pub(super) shown: u32,
 }
 
-/// The ping and frame rate (with the free camera, for watching the netcode, also the jitter), or
+/// The ping and frame rate (with the action camera, for watching the netcode, also the jitter), or
 /// that we're connecting or cut off.
 pub(super) fn update_status(
     time: Res<Time<Real>>,
@@ -226,12 +250,16 @@ pub(super) fn update_status(
     mut status: Single<&mut Text, With<Status>>,
     client: Query<(&Link, Has<Connected>, Option<&Disconnected>), With<Client>>,
     mode: Res<CameraMode>,
+    predicted: Query<(&PredictedWalk, &Pos, &arena_shared::protocol::Motion), With<crate::Me>>,
 ) {
     frame_rate.seconds += time.delta_secs();
     frame_rate.frames += 1;
-    if frame_rate.seconds >= 0.5 {
-        *frame_rate = FrameRate { shown: (frame_rate.frames as f32 / frame_rate.seconds).round() as u32, ..default() };
+    // Rewritten only as the frame rate is recounted: a text that changed every frame would have
+    // the UI laid out again every frame.
+    if frame_rate.seconds < 0.5 {
+        return;
     }
+    *frame_rate = FrameRate { shown: (frame_rate.frames as f32 / frame_rate.seconds).round() as u32, ..default() };
     let Ok((link, connected, disconnected)) = client.single() else { return };
     let mut text = String::new();
     if let Some(disconnected) = disconnected {
@@ -243,6 +271,14 @@ pub(super) fn update_status(
         let _ = write!(text, "ping {:.0} ms   {} fps", ms(link.stats.rtt), frame_rate.shown);
         if mode.free {
             let _ = write!(text, "   jitter {:.0} ms", ms(link.stats.jitter));
+            // The prediction's numbers: how far ahead of the server it steps our keys, the glide
+            // it still has to show away, and the last correction worth noticing.
+            if let Ok((predicted, pos, motion)) = predicted.single() {
+                let lead = predicted.lead().map_or("?".to_string(), |lead| format!("{lead:.1}"));
+                let _ = write!(text, "   lead {lead} t   glide {:.2} m   fix {:.2} m", predicted.error(), predicted.last_fix());
+                // Where we are: our position, and how high we're shown (and told we are).
+                let _ = write!(text, "   at {:.1}, {:.1}   up {:.2} ({:.2}) m", pos.0.x, pos.0.y, predicted.height, motion.height);
+            }
         }
     }
     // Only touch the component when the text changed, so Bevy doesn't re-layout it every frame.
@@ -289,18 +325,21 @@ pub(super) fn update_key_hints(
     let abilities = class
         .iter()
         .flat_map(|class| class.def().abilities())
-        .filter(|(slot, _)| key_casts(*slot, mode.free))
         .map(|(slot, _)| key_label(slot))
         .collect::<Vec<_>>();
     let abilities = (abilities.join(" "), if abilities.len() == 1 { "ability" } else { "abilities" });
     let keys: Vec<(&str, &str)> = if mode.free {
         vec![
+            ("Click", "capture the mouse"),
+            ("Mouse", "look / aim"),
             ("WASD", "move"),
-            ("Left click", "attack"),
+            ("Hold left click", "attack"),
             (&abilities.0, abilities.1),
-            ("Right drag, arrows", "turn camera"),
+            ("Space", "jump"),
             ("Wheel, + -", "zoom"),
-            ("Tab", "watch next fighter"),
+            ("Hold Tab", "scoreboard"),
+            ("F1", "watch next fighter"),
+            ("Esc", "free the mouse"),
         ]
     } else {
         vec![

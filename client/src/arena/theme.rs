@@ -29,8 +29,13 @@ pub struct Theme {
     pub sky_brightness: f32,
     pub sun: Color,
     pub sun_illuminance: f32,
+    /// Where the sun shines from (toward the arena's middle): how low it stands, and from which
+    /// side.
+    pub sun_from: Vec3,
     /// What lies around the clearing, and what its trees are.
     pub wilds: Wilds,
+    /// Whether its high stone faces are a fortress's walls: laid in courses (`Props::coursed`).
+    pub battlements: bool,
 }
 
 /// The land around a map's clearing out to the haze, and what grows on it (the map's own trees
@@ -45,20 +50,26 @@ pub enum Wilds {
     /// Bare highland: dry grass rising in terraces of banded rock, with rock pillars, scrub,
     /// boulders and a few round autumn trees.
     Highlands,
+    /// Open meadow, rising gently and bare out to the haze: nothing grows on it, nothing in the
+    /// way of the view.
+    Field,
 }
 
 impl Theme {
     pub fn of(map: MapId) -> &'static Theme {
-        match map {
+        match map.base() {
             MapId::Crossing => &GLADE,
             MapId::Keep => &FEN,
             MapId::Gorge => &HIGHLANDS,
             MapId::Wilds => &HOLLOW,
+            MapId::Yard => &YARD,
+            MapId::Hold => &RAVENHOLD,
+            _ => &BASTION,
         }
     }
 }
 
-/// River Crossing: a green forest glade at dusk, the world's palette (`palette`).
+/// River Crossing: a deep forest glade at dusk, the world's palette (`palette`).
 const GLADE: Theme = Theme {
     grass: MOSS,
     meadow: MEADOW,
@@ -78,92 +89,171 @@ const GLADE: Theme = Theme {
     rope: ROPE,
     haze: HAZE,
     sky: SKY,
-    sky_brightness: 160.0,
+    sky_brightness: 450.0,
     sun: SUN,
-    sun_illuminance: 3_600.0,
+    sun_illuminance: 2_050.0,
+    sun_from: SUN_FROM,
     wilds: Wilds::Forest,
+    battlements: false,
 };
 
-/// Sunken Keep: a drowned fen by moonlight. Sea-green tussocks in black water, dead snags and
-/// dark willows under a cold, dim moon and blue mist, so the torches on the keep carry the
-/// scene; pale bog cotton for flowers.
-const FEN: Theme = Theme {
-    grass: Color::srgb_u8(0x5A, 0x72, 0x62),
-    meadow: Color::srgb_u8(0x6C, 0x80, 0x6E),
-    fern: Color::srgb_u8(0x3D, 0x5C, 0x54),
-    pine: Color::srgb_u8(0x22, 0x37, 0x38),
-    slate: Color::srgb_u8(0x5C, 0x66, 0x76),
-    stone: Color::srgb_u8(0x7C, 0x84, 0x8F),
-    wall: Color::srgb_u8(0x5A, 0x64, 0x70),
-    bark: Color::srgb_u8(0x48, 0x3F, 0x38),
-    path: Color::srgb_u8(0x78, 0x7A, 0x6E),
-    bank: Color::srgb_u8(0x48, 0x48, 0x40),
-    riverbed: Color::srgb_u8(0x2C, 0x38, 0x3C),
-    pond: Color::srgb_u8(0x48, 0x78, 0x86),
-    bloom: Color::srgb_u8(0xBE, 0xC6, 0xB4),
-    marsh: Color::srgb_u8(0x4C, 0x58, 0x48),
-    abyss: Color::srgb_u8(0x2A, 0x31, 0x3E),
-    rope: Color::srgb_u8(0x68, 0x60, 0x50),
-    haze: Color::srgb_u8(0x6A, 0x7C, 0x8A),
-    sky: Color::srgb_u8(0x6E, 0x88, 0xB4),
-    sky_brightness: 210.0,
-    sun: Color::srgb_u8(0xC4, 0xD4, 0xFF),
+/// Practice Yard: open meadow all around instead of the glade's forest, at sunset: the sun just
+/// over the horizon in the west, orange and long-shadowed, the air warm and the sky's fill
+/// gone violet.
+const YARD: Theme = Theme {
+    wilds: Wilds::Field,
+    haze: Color::srgb_u8(0x9C, 0x66, 0x5C),
+    sky: Color::srgb_u8(0x5E, 0x56, 0x8C),
+    sky_brightness: 400.0,
+    sun: Color::srgb_u8(0xFF, 0xA8, 0x5A),
     sun_illuminance: 2_600.0,
+    sun_from: Vec3::new(-40.0, 8.0, -10.0),
+    ..GLADE
+};
+
+/// Sunken Keep: a drowned fen in the last grey light. Sea-green tussocks in dark water, dead
+/// snags, blue mist; the keep's torches carry the warmth. Bog cotton for flowers.
+const FEN: Theme = Theme {
+    grass: Color::srgb_u8(0x4E, 0x66, 0x54),
+    meadow: Color::srgb_u8(0x5C, 0x72, 0x60),
+    fern: Color::srgb_u8(0x38, 0x55, 0x4C),
+    pine: Color::srgb_u8(0x24, 0x38, 0x3A),
+    slate: Color::srgb_u8(0x56, 0x5E, 0x6A),
+    stone: Color::srgb_u8(0x73, 0x7A, 0x84),
+    wall: Color::srgb_u8(0x56, 0x5E, 0x68),
+    bark: Color::srgb_u8(0x44, 0x38, 0x2E),
+    path: Color::srgb_u8(0x6B, 0x6B, 0x5E),
+    bank: Color::srgb_u8(0x42, 0x3F, 0x36),
+    riverbed: Color::srgb_u8(0x2A, 0x34, 0x38),
+    pond: Color::srgb_u8(0x3A, 0x64, 0x74),
+    bloom: Color::srgb_u8(0xAE, 0xB6, 0xA6),
+    marsh: Color::srgb_u8(0x44, 0x50, 0x3F),
+    abyss: Color::srgb_u8(0x23, 0x2A, 0x34),
+    rope: Color::srgb_u8(0x5E, 0x55, 0x45),
+    haze: Color::srgb_u8(0x3C, 0x48, 0x54),
+    sky: Color::srgb_u8(0x5A, 0x70, 0x98),
+    sky_brightness: 420.0,
+    sun: Color::srgb_u8(0xC6, 0xD6, 0xF4),
+    sun_illuminance: 1_700.0,
+    sun_from: SUN_FROM,
     wilds: Wilds::Fen,
+    battlements: false,
 };
 
-/// Hollow Wilds: a haunted wood in the last light. Deep, mossy greens gone grey-blue, violet
-/// heather, slate stone, under a low, cold violet sun and a dim purple haze, so the camp's torches
-/// and the fights carry the scene.
-const HOLLOW: Theme = Theme {
-    grass: Color::srgb_u8(0x55, 0x6E, 0x4E),
-    meadow: Color::srgb_u8(0x6A, 0x7E, 0x5A),
-    fern: Color::srgb_u8(0x3E, 0x5E, 0x48),
-    pine: Color::srgb_u8(0x24, 0x38, 0x34),
-    slate: Color::srgb_u8(0x62, 0x66, 0x78),
-    stone: Color::srgb_u8(0x7E, 0x80, 0x8E),
-    wall: Color::srgb_u8(0x5E, 0x60, 0x70),
-    bark: Color::srgb_u8(0x4A, 0x3C, 0x36),
-    path: Color::srgb_u8(0x84, 0x7A, 0x66),
-    bank: Color::srgb_u8(0x4C, 0x44, 0x3C),
-    riverbed: Color::srgb_u8(0x30, 0x3A, 0x44),
-    pond: Color::srgb_u8(0x46, 0x6E, 0x8A),
-    bloom: Color::srgb_u8(0xA8, 0x84, 0xC8),
-    marsh: Color::srgb_u8(0x50, 0x5A, 0x44),
-    abyss: Color::srgb_u8(0x2E, 0x2A, 0x40),
-    rope: Color::srgb_u8(0x70, 0x62, 0x50),
-    haze: Color::srgb_u8(0x74, 0x6C, 0x8C),
-    sky: Color::srgb_u8(0x84, 0x7C, 0xB4),
-    sky_brightness: 230.0,
-    sun: Color::srgb_u8(0xEC, 0xD4, 0xF4),
-    sun_illuminance: 3_800.0,
+/// Sunken Bastion: a drowned fortress as the light fails. Grey-green turf between cold stone,
+/// black water in the cistern, blue mist; the torches at the gates carry the color.
+const BASTION: Theme = Theme {
+    grass: Color::srgb_u8(0x53, 0x64, 0x4C),
+    meadow: Color::srgb_u8(0x5F, 0x70, 0x50),
+    fern: Color::srgb_u8(0x3E, 0x54, 0x44),
+    pine: Color::srgb_u8(0x27, 0x3A, 0x34),
+    slate: Color::srgb_u8(0x5C, 0x62, 0x70),
+    stone: Color::srgb_u8(0x7E, 0x84, 0x90),
+    wall: Color::srgb_u8(0x5A, 0x62, 0x70),
+    bark: Color::srgb_u8(0x42, 0x39, 0x2F),
+    path: Color::srgb_u8(0x6E, 0x6C, 0x60),
+    bank: Color::srgb_u8(0x44, 0x42, 0x3A),
+    riverbed: Color::srgb_u8(0x28, 0x33, 0x3A),
+    pond: Color::srgb_u8(0x32, 0x58, 0x6C),
+    bloom: Color::srgb_u8(0xA6, 0xAE, 0xBC),
+    marsh: Color::srgb_u8(0x47, 0x52, 0x44),
+    abyss: Color::srgb_u8(0x22, 0x28, 0x33),
+    rope: Color::srgb_u8(0x5C, 0x54, 0x44),
+    haze: Color::srgb_u8(0x39, 0x43, 0x4F),
+    sky: Color::srgb_u8(0x56, 0x70, 0x9C),
+    sky_brightness: 420.0,
+    sun: Color::srgb_u8(0xCA, 0xD8, 0xF6),
+    sun_illuminance: 1_800.0,
+    sun_from: SUN_FROM,
+    wilds: Wilds::Fen,
+    battlements: false,
+};
+
+/// Ravenhold: a fortress over its village in the late afternoon, an hour or two before the sun
+/// sets. Damp turf, pale limestone gone grey-blue in the shade, dark slate spires; the sun well
+/// down the sky in the south-west, warm on the walls' faces; the torches and lit windows carry
+/// the rest of the warmth.
+const RAVENHOLD: Theme = Theme {
+    grass: Color::srgb_u8(0x4C, 0x60, 0x3E),
+    meadow: Color::srgb_u8(0x5C, 0x6C, 0x44),
+    fern: Color::srgb_u8(0x37, 0x50, 0x37),
+    pine: Color::srgb_u8(0x23, 0x36, 0x2C),
+    slate: Color::srgb_u8(0x58, 0x5C, 0x66),
+    stone: Color::srgb_u8(0x8C, 0x88, 0x80),
+    wall: Color::srgb_u8(0x68, 0x68, 0x6C),
+    bark: Color::srgb_u8(0x46, 0x36, 0x2A),
+    path: Color::srgb_u8(0x70, 0x68, 0x5A),
+    bank: Color::srgb_u8(0x45, 0x3D, 0x33),
+    riverbed: Color::srgb_u8(0x2A, 0x33, 0x38),
+    pond: Color::srgb_u8(0x34, 0x54, 0x68),
+    bloom: Color::srgb_u8(0x9C, 0x6A, 0x8E),
+    marsh: Color::srgb_u8(0x46, 0x52, 0x40),
+    abyss: Color::srgb_u8(0x1E, 0x21, 0x2B),
+    rope: Color::srgb_u8(0x5E, 0x54, 0x44),
+    haze: Color::srgb_u8(0x56, 0x58, 0x6A),
+    sky: Color::srgb_u8(0x66, 0x70, 0x9C),
+    sky_brightness: 520.0,
+    sun: Color::srgb_u8(0xFF, 0xD8, 0xB4),
+    sun_illuminance: 2_900.0,
+    sun_from: Vec3::new(-30.0, 25.0, 26.0),
     wilds: Wilds::Forest,
+    battlements: true,
 };
 
-/// Riven Gorge: autumn highlands at sunset. Dry golden grass rising in terraces of red
-/// sandstone, scrub and round trees in brown and rust, a gorge falling to plum shadow, under a
-/// deep orange sun and dusty amber haze.
+/// Hollow Wilds: a haunted wood in failing light. Deep mossy greens, violet heather, a dim
+/// purple cast to the distance; the camp's torches and the fights carry the warmth.
+const HOLLOW: Theme = Theme {
+    grass: Color::srgb_u8(0x4C, 0x68, 0x3E),
+    meadow: Color::srgb_u8(0x5E, 0x78, 0x46),
+    fern: Color::srgb_u8(0x3A, 0x5C, 0x38),
+    pine: Color::srgb_u8(0x27, 0x42, 0x2E),
+    slate: Color::srgb_u8(0x5A, 0x5C, 0x6A),
+    stone: Color::srgb_u8(0x75, 0x77, 0x7F),
+    wall: Color::srgb_u8(0x58, 0x5A, 0x66),
+    bark: Color::srgb_u8(0x4A, 0x3A, 0x30),
+    path: Color::srgb_u8(0x6E, 0x67, 0x54),
+    bank: Color::srgb_u8(0x46, 0x3E, 0x34),
+    riverbed: Color::srgb_u8(0x2C, 0x38, 0x40),
+    pond: Color::srgb_u8(0x3A, 0x5C, 0x7A),
+    bloom: Color::srgb_u8(0x8A, 0x68, 0xB0),
+    marsh: Color::srgb_u8(0x48, 0x53, 0x40),
+    abyss: Color::srgb_u8(0x26, 0x24, 0x36),
+    rope: Color::srgb_u8(0x64, 0x58, 0x43),
+    haze: Color::srgb_u8(0x47, 0x43, 0x5A),
+    sky: Color::srgb_u8(0x6A, 0x6C, 0x96),
+    sky_brightness: 450.0,
+    sun: Color::srgb_u8(0xE2, 0xD8, 0xEE),
+    sun_illuminance: 2_200.0,
+    sun_from: SUN_FROM,
+    wilds: Wilds::Forest,
+    battlements: false,
+};
+
+/// Riven Gorge: dusky moorland as the sun dies. Dry grass gone umber in terraces of dark
+/// sandstone, a gorge falling to plum shadow, the last ember of a sun through dusty air.
 const HIGHLANDS: Theme = Theme {
-    grass: Color::srgb_u8(0x8A, 0x84, 0x50),
-    meadow: Color::srgb_u8(0xA0, 0x90, 0x5A),
-    fern: Color::srgb_u8(0x78, 0x5E, 0x3E),
-    pine: Color::srgb_u8(0x3C, 0x45, 0x32),
-    slate: Color::srgb_u8(0x88, 0x6C, 0x5A),
-    stone: Color::srgb_u8(0xA0, 0x88, 0x70),
-    wall: Color::srgb_u8(0x86, 0x6E, 0x5E),
-    bark: Color::srgb_u8(0x58, 0x40, 0x30),
-    path: Color::srgb_u8(0xA6, 0x8C, 0x68),
-    bank: Color::srgb_u8(0x68, 0x4C, 0x3A),
-    riverbed: Color::srgb_u8(0x48, 0x3E, 0x36),
-    pond: Color::srgb_u8(0x4E, 0x78, 0x78),
-    bloom: Color::srgb_u8(0xB6, 0x78, 0x4E),
-    marsh: Color::srgb_u8(0x68, 0x62, 0x40),
-    abyss: Color::srgb_u8(0x38, 0x2A, 0x34),
-    rope: Color::srgb_u8(0x88, 0x72, 0x50),
-    haze: Color::srgb_u8(0xB4, 0xA0, 0x8E),
-    sky: Color::srgb_u8(0x98, 0x88, 0xB0),
-    sky_brightness: 150.0,
-    sun: Color::srgb_u8(0xFF, 0xCA, 0x9C),
-    sun_illuminance: 3_400.0,
+    grass: Color::srgb_u8(0x6F, 0x67, 0x3E),
+    meadow: Color::srgb_u8(0x7E, 0x74, 0x44),
+    fern: Color::srgb_u8(0x5A, 0x4C, 0x34),
+    pine: Color::srgb_u8(0x34, 0x44, 0x34),
+    slate: Color::srgb_u8(0x6A, 0x5A, 0x4C),
+    stone: Color::srgb_u8(0x80, 0x70, 0x5E),
+    wall: Color::srgb_u8(0x66, 0x5A, 0x4E),
+    bark: Color::srgb_u8(0x4C, 0x3A, 0x2A),
+    path: Color::srgb_u8(0x7C, 0x6E, 0x54),
+    bank: Color::srgb_u8(0x54, 0x44, 0x36),
+    riverbed: Color::srgb_u8(0x3C, 0x3A, 0x32),
+    pond: Color::srgb_u8(0x35, 0x59, 0x6A),
+    bloom: Color::srgb_u8(0xA0, 0x64, 0x38),
+    marsh: Color::srgb_u8(0x58, 0x54, 0x33),
+    abyss: Color::srgb_u8(0x2C, 0x26, 0x30),
+    rope: Color::srgb_u8(0x6E, 0x5F, 0x45),
+    haze: Color::srgb_u8(0x4E, 0x46, 0x44),
+    sky: Color::srgb_u8(0x6E, 0x64, 0x88),
+    sky_brightness: 420.0,
+    sun: Color::srgb_u8(0xF0, 0xD0, 0xA8),
+    sun_illuminance: 2_400.0,
+    sun_from: SUN_FROM,
     wilds: Wilds::Highlands,
+    battlements: false,
 };

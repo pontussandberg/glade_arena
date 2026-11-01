@@ -10,6 +10,7 @@
 use bevy::prelude::*;
 
 use crate::cloth::Wardrobe;
+use crate::plain::PlainMaterial;
 
 mod theme;
 pub use theme::*;
@@ -25,6 +26,8 @@ mod zombie;
 use zombie::*;
 mod merchant;
 use merchant::*;
+mod recruits;
+use recruits::*;
 mod shots;
 pub use shots::*;
 mod scene;
@@ -33,26 +36,27 @@ pub use scene::*;
 pub mod palette {
     use bevy::color::Color;
 
-    // The world: below ~50% saturation, 25-72% lightness.
-    pub const MOSS: Color = Color::srgb_u8(0x6F, 0x8F, 0x4E);
-    pub const MEADOW: Color = Color::srgb_u8(0x8A, 0xA0, 0x5A);
-    pub const FERN: Color = Color::srgb_u8(0x4E, 0x77, 0x48);
-    pub const PINE: Color = Color::srgb_u8(0x2E, 0x4B, 0x3C);
-    pub const SLATE: Color = Color::srgb_u8(0x6C, 0x76, 0x84);
-    pub const STONE: Color = Color::srgb_u8(0x84, 0x8A, 0x93);
-    pub const WALL: Color = Color::srgb_u8(0x69, 0x71, 0x7D);
-    pub const BARK: Color = Color::srgb_u8(0x5E, 0x48, 0x38);
-    pub const PATH: Color = Color::srgb_u8(0x95, 0x8C, 0x6E);
-    pub const BANK: Color = Color::srgb_u8(0x5A, 0x51, 0x41);
-    pub const RIVERBED: Color = Color::srgb_u8(0x3D, 0x4A, 0x44);
-    pub const POND: Color = Color::srgb_u8(0x4F, 0x86, 0x82);
-    pub const HEATHER: Color = Color::srgb_u8(0x9A, 0x86, 0xB6);
+    // The world: dark medieval — deep, rich colors with the light low and the torches carrying
+    // the scene. Dark means lifted blue shadows and warm accents, never black soup.
+    pub const MOSS: Color = Color::srgb_u8(0x4C, 0x6B, 0x3A);
+    pub const MEADOW: Color = Color::srgb_u8(0x5E, 0x7A, 0x42);
+    pub const FERN: Color = Color::srgb_u8(0x3E, 0x60, 0x36);
+    pub const PINE: Color = Color::srgb_u8(0x2A, 0x44, 0x30);
+    pub const SLATE: Color = Color::srgb_u8(0x60, 0x62, 0x6A);
+    pub const STONE: Color = Color::srgb_u8(0x7A, 0x7C, 0x80);
+    pub const WALL: Color = Color::srgb_u8(0x5E, 0x60, 0x66);
+    pub const BARK: Color = Color::srgb_u8(0x50, 0x3C, 0x2C);
+    pub const PATH: Color = Color::srgb_u8(0x75, 0x6A, 0x52);
+    pub const BANK: Color = Color::srgb_u8(0x4A, 0x42, 0x34);
+    pub const RIVERBED: Color = Color::srgb_u8(0x30, 0x3C, 0x3A);
+    pub const POND: Color = Color::srgb_u8(0x33, 0x60, 0x78);
+    pub const HEATHER: Color = Color::srgb_u8(0xA4, 0x7E, 0xC8);
     /// Boggy ground, wetter and browner than moss.
-    pub const MARSH: Color = Color::srgb_u8(0x5E, 0x66, 0x45);
+    pub const MARSH: Color = Color::srgb_u8(0x4A, 0x58, 0x40);
     /// The bottom of a chasm, the darkest the world goes.
-    pub const ABYSS: Color = Color::srgb_u8(0x3A, 0x42, 0x50);
+    pub const ABYSS: Color = Color::srgb_u8(0x24, 0x29, 0x31);
     /// Hemp rope on the rope bridges.
-    pub const ROPE: Color = Color::srgb_u8(0x7A, 0x6A, 0x50);
+    pub const ROPE: Color = Color::srgb_u8(0x6A, 0x5B, 0x41);
     /// Near-black leathers: trousers and hoods; boots and eye sockets.
     pub const LEATHER: Color = Color::srgb_u8(0x2E, 0x27, 0x24);
     /// The merchant's: a rich burgundy coat, weathered skin, a grey-brown beard, a forest-green
@@ -77,6 +81,15 @@ pub mod palette {
     pub const HUNTER: Color = Color::srgb_u8(0x1A, 0x1E, 0x1C);
     pub const HUNTER_DARK: Color = Color::srgb_u8(0x0D, 0x10, 0x0F);
     pub const HUNTER_ASH: Color = Color::srgb_u8(0x3A, 0x3E, 0x3C);
+    /// The shade's: a tunic of cold near-black with a breath of green in it, the ash grey of
+    /// the wraps on its arms and head, the paler band round its brow (what's seen of it from
+    /// above), a dusk-purple scarf, and a chest strap of old blood not yet gone black. Dark, but
+    /// lit: a figure, not a hole in the ground.
+    pub const SHADE_CLOTH: Color = Color::srgb_u8(0x2C, 0x34, 0x30);
+    pub const SHADE_WRAP: Color = Color::srgb_u8(0x58, 0x5E, 0x58);
+    pub const SHADE_PALE: Color = Color::srgb_u8(0x84, 0x8A, 0x84);
+    pub const SHADE_SCARF: Color = Color::srgb_u8(0x5E, 0x52, 0x74);
+    pub const SHADE_STRAP: Color = Color::srgb_u8(0x62, 0x22, 0x26);
     /// Old blood gone black-brown: the executioner's leather apron and the rag on its spear.
     pub const OXBLOOD: Color = Color::srgb_u8(0x33, 0x1D, 0x1B);
     /// Pale, cold bone: the death hunter's bandana, faded.
@@ -106,7 +119,7 @@ pub mod palette {
     pub const WISP: Color = Color::srgb_u8(0xB8, 0xFF, 0xD6);
     /// Eyes burning a cold, spectral white.
     pub const SOUL: Color = Color::srgb_u8(0xF2, 0xFA, 0xFF);
-    pub const HAZE: Color = Color::srgb_u8(0xA9, 0xB8, 0xB6);
+    pub const HAZE: Color = Color::srgb_u8(0x43, 0x4C, 0x56);
     /// A zombie's rotting grey-green skin, its darker rot and wounds, and the dirty linen it
     /// died in.
     pub const ROT: Color = Color::srgb_u8(0x7E, 0x8A, 0x66);
@@ -132,9 +145,10 @@ pub mod palette {
     /// What a slowed fighter's colors are multiplied by: a cold blue cast.
     pub const FROSTBITE: Color = Color::srgb_u8(0x8C, 0xB8, 0xFF);
 
-    // Light. Fire is the one warm, saturated thing in the world: small, static and flickering.
-    pub const SUN: Color = Color::srgb_u8(0xFF, 0xE2, 0xC4);
-    pub const SKY: Color = Color::srgb_u8(0x8F, 0xA4, 0xC2);
+    // Light. A dim, cold daylight over a blue dusk fill — enough to read the field by, while
+    // fire stays the one warm, living light.
+    pub const SUN: Color = Color::srgb_u8(0xDC, 0xE4, 0xF2);
+    pub const SKY: Color = Color::srgb_u8(0x66, 0x78, 0x9A);
     pub const TORCH_FLAME: Color = Color::srgb_u8(0xFF, 0xB2, 0x57);
     pub const TORCH_LIGHT: Color = Color::srgb_u8(0xFF, 0x94, 0x43);
 
@@ -182,8 +196,8 @@ pub fn to_gameplay(w: Vec3) -> Vec2 {
 }
 
 /// Matte, so flat facets read cleanly. Vertex colors (if any) multiply `color`.
-pub fn matte(color: Color) -> StandardMaterial {
-    StandardMaterial {
+pub fn matte(color: Color) -> PlainMaterial {
+    PlainMaterial {
         base_color: color,
         perceptual_roughness: 0.95,
         metallic: 0.0,
@@ -193,13 +207,13 @@ pub fn matte(color: Color) -> StandardMaterial {
 }
 
 /// Self-lit: shots, flames and markers that should read the same in light and shade.
-pub fn glow(color: Color, strength: f32) -> StandardMaterial {
-    StandardMaterial { emissive: LinearRgba::from(color) * strength, unlit: true, ..matte(color) }
+pub fn glow(color: Color, strength: f32) -> PlainMaterial {
+    PlainMaterial { emissive: LinearRgba::from(color) * strength, unlit: true, ..matte(color) }
 }
 
 /// See-through glow: swishes, streaks and auras.
-pub fn translucent(color: Color, alpha: f32, strength: f32) -> StandardMaterial {
-    StandardMaterial { alpha_mode: AlphaMode::Blend, ..glow(color.with_alpha(alpha), strength) }
+pub fn translucent(color: Color, alpha: f32, strength: f32) -> PlainMaterial {
+    PlainMaterial { alpha_mode: AlphaMode::Blend, ..glow(color.with_alpha(alpha), strength) }
 }
 
 /// One normal per face: the low-poly look.
@@ -210,7 +224,8 @@ pub fn faceted(mesh: Mesh) -> Mesh {
 /// Class ids that have their own figure in `fighter_mesh`. Every class in `assets/classes/` needs
 /// one (and its parts in `fighter_rig` and its moves in `rig/`): the client won't start
 /// without them, and a test checks every class has one.
-pub const FIGHTER_LOOKS: [&str; 5] = ["javelinist", "revenant", "frost_mage", "zombie", "merchant"];
+pub const FIGHTER_LOOKS: [&str; 10] =
+    ["javelinist", "revenant", "frost_mage", "zombie", "merchant", "warden", "pyre_witch", "shade", "breaker", "stormweaver"];
 
 /// Class ids whose shots have their own look in `shot_look` (the rest throw round bolts).
 pub const SHOT_LOOKS: [&str; 2] = ["javelinist", "frost_mage"];
@@ -221,18 +236,17 @@ pub const SHOT_LOOKS: [&str; 2] = ["javelinist", "frost_mage"];
 pub struct RigMeshes {
     /// Turns to look where the fighter walks or aims.
     pub head: Mesh,
-    /// An arm, hanging down (-Y) from the shoulder.
+    /// The upper arm, hanging down (-Y) from the shoulder to the elbow (`rig::Moves::elbow_at`).
     pub arm: Mesh,
-    /// A forearm hanging down from the elbow (`rig::Moves::elbow_at`), in its own space, if the arm bends
-    /// there (`arm` is then only the upper arm).
-    pub forearm: Option<Mesh>,
-    /// The left arm, if it isn't `arm` (and `forearm`) again: an empty sleeve.
-    pub lead_arm: Option<Mesh>,
-    /// A leg, hanging down from the hip.
+    /// The forearm hanging down from the elbow, in its own space.
+    pub forearm: Mesh,
+    /// The left arm, if it isn't `arm` and `forearm` again: its own upper arm, and its forearm if
+    /// it has one (an empty sleeve has none).
+    pub lead_arm: Option<(Mesh, Option<Mesh>)>,
+    /// The thigh, hanging down from the hip to the knee (`RIG_KNEE`).
     pub leg: Mesh,
-    /// A shin hanging down from the knee (`RIG_KNEE`), in its own space, if the leg bends there
-    /// (`leg` is then only the thigh).
-    pub shin: Option<Mesh>,
+    /// The shin hanging down from the knee, in its own space.
+    pub shin: Mesh,
     /// The weapon in the right hand, pointing up (+Y) from the grip.
     pub held: Mesh,
     /// Eyes in the head's space, drawn glowing cold white (`palette::SOUL`, everyone's).
@@ -270,87 +284,97 @@ pub const RIG_KNEE: Vec3 = Vec3::new(0.0, -0.4, 0.0);
 pub const RIG_ELBOW: Vec3 = Vec3::new(0.0, -0.26, 0.0);
 
 /// A class's moving parts: its hood, sleeves, legs, weapon and (if it has one) cape.
+/// Where a figure's gripped weapon cuts, along its length up from the grip (meters): where its
+/// blade (or its head) starts, and how far its point reaches. The trail and the mark it leaves in
+/// the air follow that stretch, not the whole shaft.
+pub fn blade_span(class_key: &str) -> (f32, f32) {
+    match class_key {
+        "warden" => (0.18, 1.02),
+        "breaker" => (0.88, 1.2),
+        "shade" => (0.1, 0.48),
+        _ => (BLADE_START, BLADE_LENGTH),
+    }
+}
+
+/// Where a figure's other hand's blade runs along its lead forearm (meters along the forearm's
+/// own axis from the elbow, its base to its point), if it holds one: the shade's reversed knife.
+pub fn off_blade_span(class_key: &str) -> Option<(f32, f32)> {
+    match class_key {
+        "shade" => Some((-0.2, -0.46)),
+        _ => None,
+    }
+}
+
+/// How bright a figure's blades' trails are and how long they linger, as shares of the usual
+/// (`swish::trail`): a knife's cut is nothing but its flash, so the shade's are the brightest,
+/// and the shortest-lived, so the flash is where the knife ends up, not where it came from.
+pub fn blade_flash(class_key: &str) -> (f32, f32) {
+    match class_key {
+        "shade" => (2.0, 0.6),
+        _ => (1.0, 1.0),
+    }
+}
+
 pub fn fighter_rig(class_key: &str) -> RigMeshes {
+    // Every figure's parts: its upper arm and forearm, its thigh and shin, and the rest.
+    let rig = |(arm, forearm): (Mesh, Mesh), lead_arm: Option<(Mesh, Option<Mesh>)>, (leg, shin): (Mesh, Mesh), head: Mesh, held: Mesh, eyes: Mesh, glow: Color| RigMeshes {
+        head,
+        arm,
+        forearm,
+        lead_arm,
+        leg,
+        shin,
+        held,
+        eyes,
+        glow,
+        held_glow: None,
+        body_glow: None,
+        held_aura: None,
+        held_glint: None,
+        wardrobe: None,
+    };
     match class_key {
         "javelinist" => RigMeshes {
-            head: javelinist_hood(),
-            arm: javelinist_arm(),
-            forearm: Some(javelinist_forearm()),
-            shin: Some(javelinist_shin()),
-            lead_arm: Some(javelinist_stump()),
-            leg: javelinist_leg(),
-            held: held_spear(),
-            eyes: slit_eyes(HUNTER_EYES),
-            glow: palette::DEADEYE,
-            held_glow: None,
-            body_glow: None,
             held_aura: Some(spear_aura()),
             held_glint: Some((glint(), spear_edge)),
             wardrobe: Some(javelinist_wardrobe()),
+            ..rig((javelinist_arm(), javelinist_forearm()), Some((javelinist_stump(), None)), (javelinist_leg(), javelinist_shin()), javelinist_hood(), held_spear(), slit_eyes(HUNTER_EYES), palette::DEADEYE)
         },
         "revenant" => RigMeshes {
-            head: revenant_head(),
-            arm: revenant_arm(),
-            forearm: None,
-            shin: None,
-            lead_arm: None,
-            leg: booted_leg(palette::ROBE, palette::DARK_LEATHER, 0.082, 0.07),
-            held: glaive(),
-            eyes: slit_eyes(REVENANT_EYES),
-            glow: palette::WISP,
             held_glow: Some(glaive_glow()),
             body_glow: Some(revenant_glow()),
             held_aura: Some(glaive_cracks()),
             held_glint: Some((glint(), glaive_edge)),
             wardrobe: Some(revenant_wardrobe()),
+            ..rig(revenant_arm(), None, booted_leg(palette::ROBE, palette::DARK_LEATHER, 0.082, 0.07), revenant_head(), glaive(), slit_eyes(REVENANT_EYES), palette::WISP)
         },
         "frost_mage" => RigMeshes {
-            head: frost_crowned_hood(),
-            arm: frost_mage_arm(),
-            forearm: None,
-            shin: None,
-            lead_arm: None,
-            leg: booted_leg(palette::FROST_DARK, palette::DARK_LEATHER, 0.1, 0.08),
-            held: ice_staff(),
-            eyes: spectral_eyes(Vec2::ONE),
-            glow: palette::FROST_GLOW,
             held_glow: Some(staff_crystals()),
             body_glow: Some(frost_mage_glow()),
-            held_aura: None,
-            held_glint: None,
             wardrobe: Some(frost_mage_wardrobe()),
+            ..rig(frost_mage_arm(), None, booted_leg(palette::FROST_DARK, palette::DARK_LEATHER, 0.1, 0.08), frost_crowned_hood(), ice_staff(), spectral_eyes(Vec2::ONE), palette::FROST_GLOW)
         },
-        "zombie" => RigMeshes {
-            head: zombie_head(),
-            arm: zombie_arm(),
-            forearm: None,
-            shin: None,
-            lead_arm: None,
-            leg: booted_leg(palette::RAGS.darker(0.15), palette::ROT_DARK, 0.085, 0.07),
-            held: zombie_claws(),
-            eyes: slit_eyes(ZOMBIE_EYES),
-            glow: palette::WISP,
-            held_glow: None,
-            body_glow: None,
-            held_aura: None,
-            held_glint: None,
-            wardrobe: None,
-        },
+        "zombie" => rig(zombie_arm(), None, booted_leg(palette::RAGS.darker(0.15), palette::ROT_DARK, 0.085, 0.07), zombie_head(), zombie_claws(), slit_eyes(ZOMBIE_EYES), palette::WISP),
         "merchant" => RigMeshes {
-            head: merchant_head(),
-            arm: merchant_arm(),
-            forearm: None,
-            shin: None,
-            lead_arm: None,
-            leg: booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.1, 0.085),
-            held: merchant_staff(),
-            eyes: slit_eyes(MERCHANT_EYES),
-            glow: palette::TORCH_FLAME,
             held_glow: Some(merchant_lantern()),
-            body_glow: None,
-            held_aura: None,
-            held_glint: None,
-            wardrobe: None,
+            ..rig(merchant_arm(), None, booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.1, 0.085), merchant_head(), merchant_staff(), slit_eyes(MERCHANT_EYES), palette::TORCH_FLAME)
+        },
+        "warden" => {
+            let (shield_arm, shield_forearm) = warden_shield_arm();
+            rig(warden_arm(), Some((shield_arm, Some(shield_forearm))), booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.085, 0.07), warden_helm(), arming_sword(), slit_eyes(WARDEN_EYES), palette::GOLD)
+        }
+        "pyre_witch" => RigMeshes {
+            held_glow: Some(pyre_staff_glow()),
+            ..rig(pyre_witch_arm(), None, booted_leg(palette::ASH, palette::DARK_LEATHER, 0.08, 0.065), pyre_witch_hood(), pyre_staff(), spectral_eyes(Vec2::ONE), palette::TORCH_FLAME)
+        },
+        "shade" => {
+            let (offhand, offhand_forearm) = shade_offhand();
+            rig(shade_arm(), Some((offhand, Some(offhand_forearm))), booted_leg(palette::SHADE_CLOTH, palette::DARK_LEATHER, 0.075, 0.062), shade_hood(), shade_knife(), spectral_eyes(Vec2::ONE), palette::HEATHER)
+        }
+        "breaker" => rig(breaker_arm(), None, booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.095, 0.078), breaker_helm(), maul(), slit_eyes(BREAKER_EYES), palette::TORCH_LIGHT),
+        "stormweaver" => RigMeshes {
+            held_glow: Some(storm_staff_glow()),
+            ..rig(stormweaver_arm(), None, booted_leg(recruits::STORM_DARK, palette::DARK_LEATHER, 0.08, 0.065), stormweaver_hood(), storm_staff(), spectral_eyes(Vec2::ONE), recruits::STORM_GLOW)
         },
         _ => unreachable!("no rig for class {class_key:?} (add it to FIGHTER_LOOKS)"),
     }
@@ -382,6 +406,12 @@ pub fn fighter_mesh(class_key: &str) -> Mesh {
         // The shopkeeper (no one picks it): a stout trader in a long burgundy coat, a pack piled
         // with wares on its back, a wide hat with a feather, a lantern hanging off its staff.
         "merchant" => merchant_body(),
+        // The recruits (`recruits.rs`): the five classes that joined after the first three.
+        "warden" => warden_body(),
+        "pyre_witch" => pyre_witch_body(),
+        "shade" => shade_body(),
+        "breaker" => breaker_body(),
+        "stormweaver" => stormweaver_body(),
         _ => unreachable!("no figure for class {class_key:?} (add it to FIGHTER_LOOKS)"),
     }
 }

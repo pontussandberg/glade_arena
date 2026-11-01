@@ -71,29 +71,21 @@ pub(super) fn zombie_head() -> Mesh {
 pub(super) const ZOMBIE_EYES: Vec3 = Vec3::new(0.112, 0.19, 0.045);
 
 /// A bare, rotting arm under the torn stump of a sleeve, into a bony hand.
-pub(super) fn zombie_arm() -> Mesh {
+pub(super) fn zombie_arm() -> (Mesh, Mesh) {
     let (skin, rot) = (palette::ROT, palette::ROT_DARK);
-    let sleeve = tube(
-        &[ring(0.0, 0.03, (0.072, 0.072), palette::RAGS), ring(0.0, -0.06, (0.076, 0.076), palette::RAGS), ring(0.0, -0.13, (0.08, 0.08), palette::RAGS).torn(0.05)],
-        16,
-        (true, true),
+    let sleeve = vec![ring(0.0, 0.03, (0.072, 0.072), palette::RAGS), ring(0.0, -0.06, (0.076, 0.076), palette::RAGS), ring(0.0, -0.13, (0.08, 0.08), palette::RAGS).torn(0.05)];
+    let arm = smoothed(
+        &[
+            ring(0.0, 0.0, (0.05, 0.05), skin),
+            ring(0.0, -0.18, (0.043, 0.045), skin),
+            // A dark rotting patch at the elbow.
+            ring(0.0, RIG_ELBOW.y, (0.047, 0.047), rot),
+            ring(0.0, -0.32, (0.04, 0.042), skin),
+            ring(0.0, -0.42, (0.034, 0.038), skin),
+        ],
+        2,
     );
-    let arm = tube(
-        &smoothed(
-            &[
-                ring(0.0, 0.0, (0.05, 0.05), skin),
-                ring(0.0, -0.18, (0.043, 0.045), skin),
-                // A dark rotting patch at the elbow.
-                ring(0.0, -0.26, (0.047, 0.047), rot),
-                ring(0.0, -0.32, (0.04, 0.042), skin),
-                ring(0.0, -0.42, (0.034, 0.038), skin),
-            ],
-            2,
-        ),
-        14,
-        (true, false),
-    );
-    sculpted(vec![sleeve, arm, fist(skin, -0.42, 0.045)])
+    jointed(RIG_ELBOW, vec![(arm, 14, (true, false)), (sleeve, 16, (true, true))], vec![fist(skin, -0.42, 0.045)])
 }
 
 /// The zombie's claws, from the hand (the grip, at the origin) out along +Y: three long, hooked,

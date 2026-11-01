@@ -10,7 +10,7 @@
     blurb: "It read every book in the tower. Then it burned the tower.",
     playable: false,
     max_hp: 2600,
-    move_speed: 2.8,
+    move_speed: 3.20,
     attack: (
         damage: 18,
         attack_ticks: 36,

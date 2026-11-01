@@ -6,14 +6,15 @@
     role: "Controller",
     blurb: "Bends the cold. Its frostbolts shatter into bursts of ice that slow whole packs, its nova freezes, and it always crits the frozen.",
     max_hp: 100,
-    move_speed: 3.7,
+    move_speed: 4.25,
     attack: (
         damage: 11,
         attack_ticks: 26,
         windup: 0.32,
-        kind: Projectile(speed: 17.0, radius: 0.28, range: 10.0),
+        kind: Projectile(speed: 17.0, radius: 0.28, range: 30.0),
         chill: (slow: 0.4, slow_ticks: 64),
-        // A frostbolt shatters where it hits: the cold bursts out over everyone round its mark.
+        // A frostbolt shatters where it hits, or where it ends (its range, a wall): the cold bursts
+        // out over everyone round its mark.
         burst: Some(radius: 1.8, share: 0.7),
     ),
     abilities: [
@@ -21,12 +22,12 @@
             name: "Frost Nova",
             description: "Enemies within {ability_reach} take {ability_damage} damage and are frozen for {ability_root}.",
             cooldown_ticks: 224,
-            kind: Nova(radius: 3.5, damage: 6, chill: (root_ticks: 80)),
+            kind: Nova(radius: 8.75, damage: 6, chill: (root_ticks: 80)),
         ),
     ],
     passive: Some(
         name: "Shatter",
-        description: "Frostbolts shatter where they hit: enemies within {burst_radius} of the one struck take {burst_share} of the damage. Everyone they hit is slowed by {attack_slow} for {attack_slow_time}. Against frozen enemies, gain {crit_vs_frozen} crit chance.",
+        description: "Frostbolts shatter where they hit or land: enemies within {burst_radius} take {burst_share} of the damage. Everyone they hit is slowed by {attack_slow} for {attack_slow_time}. Against frozen enemies, gain {crit_vs_frozen} crit chance.",
     ),
     crit: (vs_frozen: 1.0),
 )

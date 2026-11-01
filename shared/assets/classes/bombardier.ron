@@ -8,7 +8,7 @@
     blurb: "Throws what it brewed. Mind where you stand.",
     playable: false,
     max_hp: 70,
-    move_speed: 2.7,
+    move_speed: 3.10,
     attack: (
         damage: 6,
         attack_ticks: 56,

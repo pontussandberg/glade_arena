@@ -9,7 +9,7 @@
     blurb: "Every plague in the wilds came from somewhere.",
     playable: false,
     max_hp: 3400,
-    move_speed: 2.2,
+    move_speed: 2.55,
     attack: (
         damage: 34,
         attack_ticks: 52,

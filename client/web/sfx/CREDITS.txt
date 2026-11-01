@@ -1,0 +1,50 @@
+Sound recordings used by the game, all released under CC0 1.0 (public domain dedication,
+https://creativecommons.org/publicdomain/zero/1.0/). No attribution is required; it is given
+here with thanks. Files were trimmed, mixed to mono and normalized; some were halved in
+sample rate. The game layers and pitches them at play time (client/src/audio.rs).
+
+Pontus Sandberg, the game's author (not CC0; part of the game):
+  jav_throw.wav (the fifth of six takes in jav_throw_sound.wav)
+
+Kenney (https://kenney.nl), "Impact Sounds" and "RPG Audio" packs:
+  impact*.ogg, cloth1/2.ogg, clothBelt.ogg, creak1/2.ogg, drawKnife1/2.ogg, knifeSlice.ogg,
+  knifeSlice2.ogg, handleCoins.ogg, handleSmallLeather.ogg, metalClick.ogg, chop.ogg
+
+artisticdude (OpenGameArt), "Swishes Sound Pack" and "RPG Sound Pack":
+  swish_light_*.wav, swish_heavy_*.wav, swing_1/2.wav, unsheathe_1/2.wav, ring.wav, coins.wav,
+  chainmail.wav, cloth_heavy.wav, magic.wav
+
+StarNinjas (OpenGameArt), "20 Sword Sound Effects (Attacks and Clashes)":
+  sword_1-3.ogg, clash_1-3.ogg
+
+rubberduck (OpenGameArt), "100 CC0 SFX #2":
+  air_01.ogg, hit_01/02.ogg, metal_hit_01/02.ogg, stones_01/02.ogg, glass_01.ogg, thunder_01.ogg,
+  frost_air.wav (air_03 under a highpass), ice_tinkle_1/2.wav (glass_02/03 sped up a little
+  under a highpass)
+
+faxcorp (OpenGameArt), "Electricity Game Sound Pack":
+  zap_hit.wav (hit), zap_bloom.wav (shieldhit), crackle.wav (snaploop), charge.wav
+  (chargestart), boom.wav (deathboom), groundhit.wav
+
+bart (OpenGameArt), "Ice spells" (from a pdsounds recording by Stephan): ice.wav, coldsnap.wav
+IgnasD (OpenGameArt), "Ice breaking/shattering": shatter_1/2.ogg (LedasLuzta, LedasLuzta2),
+  ice_crack_1-3.wav (single cracks cut from LedasLuzta4 and LedasLuzta5, sped up a little),
+  ice_break_1/2.wav (LedasLuzta5's last break, LedasLuzta33), ice_deep_1-3.wav (single cracks
+  from LedasLuzta33 and LedasLuzta5 slowed to about 0.65x under a lowpass)
+themightyglider (OpenGameArt), "Catching fire": flame.ogg
+
+"SSE Library: FIRE" (USC Cinema / Sunset Editorial collection, via the Internet Archive,
+https://archive.org/details/SSE_Library_FIRE):
+  fire_whoosh.wav (flare whoosh), fire_pop.wav and fire_bed.wav (acetylene torch pops)
+
+Still North Media (Ben Jaszczak and Brian Nelson; OpenGameArt, "Medieval sound effects - Weapon
+Textures"), single takes cut from the texture files:
+  spear_swing_1-3.wav (Spear Swing), blade_swing_1-3.wav (Katana Swing, slowed to 0.75x), bow_draw_1-3.wav (Scythian
+  Recurve Draw), spear_flight_1-3.wav (Scythian Recurve Heavy Arrow Passby, slowed to 0.6x under
+  a lowpass)
+
+qubodup (OpenGameArt), "Ghost breath": ghost_breath.wav (the swell of it)
+
+Made from the above: draw_air.wav (swish_heavy_1 reversed and slowed), rift_tear.wav (magic.wav
+slowed to half speed under a lowpass), ice_thump.wav (boom.wav's first knock, under a low
+lowpass)

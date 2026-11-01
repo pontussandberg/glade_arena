@@ -164,6 +164,9 @@ struct Room {
     started: bool,
     /// Never listed, no one joins.
     practice: bool,
+    /// Where its members start, instead of a spawn point ("Practice Ravenhold at 10 -4"): for
+    /// looking a map over from anywhere on it.
+    start: Option<Vec2>,
     /// A run against the waves of one's own: never listed, no one joins.
     solo: bool,
     /// Only those who give it join.
@@ -201,7 +204,8 @@ impl Room {
         // Shopping for the next: the last one fought is as far as it got.
         let wave = if matches!(run.phase, RunPhase::Shop { .. }) { run.wave - 1 } else { run.wave };
         let party = run.party.iter().map(|(_, name, class)| (name.clone(), *class)).collect();
-        let score = HighScore { wave, map: self.map, party, date: crate::highscores::today(), version: arena_shared::config::GAME_VERSION.to_string() };
+        // Under the map's base: a run that opened the bastion's courts is still the bastion's.
+        let score = HighScore { wave, map: self.map.base(), party, date: crate::highscores::today(), version: arena_shared::config::GAME_VERSION.to_string() };
         Some((scores.record(score), run.party.iter().map(|(id, ..)| *id).collect()))
     }
 }
@@ -210,6 +214,12 @@ impl Lobby {
     /// The map `room` plays on (the default one if it's gone).
     pub fn map(&self, room: &InRoom) -> &'static Map {
         self.rooms.get(&room.key).map_or(MapId::default(), |r| r.map).map()
+    }
+
+    /// Where a player in `room` starts, away from `others` there: its spawn point farthest from
+    /// them, or where it was asked to start (`Room::start`).
+    pub fn spawn_point(&self, room: &InRoom, others: impl IntoIterator<Item = Vec2> + Clone) -> Vec2 {
+        self.rooms.get(&room.key).and_then(|r| r.start).unwrap_or_else(|| arena_shared::sim::pick_spawn_point(self.map(room), others))
     }
 
     /// Who's in `room`, and how many on each team.
@@ -640,7 +650,21 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             join(lobby, ctx, link, key)?;
         }
         RoomRequest::QuickJoin(name) => {
+            // "Practice <map>" (its label, e.g. "Practice Ravenhold"): a practice room of one's
+            // own on that map, to walk it in peace; "Practice Ravenhold at 10 -4" starts there
+            // (read before the name is cut to length: the room is only ever called "Practice").
+            if let Some(wanted) = name.to_lowercase().strip_prefix("practice ") {
+                let (wanted, at) = wanted.split_once(" at ").unwrap_or((wanted, ""));
+                if let Some(map) = MapId::ALL.into_iter().find(|map| map.label().to_lowercase() == wanted.trim()) {
+                    let at: Vec<f32> = at.split_whitespace().filter_map(|n| n.parse().ok()).collect();
+                    handle(lobby, allocator, ctx, link, RoomRequest::Practice(map))?;
+                    let key = lobby.guests[&link].room.expect("just joined");
+                    lobby.rooms.get_mut(&key).expect("just made").start = at.get(..2).map(|xy| Vec2::new(xy[0], xy[1]));
+                    return Ok(());
+                }
+            }
             let name = clean_room_name(&name).ok_or("Give the room a name")?;
+            let lower = name.to_lowercase();
             let found = lobby
                 .rooms
                 .iter()
@@ -656,11 +680,21 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                 Some(key) => key,
                 None => {
                     // One called "Waves..." is a run against the waves, on from the off; "Waves 10"
-                    // starts at wave 10 (for trying later waves out).
-                    let mode = if name.to_lowercase().starts_with("waves") { Mode::Waves } else { Mode::Ffa };
+                    // starts at wave 10 (for trying later waves out). "Bastion..." likewise, on
+                    // the bastion ("Bastion 9" starts at wave 9, its armory already open), and
+                    // "Ravenhold..." on the hold.
+                    let bastion = lower.starts_with("bastion");
+                    let hold = lower.starts_with("ravenhold");
+                    let mode = if lower.starts_with("waves") || bastion || hold { Mode::Waves } else { Mode::Ffa };
                     let from_wave = name.split_whitespace().nth(1).and_then(|n| n.parse::<u32>().ok()).filter(|n| (1..=200).contains(n));
                     // The default map, if it's one of the mode's; else the mode's own (the wilds).
-                    let map = mode.maps().iter().copied().find(|&map| map == MapId::default()).unwrap_or(mode.maps()[0]);
+                    let map = if bastion {
+                        MapId::Bastion
+                    } else if hold {
+                        MapId::Hold
+                    } else {
+                        mode.maps().iter().copied().find(|&map| map == MapId::default()).unwrap_or(mode.maps()[0])
+                    };
                     let key = create(lobby, allocator, ctx, link, name, mode, map);
                     let now = ctx.now();
                     let room = lobby.rooms.get_mut(&key).expect("just made");
@@ -671,6 +705,10 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                     key
                 }
             };
+            // One started mid-list ("Waves 10") begins on that wave's stage of its map.
+            if let Some(wave) = lobby.rooms.get(&key).and_then(|room| room.run.as_ref()).map(|run| run.wave) {
+                stage_map(lobby, &mut ctx.commands, key, wave);
+            }
             lobby.guests.get_mut(&link).expect("a guest").playing = true;
             join(lobby, ctx, link, key)?;
         }
@@ -681,6 +719,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             room.started = true;
             room.practice = true;
             lobby.guests.get_mut(&link).expect("a guest").playing = true;
+            stand_dummies(lobby, ctx, key);
             join(lobby, ctx, link, key)?;
         }
         RoomRequest::PlaySolo => {
@@ -816,10 +855,9 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                 return Err("A dummy can't stand there");
             }
             let patrol = if walks { Some(Patrol::through(room.map.map(), at).ok_or("No room for a dummy to walk there")?) } else { None };
-            // Each class in turn.
-            let class = ClassId::playable().nth(room.dummies.len() % ClassId::playable().count()).expect("a class");
-            let in_room = room.in_room(key);
-            let dummy = spawn_dummy(&mut ctx.commands, lobby.next_local(), class, in_room, at);
+            let class = dummy_class(room.dummies.len());
+            let (in_room, map) = (room.in_room(key), room.map.map());
+            let dummy = spawn_dummy(&mut ctx.commands, map, lobby.next_local(), class, in_room, at);
             let room = lobby.rooms.get_mut(&key).expect("in it");
             if let Some(patrol) = patrol {
                 ctx.commands.entity(dummy).insert(patrol);
@@ -926,6 +964,8 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                     guest.satchel = Satchel { gold, ..default() };
                 }
             }
+            // A fresh run starts on the map's base stage (the last run may have opened it up).
+            stage_map(lobby, &mut ctx.commands, key, 1);
             lobby.clear_score(key);
             for member in members {
                 if let Some(guest) = lobby.guests.get_mut(&member) {
@@ -940,6 +980,27 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
 
 /// The most target dummies a practice room may have.
 const MAX_DUMMIES: usize = 12;
+
+/// What a room's `n`th dummy fights as: each class in turn.
+fn dummy_class(n: usize) -> ClassId {
+    ClassId::playable().nth(n % ClassId::playable().count()).expect("a class")
+}
+
+/// The target dummies a practice room's map comes with (`Map::dummies`) stand on it, as if
+/// placed first. Nothing happens for any other room.
+fn stand_dummies(lobby: &mut Lobby, ctx: &mut Ctx, key: RoomKey) {
+    let room = &lobby.rooms[&key];
+    if !room.practice {
+        return;
+    }
+    let in_room = room.in_room(key);
+    let map = room.map.map();
+    for &at in &map.dummies {
+        let class = dummy_class(lobby.rooms[&key].dummies.len());
+        let dummy = spawn_dummy(&mut ctx.commands, map, lobby.next_local(), class, in_room, at);
+        lobby.rooms.get_mut(&key).expect("in it").dummies.push(dummy);
+    }
+}
 /// The most zombies a practice room may have about.
 const MAX_PRACTICE_ZOMBIES: usize = 12;
 
@@ -959,6 +1020,7 @@ fn create(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, leade
         leader,
         started: false,
         practice: false,
+        start: None,
         solo: false,
         password: None,
         members: Vec::new(),
@@ -986,6 +1048,28 @@ fn spawn_room_things(commands: &mut Commands, room: InRoom, map: MapId) -> Vec<E
     things
 }
 
+/// Room `key`'s map onto the stage `wave` has reached (`MapId::at_stage`): on the bastion, a
+/// sealed court's gate opens between waves, and what lies in it (pickups, the court's lairs and
+/// chest spots through the map itself) comes with it. Unlike `switch_map`, fighters stay exactly
+/// where they stand: a stage only ever opens ground. Returns the gate just opened (none going
+/// back to the base for a fresh run), for the thunder at it.
+pub(super) fn stage_map(lobby: &mut Lobby, commands: &mut Commands, key: RoomKey, wave: u32) -> Option<Vec2> {
+    let room = lobby.rooms.get_mut(&key)?;
+    let staged = room.map.at_stage(wave);
+    if staged == room.map {
+        return None;
+    }
+    info!(room = key.0, from = ?room.map, to = ?staged, wave, "the bastion's gate opens");
+    room.map = staged;
+    room.changed = true;
+    lobby.list_changed = true;
+    let room = lobby.rooms.get_mut(&key).expect("still here");
+    room.clear_things(commands);
+    let in_room = room.in_room(key);
+    room.things = spawn_room_things(commands, in_room, staged);
+    staged.gate_opened()
+}
+
 /// Room `key` onto `map`: what lay on the old map goes, and the new one's comes. Practice may
 /// change it with everyone in: they start over on the new map (from a spawn point), and shots in
 /// the air are gone with the old one.
@@ -1010,6 +1094,7 @@ fn switch_map(lobby: &mut Lobby, ctx: &mut Ctx, key: RoomKey, map: MapId) {
             ctx.commands.entity(player).insert(NeedsSpawnPoint);
         }
     }
+    stand_dummies(lobby, ctx, key);
 }
 
 /// The team a mode puts its `n`th member on.
@@ -1175,11 +1260,27 @@ fn handle_class_choices(
             let Some(class) = class.pickable() else { continue };
             let Some(guest) = lobby.guests.get_mut(&link) else { continue };
             guest.active_at = now;
+            let again = guest.class == Some(class);
             guest.class = Some(class);
-            if let Some(key) = guest.room
+            let (id, team, key) = (guest.peer, guest.team, guest.room);
+            if let Some(key) = key
                 && let Some(room) = lobby.rooms.get_mut(&key)
             {
                 room.changed = true;
+                // Practicing, a class is tried on on the spot: the old fighter goes and a fresh
+                // one spawns as the pick (`enter_arena` only dresses the empty-handed). Only a
+                // new pick: the client repeats its choice after every respawn, and respawning
+                // for the repeat would respawn forever.
+                if room.practice && room.started && !again
+                    && let Some(player) = ctx.player_of(link)
+                {
+                    let in_room = room.in_room(key);
+                    lobby.guests.get_mut(&link).expect("there").satchel.refund_unfit(class);
+                    ctx.commands.entity(player).try_despawn();
+                    spawn_player(&mut ctx.commands, link, id, class, in_room, Team(team));
+                    info!(room = key.0, class = class.def().name, "practice re-pick");
+                    continue;
+                }
             }
             enter_arena(&mut lobby, &mut ctx, link);
         }

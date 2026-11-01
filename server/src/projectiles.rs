@@ -3,6 +3,7 @@
 use super::*;
 
 use arena_shared::items::Item;
+use arena_shared::map::ShotEnd;
 use arena_shared::sim;
 
 use crate::rooms::{InRoom, Lobby};
@@ -23,19 +24,50 @@ pub(crate) struct Spares(pub(crate) PeerId);
 #[derive(Component, Default)]
 pub(crate) struct Pierced(Vec<PeerId>);
 
+/// Shots fly on, and end at their range or against what's in their way. An auto-attack's shot
+/// that bursts (`AttackDef::burst`, a frostbolt) bursts where it ends too, hitting no one itself.
+#[allow(clippy::type_complexity)]
 pub(super) fn move_projectiles(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
-    mut projectiles: Query<(Entity, &mut Pos, &Projectile, &InRoom)>,
+    mut projectiles: Query<(Entity, &mut Pos, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Bounces>), Without<PlayerId>>,
+    mut targets: Targets,
+    mut log: ResMut<HitLog>,
 ) {
     let tick = timeline.tick().0;
-    for (entity, mut pos, projectile, room) in &mut projectiles {
+    for (entity, mut pos, projectile, room, team, might, bounces) in &mut projectiles {
         pos.0 = sim::projectile_pos(projectile, tick as f32);
-        if sim::projectile_expired(lobby.map(room), pos.0, projectile, tick) {
-            commands.entity(entity).despawn();
+        if !sim::projectile_expired(lobby.map(room), pos.0, projectile, tick) {
+            continue;
+        }
+        commands.entity(entity).despawn();
+        let burst = projectile.class.def().attack.burst.filter(|_| projectile.ability.is_none() && bounces.is_none());
+        if let Some(burst) = burst {
+            let amount = mighty(mighty(sim::projectile_damage(projectile, tick), might_of(might)), burst.share);
+            let end = sim::projectile_end(lobby.map(room), projectile, tick);
+            burst_at(&mut commands, &mut log, tick, &mut targets, (projectile, amount), (burst, end, None), (*room, *team));
         }
     }
+}
+
+/// An auto-attack's burst (`AttackDef::burst`) where its shot ended (`end`: shown on what it came
+/// down on, or the side of what it flew into): `amount` (chilled as its shot chills) to each of
+/// its shooter's foes round it but the one its shot struck (`spares`).
+fn burst_at(
+    commands: &mut Commands,
+    log: &mut HitLog,
+    now: u32,
+    targets: &mut Targets,
+    (projectile, amount): (&Projectile, i32),
+    (burst, end, spares): (arena_shared::classes::BurstDef, ShotEnd, Option<PeerId>),
+    side: Side,
+) {
+    let at = end.at;
+    crate::fx::spawn_fx(commands, side.0, Fx::at(FxKind::Blast(burst.color), at, burst.radius, now, 10).ended(end));
+    let reach = burst.radius + PLAYER_RADIUS;
+    let blow = Blow::attack(amount, sim::projectile_chill(projectile), false, projectile.crit);
+    hit_foes(commands, log, now, targets, (projectile.owner, projectile.class, "auto-attack"), (side, Source::Splash), blow, |id, p, _| Some(id) != spares && p.distance(at) <= reach);
 }
 
 /// Projectile hits on the shooter's foes (allies' pass through), judged against where everyone
@@ -48,16 +80,19 @@ pub(super) fn resolve_projectile_hits(
     timeline: Res<LocalTimeline>,
     mut projectiles: Query<(Entity, &Pos, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Spares>, (Option<&Bounces>, Option<&mut Pierced>))>,
     mut targets: Targets,
+    lobby: Res<Lobby>,
     mut log: ResMut<HitLog>,
 ) {
     let now = timeline.tick();
     // Frostbolts' bursts (`AttackDef::burst`), dealt once every shot's hit is: where, by whom,
-    // how hard, and whom they spare (the one struck).
+    // how hard, and whom they spare (the one struck). And storm bolts' chains (`AttackDef::chain`)
+    // likewise: from the one struck, on to the nearest.
     let mut bursts = Vec::new();
+    let mut chains = Vec::new();
     for (projectile_entity, projectile_pos, projectile, room, team, might, spares, (bounces, mut pierced)) in &mut projectiles {
         let pierces = projectile.ability.is_none() && projectile.class.def().attack.pierces;
         let mut through: Vec<PeerId> = pierced.as_ref().map_or_else(Vec::new, |p| p.0.clone());
-        for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent, _, (sheltered, decoy)) in &mut targets {
+        for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent, _, (sheltered, decoy, motion)) in &mut targets {
             if target_id.0 == projectile.owner
                 || sheltered
                 || owns(projectile.owner, decoy)
@@ -65,7 +100,7 @@ pub(super) fn resolve_projectile_hits(
                 || through.contains(&target_id.0)
                 || health.0 == 0
                 || !foes((*room, *team), (*target_room, *target_team))
-                || !sim::projectile_hits(projectile_pos.0, projectile, target_pos.0) {
+                || !sim::projectile_hits(projectile_pos.0, projectile, now.0, target_pos.0, motion.height) {
                 continue;
             }
             let goes_on = pierces && target_team.0 == arena_shared::rooms::ZOMBIES;
@@ -91,7 +126,12 @@ pub(super) fn resolve_projectile_hits(
             let shot = ShotHit { projectile: *projectile, might: might_of(might), bounces: bounces.map(|b| b.0), pierced: !first };
             damage(&mut commands, &mut log, now.0, at, hit, blow, (projectile.owner, projectile.class, with), ((*room, *team), source, Some(shot)));
             if let Some(burst) = def.attack.burst.filter(|_| source == Source::Attack) {
-                bursts.push((burst, target_pos.0, target_id.0, *projectile, mighty(amount, burst.share), chill, (*room, *team)));
+                // On the one struck: where its feet are.
+                let end = ShotEnd { at: target_pos.0, height: lobby.map(room).surface_under(target_pos.0, motion.height + 1e-3), wall: None };
+                bursts.push((burst, end, target_id.0, *projectile, mighty(amount, burst.share), (*room, *team)));
+            }
+            if let Some(chain) = def.attack.chain.filter(|_| source == Source::Attack) {
+                chains.push((chain, target_pos.0, target_id.0, *projectile, mighty(amount, chain.share), chill, (*room, *team)));
             }
             if !goes_on {
                 break;
@@ -106,10 +146,30 @@ pub(super) fn resolve_projectile_hits(
             _ => {}
         }
     }
-    for (burst, at, struck, projectile, amount, chill, side) in bursts {
-        crate::fx::spawn_fx(&mut commands, side.0, Fx::at(FxKind::Blast(burst.color), at, burst.radius, now.0, 10));
-        let reach = burst.radius + PLAYER_RADIUS;
-        let blow = Blow::attack(amount, chill, false, projectile.crit);
-        hit_foes(&mut commands, &mut log, now.0, &mut targets, (projectile.owner, projectile.class, "auto-attack"), (side, Source::Splash), blow, |id, p| id != struck && p.distance(at) <= reach);
+    for (burst, end, struck, projectile, amount, side) in bursts {
+        burst_at(&mut commands, &mut log, now.0, &mut targets, (&projectile, amount), (burst, end, Some(struck)), side);
+    }
+    // Each arc leaps to the nearest foe within reach of the last one struck that hasn't been
+    // struck by this bolt, and on from there, so a shot into a pack runs through it.
+    for (chain, mut from, struck, projectile, amount, chill, side) in chains {
+        let mut hit = vec![struck];
+        let reach = chain.reach + PLAYER_RADIUS;
+        for _ in 0..chain.hops {
+            let next = targets
+                .iter()
+                .filter(|(_, id, (room, team), pos, health, _, _, _, (sheltered, decoy, _))| {
+                    !hit.contains(&id.0) && id.0 != projectile.owner && health.0 > 0 && !*sheltered && !owns(projectile.owner, *decoy) && foes(side, (**room, **team)) && pos.0.distance(from) <= reach
+                })
+                .min_by(|a, b| a.3.0.distance(from).total_cmp(&b.3.0.distance(from)))
+                .map(|(entity, id, _, pos, ..)| (entity, id.0, pos.0));
+            let Some((entity, id, at)) = next else { break };
+            crate::fx::spawn_fx(&mut commands, side.0, Fx::between(FxKind::Arc, from, at, 0.0, now.0, 6));
+            let Ok((.., mut health, mut chilled, mut recent, _, _)) = targets.get_mut(entity) else { break };
+            let blow = Blow::attack(amount, chill, false, projectile.crit);
+            damage(&mut commands, &mut log, now.0, (entity, id, at), (&mut health, &mut chilled, &mut recent), blow, (projectile.owner, projectile.class, "auto-attack"), (side, Source::Splash, None));
+            hit.push(id);
+            from = at;
+        }
     }
 }
+
