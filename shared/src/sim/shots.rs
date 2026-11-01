@@ -1,17 +1,53 @@
 //! Shots in flight: where one starts and is at a tick (and how high: aimed up or down, it
-//! climbs or falls as it flies, and a thrown one, that `falls`, drops under gravity from the
-//! hand), when it's spent, whom it hits, and for how much.
+//! climbs or falls as it flies, and a thrown one, that `falls`, drops under gravity past its
+//! range), when it's spent, whom it hits, and for how much.
 
 use super::*;
 
 use crate::classes::{Chill, Shot};
-use crate::config::{BODY_HEIGHT, GRAVITY, SHOT_HEIGHT};
+use crate::config::{ACTION_LOOK_HEIGHT, ACTION_SHOULDER, BODY_HEIGHT, GRAVITY, SHOT_HEIGHT, SHOULDER_WALL_MARGIN};
 use crate::map::Map;
 use crate::protocol::Projectile;
 
 /// Where a shot starts: at the edge of the shooter, so it doesn't start inside them.
 pub(crate) fn shot_spawn(pos: Vec2, dir: Vec2, radius: f32) -> Vec2 {
     pos + dir * (PLAYER_RADIUS + radius)
+}
+
+/// How far to the right (`right`, along the ground) of a fighter at `pos`, feet `feet` high, the
+/// action camera looks over their shoulder: `ACTION_SHOULDER`, or less with something solid
+/// beside their head (a wall, a roof, a rock: `Map::sight_meets`; not a tree, nor the open
+/// edge of the map), just short of it, so it never looks from inside one.
+pub fn shoulder_room(map: &Map, pos: Vec2, right: Vec2, feet: f32) -> f32 {
+    const STEP: f32 = 0.25;
+    let eye = feet + ACTION_LOOK_HEIGHT;
+    let mut out = STEP;
+    while out <= ACTION_SHOULDER {
+        if map.sight_meets((pos, eye), (pos + right * out, eye)) {
+            return (out - SHOULDER_WALL_MARGIN).max(0.0);
+        }
+        out += STEP;
+    }
+    ACTION_SHOULDER
+}
+
+/// To the right of `dir`, along the ground.
+fn right_of(dir: Vec2) -> Vec2 {
+    Vec2::new(dir.y, -dir.x)
+}
+
+/// A shot fired in action mode (by a fighter at `pos`, feet `feet` high), to fly where the
+/// crosshair is: it starts on the camera's line of sight and flies along it, so on screen it
+/// leaves from the middle and stays in the crosshair however far it flies. The line passes
+/// `aside` to the fighter's right (as far as the room there allows, `shoulder_room`; 0 in first
+/// person) at `ACTION_LOOK_HEIGHT` over their feet, the point the camera turns about, along the
+/// shot's `dir` and `climb`. A thrown one (`Shot::falls`) stays on it out to its range and
+/// falls away under it from there (`projectile_height`).
+pub fn onto_sight(map: &Map, projectile: Projectile, pos: Vec2, aside: f32, feet: f32) -> Projectile {
+    let right = right_of(projectile.dir);
+    let aside = aside.clamp(0.0, shoulder_room(map, pos, right, feet));
+    let ahead = (projectile.origin - pos).dot(projectile.dir);
+    Projectile { origin: projectile.origin + right * aside, lift: feet + ACTION_LOOK_HEIGHT + projectile.climb * ahead - SHOT_HEIGHT, ..projectile }
 }
 
 /// How a projectile flies, from its shooter's class (only classes that shoot fire them).
@@ -27,7 +63,7 @@ pub fn projectile_flown(projectile: &Projectile, tick: f32) -> f32 {
     shot(projectile).speed * TICK_DT * steps
 }
 
-/// Where a projectile is at `tick`, on the gameplay plane.
+/// Where a projectile is at `tick`, on the gameplay plane: along its `dir`.
 pub fn projectile_pos(projectile: &Projectile, tick: f32) -> Vec2 {
     projectile.origin + projectile.dir * projectile_flown(projectile, tick)
 }
@@ -35,10 +71,9 @@ pub fn projectile_pos(projectile: &Projectile, tick: f32) -> Vec2 {
 /// How high a projectile flies at `tick`, over the gameplay plane (not the ground under it, which
 /// rises and falls: `Map::height_at`): from the hand (raised by the ground the shooter stood on
 /// and a jump, together its `lift`), up or down as it was aimed (`climb`), straight. A thrown
-/// one (`Shot::falls`) leaves along that
-/// line and gravity has it from there: on at its speed along the ground, dropping ever faster
-/// below the line it was aimed along (a throw is aimed where it leaves, not where it lands:
-/// hold over for a far mark).
+/// one (`Shot::falls`) flies along that line out to its range and gravity has it from there: on
+/// at its speed along the ground, dropping ever faster below the line (hold over for a mark
+/// past the range).
 pub fn projectile_height(projectile: &Projectile, tick: f32) -> f32 {
     let flown = projectile_flown(projectile, tick);
     SHOT_HEIGHT + projectile.lift + projectile.climb * flown - 0.5 * GRAVITY * projectile_falling(projectile, flown).powi(2)
@@ -48,14 +83,15 @@ pub fn projectile_height(projectile: &Projectile, tick: f32) -> f32 {
 /// (negative falling): as aimed, and steeper down the longer a thrown one has flown.
 pub fn projectile_pitch(projectile: &Projectile, tick: f32) -> f32 {
     let shot = shot(projectile);
-    projectile.climb - GRAVITY * projectile_falling(projectile, projectile_flown(projectile, tick)) / shot.speed
+    let flown = projectile_flown(projectile, tick);
+    projectile.climb - GRAVITY * projectile_falling(projectile, flown) / shot.speed
 }
 
 /// How long (seconds) a projectile that has `flown` this far has been falling: a thrown one
-/// since it left the hand, one that doesn't fall never.
+/// since it flew past its range (straight as aimed till then), one that doesn't fall never.
 fn projectile_falling(projectile: &Projectile, flown: f32) -> f32 {
     let shot = shot(projectile);
-    if shot.falls { flown / shot.speed } else { 0.0 }
+    if shot.falls { (flown - shot.range).max(0.0) / shot.speed } else { 0.0 }
 }
 
 /// Out of range (or, for one that falls, given up on), or its middle into something that

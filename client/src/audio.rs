@@ -64,12 +64,15 @@ pub enum Sfx {
     Step(Surface),
     /// A dash, as the figure dashes.
     Dash(DashVoice),
-    /// The revenant's glaive coming over and down flat: a long blade's slice of air with a low
-    /// rush of wind under it, the flat of the blade meeting earth, and the ground tearing open
-    /// with a cold ring.
+    /// The revenant's glaive landing as its lead foot stomps down: the edge biting into the
+    /// ground, a heavy dull thump with real weight under it, and the earth shuddering low for a
+    /// good while after.
     GlaiveSwing,
-    /// The revenant gathering: a cold wind rising behind the blade, and under it a breath drawn
-    /// from the other side.
+    /// The revenant's glaive coming over and down, just before it lands (`strike_whoosh`): a
+    /// long, heavy haft pushing through the air, the coat flapping with it.
+    GlaiveWhoosh,
+    /// The revenant gathering: its coat heaving as the glaive goes up, the air beginning to move
+    /// behind the blade, and under it a breath drawn from the other side.
     GlaiveReady,
     /// The javelinist gathering: the spear drawn back over the shoulder, cloth shifting and the
     /// shaft groaning in the grip.
@@ -102,6 +105,9 @@ pub enum Sfx {
     Loose,
     /// A spear in flight: the heavy shaft droning away through the air.
     SpearLoose,
+    /// A thrown spear that missed, striking what isn't a fighter (a wall, a rock, the ground): its
+    /// iron tip chipping on grimy stone, high, short and very faint, nothing more.
+    SpearTing,
     /// A gout of fire tossed: it catches with a snap, whoomps away, and crackles after.
     FireLoose,
     /// The pyre witch gathering: fire catching in the hand, a fuse of a hiss.
@@ -202,7 +208,7 @@ fn weapon_pitch(class: arena_shared::protocol::ClassId) -> f32 {
 /// figure without its own gets the plain gather and swish, pitched by its weapon's weight.
 fn attack_voice(class: arena_shared::protocol::ClassId) -> (Sfx, Sfx, f32) {
     match class.def().figure() {
-        "revenant" => (Sfx::GlaiveReady, Sfx::GlaiveSwing, 1.17),
+        "revenant" => (Sfx::GlaiveReady, Sfx::GlaiveSwing, 1.0),
         "javelinist" => (Sfx::JavReady, Sfx::SpearThrow, 1.0),
         "frost_mage" => (Sfx::FrostReady, Sfx::Swing, 1.0),
         "warden" => (Sfx::ShieldReady, Sfx::ShieldThrust, 1.0),
@@ -213,6 +219,16 @@ fn attack_voice(class: arena_shared::protocol::ClassId) -> (Sfx, Sfx, f32) {
         "shade" => (Sfx::KnifeReady, Sfx::KnifeSwing, 1.0),
         "zombie" => (Sfx::Windup, Sfx::ClawSwing, 1.0),
         _ => (Sfx::Windup, Sfx::Swing, weapon_pitch(class)),
+    }
+}
+
+/// A heavy blow's whoosh, for a class that has one: what it is, and how long (seconds) before
+/// the attack goes off it starts, its loudest just as the blow lands. The swing's own sound
+/// plays as it goes off, too late for the air the blade pushes on the way down.
+fn strike_whoosh(class: arena_shared::protocol::ClassId) -> Option<(Sfx, f32)> {
+    match class.def().figure() {
+        "revenant" => Some((Sfx::GlaiveWhoosh, 0.2)),
+        _ => None,
     }
 }
 
@@ -276,6 +292,10 @@ fn windup_sounds(
         if unheard(&mut heard, attacker, swing.started_at, clock.as_ref().map(|clock| clock.now(is_me))) {
             let (gather, _, pitch) = attack_voice(*class);
             queue.push_pitched(gather, 0.4 * earshot(pos.0.distance(me.0), 10.0), 0.0, pitch);
+            if let Some((whoosh, lead)) = strike_whoosh(*class) {
+                let windup = swing.windup_ticks(&class.def().attack) as f32 / arena_shared::config::TICK_HZ as f32;
+                queue.push_pitched(whoosh, 0.42 * earshot(pos.0.distance(me.0), 13.0), (windup - lead).max(0.0), pitch);
+            }
         }
     }
 }
@@ -784,11 +804,10 @@ mod web {
             let g = gain;
             // A small random spread keeps a flurry from repeating; the revenant's voice is
             // pinned instead, tuned by ear to one speed.
-            let p = if matches!(kind, Sfx::GlaiveReady | Sfx::GlaiveSwing) { pitch } else { self.vary(0.08) * pitch };
+            let p = if matches!(kind, Sfx::GlaiveReady | Sfx::GlaiveSwing | Sfx::GlaiveWhoosh) { pitch } else { self.vary(0.08) * pitch };
             const SWISH_LIGHT: [&str; 3] = ["swish_light_1", "swish_light_2", "swish_light_3"];
             const SWISH_HEAVY: [&str; 3] = ["swish_heavy_1", "swish_heavy_2", "swish_heavy_3"];
             const SPEAR_SWINGS: [&str; 3] = ["spear_swing_1", "spear_swing_2", "spear_swing_3"];
-            const BLADE_SWINGS: [&str; 3] = ["blade_swing_1", "blade_swing_2", "blade_swing_3"];
             const BOW_DRAWS: [&str; 3] = ["bow_draw_1", "bow_draw_2", "bow_draw_3"];
             const SPEAR_FLIGHTS: [&str; 3] = ["spear_flight_1", "spear_flight_2", "spear_flight_3"];
             const FLESH: [&str; 5] = ["impactPunch_medium_000", "impactPunch_medium_001", "impactPunch_medium_002", "impactSoft_medium_000", "impactSoft_medium_001"];
@@ -879,28 +898,46 @@ mod web {
                     self.sample("swing_2", now, 0.34 * g, p * 1.05, 0.1, 0.1);
                 }
                 Sfx::GlaiveReady => {
-                    // The glaive drawn back and up: a cold wind rising behind the blade, and under
-                    // it a breath drawn from the other side, soft and swelling.
-                    if let Some(e) = self.env(now, 0.22, 0.18 * g, 0.34) {
-                        self.noise(Bandpass, 300.0 * p, 1400.0 * p, 1.2, now, 0.34, &e);
-                    }
+                    // The glaive heaved back and up: the coat heaving, the air beginning to move
+                    // behind the blade (a heavy swish slowed right down), and under it a breath
+                    // drawn from the other side, soft and swelling.
+                    self.sample("cloth_heavy", now, 0.22 * g, 0.9 * p, 0.2, 0.1);
+                    let haul = self.pick(&SWISH_HEAVY);
+                    self.sample(haul, now + 0.08, 0.15 * g, 0.5 * p, 0.25, 0.15);
                     if let Some(e) = self.held(now, 0.09 * g, 0.3, 0.15) {
                         self.clip_through("ghost_breath", now, 0.3, Some(0.5), p, Lowpass, 1800.0, &e);
                     }
                 }
-                Sfx::GlaiveSwing => {
-                    // The glaive coming over and down flat: a long blade's slice of air with a
-                    // low rush of wind under it, the flat of the blade meeting earth with a
-                    // little grit, and the ground tearing open with a cold ring that hangs on.
-                    let slice = self.pick(&BLADE_SWINGS);
-                    self.sample(slice, now, 0.5 * g, p, 0.15, 0.1);
-                    if let Some(e) = self.env(now, 0.03, 0.2 * g, 0.22) {
-                        self.noise(Lowpass, 700.0 * p, 180.0, 0.8, now, 0.22, &e);
+                Sfx::GlaiveWhoosh => {
+                    // A long haft and a heavy blade shoving through the air (a staff's swing
+                    // slowed down, its whistle dulled away), the coat flapping with it.
+                    let air = self.pick(&SPEAR_SWINGS);
+                    if let Some(e) = self.held(now, 0.4 * g, 0.3, 0.2) {
+                        self.clip_through(air, now, 0.0, None, 0.65 * p, Lowpass, 2200.0, &e);
                     }
-                    self.sample("groundhit", now + 0.1, 0.3 * g, 0.85 * p, 0.1, 0.25);
-                    let grit = self.pick(&STONES);
-                    self.sample(grit, now + 0.11, 0.1 * g, p, 0.1, 0.25);
-                    self.sample("rift_tear", now + 0.1, 0.28 * g, p, 0.3, 0.3);
+                    self.sample("cloth_heavy", now + 0.02, 0.12 * g, 0.85 * p, 0.2, 0.1);
+                }
+                Sfx::GlaiveSwing => {
+                    // In the order the ground takes it (recordings only, nothing synthesized,
+                    // nothing that bounces, no scatter of debris: it reads as a splash): the
+                    // edge biting in, the blade's and the stomping foot's thump, a slowed heavy
+                    // blow's weight under it, and the earth shuddering low and rumbling on after.
+                    if let Some(e) = self.held(now, 0.28 * g, 0.05, 0.1) {
+                        self.clip_through("chop", now, 0.0, None, 0.7 * p, Lowpass, 2600.0, &e);
+                    }
+                    if let Some(e) = self.held(now, 0.42 * g, 0.1, 0.2) {
+                        self.clip_through("groundhit", now, 0.0, None, 0.7 * p, Lowpass, 1400.0, &e);
+                    }
+                    let weight = self.pick(&["impactPunch_heavy_000", "impactPunch_heavy_001"]);
+                    if let Some(e) = self.held(now, 0.35 * g, 0.15, 0.3) {
+                        self.clip_through(weight, now, 0.0, None, 0.55 * p, Lowpass, 600.0, &e);
+                    }
+                    if let Some(e) = self.held(now, 0.55 * g, 0.35, 0.9) {
+                        self.clip_through("boom", now, 0.0, None, 0.6 * p, Lowpass, 180.0, &e);
+                    }
+                    if let Some(e) = self.held(now + 0.04, 0.3 * g, 0.5, 1.0) {
+                        self.clip_through("thunder_01", now + 0.04, 0.85, Some(1.6), 0.55 * p, Lowpass, 260.0, &e);
+                    }
                 }
                 Sfx::ShieldReady => {
                     // The shield coming up and the sword cocked back: leather and strap, and a
@@ -1072,6 +1109,11 @@ mod web {
                     if let Some(e) = self.held(now, 0.25 * g, 0.15, 0.15) {
                         self.clip("crackle", now, 0.2, Some(0.3), 1.5 * p, &e);
                     }
+                }
+                Sfx::SpearTing => {
+                    // A pick's first bite into stone, raised, its rubble after cut off.
+                    let chip = self.pick(&["impactMining_000", "impactMining_001"]);
+                    self.sample(chip, now, 0.14 * g, 1.7 * p, 0.03, 0.06);
                 }
                 Sfx::Hit => {
                     // A blow landing on a body.

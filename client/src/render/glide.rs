@@ -182,7 +182,7 @@ pub(super) fn predict_me(
     time: Res<Time<Real>>,
     clock: AttackClock,
     map: Res<crate::rooms::CurrentMap>,
-    (sends, draws, attacks): (Res<crate::SentWalks>, Res<crate::SentDraws>, Res<crate::SentAttacks>),
+    (sends, draws, attacks, jumps): (Res<crate::SentWalks>, Res<crate::SentDraws>, Res<crate::SentAttacks>, Res<crate::SentJumps>),
     mut schedule: ResMut<crate::WalkSchedule>,
     link: Query<&Link, With<Client>>,
     mut me: Query<(Entity, &mut Pos, (&Motion, Option<&AttackState>), &ClassId, Option<&Dashing>, Option<&Chilled>, Option<&Hasted>, (Option<&Frenzy>, Option<&Fury>), Option<&Walking>, Option<&mut PredictedWalk>), With<Me>>,
@@ -190,7 +190,7 @@ pub(super) fn predict_me(
     let Some(latest) = clock.latest_tick() else { return };
     let rtt = link.single().map_or(0.0, |link| link.stats.rtt.as_secs_f32());
     let guessed_lead = rtt * TICK_HZ as f32 + PREDICT_SLACK_TICKS;
-    let (map, draws, attacks) = (map.map(), &*draws, &*attacks);
+    let (map, draws, attacks, jumps) = (map.map(), &*draws, &*attacks, &*jumps);
     for (entity, mut pos, (motion, attack), class, dashing, chilled, hasted, (frenzy, fury), walking, predicted) in &mut me {
         let Some(mut predicted) = predicted else {
             commands.entity(entity).insert(PredictedWalk { drawn: pos.0, motion_seen: *motion, height: motion.height, server_walk: walking.map_or(Vec2::ZERO, |w| w.0), ..default() });
@@ -220,8 +220,8 @@ pub(super) fn predict_me(
         let next = at.floor() as u32 + 1;
         schedule.0 = if schedule.0 > next + 4 { next } else { schedule.0.max(next) };
         // The server's step for one tick of ours: walking (never rooted by a windup, in action
-        // mode; faster in a frenzy, slower while a shot winds up, as the server walks it), or a
-        // dash running on; then our attack, as the server steps it after the walk
+        // mode; faster in a frenzy, slower while a shot winds up, as the server walks it), jumping
+        // as Space was sent (held, it jumps again just as it lands), or a dash running on; then our attack, as the server steps it after the walk
         // (`combat::attack`), by the clicks and the attack button as we sent them, so we know
         // just when a shot starts winding up and goes off. A dash that has gone its length (or
         // is knocked off its feet) is dropped before the tick's move, as the server drops it
@@ -233,7 +233,7 @@ pub(super) fn predict_me(
                 if dashing.0.is_some_and(|dash| dash.over()) || chilled.rooted_at(tick) || chilled.lifted_at(tick) {
                     dashing.0 = None;
                 }
-                let input = PlayerInput { walk, aim: Vec2::X, ..default() };
+                let input = PlayerInput { walk, aim: Vec2::X, jump_held: jumps.jumping_at(tick), ..default() };
                 let boost = (1.0 + frenzy.at(tick as f32)) * sim::winding_speed(*class, attack);
                 let to = sim::move_player_boosted(map, from, &input, *class, &AttackState::default(), &mut dashing, &mut motion, &chilled, &hasted, tick, boost);
                 // Knocked up, no attacking, and one winding up is lost.

@@ -254,7 +254,8 @@ fn spawn_my_frame(
 /// Your attack range, crit chance and attack speed, as your next attack will have them:
 /// highlighted, each that's changed, while your `follow_up` empowers it, a prime readies it or a
 /// frenzy speeds it up. And how fast you walk now, just as the server moves you: slowed (red),
-/// hasted, in a frenzy, in your own rift (highlighted), in a marsh.
+/// hasted, in a frenzy, in your own rift (highlighted), in a marsh; or how fast you're going,
+/// while that's faster (highlighted): speed built up strafing through jumps keeps on past it.
 #[allow(clippy::type_complexity)]
 fn update_live_stats(
     clock: crate::feedback::AttackClock,
@@ -290,7 +291,9 @@ fn update_live_stats(
         * (1.0 + frenzy.map_or(0.0, |f| f.at(now)))
         * (1.0 + rift)
         * map.map().speed_factor_at(pos.0);
-    let speed = def.move_speed * factor;
+    // Faster than the walk by momentum (`Motion::along`), that.
+    let going = motion.map_or(0.0, |motion| motion.along.length());
+    let speed = (def.move_speed * factor).max(going);
     if let Ok((mut text, mut color)) = texts.get_mut(frame.0.move_speed) {
         let label = move_text(speed);
         let tint = if label == move_text(def.move_speed) {

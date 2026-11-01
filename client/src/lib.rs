@@ -167,6 +167,19 @@ impl SentDraws {
     }
 }
 
+/// Which tick each `PlayerCommand::Jump` we sent was for, and whether Space was held, oldest
+/// first: what our own fighter's prediction jumps by (`render::glide`).
+#[derive(Resource, Default)]
+pub struct SentJumps(pub VecDeque<(u32, bool)>);
+
+impl SentJumps {
+    /// Whether we jump at `tick` if we can, as sent: Space held then, or pressed for it (a tap
+    /// let go before the tick still jumps on it, `PlayerInput::jumping`).
+    pub fn jumping_at(&self, tick: u32) -> bool {
+        self.0.iter().any(|&(t, held)| t == tick && held) || self.0.iter().rev().find(|(t, _)| *t <= tick).is_some_and(|(_, held)| *held)
+    }
+}
+
 /// Which tick each `PlayerCommand::Attack` we sent was for, oldest first: what our own fighter's
 /// prediction steps its attack by (`render::glide`), a shot winding up slowing its walk.
 #[derive(Resource, Default)]
@@ -223,6 +236,7 @@ impl Plugin for ClientNetPlugin {
         app.init_resource::<SentWalks>();
         app.init_resource::<SentDraws>();
         app.init_resource::<SentAttacks>();
+        app.init_resource::<SentJumps>();
         app.init_resource::<WalkSchedule>();
         app.add_systems(Update, (forget_walk_on_attack, send_commands).chain().in_set(SendCommands));
         app.add_systems(Update, fake_latency.run_if(resource_changed::<FakeLatency>));
@@ -281,6 +295,7 @@ struct Sent {
     walk: Vec2,
     aim: Vec2,
     climb: f32,
+    aside: f32,
     /// Whether Space was held, and the attack button, as last sent.
     jump: bool,
     draw: bool,
@@ -304,7 +319,7 @@ fn send_commands(
     mut client: Query<&mut MessageSender<PlayerCommand>, (With<Client>, With<Connected>)>,
     mut sent: Local<Sent>,
     #[cfg(feature = "render")] mode: Option<Res<crate::camera::CameraMode>>,
-    (mut sent_walks, mut sent_draws, mut sent_attacks): (ResMut<SentWalks>, ResMut<SentDraws>, ResMut<SentAttacks>),
+    (mut sent_walks, mut sent_draws, mut sent_attacks, mut sent_jumps): (ResMut<SentWalks>, ResMut<SentDraws>, ResMut<SentAttacks>, ResMut<SentJumps>),
     schedule: Res<WalkSchedule>,
 ) {
     let (Ok(mut sender), Ok(attack)) = (client.single_mut(), me.single()) else {
@@ -341,22 +356,23 @@ fn send_commands(
             sent_walks.0.pop_front();
         }
     }
-    // In action mode the aim is the camera's: its direction and its pitch (`climb`). It's sent
-    // as the camera turns while our attack winds up (the only time the server has a use for it),
-    // so the attack follows it until it goes off (`PlayerCommand::Aim`); the click that starts
-    // one carries the direction itself, and the pitch goes ahead of it if it changed. Out of
-    // action mode the pitch is sent level once, so no shot keeps the last one.
+    // In action mode the aim is the camera's: its direction, its pitch (`climb`) and how far to
+    // our right its line passes (`aside`, where a shot comes onto it). It's sent as the camera
+    // turns while our attack winds up (the only time the server has a use for it), so the attack
+    // follows it until it goes off (`PlayerCommand::Aim`); the click that starts one carries the
+    // direction itself, and the pitch goes ahead of it if it changed. Out of action mode the
+    // pitch is sent level once, so no shot keeps the last one.
     #[cfg(feature = "render")]
     let action = mode.as_ref().is_some_and(|mode| mode.free);
     #[cfg(not(feature = "render"))]
     let action = false;
     let winding_up = attack.is_some_and(|attack| attack.winding_up().is_some());
-    let turned = input.aim != sent.aim || input.climb != sent.climb;
-    let pitched = input.climb != sent.climb;
+    let pitched = input.climb != sent.climb || input.aside != sent.aside;
+    let turned = input.aim != sent.aim || pitched;
     let firing = input.fire && due(sent.attack_at);
     if (action && winding_up && turned && due(sent.aim_at)) || (pitched && (firing || !action)) {
-        send(PlayerCommand::Aim(input.aim, input.climb));
-        (sent.aim, sent.climb, sent.aim_at) = (input.aim, input.climb, now);
+        send(PlayerCommand::Aim(input.aim, input.climb, input.aside));
+        (sent.aim, sent.climb, sent.aside, sent.aim_at) = (input.aim, input.climb, input.aside, now);
     }
     if firing {
         // For the tick a walk would be (`PlayerCommand::Attack`).
@@ -376,9 +392,14 @@ fn send_commands(
         desired.0.casts = default();
         walk_when_ordered.0 = input.move_to;
     }
+    // Space, for the tick a walk would be (`PlayerCommand::Jump`).
     if input.jump != sent.jump {
-        send(PlayerCommand::Jump(input.jump));
+        send(PlayerCommand::Jump(input.jump, schedule.0));
         sent.jump = input.jump;
+        sent_jumps.0.push_back((schedule.0, input.jump));
+        while sent_jumps.0.len() > SENT_WALKS_KEPT {
+            sent_jumps.0.pop_front();
+        }
     }
     // The attack button, for the tick a walk would be (`PlayerCommand::Draw`).
     if input.draw != sent.draw {

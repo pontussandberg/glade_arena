@@ -358,7 +358,7 @@ fn preview_impact() {
     let class = ClassId::by_key(key).unwrap();
     let moves = moves(key);
     let landed = targets(moves, Phase { draw: 0.0, throw: 1.0, dashing: 0.0, second: 1.0 }, Vec2::ZERO, 0.0);
-    // Plain, and empowered (`follow_up`): the blade grown, smeared out at its longest.
+    // Plain, and grown to strike (`follow_up`): the blade grown, smeared out at its longest.
     for empowered in [false, true] {
     let (smear, blade) = if empowered { (moves.stretch + EMPOWERED_STRETCH, EMPOWERED_BLADE) } else { (0.0, 1.0) };
     let posed = assemble(moves, &landed, &landed, Vec2::X, 0.0, 0.0, smear, blade, 0.0);
@@ -442,7 +442,7 @@ fn preview_attacks() {
         let class = ClassId::by_key(key).unwrap();
         let moves = moves(key);
         let length = arena::blade_span(key).1;
-        let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0 };
+        let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0, aside: 0.0 };
         let (windup, period) = (swing.windup_ticks(&class.def().attack) as f32, swing.ticks(&class.def().attack) as f32);
         let release = 10.0 + windup;
         // The moments to show, in ticks.

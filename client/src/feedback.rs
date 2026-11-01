@@ -491,13 +491,15 @@ fn react_to_hits(
     }
 }
 
-/// Dead fighters (waiting to respawn) aren't drawn. Also checked when a fighter first gets its
-/// body, in case we first see someone while they're dead.
+/// Dead fighters (waiting to respawn) aren't drawn, nor your own while you see through its eyes
+/// (`CameraMode::through_my_eyes`: its weapon in hand is, `rig::view`).
 fn hide_the_dead(
-    mut players: Query<(&Health, &mut Visibility), (With<PlayerId>, Or<(Changed<Health>, Added<Mesh3d>)>)>,
+    mode: Res<crate::camera::CameraMode>,
+    mut players: Query<(&Health, &mut Visibility, Has<crate::Me>), (With<PlayerId>, With<Mesh3d>)>,
 ) {
-    for (health, mut visibility) in &mut players {
-        visibility.set_if_neq(shown(health.alive()));
+    let eyes = mode.through_my_eyes();
+    for (health, mut visibility, me) in &mut players {
+        visibility.set_if_neq(shown(health.alive() && !(me && eyes)));
     }
 }
 

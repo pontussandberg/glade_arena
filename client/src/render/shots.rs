@@ -29,6 +29,11 @@ const SETTLE_SECONDS: f32 = 0.2;
 /// How far (meters) a thrown spear flies before it has come in from where it left the hand (to
 /// the side and above) onto its real path at `THROWN_HEIGHT`: one long, gentle curve, no dive.
 const CONVERGE_METERS: f32 = 7.0;
+/// Our own spear starts just beside the crosshair's line (meters), on the side of the hand that
+/// threw it, so it's seen leaving it and not end-on, and comes in onto the line over a long
+/// stretch of flight (meters): to the eye it starts on the crosshair.
+const OWN_ASIDE: f32 = 0.15;
+const OWN_CONVERGE_METERS: f32 = 20.0;
 /// Others' spears reach us a round trip (and a bit) after they're thrown, when their real path
 /// is already meters ahead of the hand. A spear never starts more than this far (meters) behind
 /// it; beyond that (a very high ping) the rest is skipped.
@@ -76,6 +81,11 @@ pub(super) struct Launch {
     pub(super) held: Quat,
     /// As big as the thrower drew it in the hand.
     pub(super) scale: Vec3,
+    /// How far (ticks) behind its real path it left the hand, along it: our own held drawn, let
+    /// go only once the hand has driven it up to the top of the throw (`HeldAt::drive`).
+    pub(super) lag: f32,
+    /// How far (meters) it flies before it has come in onto its real path.
+    pub(super) converge: f32,
 }
 
 /// A thrown spear as it leaves the hand that holds it at `held` (`HeldAt::at`, the grip, the
@@ -94,8 +104,10 @@ pub(crate) fn leaving_hand(held: &Transform) -> Transform {
 /// relative to us. Never before where it starts.
 ///
 /// A thrown spear leaves the hand: out of sight until the thrower's hand has let go of it (our
-/// own fighter is drawn a moment behind the news of its throw), then it takes over the held
-/// javelin's place (where the throw sends it, see `HeldAt`),
+/// own fighter is drawn a moment behind the news of its throw). Our own then appears just beside
+/// its real path, the crosshair's line, as the hand empties (the throw sells it), and comes in onto
+/// it over `OWN_CONVERGE_METERS`. Another's takes over
+/// the held javelin's place (where the throw sends it, see `HeldAt`),
 /// then comes in onto its real path (which starts at the thrower's center, where hits are judged)
 /// along one gentle curve over its first `CONVERGE_METERS`, across and down (or up) at once:
 /// heading in from the moment it leaves the hand, it meets the path running along it, its nose
@@ -112,7 +124,8 @@ pub(super) fn fly_shots(
     time: Res<Time>,
     clock: AttackClock,
     visuals: Res<Visuals>,
-    mut holders: Query<(&PlayerId, &mut HeldAt)>,
+    mode: Res<crate::camera::CameraMode>,
+    mut holders: Query<(&PlayerId, &mut HeldAt, Has<Me>)>,
     mut shots: Query<(&Projectile, &mut Transform, &mut Visibility, Option<&mut Thrown>, Option<&Spin>), With<Mesh3d>>,
 ) {
     let now = time.elapsed_secs();
@@ -123,10 +136,14 @@ pub(super) fn fly_shots(
         // Just where the sim has it: aimed up or down (the action camera's), it rises or falls
         // as it flies (and a thrown one drops from the hand on), its nose along its flight. A
         // thrown one is let go a little higher than that and comes onto its path (`Thrown`).
-        let height = sim::projectile_height(projectile, at_tick);
-        let on_path = to_world(sim::projectile_pos(projectile, at_tick), height);
-        let along = Quat::from_rotation_y(projectile.dir.to_angle());
-        let tilt = Quat::from_rotation_z(sim::projectile_pitch(projectile, at_tick).atan());
+        let path_at = |tick: f32| {
+            let height = sim::projectile_height(projectile, tick);
+            let on_path = to_world(sim::projectile_pos(projectile, tick), height);
+            let along = Quat::from_rotation_y(projectile.dir.to_angle());
+            let tilt = Quat::from_rotation_z(sim::projectile_pitch(projectile, tick).atan());
+            (height, on_path, along, tilt)
+        };
+        let (height, on_path, along, tilt) = path_at(at_tick);
         let forward_dir = along * Vec3::X;
         let Some(mut thrown) = thrown else {
             let spun = spin.map_or(Quat::IDENTITY, |s| Quat::from_rotation_x(s.0 * now));
@@ -139,8 +156,9 @@ pub(super) fn fly_shots(
             // moment behind the news of its throw). Out of sight until it is, or until it's late.
             None if projectile.ability.is_none()
                 && !projectile.extra
-                && tick < projectile.spawn_tick as f32 + MAX_HOLD_TICKS
-                && holders.iter().any(|(id, held)| id.0 == projectile.owner && held.let_go.is_none_or(|at| at < projectile.spawn_tick)) =>
+                && holders.iter().any(|(id, held, _)| {
+                    id.0 == projectile.owner && tick < projectile.spawn_tick as f32 + held.drive + MAX_HOLD_TICKS && held.let_go.is_none_or(|at| at < projectile.spawn_tick)
+                }) =>
             {
                 visibility.set_if_neq(Visibility::Hidden);
                 continue;
@@ -148,34 +166,41 @@ pub(super) fn fly_shots(
             None => {
                 visibility.set_if_neq(Visibility::Inherited);
                 // Where it starts, which way it points and how big it is: an ability's where the
-                // sim threw it (just outside the thrower's body), along its flight; an
-                // auto-attack just as the held javelin is this frame (its point, held pointing up,
-                // +Y, a shot along +X, as big as the thrower draws it), the hand letting go of it.
+                // sim threw it (just outside the thrower's body), along its flight; our own
+                // auto-attack on its path, on the crosshair's line, the throw selling it, as big
+                // as it's drawn in the hand; another's just as the held javelin is this frame (its
+                // point, held pointing up, +Y, a shot along +X), the hand letting go of it.
                 let start = if projectile.ability.is_some() || projectile.extra {
-                    Some((to_world(projectile.origin, height), along, Vec3::ONE))
+                    Some((to_world(projectile.origin, height), along, Vec3::ONE, 0.0, CONVERGE_METERS))
                 } else {
-                    holders.iter_mut().find(|(id, _)| id.0 == projectile.owner).map(|(_, mut held)| {
+                    holders.iter_mut().find(|(id, ..)| id.0 == projectile.owner).map(|(_, mut held, me)| {
                         held.launched = held.launched.max(Some(projectile.spawn_tick));
-                        // Our own: from just where the hand let go between frames, flown on
-                        // along its path since (off it as far as the hand was then).
-                        let (hand, path) = match held.released_from.filter(|_| held.let_go == Some(projectile.spawn_tick)) {
-                            Some(hand) => (hand, to_world(sim::projectile_pos(projectile, projectile.spawn_tick as f32), height)),
-                            None => (held.at, on_path),
-                        };
-                        let leaving = leaving_hand(&hand);
-                        (leaving.translation + on_path - path, leaving.rotation, leaving.scale)
+                        let leaving = leaving_hand(&held.at);
+                        if me {
+                            // One held drawn, let go a drive after it went off, that far behind
+                            // its real path along it; just beside it on the throwing hand's side
+                            // (the fighter's, left of the crosshair; in first person, the arm in
+                            // view's, right of it).
+                            let lag = if held.released_from.is_some() && held.let_go == Some(projectile.spawn_tick) { held.drive } else { 0.0 };
+                            let (_, from, along, tilt) = path_at(at_tick - lag);
+                            let right = (along * Vec3::X).cross(Vec3::Y).normalize_or_zero();
+                            let side = if mode.through_my_eyes() { 1.0 } else { -1.0 };
+                            (from + right * side * OWN_ASIDE, along * tilt, leaving.scale, lag, OWN_CONVERGE_METERS)
+                        } else {
+                            (leaving.translation, leaving.rotation, leaving.scale, 0.0, CONVERGE_METERS)
+                        }
                     })
                 };
                 *thrown.launch.insert(match start {
-                    Some((from, rotation, scale)) => {
+                    Some((from, rotation, scale, lag, converge)) => {
                         // No more than `MAX_CATCH_UP` behind its real path.
-                        let mut offset = from - on_path;
+                        let mut offset = from - path_at(at_tick - lag).1;
                         let excess = offset.dot(forward_dir) + MAX_CATCH_UP;
                         offset -= forward_dir * excess.min(0.0);
-                        Launch { at: now, from, offset, held: rotation, scale }
+                        Launch { at: now, from, offset, held: rotation, scale, lag, converge }
                     }
                     // No thrower to be seen: straight from its path.
-                    None => Launch { at: now, from: on_path, offset: Vec3::ZERO, held: along, scale: Vec3::ONE },
+                    None => Launch { at: now, from: on_path, offset: Vec3::ZERO, held: along, scale: Vec3::ONE, lag: 0.0, converge: CONVERGE_METERS },
                 })
             }
         };
@@ -186,14 +211,18 @@ pub(super) fn fly_shots(
         let across = flat - forward_dir * ahead;
         // Eased out (1 to 0 over `seconds`), so the spear runs onto its path without a kink.
         let left = |seconds: f32| (1.0 - since / seconds).max(0.0).powi(2);
+        // One left behind along its path catches up along it within `SETTLE_SECONDS`, on just
+        // the curve it flies (onto the crosshair's line), only a moment late.
+        let (_, on_path, along, tilt) = if launch.lag > 0.0 { path_at(at_tick - launch.lag * left(SETTLE_SECONDS)) } else { (height, on_path, along, tilt) };
+        let forward_dir = along * Vec3::X;
         let give_back = SETTLE_SECONDS.max(8.0 * ahead / speed.max(1.0));
-        // Across and down onto its path over `CONVERGE_METERS` of flight, on a parabola: leaving
+        // Across and down onto its path over `Launch::converge` of flight, on a parabola: leaving
         // the hand heading in, meeting the path along it; the nose along the curve.
         let off = across + Vec3::Y * rise;
         let flown = (on_path - (launch.from - launch.offset)).dot(forward_dir).max(0.0);
-        let rest = (1.0 - flown / CONVERGE_METERS).max(0.0);
+        let rest = (1.0 - flown / launch.converge).max(0.0);
         let at = on_path + off * rest * rest + forward_dir * ahead * left(give_back);
-        let heading = (forward_dir - off * 2.0 * rest / CONVERGE_METERS).normalize();
+        let heading = (forward_dir - off * 2.0 * rest / launch.converge).normalize();
         let flying = Quat::from_rotation_arc(forward_dir, heading) * along * tilt;
         let turned = 1.0 - left(SETTLE_SECONDS);
         transform.set_if_neq(Transform::from_translation(at).with_rotation(launch.held.slerp(flying, turned)).with_scale(launch.scale));
@@ -229,6 +258,10 @@ const SPLINTER_STRETCH: f32 = 4.0;
 const SPLINTER_FALL: f32 = 9.0;
 /// A spear gone this much short of its range (meters) was stopped by something, not spent.
 const STOPPED_SHORT: f32 = 0.4;
+/// A spear ending this near a fighter's body (meters) struck it, not what's around it; how far
+/// off (meters) the ting of one striking anything else is heard.
+const TING_SLACK: f32 = 0.4;
+const TING_EARSHOT: f32 = 30.0;
 /// A bolt bursting as it's spent (`strike_home`): how long its flash lasts and how big it gets
 /// (seconds, meters); how many sparks fly out of it every way, how fast (m/s) and for how long.
 const BURST_SECONDS: f32 = 0.12;
@@ -263,7 +296,9 @@ pub(super) fn strike_home(
     map: Res<crate::rooms::CurrentMap>,
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<PlainMaterial>>,
+    mut sounds: ResMut<crate::audio::SoundQueue>,
     shots: Query<(&Projectile, &Transform, Option<&Thrown>, &InheritedVisibility, &MeshMaterial3d<PlainMaterial>)>,
+    fighters: Query<(&Transform, Has<Me>), (With<PlayerId>, Without<Projectile>)>,
 ) {
     let cleared = room.0.as_ref().is_some_and(|view| view.winner.is_some()) || map.is_changed();
     let Ok((projectile, transform, thrown, visible, own_light)) = shots.get(trigger.entity) else { return };
@@ -297,6 +332,16 @@ pub(super) fn strike_home(
         let size = SPLINTER_SIZE.0 + (SPLINTER_SIZE.1 - SPLINTER_SIZE.0) * r(3);
         let life = SPLINTER_LIFE.0 + (SPLINTER_LIFE.1 - SPLINTER_LIFE.0) * r(4);
         commands.spawn((Impact { started: now, life, size, velocity: Some(velocity) }, bit()));
+    }
+    // Into anything but a fighter (whose hit sounds for itself), a miss: a faint chip on stone, as
+    // near as it is.
+    let into_fighter = fighters.iter().any(|(body, _)| {
+        let feet = body.translation.y;
+        arena::to_gameplay(body.translation).distance(arena::to_gameplay(point)) < PLAYER_RADIUS + shot.radius + TING_SLACK
+            && (feet - TING_SLACK..feet + BODY_HEIGHT + TING_SLACK).contains(&point.y)
+    });
+    if !into_fighter && let Some((ear, _)) = fighters.iter().find(|(_, me)| *me) {
+        sounds.push(crate::audio::Sfx::SpearTing, crate::audio::earshot(ear.translation.distance(point), TING_EARSHOT));
     }
 }
 

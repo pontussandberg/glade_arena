@@ -61,6 +61,11 @@ pub(crate) struct Moves {
     pub(super) back_leg: [f32; 4],
     /// How much of the body's twist its legs turn with (0: they keep along the facing).
     pub(super) hip_turn: f32,
+    /// Each leg's swing turned about the upright from its hip, on top of `hip_turn` (keyframes,
+    /// back leg and lead leg: negative toward the weapon side, like `twist`): the stance winding
+    /// round with the hips as it draws, then driven through.
+    pub(super) back_leg_turn: [f32; 4],
+    pub(super) lead_leg_turn: [f32; 4],
     /// How far each knee bends (positive: the shin back), for a rig whose legs bend there.
     pub(super) lead_knee: [f32; 4],
     pub(super) back_knee: [f32; 4],
@@ -81,6 +86,9 @@ pub(crate) struct Moves {
     /// How it fidgets standing still.
     pub(crate) idle: Idle,
     pub(super) head_dip: [f32; 4],
+    /// The head turned about the neck on top of following the body (`head_follow`; keyframes,
+    /// negative toward the weapon side, like `twist`).
+    pub(super) head_turn: [f32; 4],
     pub(super) held: Held,
     // (The fourth keyframe of each is the class's Q pose: a nova's slam. A dash has none.)
     /// Throws its weapon with the auto-attack: the hand is empty until a new one is drawn.
@@ -113,6 +121,19 @@ pub(crate) struct Moves {
     /// The weapon arm's swing turned about the upright (radians, in the facing's frame; positive
     /// turns it in across the body): a blow in one straight plane, aimed where it lands.
     pub(super) swing_yaw: f32,
+    /// Its blow comes down onto its lane's middle line, wherever that runs beside its striker
+    /// (`LastSwing::aside`: in action mode the crosshair's line), lying straight along it: the
+    /// arm lifted out from the weapon shoulder to it as the blow comes over and down
+    /// (`Angles::arm_tilt`), landing along it, not turned in across it (`swing_yaw`).
+    pub(crate) lands_on_lane: bool,
+    /// How far ahead of its arm the body (its twist, lean, legs and head) goes through the strike
+    /// (0: with it): the body's share of the strike is the arm's to the power of one less this,
+    /// so the step and the hips drive it and the arm comes through after them. Only striking:
+    /// it settles back with the arm.
+    pub(super) body_leads: f32,
+    /// How far (radians) the whole figure turns toward its weapon side as it braces to attack,
+    /// toward the action camera's crosshair over that shoulder, what it holds still along the aim.
+    pub(super) aim_turn: f32,
     /// How far through the strike (0 to 1, above 0) it is when the attack goes off: the rest of
     /// it plays in the backswing, where walking cuts it short. A thrust: the tip just reaching
     /// the target's body. A throw: the spear leaving the hand. Tuned by eye.

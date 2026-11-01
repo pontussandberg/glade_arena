@@ -298,15 +298,15 @@ pub(super) fn attack(
             state.set_if_neq(sim::cancel_attack(*state));
             continue;
         }
-        // In action mode an attack winding up follows the aim until it goes off
-        // (`PlayerCommand::Aim`); the MOBA's locks it on the click.
+        // In action mode an attack winding up follows the aim (and the line of sight beside it)
+        // until it goes off (`PlayerCommand::Aim`); the MOBA's locks it on the click.
         if action
             && let Some(swing) = state.winding_up()
             && let Some(dir) = input.aim.try_normalize()
-            && swing.dir != dir
+            && (swing.dir != dir || swing.aside != input.aside)
             && let Some(swing) = state.swing.as_mut()
         {
-            swing.dir = dir;
+            (swing.dir, swing.aside) = (dir, input.aside);
         }
         // A primed attack going off this tick is a sure crit (`primer`: the ability that readied it).
         let primer = state.primed.filter(|_| state.winding_up().is_some_and(|swing| swing.primed)).map(|(slot, _)| slot);
@@ -326,10 +326,18 @@ pub(super) fn attack(
         match released {
             None => {}
             Some(sim::Attack::Projectile(projectile)) => {
-                // Pitched as the aim is now (action mode's; level in the MOBA).
-                spawn_projectile(&mut commands, Projectile { crit: primed, climb: input.climb, lift: feet, ..projectile }, side, might);
+                // Pitched as the aim is now (action mode's; level in the MOBA), and in action mode
+                // let go from the raised hand onto the crosshair's line.
+                let projectile = Projectile { crit: primed, climb: input.climb, lift: feet, ..projectile };
+                let projectile = if action { sim::onto_sight(lobby.map(room), projectile, pos.0, input.aside, feet) } else { projectile };
+                spawn_projectile(&mut commands, projectile, side, might);
             }
             Some(sim::Attack::Melee(mut swing)) => {
+                // In action mode its lane runs along the crosshair's line, as far out to the
+                // right as a wall beside lets the camera's (`sim::shoulder_room`); in the MOBA
+                // straight out from the striker.
+                let right = Vec2::new(swing.dir.y, -swing.dir.x).normalize_or_zero();
+                swing.aside = if action { swing.aside.clamp(0.0, sim::shoulder_room(lobby.map(room), pos.0, right, feet)) } else { 0.0 };
                 // An empowered strike grows with a Gravecaller Rift.
                 let level = satchel.map_or(0, |s| s.level(arena_shared::items::Item::GravecallerRift));
                 swing.grown = if swing.empowered && level > 0 { arena_shared::items::gravecaller_rift(level) } else { 0.0 };
@@ -349,7 +357,7 @@ pub(super) fn attack(
                 // sure to crit. Each hit is noted as it lands.
                 let ambush = class.def().crit.ambush_ticks;
                 let landed = hit_foes_each(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Attack), |target, at, target_feet| {
-                    if !sim::melee_hits(lobby.map(room), (pos.0, feet), swing.dir, (swing.empowered, swing.grown), *class, (at, target_feet)) {
+                    if !sim::melee_hits(lobby.map(room), (swing.lane_from(pos.0), feet), swing.dir, (swing.empowered, swing.grown), *class, (at, target_feet)) {
                         return None;
                     }
                     let fresh = ambush > 0 && ambushes.0.insert((id.0, target), now.0).is_none_or(|last| now.0 - last > ambush);
@@ -414,7 +422,7 @@ pub(super) fn second_cuts(
         let blow = Blow::attack(cut.amount, cut.chill, cut.swing.empowered, false);
         let with = (id.0, *class, "auto-attack");
         hit_foes(&mut commands, &mut log, now, &mut targets, with, ((*room, *team), Source::Attack), blow, |_, at, feet| {
-            sim::melee_hits(lobby.map(room), (pos.0, motion.height), cut.swing.dir, (cut.swing.empowered, cut.swing.grown), *class, (at, feet))
+            sim::melee_hits(lobby.map(room), (cut.swing.lane_from(pos.0), motion.height), cut.swing.dir, (cut.swing.empowered, cut.swing.grown), *class, (at, feet))
         });
     }
 }

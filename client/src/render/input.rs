@@ -118,7 +118,7 @@ pub(super) fn read_local_input(
         (Some(cursor), Some(me)) => cursor - me,
         _ => desired.0.aim,
     };
-    let climb = if mode.free { mode.climb } else { 0.0 };
+    let (climb, aside) = if mode.free { (mode.climb, mode.aside()) } else { (0.0, 0.0) };
     // Casts not sent yet, and new ones after them, each toward the cursor as its key went down.
     let mut casts = PlayerInput { casts: desired.0.casts, ..default() };
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
@@ -191,7 +191,7 @@ pub(super) fn read_local_input(
     // tap is held for a frame at least. `casts` and `fire` are kept until they've been sent
     // (`send_commands` clears them), so a short click isn't missed.
     let jump = mode.free && (keys.pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Space)) && !board;
-    desired.0 = PlayerInput { move_to, walk, aim, climb, fire, draw, jump, casts: casts.casts, ..default() };
+    desired.0 = PlayerInput { move_to, walk, aim, climb, aside, fire, draw, jump, casts: casts.casts, ..default() };
 }
 
 /// What a cast of `kind` by our fighter at `me` is aimed with, aiming `aim`: in action mode a

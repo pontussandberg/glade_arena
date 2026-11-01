@@ -46,6 +46,8 @@ pub(super) const BREAKER: Moves = Moves {
     back_knee: [0.1, 0.3, 0.1, 0.8],
     // The hips wind up and unwind with the shoulders: the sweep comes from the ground up.
     hip_turn: 0.5,
+    back_leg_turn: [0.0; 4],
+    lead_leg_turn: [0.0; 4],
     // Side on; wound far round the other way, the maul out behind; unwound right through, past
     // the facing.
     twist: [-0.6, -1.05, 1.1, 0.0],
@@ -67,6 +69,7 @@ pub(super) const BREAKER: Moves = Moves {
         gesture: Angles { weapon_arm: 0.3, elbow: 0.1, tip: 0.15, twist: -0.2, lean: 0.05, head_dip: -0.12, ..STILL },
     },
     head_dip: [0.1, 0.15, -0.2, -0.3],
+    head_turn: [0.0; 4],
     // Kept level and swung round: carried pointing up and back over the shoulder; wound up
     // pointing out behind the weapon side, the head out behind the turned body, a batter's;
     // swept right round through the front to point ahead of the other side; pointed down ahead
@@ -89,6 +92,9 @@ pub(super) const BREAKER: Moves = Moves {
     head_follow: 0.7,
     // The twist does the sweeping: the arm stays in its own plane.
     swing_yaw: 0.0,
+    lands_on_lane: false,
+    body_leads: 0.0,
+    aim_turn: 0.0,
     // The head comes through the middle of its lane at the end of the sweep.
     contact: 0.9,
 };

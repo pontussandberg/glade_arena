@@ -426,8 +426,8 @@ pub enum AttackKind {
     /// Flies straight until it hits someone, a blocking tile, or runs out of range. With
     /// `far_scale`, damage scales linearly from the attack's `damage` (point blank) to `far_scale`
     /// times it (after flying the full range, and no more past it). One that `falls` is thrown:
-    /// gravity pulls it down from the moment it leaves the hand, so it drops ever further below
-    /// the line it was aimed along, and it isn't spent at its range but ends where it hits
+    /// straight along the line it was aimed along out to its range, then gravity pulls it down,
+    /// ever further below the line, and it isn't spent at its range but ends where it hits
     /// something or the ground (`sim::projectile_height`).
     Projectile {
         speed: f32,
@@ -455,7 +455,7 @@ pub struct Shot {
     pub speed: f32,
     pub radius: f32,
     pub range: f32,
-    /// Thrown: it drops under gravity from the hand, and isn't spent at its range
+    /// Thrown: it drops under gravity past its range, and isn't spent there
     /// (`AttackKind::Projectile`).
     pub falls: bool,
 }
@@ -803,9 +803,10 @@ mod tests {
             assert!((1..=most_hp).contains(&c.max_hp), "{}: max_hp", c.id);
             if let Some(look) = &c.look {
                 let figure = ClassId::by_key(&look.figure).unwrap_or_else(|| panic!("{}: its figure {} isn't a class", c.id, look.figure));
-                // A class may wear its own figure (to color only its bolts), but never a
-                // borrowed figure that is itself borrowed: the client resolves one level.
-                assert!(look.figure == c.id || figure.def().look.is_none(), "{}: its figure {} borrows another's itself", c.id, look.figure);
+                // A class may wear its own figure (to color only its bolts, or resize it), but
+                // never a borrowed figure that is itself borrowed: the client resolves one level.
+                let borrowed = figure.def().look.as_ref().is_some_and(|its| its.figure != look.figure);
+                assert!(look.figure == c.id || !borrowed, "{}: its figure {} borrows another's itself", c.id, look.figure);
                 assert!((0.3..=3.0).contains(&look.size), "{}: size", c.id);
             }
             if let Some(mob) = &c.mob {
@@ -831,7 +832,7 @@ mod tests {
             assert!(c.attack.windup > 0.0 && c.attack.windup < 1.0, "{}: windup must be a part of the attack", c.id);
             match c.attack.kind {
                 AttackKind::Melee { range, width, from } => {
-                    assert!((0.5..=4.0).contains(&range) && (0.05..=3.0).contains(&width), "{}: melee", c.id);
+                    assert!((0.5..=5.0).contains(&range) && (0.05..=3.0).contains(&width), "{}: melee", c.id);
                     assert!((0.0..range).contains(&from), "{}: melee lane starts past its end", c.id);
                 }
                 AttackKind::Projectile { speed, radius, range, far_scale, .. } => {

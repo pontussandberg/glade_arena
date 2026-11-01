@@ -33,7 +33,7 @@ in a field, not like a fantasy trailer. Rules of thumb:
 
 | Hero | Gather (windup) | Release | Flight / landing |
 | --- | --- | --- | --- |
-| Revenant | a bandpassed wind rising (noise), `ghost_breath` soft under it | `blade_swing` (a katana's slice slowed), a low noise rush | `groundhit` low, a little grit, `rift_tear` (a slowed, lowpassed shimmer) |
+| Revenant | `cloth_heavy` (the coat heaving), a `swish_heavy` slowed right down, `ghost_breath` soft under it | a `spear_swing` slowed and dulled with `cloth_heavy`, timed to peak as the blade lands (no synthesized sweeps: they read as lasers) | `chop` (the bite), `groundhit` and a slowed `impactPunch_heavy` (weight, nothing bouncy), `boom` and `thunder_01` lowpassed to a low shudder and rumble (depth); no `stones` debris (it reads as a splash) |
 | Javelinist | cloth, `bow_draw` slowed and lowpassed into a wooden groan, a touch of `draw_air` | `cloth_heavy`, `spear_swing` | `spear_flight` (a heavy arrow passby slowed) |
 | Frost mage | ice ticking, glassy shimmer | plain swing | frost on the bolt leaving |
 | Warden | leather, steel clearing the rim | shield face, flat clap | |

@@ -103,7 +103,9 @@ pub fn move_player_boosted(
     } else if attack.winding_up().is_some() {
         motion.along = Vec2::ZERO;
     } else if input.walk != Vec2::ZERO || (motion.along != Vec2::ZERO && input.move_to.is_none()) {
-        let wish_speed = class.def().move_speed * speed * boost * map.speed_factor_at(pos);
+        // Slowed by what it walks through (a marsh, wading) only with its feet in it.
+        let ground = if grounded { map.speed_factor_at(pos) } else { 1.0 };
+        let wish_speed = class.def().move_speed * speed * boost * ground;
         let wish = input.walk.normalize_or_zero();
         let mut v = motion.along;
         if grounded && !jumps {
@@ -189,12 +191,13 @@ pub struct Rift {
 
 impl Rift {
     /// The rift a swing tears open, if its class's strike tears any: over the swing's lane
-    /// (empowered or not), from where `owner` stood at `pos`, its feet `feet` high.
+    /// (empowered or not), from where `owner` stood at `pos` (as far aside as it ran:
+    /// `LastSwing::aside`), its feet `feet` high.
     pub fn torn(owner: PeerId, class: ClassId, pos: Vec2, feet: f32, swing: &LastSwing) -> Option<Rift> {
         let attack = &class.def().attack;
         let (rift, (from, range, width)) = (attack.rift?, attack.lane_grown(swing.empowered, swing.grown)?);
         let dir = swing.dir.normalize_or_zero();
-        Some(Rift { owner, origin: pos, feet, dir, from, range, width, until: swing.tick + rift.ticks, haste: rift.haste, burn: rift.burn, leech: rift.leech })
+        Some(Rift { owner, origin: swing.lane_from(pos), feet, dir, from, range, width, until: swing.tick + rift.ticks, haste: rift.haste, burn: rift.burn, leech: rift.leech })
     }
 
     /// Is a body at `at`, its feet `feet` high, in it at `tick`: touching it across the ground,

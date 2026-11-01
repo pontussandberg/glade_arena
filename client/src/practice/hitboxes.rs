@@ -101,7 +101,7 @@ fn note_attacks(
     flashes.0.retain(|(until, _)| *until > now);
     for (swing, pos, class) in &swings {
         if show.0 && swing.tick > 0 {
-            flashes.0.push((now + FLASH_SECONDS, Flash::Lane { at: pos.0, dir: swing.dir, empowered: swing.empowered, class: *class }));
+            flashes.0.push((now + FLASH_SECONDS, Flash::Lane { at: swing.lane_from(pos.0), dir: swing.dir, empowered: swing.empowered, class: *class }));
         }
     }
     for (entity, cooldowns, pos, class) in &casts {
@@ -134,7 +134,7 @@ fn draw_hitboxes(
         }
         circle(&mut gizmos, to_world(pos.0, map.map().height_at(pos.0)), PLAYER_RADIUS, BODY);
         if let Some(swing) = attack.winding_up() {
-            lane(&mut gizmos, pos.0, swing.dir, swing.quick, *class, WINDING_UP);
+            lane(&mut gizmos, swing.lane_from(pos.0), swing.dir, swing.quick, *class, WINDING_UP);
         }
     }
     let now = time.elapsed_secs();

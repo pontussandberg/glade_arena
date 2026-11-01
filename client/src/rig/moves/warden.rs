@@ -44,6 +44,8 @@ pub(super) const WARDEN: Moves = Moves {
     lead_knee: [0.1, 0.35, 0.95, 0.9],
     back_knee: [0.05, 0.15, 0.1, 0.9],
     hip_turn: 0.2,
+    back_leg_turn: [0.0; 4],
+    lead_leg_turn: [0.0; 4],
     // Side on, the shield side forward and the sword shoulder back (a guard); coiled further
     // round behind the shield; the shoulder driven round through the thrust.
     twist: [-0.55, -0.85, 0.45, 0.0],
@@ -66,6 +68,7 @@ pub(super) const WARDEN: Moves = Moves {
         gesture: Angles { lead_arm: 0.2, lead_elbow: -0.25, weapon_arm: 0.15, tip: -0.35, twist: 0.12, head_dip: 0.05, ..STILL },
     },
     head_dip: [0.05, 0.1, -0.15, -0.3],
+    head_turn: [0.0; 4],
     // Carried: the blade mostly along the forearm, pointing forward and down. Cocked: nearly in
     // line with the level forearm, the point raised a little at the target. Thrust: in line
     // with the straight arm. Slam: square off the lowered arm.
@@ -86,6 +89,9 @@ pub(super) const WARDEN: Moves = Moves {
     head_follow: 0.5,
     // Turned in a little from the sword shoulder, so the thrust lands on the middle of its lane.
     swing_yaw: 0.15,
+    lands_on_lane: false,
+    body_leads: 0.0,
+    aim_turn: 0.0,
     // The point reaches the target just as the lunge lands.
     contact: 0.9,
 };

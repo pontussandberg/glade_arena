@@ -211,10 +211,12 @@ mod tests {
 
     #[test]
     fn over_a_crate_the_tear_breaks_into_pieces_on_its_top_and_on_the_ground_round_it() {
-        // North onto the lowest crate (y 1 to 2) and off its back onto the ground again.
+        // North onto the lowest crate (y 1 to 2), the lane ending on its top, short of the fence
+        // behind it.
         let yard = MapId::Yard.map();
         let (t, _) = *yard.crates.iter().find(|&&(_, high)| high == 1).unwrap();
-        let pos = Vec2::new(Map::center(t).x, -1.0);
+        let (_, range, _) = ClassId::by_key("revenant").unwrap().def().attack.lane(false).unwrap();
+        let pos = Vec2::new(Map::center(t).x, Map::center(t).y + 0.4 - range);
         let laid = torn(pos, Vec2::Y, 0.0);
         lies_on_what_is_under_it(&laid, pos, 0.0, "over a crate");
         let on_top = laid.iter().filter(|t| t.iter().all(|p| (p.y - CRATE).abs() < 1e-3)).count();
@@ -226,7 +228,7 @@ mod tests {
     #[test]
     fn off_a_terraces_edge_the_tear_falls_on_down_onto_the_square_below() {
         // North off the south terrace (y = -9), its parapet along the edge, the square below.
-        let pos = Vec2::new(2.5, -11.0);
+        let pos = Vec2::new(2.5, -11.8);
         let laid = torn(pos, Vec2::Y, 1.5);
         lies_on_what_is_under_it(&laid, pos, 1.5, "off the terrace");
         let below = laid.iter().filter(|t| t.iter().all(|p| p.y < 0.05 && to_gameplay(*p).y > -8.95)).count();
@@ -254,7 +256,7 @@ mod tests {
         assert!(feet > g + House::WALLS - House::EAVES * House::SLOPE, "standing at {pos} on {feet} m, not on the roof");
         let laid = torn(pos, Vec2::X, feet);
         lies_on_what_is_under_it(&laid, pos, feet, "up a roof");
-        assert!(laid.iter().flatten().all(|p| p.y > g + House::WALLS), "some of it under the roof");
+        assert!(laid.iter().flatten().all(|p| p.y > g + House::WALLS - House::EAVES * House::SLOPE), "some of it under the roof");
         let highest = laid.iter().flatten().map(|p| p.y).fold(0.0, f32::max);
         assert!(highest > feet + REACH_UP, "the tear only comes up to {highest} m on a roof stood on at {feet} m");
         assert!(area(&laid) > whole() * 0.95, "laid {} m2 of {} m2", area(&laid), whole());
@@ -275,7 +277,7 @@ mod tests {
         let yard = MapId::Yard.map();
         // Across the crate's front edge, point by point, finer than the looks.
         let (t, _) = *yard.crates.iter().find(|&&(_, high)| high == 1).unwrap();
-        let pos = Vec2::new(Map::center(t).x, 0.0);
+        let pos = Vec2::new(Map::center(t).x, -2.2);
         let mut under = Underfoot::new(yard, pos, Vec2::Y, 0.0);
         for i in 0..200 {
             let local = Vec2::new(0.5 + i as f32 * 0.005, 0.013 * (i % 7) as f32);

@@ -28,7 +28,7 @@ impl Party {
         let server = start_server(port, |_| {});
         let client = start_guest_with(1, port, class, |client| {
             if bot {
-                client.add_plugins(BotPlugin);
+                client.add_plugins(BotPlugin { stand: false });
             }
         });
         let mut party = Party { server, client };
@@ -208,7 +208,7 @@ fn long_run() {
 fn coop_picks_the_fallen_up() {
     let port = 5864;
     let mut server = start_server(port, |_| {});
-    let mut clients: Vec<App> = (1..=2).map(|id| start_guest_with(id, port, "revenant", |c| { c.add_plugins(BotPlugin); })).collect();
+    let mut clients: Vec<App> = (1..=2).map(|id| start_guest_with(id, port, "revenant", |c| { c.add_plugins(BotPlugin { stand: false }); })).collect();
     let step = |server: &mut App, clients: &mut Vec<App>| {
         server.update();
         for c in clients.iter_mut() {

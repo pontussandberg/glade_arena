@@ -30,6 +30,8 @@ pub(super) const ZOMBIE: Moves = Moves {
     lead_knee: [0.3, 0.35, 0.4, 0.0],
     back_knee: [0.25, 0.3, 0.3, 0.0],
     hip_turn: 0.0,
+    back_leg_turn: [0.0; 4],
+    lead_leg_turn: [0.0; 4],
     twist: [0.0, -0.35, 0.3, 0.0],
     // Hunched forward always, lurching into the swipe.
     lean: [-0.3, -0.1, -0.55, 0.0],
@@ -48,6 +50,7 @@ pub(super) const ZOMBIE: Moves = Moves {
         gesture: Angles { lean: -0.12, twist: 0.35, head_dip: 0.3, weapon_arm: -0.35, lead_arm: -0.3, elbow: 0.2, lead_elbow: 0.2, ..STILL },
     },
     head_dip: [0.25, 0.0, 0.35, 0.0],
+    head_turn: [0.0; 4],
     // The claws point at what it goes for.
     held: Held::OnTarget([0.0, 0.3, -0.3, 0.0]),
     throws: false,
@@ -61,5 +64,8 @@ pub(super) const ZOMBIE: Moves = Moves {
     damping: JOINT_DAMPING,
     head_follow: HEAD_FOLLOW,
     swing_yaw: 0.0,
+    lands_on_lane: false,
+    body_leads: 0.0,
+    aim_turn: 0.0,
     contact: 0.9,
 };

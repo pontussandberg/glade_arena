@@ -23,7 +23,7 @@ pub(super) fn use_abilities(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut users: Query<
-        (&PlayerId, &ClassId, (&Pos, &arena_shared::protocol::Motion), &mut PlayerInput, (&mut Cooldowns, &mut Dashing), &mut DashHits, (&InRoom, &Team), &mut AttackState, Option<&Might>),
+        (&PlayerId, &ClassId, (&Pos, &arena_shared::protocol::Motion), &mut PlayerInput, (&mut Cooldowns, &mut Dashing), &mut DashHits, (&InRoom, &Team), &mut AttackState, Option<&Might>, Has<crate::ActionMode>),
         InPlay,
     >,
     mut targets: Targets,
@@ -34,7 +34,7 @@ pub(super) fn use_abilities(
     // Read up front: `targets` holds every player's `Chilled` mutably. A root or slow landing
     // during this loop starts next tick anyway.
     let chills: Vec<(PeerId, Chilled)> = targets.iter().map(|(_, id, .., chilled, _, _, _)| (id.0, *chilled)).collect();
-    for (id, class, (pos, motion), mut input, (mut cooldowns, mut dashing), mut hits, (room, team), mut attack, might) in &mut users {
+    for (id, class, (pos, motion), mut input, (mut cooldowns, mut dashing), mut hits, (room, team), mut attack, might, action) in &mut users {
         let side = (*room, *team);
         let might = might_of(might);
         let map = lobby.map(room);
@@ -87,6 +87,9 @@ pub(super) fn use_abilities(
         for cast in casts {
             match cast {
                 Cast::Throw(projectile) => {
+                    // In action mode let go from the raised hand onto the crosshair's line, as an
+                    // attack's throw is.
+                    let projectile = if action { arena_shared::sim::onto_sight(map, projectile, pos.0, input.aside, motion.height) } else { projectile };
                     spawn_projectile(&mut commands, projectile, side, might);
                 }
                 Cast::Dash => input.move_to = None,

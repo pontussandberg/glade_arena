@@ -318,7 +318,7 @@ mod tests {
         let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some()) else { return };
         let attack = quickened(class);
         let (period, windup) = (attack.period_ticks(1.0), attack.windup_ticks(1.0));
-        let mut swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0 };
+        let mut swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0, aside: 0.0 };
         assert_eq!(swing.ready_at(&attack), 10 + period);
         // As the server does when the swing lands.
         swing.hastened = true;
@@ -634,6 +634,33 @@ mod tests {
         assert!(at.y < 3.0 - 0.25, "jumped through the house's wall: {at}");
     }
 
+    #[test]
+    fn the_yards_water_is_jumped_into_and_waded_out_of_but_never_walked_into() {
+        use crate::map::Tile;
+        let yard = crate::map::MapId::Yard.map();
+        // Its ground dips under its water (and the ford through it) alone, not its bridges or its
+        // banks.
+        for (t, tile) in yard.tiles() {
+            let under = yard.height_at(Map::center(t));
+            assert_eq!(matches!(tile, Tile::Water | Tile::Ford), under < 0.0, "{tile:?} at {t} is {under} m high");
+        }
+        // A row across the stream with open level ground either side of it.
+        let row = (-50..50)
+            .find(|&y| {
+                (17..=24).all(|x| {
+                    let t = IVec2::new(x, y);
+                    let water = (20..22).contains(&x);
+                    (yard.get(t) == Tile::Water) == water && (water || (yard.walkable(t) && yard.height_at(Map::center(t)) == 0.0))
+                }) && [(17.5, 19.5), (22.5, 24.5)].iter().all(|&(a, b)| yard.line_walkable(Vec2::new(a, y as f32 + 0.5), Vec2::new(b, y as f32 + 0.5)))
+            })
+            .expect("a crossing of the stream");
+        let (west, east) = (Vec2::new(17.5, row as f32 + 0.5), Vec2::new(24.5, row as f32 + 0.5));
+        let (at, height) = climb(west, &[east], false, 200);
+        assert!(at.x < 20.0 && height == 0.0, "walked into the stream: at {at}, {height} m high");
+        let (at, height) = climb(west, &[east], true, 200);
+        assert!(at.distance(east) < 0.3 && height == 0.0, "never got across: at {at}, {height} m high");
+    }
+
     /// The yard's crate stack, lowest first (tile, how many high), and where on the lane beside
     /// it a climb up it starts.
     fn crate_stack(yard: &Map) -> (Vec2, Vec<(IVec2, u8)>) {
@@ -806,8 +833,47 @@ mod tests {
     }
 
     #[test]
-    fn thrown_projectile_drops_from_the_hand_and_lands() {
-        let thrown = |climb| Projectile { owner: PeerId::Netcode(1), class: thrower(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 0, ability: None, crit: false, extra: false, climb, lift: 0.0 };
+    fn a_shot_in_action_mode_starts_on_the_crosshairs_line_and_a_throw_falls_away_past_its_range() {
+        let (dir, climb, feet) = (Vec2::new(0.6, 0.8), -0.05, 0.0);
+        let right = Vec2::new(dir.y, -dir.x);
+        // Somewhere with room over the right shoulder.
+        let pos = (-40..40)
+            .flat_map(|x| (-40..40).map(move |y| Vec2::new(x as f32 + 0.5, y as f32 + 0.5)))
+            .find(|&p| !map().get(Map::tile_of(p)).blocks_shots() && map().height_at(p) == feet && shoulder_room(map(), p, right, feet) == ACTION_SHOULDER)
+            .unwrap();
+        for aside in [ACTION_SHOULDER, 0.0] {
+            // The crosshair's line: through the point the camera turns about, along the aim. How
+            // far to its right a point is, and how far above the line it is there.
+            let line = |p: Vec2, height: f32| ((p - pos).dot(right) - aside, height - (feet + ACTION_LOOK_HEIGHT + climb * (p - pos).dot(dir)));
+            for class in [bolter(), thrower()] {
+                let shot = class.def().shot(None).unwrap();
+                let fired = Projectile { owner: PeerId::Netcode(1), class, origin: shot_spawn(pos, dir, shot.radius), dir, spawn_tick: 0, ability: None, crit: false, extra: false, climb, lift: feet };
+                let fired = onto_sight(map(), fired, pos, aside, feet);
+                let off = |tick: f32| line(projectile_pos(&fired, tick), projectile_height(&fired, tick));
+                // On the line where it starts, and never off to the side of it.
+                let (across, above) = off(-1.0);
+                assert!(across.abs() < 1e-4 && above.abs() < 1e-4, "{class:?} starts {across} m to the right of the line, {above} m above it");
+                for tick in 0..shot.lifetime_ticks() {
+                    let flown = projectile_flown(&fired, tick as f32);
+                    let (across, above) = off(tick as f32);
+                    assert!(across.abs() < 1e-4, "{class:?} {across} m off to the side at {flown} m");
+                    // Along it; a throw out to its range, then dropping away under it.
+                    let expected = if shot.falls { -0.5 * GRAVITY * ((flown - shot.range).max(0.0) / shot.speed).powi(2) } else { 0.0 };
+                    assert!((above - expected).abs() < 1e-3, "{class:?} {above} m over the line at {flown} m, not {expected} m");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn thrown_projectile_drops_past_its_range_and_lands() {
+        // Thrown along a long clear run, so it comes down on the ground and not on a wall.
+        let (origin, dir) = [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y]
+            .into_iter()
+            .flat_map(|dir| (-80..80).flat_map(move |x| (-80..80).map(move |y| (Vec2::new(x as f32 + 0.5, y as f32 + 0.5), dir))))
+            .find(|&(o, dir)| (0..50).all(|d| !map().get(Map::tile_of(o + dir * d as f32)).blocks_shots()))
+            .expect("a long clear run");
+        let thrown = |climb| Projectile { owner: PeerId::Netcode(1), class: thrower(), origin, dir, spawn_tick: 0, ability: None, crit: false, extra: false, climb, lift: 0.0 };
         let shot = thrower().def().shot(None).unwrap();
         let lands = |proj: &Projectile| {
             let down = (0..400).find(|&tick| projectile_expired(map(), projectile_pos(proj, tick as f32), proj, tick)).unwrap();
@@ -815,20 +881,21 @@ mod tests {
             assert!(!map().get(Map::tile_of(at)).blocks_shots(), "stopped by a wall at {at}, not the ground");
             assert!(down < shot.lifetime_ticks(), "given up on in the air, not down on the ground");
             assert!(projectile_height(proj, down as f32) < 0.0, "ended on the ground");
-            at.x
+            (at - origin).dot(dir)
         };
-        // Thrown level: below the hand and nosing down from the first tick, down where a thing
-        // falling from the hand's height at its speed lands (within the tick it lands in).
+        // Thrown level: level out to its range, then nosing down, down where a thing falling from
+        // the hand's height at its speed past there lands (within the tick it lands in).
         let level = thrown(0.0);
-        assert!(projectile_height(&level, 0.0) < SHOT_HEIGHT && projectile_pitch(&level, 0.0) < 0.0);
-        let expected = shot.speed * (2.0 * SHOT_HEIGHT / GRAVITY).sqrt();
+        let past_range = (shot.range / shot.speed * TICK_HZ as f32).ceil();
+        assert!(projectile_height(&level, past_range - 2.0) == SHOT_HEIGHT && projectile_pitch(&level, past_range + 1.0) < 0.0);
+        let expected = shot.range + shot.speed * (2.0 * SHOT_HEIGHT / GRAVITY).sqrt();
         let landed = lands(&level);
         assert!(landed >= expected && landed < expected + shot.speed * TICK_DT, "landed at {landed} m, expected {expected} m");
         // Thrown upward it flies past its range before coming down, and isn't spent there.
-        let lobbed = thrown(0.1);
+        let lobbed = thrown(0.005);
         let range_tick = (shot.range / shot.speed * TICK_HZ as f32).ceil() as u32;
         assert!(!projectile_expired(map(), projectile_pos(&lobbed, range_tick as f32), &lobbed, range_tick));
-        assert!(lands(&lobbed) > shot.range, "a lob carries past the range");
+        assert!(lands(&lobbed) > landed, "a lob carries farther");
     }
 
     const Q: AbilitySlot = AbilitySlot(0);
@@ -1162,7 +1229,7 @@ mod tests {
         let Some(class) = ClassId::all().find(|c| c.def().attack.rift.is_some()) else { return };
         let def = class.def().attack.rift.unwrap();
         let at = spawns()[0];
-        let swing = LastSwing { tick: 10, dir: Vec2::Y, empowered: false, grown: 0.0 };
+        let swing = LastSwing { tick: 10, dir: Vec2::Y, empowered: false, grown: 0.0, aside: 0.0 };
         let feet = map().height_at(at);
         let rift = Rift::torn(PeerId::Netcode(1), class, at, feet, &swing).unwrap();
         let (from, range, _) = class.def().attack.lane(false).unwrap();

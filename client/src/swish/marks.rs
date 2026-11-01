@@ -136,7 +136,8 @@ pub(super) fn show_marks(
         let dir = swing.dir.normalize_or(Vec2::X);
         let feet = crate::render::shown_height(map.map(), motion, predicted, pos.0);
         let lane = class.def().attack.lane_grown(swing.empowered, swing.grown);
-        let under = Underfoot::new(map.map(), pos.0, dir, feet);
+        // Along its lane, as far aside of the striker as it ran (onto the crosshair's line).
+        let under = Underfoot::new(map.map(), swing.lane_from(pos.0), dir, feet);
         // The ground breaks over its hitbox at once, as the hit is dealt (`strike_ground`), on
         // what's under it there.
         (blade.striking, blade.struck) = (true, lane.map(|_| under.clone()));

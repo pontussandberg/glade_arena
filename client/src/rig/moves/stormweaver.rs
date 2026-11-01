@@ -39,6 +39,8 @@ pub(super) const STORMWEAVER: Moves = Moves {
     lead_knee: [0.0, 0.2, 0.5, 0.7],
     back_knee: [0.0, 0.15, 0.2, 0.7],
     hip_turn: 0.1,
+    back_leg_turn: [0.0; 4],
+    lead_leg_turn: [0.0; 4],
     // Square on, arching back; snapped forward square.
     twist: [0.0, -0.15, 0.3, 0.15],
     // Arched back under the raised staff, then folded forward over the snap; crouched for the
@@ -60,6 +62,7 @@ pub(super) const STORMWEAVER: Moves = Moves {
     },
     // Face to the sky, then down at the target.
     head_dip: [0.0, -0.35, 0.3, -0.2],
+    head_turn: [0.0; 4],
     // Upright; tipped a little back over the head; whipped far forward, pointing down the aim;
     // planted for the call.
     held: Held::Upright([0.08, -0.35, 1.3, -0.05]),
@@ -77,6 +80,9 @@ pub(super) const STORMWEAVER: Moves = Moves {
     damping: 0.72,
     head_follow: 0.5,
     swing_yaw: 0.0,
+    lands_on_lane: false,
+    body_leads: 0.0,
+    aim_turn: 0.0,
     // The bolt leaves as the staff snaps level.
     contact: 0.8,
 };

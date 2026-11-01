@@ -39,6 +39,8 @@ pub(super) const SHADE: Moves = Moves {
     lead_knee: [0.5, 0.65, 0.6, 0.0],
     back_knee: [0.45, 0.65, 0.1, 0.0],
     hip_turn: 0.3,
+    back_leg_turn: [0.0; 4],
+    lead_leg_turn: [0.0; 4],
     // Coiled to the weapon side, then whipped through past the facing.
     twist: [-0.3, -0.75, 0.6, 0.0],
     // A low crouch always, lower into the cut.
@@ -59,6 +61,7 @@ pub(super) const SHADE: Moves = Moves {
         gesture: Angles { twist: -0.35, roll: 0.9, lead_knee: 0.12, back_knee: 0.12, lean: -0.05, head_dip: -0.1, weapon_arm: 0.1, ..STILL },
     },
     head_dip: [0.2, 0.1, 0.1, 0.0],
+    head_turn: [0.0; 4],
     // Gripped reversed (the blade cocked back along the forearm) in the crouch and the coil, and
     // swung through level with the cut.
     held: Held::Gripped { wrist: [-1.15, -1.0, -0.6, 0.0], roll: [0.0; 4] },
@@ -81,5 +84,8 @@ pub(super) const SHADE: Moves = Moves {
     head_follow: 0.3,
     // The cut starts out to the weapon side and crosses the lane's middle at contact.
     swing_yaw: 0.1,
+    lands_on_lane: false,
+    body_leads: 0.0,
+    aim_turn: 0.0,
     contact: 0.85,
 };

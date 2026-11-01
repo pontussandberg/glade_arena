@@ -30,18 +30,27 @@ pub(super) const REVENANT: Moves = Moves {
     lead_yaw: [0.15, 0.1, 0.2, 0.0],
     lead_grip: 0.0,
     lead_hold: [0.0; 4],
-    // Legs hang from the leaning body: bowed into the blow, the lead leg reaches far forward,
-    // its knee bent over the foot, and the back one, straight under the hips, braces back.
-    lead_leg: [0.25, 0.25, 1.85, 0.7],
-    back_leg: [-0.2, -0.6, -0.45, -0.75],
-    lead_knee: [0.05, 0.15, 0.7, 0.3],
-    back_knee: [0.05, 0.25, 0.1, 0.2],
+    // Legs hang from the leaning body. Drawn up, its weight sits back on the back leg, the knee
+    // giving, and the lead knee comes up off the ground; then the lead foot stomps down a long
+    // stride ahead as the blow lands, the knee bent deep over it and the hips dropped low, the
+    // back leg stretched out straight behind, both feet planted.
+    lead_leg: [0.25, 1.05, 1.6, 0.7],
+    back_leg: [-0.2, -0.1, -0.02, -0.75],
+    lead_knee: [0.05, 1.5, 0.5, 0.3],
+    back_knee: [0.05, 0.3, 0.0, 0.2],
     hip_turn: 0.0,
-    // Side on, the weapon shoulder back; wound further round, then turning into the blow.
-    twist: [-0.8, -0.5, 0.8, 0.5],
-    // A careless reaper's hunch: leaning forward always, leading the attack with the body, never
-    // standing up straight (not even with the glaive up overhead), bowing deep into the blow.
-    lean: [-0.35, -0.15, -0.7, -0.5],
+    // Drawing up, the hips wind round with the chest: the raised lead knee turns in across
+    // toward the weapon side, the back leg turning about its planted foot; then they're driven
+    // through ahead of the shoulders, the lead foot stomping down along the blow.
+    back_leg_turn: [0.0, 0.4, 0.0, 0.0],
+    lead_leg_turn: [0.0, -0.75, 0.15, 0.0],
+    // Side on, the weapon shoulder back; coiled right round as it draws up, the chest turned to
+    // the weapon side, then the hips and shoulders driving round into the blow, square to it
+    // as it lands rather than past it.
+    twist: [-0.8, -1.45, 0.35, 0.5],
+    // A careless reaper's hunch: leaning forward always, never standing up straight; drawn up it
+    // rises tallest, then bows deep into the blow.
+    lean: [-0.35, -0.05, -0.75, -0.5],
     // Standing still it slouches, easy, rather than hunching as it walks.
     standing_lean: -0.12,
     // The weapon arm hanging all but straight down, the wrist bent to keep the point down.
@@ -60,7 +69,10 @@ pub(super) const REVENANT: Moves = Moves {
         hold: 1.0,
         gesture: Angles { head_dip: 0.3, twist: -0.12, lean: -0.08, lead_arm: 0.15, lead_elbow: 0.1, ..STILL },
     },
-    head_dip: [0.25, 0.15, -0.45, -0.15],
+    head_dip: [0.25, 0.15, -0.35, -0.15],
+    // Its eyes kept on what it's about to hit: turning back against the coil as it draws up,
+    // round toward the target, and on the blade as it lands.
+    head_turn: [0.0, 0.88, -0.41, 0.0],
     // Dragged: the thumb (and blade) back, the blade trailing low behind. Drawn: straight up
     // over the head, in line with the arm (so the grip turns over on the way up without the
     // blade swinging about). Struck: in one plane over the top, the wrist coming through, the
@@ -83,9 +95,14 @@ pub(super) const REVENANT: Moves = Moves {
     damping: 1.0,
     // Head and shoulders go into the blow together.
     head_follow: 0.75,
-    // The blow's plane turned in from the weapon shoulder to the middle of its lane, where the
-    // blade lands.
-    swing_yaw: 0.13,
+    // The blow comes down straight along its lane's middle line, the arm lifted out to it
+    // wherever that runs (in action mode the crosshair's), not turned in across it.
+    swing_yaw: 0.0,
+    lands_on_lane: true,
+    // The stomp and the hips' turn drive the blow: well under way while the glaive is still up,
+    // the arm whipping it down after them, all landing at once.
+    body_leads: 0.67,
+    aim_turn: 0.0,
     // As the whole blade comes down flat on the ground along the lane, the hand almost on it.
     contact: 0.97,
 };

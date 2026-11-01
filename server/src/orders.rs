@@ -14,8 +14,8 @@ use crate::rooms::{InRoom, Lobby};
 #[derive(Component)]
 pub struct ActionMode;
 
-/// Server-only: walks, attack clicks and the attack button's holds ordered for ticks still to
-/// come (`PlayerCommand::Walk`'s, `Attack`'s and `Draw`'s tick), oldest first, each with the tick
+/// Server-only: walks, attack clicks, Space and the attack button's holds ordered for ticks still
+/// to come (`PlayerCommand::Walk`'s, `Attack`'s, `Jump`'s and `Draw`'s tick), oldest first, each with the tick
 /// it arrived on; and the arrival tick of the walk being stepped now (told back in `Walking`).
 #[derive(Component, Default)]
 pub struct WalkOrders {
@@ -37,9 +37,11 @@ pub(super) fn apply_commands(
         let Ok(mut receiver) = links.get_mut(controlled_by.owner) else { continue };
         for command in receiver.receive() {
             match command {
-                // A walk (or an attack click, or the attack button's hold) for a tick to come
-                // waits for it (`move_players`).
-                PlayerCommand::Walk(_, tick) | PlayerCommand::Attack(_, tick) | PlayerCommand::Draw(_, tick) if tick > now => orders.pending.push_back((tick, command, now)),
+                // A walk (or an attack click, Space, or the attack button's hold) for a tick to
+                // come waits for it (`move_players`).
+                PlayerCommand::Walk(_, tick) | PlayerCommand::Attack(_, tick) | PlayerCommand::Jump(_, tick) | PlayerCommand::Draw(_, tick) if tick > now => {
+                    orders.pending.push_back((tick, command, now))
+                }
                 PlayerCommand::Walk(..) => {
                     orders.received = now;
                     command.apply(&mut input);
@@ -76,8 +78,8 @@ pub(super) fn move_players(
 ) {
     let now = timeline.tick().0;
     for (id, mut pos, class, mut input, (attack, action), mut dashing, chilled, hasted, room, frenzy, sluggish, (mut walking, mut orders), mut motion) in &mut players {
-        // Walks (and attack clicks, and the attack button's holds) ordered for this tick (or one
-        // gone by) take now: before the tick's attacks are stepped (`combat::attack`).
+        // Walks (and attack clicks, Space, and the attack button's holds) ordered for this tick (or
+        // one gone by) take now: before the tick's attacks are stepped (`combat::attack`).
         while let Some(&(tick, command, received)) = orders.pending.front() {
             if tick > now {
                 break;

@@ -25,10 +25,10 @@
 //! head, leaning back with the lead hand thrown out at the target; the strike brings it down
 //! over the top in one great arc as the lead leg steps long into it and the body crunches in
 //! behind it, the blade smearing out longer, and on into the ground, where it leaves a crack
-//! (`swish/`). It lands as the blade comes level, out in front. A hit empowers the blade
-//! (Follow Through): it grows half as big again while that's armed and through the empowered
-//! attack (`EMPOWERED_BLADE`), which is the same blow, faster, smearing out further still to
-//! reach its longer lane (`EMPOWERED_STRETCH`). A strike started before the last one has settled chains onto it: the blade comes
+//! (`swish/`). It lands as the blade comes level, out in front. Its blade grows half as big
+//! again as it's drawn up (`EMPOWERED_BLADE`), smearing out further as it strikes to reach the
+//! whole of its long lane (`EMPOWERED_STRETCH`), and shrinks back as it settles; unless the
+//! hit empowered the next (Follow Through), which it stays grown for. A strike started before the last one has settled chains onto it: the blade comes
 //! straight back into the draw instead of sinking to the carry in between. A dash is no move of
 //! its own: the fighter glides along in its stance, turned to the dash, cutting a backswing
 //! short; taken mid-windup, it doesn't turn at all, facing as it was until its next move.
@@ -69,6 +69,8 @@ pub(crate) use throw::*;
 mod shine;
 use shine::*;
 mod drips;
+
+mod view;
 use drips::*;
 pub(crate) use drips::ShotDrips;
 
@@ -81,12 +83,16 @@ impl Plugin for RigPlugin {
         app.add_systems(PostUpdate, (shed_drips, drip_from_shots).after(TransformSystems::Propagate));
         app.add_systems(Update, fall_drips);
         app.add_systems(Update, (add_rigs, see_throws, turn_fighters, pose_rigs, show_auras, gleam_blades).chain().in_set(Posing));
+        app.add_systems(Update, view::hold_in_view.after(Posing).after(empty_hands));
     }
 }
 
 /// Where fighters get turned and posed; what depends on a fighter's transform runs after it.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Posing;
+
+/// How far over the ground (meters) a fighter is in the air, its feet putting down no steps.
+const ALOFT: f32 = 0.05;
 
 /// How many feet a fighter has put down (one every half stride, as it walks): the footsteps
 /// sound off it (`audio::footstep_sounds`).
@@ -111,9 +117,9 @@ const ELITE_SIZE: f32 = 1.25;
 pub(crate) fn drawn_size(class: ClassId, elite: bool) -> f32 {
     class.def().size() * if elite { ELITE_SIZE } else { 1.0 }
 }
-/// An empowered weapon (`follow_up`): how much bigger it grows, how quickly (per second,
-/// exponential), and how much further its strike smears out, so it reaches its lane's far end
-/// (`FollowUp::reach`).
+/// A weapon that grows to strike (a class with a `follow_up`: as it's drawn, and while that's
+/// armed): how much bigger it grows, how quickly it grows to stay armed (per second,
+/// exponential), and how much further its strike smears out, so it reaches its lane's far end.
 pub(crate) const EMPOWERED_BLADE: f32 = 1.5;
 const EMPOWER_RATE: f32 = 12.0;
 pub(crate) const EMPOWERED_STRETCH: f32 = 0.05;
@@ -235,6 +241,9 @@ pub(crate) struct Rig {
     /// How far into its dashing lunge it is (0..1, eased).
     glide: f32,
     joints: Joints,
+    /// How far into each of its poses it is this frame: the arm in first person is posed by it
+    /// too (`view`).
+    phase: Phase,
 }
 
 fn load_rigs(
@@ -317,6 +326,7 @@ fn add_rigs(
             empowered: 0.0,
             glide: 0.0,
             joints: Joints::default(),
+            phase: Phase::default(),
         };
         let eyes = part(&handles.eyes, &assets.eye_glow, Vec3::ZERO);
         let held_glow = handles.held_glow.as_ref().map(|mesh| part(mesh, &handles.glow, Vec3::ZERO));
@@ -452,6 +462,7 @@ fn pose_rigs(
     clock: Option<AttackClock>,
     map: Option<Res<crate::rooms::CurrentMap>>,
     draws: Option<Res<crate::SentDraws>>,
+    mode: Res<crate::camera::CameraMode>,
     mut rigs: Query<(
         &mut Rig,
         &Facing,
@@ -486,8 +497,11 @@ fn pose_rigs(
             let before = rig.stride;
             let way = if facing.moved.dot(facing.look) < 0.0 { -1.0 } else { 1.0 };
             rig.stride += way * facing.moved.length() * STRIDES_PER_METER * rig.moves.gait.cadence;
-            // A foot comes down every half stride (the legs pass each other there).
-            if (before * 2.0).floor() != (rig.stride * 2.0).floor() {
+            // A foot comes down every half stride (the legs pass each other there), but not in the
+            // air: up in a jump or a fall nothing's stepped on.
+            let at = arena::to_gameplay(body.translation);
+            let aloft = map.as_ref().is_some_and(|map| crate::render::shown_height(map.map(), motion, predicted, at) > map.map().height_at(at) + ALOFT);
+            if (before * 2.0).floor() != (rig.stride * 2.0).floor() && !aloft {
                 footfalls.0 += 1;
             }
         }
@@ -535,13 +549,10 @@ fn pose_rigs(
         // Ticks since the last attack went off, at normal attack speed.
         let released = since_throw(attack.released_at, seen.and_then(|seen| seen.attack)).map(|since| since * speed);
         let moves = rig.moves;
-        // Empowered (`follow_up` armed, or the empowered attack under way): the weapon grows, and
-        // the empowered strike smears out further, to its longer lane.
-        let empowering = attack.swing.is_some_and(|swing| swing.quick);
-        let empowered = if empowering || attack.quick_at(now) { 1.0 } else { 0.0 };
+        // Its `follow_up` armed, a weapon that grows to strike stays grown.
+        let grows = def.attack.follow_up.is_some();
+        let empowered = if grows && attack.quick_at(now) { 1.0 } else { 0.0 };
         rig.empowered += (empowered - rig.empowered) * rate(&time, EMPOWER_RATE);
-        let blade = 1.0 + (EMPOWERED_BLADE - 1.0) * rig.empowered;
-        let stretch = moves.stretch + if empowering { EMPOWERED_STRETCH } else { 0.0 };
         let (posed_windup, posed_released, ahead) = ahead_of_springs(*class, moves, windup, released, now);
         let (mut draw, mut throw, mut smear, mut second) = strike_phase(*class, moves, attack, posed_windup, posed_released, ahead);
         // Dashing off once the attack has gone off cuts its backswing short, for good: the
@@ -580,22 +591,30 @@ fn pose_rigs(
         }
         let throw = throw.max(flick);
         let phase = Phase { draw, throw, dashing, second };
+        // And it grows as it's drawn, held grown through the strike, smearing out further to
+        // its lane's far end, and shrinking back as it settles.
+        let grown = if grows { rig.empowered.max(draw).max(throw) } else { 0.0 };
+        let blade = 1.0 + (EMPOWERED_BLADE - 1.0) * grown;
+        let stretch = moves.stretch + if grows { EMPOWERED_STRETCH } else { 0.0 };
+        rig.phase = phase;
         // A thrown weapon: the hand is empty from a throw until the next attack is ready (its
         // backswing at normal speed, as `released` counts), when a new one is drawn.
         let rearm = (def.attack.period_ticks(1.0) - def.attack.windup_ticks(1.0)) as f32;
         // The latest throw the pose has let go of: ours as our clock gets to it (the state says
-        // so a moment early), another's as soon as its spear is seen (it's released then).
+        // so a moment early; a shot held drawn once the hand has driven it up to the top of the
+        // throw, `held_drive`), another's as soon as its spear is seen (it's released then).
         let seen_throw = seen.and_then(|seen| seen.attack).filter(|_| !is_me);
-        let let_go = attack.released_at.filter(|&at| now >= at as f32).max(seen_throw);
+        let drive = held_drive(*class, moves, attack);
+        let let_go = attack.released_at.filter(|&at| now >= at as f32 + drive).max(seen_throw);
         // Empty once the flying spear has left the hand (or it's late: `empty_hands`).
         let thrown = attack.released_at.max(seen_throw);
         let rearming = thrown.filter(|_| moves.throws && matches!(def.attack.kind, AttackKind::Projectile { .. }) && released.is_some_and(|s| s < rearm));
-        let late = thrown.is_some_and(|at| present > at as f32 + MAX_HOLD_TICKS);
+        let mut late = thrown.is_some_and(|at| present > at as f32 + drive + MAX_HOLD_TICKS);
         // Our own hand letting go this frame: just how it was posed as it did, between frames.
         let frame_ticks = dt * TICK_HZ as f32;
         let released_from = match let_go {
-            Some(at) if is_me && moves.throws && held_at.let_go != let_go && now - (at as f32) < frame_ticks => {
-                let back = (dt - (now - at as f32) / TICK_HZ as f32).clamp(0.0, dt);
+            Some(at) if is_me && moves.throws && held_at.let_go != let_go && now - (at as f32 + drive) < frame_ticks => {
+                let back = (dt - (now - (at as f32 + drive)) / TICK_HZ as f32).clamp(0.0, dt);
                 let posed = pose_releasing(*class, moves, attack, &rig.joints, back, at as f32, flick, (facing.look, step, rig.walking, stride));
                 let placed = Transform { translation: body.translation.with_y(posed.body.translation.y), ..posed.body };
                 Some(held_in_world(&placed, &posed))
@@ -610,6 +629,11 @@ fn pose_rigs(
         // leaning into it with its arms trailing and its legs split; knocked off its feet it
         // staggers back, arms flung up.
         let mut target = targets(moves, phase, step, rig.walking);
+        // A blow onto its lane's middle line (`Moves::lands_on_lane`), as far to the right as the
+        // lane runs (the crosshair's line): drawn up as ever, the arm lifted out from the weapon
+        // shoulder as it comes over and down, so the stroke sweeps onto that line and lands on it.
+        let tilt = lane_tilt(moves, attack.swing.map_or(0.0, |swing| swing.aside), rig.size) * phase.throw;
+        target.arm_tilt = tilt;
         let free = 1.0 - phase.braced();
         let breathing = (1.0 - rig.walking) * free * (1.0 - rig.glide);
         let breath = (wall_clock * BREATH_RATE + (rig.gleaming.seed as f32 * 0.37).fract() * TAU).sin() * breathing;
@@ -630,6 +654,7 @@ fn pose_rigs(
         target.weapon_arm += 0.6 * STAGGER_ARMS * stagger - DASH_ARMS * lunge * if moves.rests { 0.3 } else { 1.0 };
         let angles = rig.joints.follow(&target, dt, moves);
         let mut aimed = targets(moves, phase, Vec2::ZERO, rig.walking);
+        aimed.arm_tilt = tilt;
         aimed.add(&fidget, 1.0);
         let walk = rig.walking * free;
         // As high as it is: on the ground where it stands, or up in a jump or a fall
@@ -655,17 +680,31 @@ fn pose_rigs(
         // For a fighter that throws its weapon: where it is in the hand this frame (child
         // transforms aren't propagated until after this frame's shots are placed).
         // Let go of, but its flying spear not here yet (the news of it late): it flies on by
-        // itself from just where it was let go, along the aim at its speed, not dragged on in
-        // the hand, until the flying spear takes over just there (`render::fly_shots`), or for
-        // good until it's late (it may never come: a shot that hit or ended at once), when it's
-        // back in the hand, hidden till the next attack's ready (`empty_hands`).
+        // itself from just where it was let go, along the aim at its speed (up or down as the
+        // action camera looks), not dragged on in the hand, until the flying spear takes over
+        // just there (`render::fly_shots`), or for good until it's late or into the ground (it
+        // may never come: a shot that hit or ended at once), when it's back in the hand, hidden
+        // till the next attack's ready (`empty_hands`).
         let mut held = posed.held;
         if moves.throws {
             let ahead_of_news = released_from.filter(|_| held_at.launched < let_go && !late);
-            let at = match (ahead_of_news, let_go, def.attack.kind.shot()) {
+            let flying = match (ahead_of_news, let_go, def.attack.kind.shot()) {
                 (Some(from), Some(at), Some(shot)) => {
-                    let flown = (now - at as f32).max(0.0) / TICK_HZ as f32 * shot.speed;
-                    let flying = Transform { translation: from.translation + arena::to_world(facing.look, 0.0) * flown, ..from };
+                    let flown = (now - (at as f32 + drive)).max(0.0) / TICK_HZ as f32 * shot.speed;
+                    let climb = if mode.free { mode.climb } else { 0.0 };
+                    let flying = Transform { translation: from.translation + arena::to_world(facing.look * flown, climb * flown), ..from };
+                    let ground = map.as_ref().map_or(f32::NEG_INFINITY, |map| map.map().height_at(arena::to_gameplay(flying.translation)));
+                    if flying.translation.y < ground {
+                        late = true;
+                        None
+                    } else {
+                        Some(flying)
+                    }
+                }
+                _ => None,
+            };
+            let at = match flying {
+                Some(flying) => {
                     // What it hangs from: the fighter, its weapon arm and elbow (see `add_rigs`).
                     let elbow = Transform::from_translation(placed.translation.with_y(0.0))
                         * posed.body
@@ -677,7 +716,7 @@ fn pose_rigs(
                 _ => held_in_world(&placed, &posed),
             };
             let launched = held_at.launched;
-            held_at.set_if_neq(HeldAt { at, let_go, launched, released_from, rearming, late });
+            held_at.set_if_neq(HeldAt { at, let_go, drive, launched, released_from, rearming, late });
         }
         let rotations = [
             (rig.head, posed.head),
@@ -723,18 +762,22 @@ mod tests {
     }
 
     /// Plays the javelinist's throw frame by frame as `pose_rigs` poses it, at several frame
-    /// rates and with the release falling at different points between frames. Just as the hand
+    /// rates and with the release falling at different points between frames, thrown as its
+    /// windup ends and held drawn a while first (let go a drive later, `held_drive`). Just as the hand
     /// lets go (`pose_releasing`), the flying spear (`render::leaving_hand`) is drawn exactly over
-    /// the held one as its parts draw it, every vertex, its point over the thrower's own hitbox
-    /// (where the spear's real path starts) at the height it flies at (`render::THROWN_HEIGHT`),
-    /// passing over the shoulder (the arm under it), however the frames fall.
+    /// the held one as its parts draw it, every vertex, its point just where the spear's real path
+    /// starts, as high and as far to the right (`config::RELEASE_HEIGHT`, `config::RELEASE_ASIDE`)
+    /// and not far off it along the aim, passing over the shoulder (the arm under it), however
+    /// the frames fall.
     #[test]
     fn a_thrown_spear_leaves_the_hand_just_where_it_is_held() {
         use arena_shared::protocol::{AttackState, Swing};
         use bevy::prelude::*;
 
         use super::*;
-        use crate::render::{THROWN_HEIGHT, leaving_hand};
+        use arena_shared::config::{RELEASE_ASIDE, RELEASE_HEIGHT};
+
+        use crate::render::leaving_hand;
 
         let key = "javelinist";
         let class = ClassId::by_key(key).unwrap();
@@ -742,65 +785,75 @@ mod tests {
         let moves = moves(key);
         let rig = arena::fighter_rig(key);
         let shot = arena::shot_look(def, def.shot(None).unwrap(), false).mesh;
+        // Where along the aim its real path starts (`sim::shot_spawn`).
+        let start = arena_shared::config::PLAYER_RADIUS + def.shot(None).unwrap().radius;
         let (held_mesh, shot_mesh) = (positions(&rig.held), positions(&shot));
         assert_eq!(held_mesh.len(), shot_mesh.len(), "the flying spear is the held one");
         let mut heights = Vec::new();
-        for fps in [30.0, 60.0, 144.0] {
-            for phase in 0..8 {
-                let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0 };
-                let release = 10 + swing.windup_ticks(&def.attack);
-                let mut joints = Joints::default();
-                let dt = 1.0 / fps;
-                let mut frame = 0;
-                let leave = loop {
-                    // Our own fighter's clock (`pose_rigs`), starting at a different point
-                    // between frames each time.
-                    let now = (frame as f32 + phase as f32 / 8.0) * dt * TICK_HZ as f32;
-                    frame += 1;
-                    let mut attack = AttackState { swing: Some(swing), ..default() };
-                    if now >= release as f32 {
-                        attack.swing = None;
-                        attack.released_at = Some(release);
-                        // The frame the hand lets go: posed just as it did.
-                        let back = dt - (now - release as f32) / TICK_HZ as f32;
-                        break pose_releasing(class, moves, &attack, &joints, back, release as f32, 0.0, (Vec2::X, Vec2::ZERO, 0.0, 0.0));
-                    }
-                    let (shown, shown_released, ahead) = ahead_of_springs(class, moves, attack.winding_up(), None, now);
-                    let (draw, throw, _, second) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
-                    joints.follow(&targets(moves, Phase { draw, throw, dashing: 0.0, second }, Vec2::ZERO, 0.0), dt, moves);
-                };
-                let placed = Transform { translation: Vec3::new(3.0, leave.body.translation.y, -2.0), ..leave.body };
-                // The held spear as its parts (fighter, arm, elbow, spear) draw it.
-                let drawn = GlobalTransform::from(placed)
-                    .mul_transform(Transform::from_translation(arena::RIG_SHOULDER).with_rotation(leave.arms[0]))
-                    .mul_transform(Transform::from_translation(moves.elbow_at).with_rotation(leave.elbows[0]))
-                    .mul_transform(leave.held);
-                let flying = leaving_hand(&held_in_world(&placed, &leave));
-                let off = held_mesh.iter().zip(&shot_mesh).map(|(&h, &s)| drawn.transform_point(h).distance(flying.transform_point(s))).fold(0.0, f32::max);
-                assert!(off < 1e-3, "at {fps} fps, phase {phase}: the flying spear is drawn up to {off} m off the held one");
-                heights.push((fps, phase, flying.translation.y));
-                // Over the shoulder, the arm under it, not through it.
-                let shoulder = GlobalTransform::from(placed).transform_point(arena::RIG_SHOULDER);
-                let (grip, along) = (drawn.translation(), drawn.rotation() * Vec3::Y);
-                let over = (grip + along * (shoulder - grip).dot(along) - shoulder).y;
-                assert!(over > SHOULDER_CLEARANCE, "at {fps} fps, phase {phase}: the spear passes only {over} m over the shoulder");
-                // Over its own hitbox, where its real path starts.
-                let off_center = (flying.translation - placed.translation).with_y(0.0).length();
-                assert!(off_center < arena_shared::config::PLAYER_RADIUS, "at {fps} fps, phase {phase}: let go {off_center} m off its thrower's middle");
-            }
+        for (fps, held, phase) in [30.0, 60.0, 144.0].into_iter().flat_map(|fps| [0, 6].into_iter().flat_map(move |held| (0..8).map(move |phase| (fps, held, phase)))) {
+            let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held, aside: 0.0 };
+            let release = 10 + swing.windup_ticks(&def.attack) + held;
+            let drive = held_drive(class, moves, &AttackState { swing: Some(swing), released_at: Some(release), ..default() });
+            assert_eq!(drive > 0.0, held > 0, "only a shot held drawn is let go a drive after it goes off");
+            let mut joints = Joints::default();
+            let dt = 1.0 / fps;
+            let mut frame = 0;
+            let leave = loop {
+                // Our own fighter's clock (`pose_rigs`), starting at a different point
+                // between frames each time.
+                let now = (frame as f32 + phase as f32 / 8.0) * dt * TICK_HZ as f32;
+                frame += 1;
+                let mut attack = AttackState { swing: Some(swing), ..default() };
+                if now >= release as f32 {
+                    attack.released_at = Some(release);
+                }
+                if now >= release as f32 + drive {
+                    // The frame the hand lets go: posed just as it did.
+                    let back = dt - (now - (release as f32 + drive)) / TICK_HZ as f32;
+                    break pose_releasing(class, moves, &attack, &joints, back, release as f32, 0.0, (Vec2::X, Vec2::ZERO, 0.0, 0.0));
+                }
+                let released = attack.released_at.map(|at| now - at as f32);
+                let (shown, shown_released, ahead) = ahead_of_springs(class, moves, attack.winding_up(), released, now);
+                let (draw, throw, _, second) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
+                joints.follow(&targets(moves, Phase { draw, throw, dashing: 0.0, second }, Vec2::ZERO, 0.0), dt, moves);
+            };
+            let placed = Transform { translation: Vec3::new(3.0, leave.body.translation.y, -2.0), ..leave.body };
+            // The held spear as its parts (fighter, arm, elbow, spear) draw it.
+            let drawn = GlobalTransform::from(placed)
+                .mul_transform(Transform::from_translation(arena::RIG_SHOULDER).with_rotation(leave.arms[0]))
+                .mul_transform(Transform::from_translation(moves.elbow_at).with_rotation(leave.elbows[0]))
+                .mul_transform(leave.held);
+            let flying = leaving_hand(&held_in_world(&placed, &leave));
+            let off = held_mesh.iter().zip(&shot_mesh).map(|(&h, &s)| drawn.transform_point(h).distance(flying.transform_point(s))).fold(0.0, f32::max);
+            assert!(off < 1e-3, "at {fps} fps, phase {phase}: the flying spear is drawn up to {off} m off the held one");
+            // Facing +X, its right is +Z.
+            heights.push((fps, phase, flying.translation.y, flying.translation.z - placed.translation.z));
+            // Over the shoulder, the arm under it, not through it.
+            let shoulder = GlobalTransform::from(placed).transform_point(arena::RIG_SHOULDER);
+            let (grip, along) = (drawn.translation(), drawn.rotation() * Vec3::Y);
+            let over = (grip + along * (shoulder - grip).dot(along) - shoulder).y;
+            assert!(over > SHOULDER_CLEARANCE, "at {fps} fps, phase {phase}: the spear passes only {over} m over the shoulder");
+            // Facing +X: about where along the aim its real path starts.
+            let ahead = flying.translation.x - placed.translation.x;
+            assert!((ahead - start).abs() < RELEASE_AHEAD_SLACK, "at {fps} fps, phase {phase}: let go {ahead} m ahead, its path starting {start} m ahead");
         }
-        for &(fps, phase, height) in &heights {
-            println!("{fps:>5} fps, phase {phase}: let go with its point at {height:.3} m (flies at {THROWN_HEIGHT} m)");
+        for &(fps, phase, height, aside) in &heights {
+            println!("{fps:>5} fps, phase {phase}: let go with its point {height:.3} m up, {aside:.3} m right (its path starts {RELEASE_HEIGHT} m up, {RELEASE_ASIDE} m right)");
             let slack = RELEASE_HEIGHT_SLACK.iter().find(|(at, _)| *at == fps).map(|(_, slack)| *slack).unwrap();
-            assert!((height - THROWN_HEIGHT).abs() < slack, "at {fps} fps, phase {phase}: let go at {height} m, off the height it flies at");
+            assert!((height - RELEASE_HEIGHT).abs() < slack, "at {fps} fps, phase {phase}: let go at {height} m, off the height its path starts at");
+            assert!((aside - RELEASE_ASIDE).abs() < slack, "at {fps} fps, phase {phase}: let go {aside} m to the right, off where its path starts");
         }
     }
+
+    /// How far (meters) along the aim from where a thrown spear's path starts its point may be let
+    /// go: the flying spear gives the difference back over its first moments (`render::fly_shots`).
+    const RELEASE_AHEAD_SLACK: f32 = 0.7;
 
     /// How far (meters) over its thrower's weapon shoulder (the joint) a thrown spear passes as
     /// it's let go, at least.
     const SHOULDER_CLEARANCE: f32 = 0.2;
 
-    /// How far (meters) from the height a thrown spear flies its point may be let go, by frame
+    /// How far (meters) from where a thrown spear's path starts its point may be let go, by frame
     /// rate: the arm snaps through the throw in a few frames at the lowest, which only roughly
     /// follow it.
     const RELEASE_HEIGHT_SLACK: [(f32, f32); 3] = [(30.0, 0.15), (60.0, 0.04), (144.0, 0.02)];

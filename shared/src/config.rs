@@ -32,6 +32,18 @@ pub const PLAYER_RADIUS: f32 = 0.5;
 pub const BODY_HEIGHT: f32 = 2.1;
 /// How high a shot leaves the hand (meters): where its climb or fall starts from.
 pub const SHOT_HEIGHT: f32 = 1.0;
+/// The action camera (third person): how far to a fighter's right (meters, over the shoulder)
+/// and how high over their feet the point it turns about is, so its line of sight (the
+/// crosshair's) always passes through it; and how near that point comes to a wall beside them
+/// (`sim::shoulder_room`).
+pub const ACTION_SHOULDER: f32 = 0.6;
+pub const ACTION_LOOK_HEIGHT: f32 = 2.0;
+pub const SHOULDER_WALL_MARGIN: f32 = 0.45;
+/// In action mode a thrower's raised hand lets go of the spear this far to their right and this
+/// high over their feet (meters), near the line of sight its shot starts on (`sim::onto_sight`),
+/// where the spear in flight appears as the hand empties (`render::fly_shots`).
+pub const RELEASE_ASIDE: f32 = 0.45;
+pub const RELEASE_HEIGHT: f32 = 2.07;
 /// How fast a thrown shot falls (m/s², the real thing), one that falls at all (`Shot::falls`).
 pub const GRAVITY: f32 = 9.81;
 /// How high a jump goes at the top (meters), from flat ground (`sim::jump_speed`).

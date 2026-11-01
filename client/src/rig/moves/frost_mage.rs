@@ -36,6 +36,8 @@ pub(super) const FROST_MAGE: Moves = Moves {
     lead_knee: [0.0, 0.25, 0.45, 0.7],
     back_knee: [0.0, 0.2, 0.1, 0.7],
     hip_turn: 0.0,
+    back_leg_turn: [0.0; 4],
+    lead_leg_turn: [0.0; 4],
     twist: [0.0, -0.4, 0.35, 0.15],
     lean: [0.0, 0.1, -0.25, -0.35],
     standing_lean: 0.0,
@@ -54,6 +56,7 @@ pub(super) const FROST_MAGE: Moves = Moves {
         gesture: Angles { hold: 1.0, weapon_arm: 0.15, elbow: 0.15, head_dip: 0.12, ..STILL },
     },
     head_dip: [0.0, 0.1, -0.15, -0.2],
+    head_turn: [0.0; 4],
     // Upright at the side; level, pointed at the target, as it's drawn back and thrust; planted
     // for the nova.
     held: Held::Upright([0.08, 1.45, 1.5, -0.05]),
@@ -68,5 +71,8 @@ pub(super) const FROST_MAGE: Moves = Moves {
     damping: JOINT_DAMPING,
     head_follow: HEAD_FOLLOW,
     swing_yaw: 0.0,
+    lands_on_lane: false,
+    body_leads: 0.0,
+    aim_turn: 0.0,
     contact: 0.9,
 };

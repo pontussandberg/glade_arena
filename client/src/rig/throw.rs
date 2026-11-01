@@ -57,10 +57,13 @@ pub(crate) struct HeldAt {
     pub at: Transform,
     /// The latest attack (its release tick) the pose has got as far as letting go of.
     pub let_go: Option<u32>,
+    /// How long (ticks) after its latest attack went off the hand lets go of it (`held_drive`).
+    pub drive: f32,
     /// The latest attack whose flying spear has left the hand (its spawn tick).
     pub launched: Option<u32>,
-    /// Where the hand was (as `at`) just as it let go of `let_go`, between frames: our own
-    /// throws' flying spears leave from here, flown on since, however the frames fall.
+    /// Where the hand was (as `at`) just as it let go of `let_go` (`drive` after it went off),
+    /// between frames: our own throws' flying spears leave from here, flown on since, however the
+    /// frames fall.
     pub released_from: Option<Transform>,
     /// A throw (its release tick) whose spear the hand is empty of until the next attack is
     /// ready, once its flying spear has left the hand, or it's `late` for it.
@@ -74,7 +77,8 @@ pub(crate) fn held_in_world(placed: &Transform, posed: &Posed) -> Transform {
     Transform::from_translation(placed.translation.with_y(0.0)) * posed.held_on_body
 }
 
-/// How long (ticks past a throw) each side of a hand-off (`HeldAt`) waits for the other, at most.
+/// How long (ticks past a throw, and its `HeldAt::drive`) each side of a hand-off (`HeldAt`)
+/// waits for the other, at most.
 pub(crate) const MAX_HOLD_TICKS: f32 = 3.0;
 
 /// A thrower's hand is empty from when its flying spear leaves it (`render::fly_shots`, just
@@ -89,14 +93,15 @@ pub(crate) fn empty_hands(rigs: Query<(&Rig, &HeldAt)>, mut parts: Query<&mut Vi
     }
 }
 
-/// How a thrower is posed `dt` (seconds) on from its `joints`, just as its attack goes off then
-/// (`at`, a fractional tick), mid-`flick` of a Q (0 if none, as `pose_rigs` layers it on), facing,
-/// stepping, walking and striding as `walk` says: where its hand lets go, wherever between
-/// frames that falls.
+/// How a thrower is posed `dt` (seconds) on from its `joints`, just as its hand lets go of the
+/// attack that went off at `at` (a fractional tick; a shot held drawn its `held_drive` later),
+/// mid-`flick` of a Q (0 if none, as `pose_rigs` layers it on), facing, stepping, walking and
+/// striding as `walk` says: where its hand lets go, wherever between frames that falls.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn pose_releasing(class: ClassId, moves: &Moves, attack: &AttackState, joints: &Joints, dt: f32, at: f32, flick: f32, walk: (Vec2, Vec2, f32, f32)) -> Posed {
     let (look, step, walking, stride) = walk;
-    let (windup, released, ahead) = ahead_of_springs(class, moves, None, Some(0.0), at);
+    let drive = held_drive(class, moves, attack);
+    let (windup, released, ahead) = ahead_of_springs(class, moves, None, Some(drive), at + drive);
     let (draw, throw, smear, second) = strike_phase(class, moves, attack, windup, released, ahead);
     let phase = Phase { draw, throw: throw.max(flick), dashing: 0.0, second };
     let angles = joints.clone().follow(&targets(moves, phase, step, walking), dt, moves);

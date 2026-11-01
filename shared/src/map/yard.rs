@@ -8,18 +8,20 @@
 //! footbridge. Timber-framed houses with lit windows stand along the lane, round the square and
 //! up on the terrace, with fences and flower beds between them, trees here and there. Every
 //! sheer edge is faced with stone (`scene::Props::retaining`). Target dummies stand in the
-//! square, down the far lane, and on each high place. For trying a hero's kit, aim and movement
-//! out, not for fighting over.
+//! square, down the far lane, and on each high place. East of the hill lie the strafing grounds,
+//! wide open for building speed through jumps: two high mesas, each with a long, broad ramp up
+//! its west side, joined by a wide high bridge over a river, and a low stone arch over the river
+//! nearer the hill. For trying a hero's kit, aim and movement out, not for fighting over.
 
 use bevy::math::{IVec2, Vec2};
 
 use super::{Map, MapId, Tile, squircle};
 
-const SIZE: IVec2 = IVec2::new(96, 64);
+const SIZE: IVec2 = IVec2::new(192, 120);
 
 /// Meters inside the field's edge (negative outside): a rounded rectangle, no wobble.
 fn edge(p: Vec2) -> f32 {
-    (1.0 - squircle(Vec2::new(p.x / 44.5, p.y / 28.5))) * 20.0
+    (1.0 - squircle(Vec2::new(p.x / 92.5, p.y / 56.5))) * 20.0
 }
 
 fn beyond(_: Vec2) -> Tile {
@@ -140,6 +142,9 @@ const DUMMIES: &[Vec2] = &[
     Vec2::new(-10.5, -10.5),
     Vec2::new(21.5, CAUSEWAY_Y),
     Vec2::new(HILL.x + 0.5, HILL.y + 0.5),
+    // Up on the strafing grounds' mesas.
+    Vec2::new(76.5, -26.5),
+    Vec2::new(76.5, 28.5),
 ];
 
 /// The high ground beyond the terrace: the plateau's middle, height and radius, with the ramp
@@ -153,6 +158,28 @@ const HILL_REACH: f32 = 12.0;
 /// a slope a fighter walks up (under `map::CLIMB`).
 const RAMP_HALF: f32 = 1.5;
 const RAMP_RUN: f32 = 1.5;
+
+/// The strafing grounds: the two mesas (boxes on tile edges) and their height; the broad ramps
+/// up their west sides (their middles' y, half their width, how far each runs for its height:
+/// gentler than a stair); the high bridge between the mesas (its middle's x, half its width);
+/// the river under it (its tiles' rows, from where it starts east to the field's edge); and the
+/// low arch over the river (its middle's x, its height, how far it runs up for it).
+const SOUTH_MESA: (Vec2, Vec2) = (Vec2::new(64.0, -30.0), Vec2::new(80.0, -12.0));
+const NORTH_MESA: (Vec2, Vec2) = (Vec2::new(64.0, 14.0), Vec2::new(80.0, 32.0));
+const MESA_TOP: f32 = 6.0;
+const BIG_RAMPS: [f32; 2] = [-21.0, 23.0];
+const BIG_RAMP_HALF: f32 = 5.0;
+const BIG_RAMP_RUN: f32 = 4.0;
+const HIGH_BRIDGE_X: f32 = 72.0;
+const BRIDGE_HALF: f32 = 4.0;
+const RIVER: (i32, i32, i32) = (-4, 5, 50);
+const ARCH_X: f32 = 56.0;
+const ARCH_TOP: f32 = 3.0;
+const ARCH_RUN: f32 = 3.0;
+/// How deep the yard's water is where a body wades it (meters under the bank: its feet on the
+/// bed, the water about its shins), and how far in from the bank the bed slopes down to that.
+const WADE_DEPTH: f32 = 0.6;
+const WADE_SHELF: f32 = 1.0;
 
 /// 0 to 1 smoothly as `t` goes 0 to 1.
 fn smooth(t: f32) -> f32 {
@@ -231,12 +258,45 @@ fn relief(p: Vec2) -> f32 {
     }
     // The hill: a broad dome, walked up any way.
     h = h.max(HILL_TOP * smooth(1.0 - p.distance(HILL) / HILL_REACH));
+    // The strafing grounds: the mesas, a broad ramp up the west side of each, the high bridge
+    // from one to the other, and the low arch over the river, up from either bank.
+    for mesa in [SOUTH_MESA, NORTH_MESA] {
+        h = h.max(level(p, mesa, MESA_TOP));
+    }
+    let run = MESA_TOP * BIG_RAMP_RUN;
+    let foot = SOUTH_MESA.0.x - run;
+    for middle in BIG_RAMPS {
+        if (p.y - middle).abs() <= BIG_RAMP_HALF && p.x >= foot && p.x < SOUTH_MESA.0.x {
+            h = h.max(MESA_TOP * (p.x - foot) / run);
+        }
+    }
+    if (p.x - HIGH_BRIDGE_X).abs() <= BRIDGE_HALF && p.y >= SOUTH_MESA.1.y && p.y <= NORTH_MESA.0.y {
+        h = h.max(MESA_TOP);
+    }
+    if (p.x - ARCH_X).abs() <= BRIDGE_HALF {
+        let (south, north) = (RIVER.0 as f32, RIVER.1 as f32 + 1.0);
+        let up = (p.y - (south - ARCH_TOP * ARCH_RUN)) / (ARCH_TOP * ARCH_RUN);
+        let down = (p.y - north) / (ARCH_TOP * ARCH_RUN);
+        h = h.max(ARCH_TOP * up.clamp(0.0, 1.0).min(1.0 - down.clamp(0.0, 1.0)));
+    }
+    // The stream's and the river's beds, under the water (and the ford) and not its bridges,
+    // sloping down from either bank, so what comes down in them stands in the water and can wade
+    // back out.
+    if h <= 0.0 {
+        let stream = (p.x - STREAM.0 as f32).min(STREAM.1 as f32 - p.x);
+        let river = (p.y - RIVER.0 as f32).min(RIVER.1 as f32 + 1.0 - p.y).min(p.x - RIVER.2 as f32);
+        let inside = stream.max(river);
+        if inside > 0.0 {
+            h = -WADE_DEPTH * (inside / WADE_SHELF).min(1.0);
+        }
+    }
     h
 }
 
 pub(super) fn build() -> Map {
     let mut map = Map::blank(MapId::Yard, SIZE, edge, beyond);
     map.relief = relief;
+    map.wades = true;
     // The lane from the gate to the far end, the square, and the side lanes to the stall and
     // the inn; the terrace's own lane and its stairs; the causeway.
     map.fill(Vec2::new(-42.5, -1.5), Vec2::new(42.5, 1.5), Tile::Path);
@@ -253,10 +313,22 @@ pub(super) fn build() -> Map {
     }
     map.fill(Vec2::new(15.5, CAUSEWAY_Y - 1.0), Vec2::new(29.5, CAUSEWAY_Y + 1.0), Tile::Path);
     // The stream, with the lane's bridge, the causeway's footbridge and a ford.
-    map.fill(Vec2::new(STREAM.0 as f32 + 0.5, -40.0), Vec2::new(STREAM.1 as f32 - 0.5, 40.0), Tile::Water);
+    map.fill(Vec2::new(STREAM.0 as f32 + 0.5, -60.0), Vec2::new(STREAM.1 as f32 - 0.5, 60.0), Tile::Water);
     map.fill(Vec2::new(STREAM.0 as f32 + 0.5, -1.5), Vec2::new(STREAM.1 as f32 - 0.5, 1.5), Tile::Bridge);
     map.fill(Vec2::new(STREAM.0 as f32 + 0.5, CAUSEWAY_Y - 1.0), Vec2::new(STREAM.1 as f32 - 0.5, CAUSEWAY_Y + 1.0), Tile::Bridge);
     map.fill(Vec2::new(STREAM.0 as f32 + 0.5, FORD_Y), Vec2::new(STREAM.1 as f32 - 0.5, FORD_Y), Tile::Ford);
+    // The strafing grounds: the ramps and the high bridge's way over land paved, the river,
+    // and the bridges over it.
+    for middle in BIG_RAMPS {
+        map.fill(Vec2::new(SOUTH_MESA.0.x - MESA_TOP * BIG_RAMP_RUN + 0.5, middle - BIG_RAMP_HALF + 0.5), Vec2::new(SOUTH_MESA.0.x - 0.5, middle + BIG_RAMP_HALF - 0.5), Tile::Path);
+    }
+    let bridge = |y: f32| (Vec2::new(HIGH_BRIDGE_X - BRIDGE_HALF + 0.5, y), Vec2::new(HIGH_BRIDGE_X + BRIDGE_HALF - 0.5, y));
+    map.fill(bridge(SOUTH_MESA.1.y + 0.5).0, bridge(NORTH_MESA.0.y - 0.5).1, Tile::Path);
+    let (river_lo, river_hi) = (Vec2::new(RIVER.2 as f32 + 0.5, RIVER.0 as f32 + 0.5), Vec2::new(SIZE.x as f32, RIVER.1 as f32 + 0.5));
+    map.fill(river_lo, river_hi, Tile::Water);
+    for x in [HIGH_BRIDGE_X, ARCH_X] {
+        map.fill(Vec2::new(x - BRIDGE_HALF + 0.5, river_lo.y), Vec2::new(x + BRIDGE_HALF - 0.5, river_hi.y), Tile::Bridge);
+    }
     for &(lo, size, door) in HOUSES {
         map.house(lo, size, door);
     }

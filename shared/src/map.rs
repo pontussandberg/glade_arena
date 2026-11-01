@@ -261,6 +261,10 @@ pub struct Map {
     pub gardens: Vec<Vec2>,
     /// Stacks of crates (tile, how many high): wall tiles under each, stood on (`CRATE`).
     pub crates: Vec<(IVec2, u8)>,
+    /// Its water is shallow: no one walks into it from the bank, but a body can jump out over
+    /// it, and one that comes down in it wades (`MARSH_SPEED`) wherever it likes in it and out.
+    /// Its ground dips under the water (the map's relief), so a body in it stands in it.
+    pub wades: bool,
     /// Everything that stands in the way, as boxes (`colliders`, worked out in `finished`), the
     /// ones near each tile (by tile index), and where on each tile a body stands, if anywhere
     /// (`stand`).
@@ -419,6 +423,7 @@ impl Map {
             well: None,
             gardens: Vec::new(),
             crates: Vec::new(),
+            wades: false,
             colliders: Vec::new(),
             near: Vec::new(),
             stands: Vec::new(),
@@ -612,9 +617,12 @@ impl Map {
         self.walkable(Map::tile_of(p))
     }
 
-    /// How fast walking at `p` is, as a share of a fighter's speed.
+    /// How fast walking at `p` is, as a share of a fighter's speed: wading too (`wades`).
     pub fn speed_factor_at(&self, p: Vec2) -> f32 {
-        self.get(Map::tile_of(p)).speed_factor()
+        match self.get(Map::tile_of(p)) {
+            Tile::Water if self.wades => MARSH_SPEED,
+            tile => tile.speed_factor(),
+        }
     }
 
     /// Every tile on the grid, row by row from the bottom.
@@ -658,15 +666,21 @@ impl Map {
     }
 
     /// `line_walkable` for a body with its feet `feet` high, on the ground or up in the air:
-    /// water, chasms, trees and the forest block it at any height; anything else is a collider,
+    /// water (unless it wades it, `wades`: in it or up over it), chasms, trees and the forest
+    /// block it at any height; anything else is a collider,
     /// in its way only below its top (`colliders_block`), and stood on over it. Where it ends up
     /// may be no higher over its feet than `CLIMB` lets it step, and the edge of its square
     /// comes over no ground rising more steeply than that either: come at a terrace's face
     /// straight, at a slant or round its corner, the body stops at it, not in it. A body already
     /// reaching into a blocked tile may move out of it, never further in.
     pub fn line_walkable_at(&self, a: Vec2, b: Vec2, feet: f32) -> bool {
+        // Wading water: already in it, or off the ground (jumped out over it).
+        let wading = self.wades && (self.get(Map::tile_of(a)) == Tile::Water || feet > self.floor_at(a, feet) + 1e-3);
         let blocks = |t: IVec2| {
             let tile = self.get(t);
+            if wading && tile == Tile::Water {
+                return self.colliders_on(t).any(|collider| collider.blocks(a, b, feet));
+            }
             // What blocks at any height: its tile as a box as tall as there is.
             let void = !tile.walkable() && !matches!(tile, Tile::Wall | Tile::Rock) && {
                 let c = Map::center(t);

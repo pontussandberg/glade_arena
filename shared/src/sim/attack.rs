@@ -52,7 +52,7 @@ pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, held:
     {
         swing.held += 1;
     }
-    if let Some(Swing { dir, quick, .. }) = state.winding_up().filter(|swing| tick >= swing.releases_at(&class.def().attack)) {
+    if let Some(Swing { dir, quick, aside, .. }) = state.winding_up().filter(|swing| tick >= swing.releases_at(&class.def().attack)) {
         state.released_at = Some(tick);
         // An attack going off uses up the `follow_up` (one cancelled first doesn't), and a
         // primed one the prime.
@@ -65,7 +65,7 @@ pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, held:
                 let origin = shot_spawn(pos, dir, radius);
                 Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 })
             }
-            AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir, empowered: quick, grown: 0.0 }),
+            AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir, empowered: quick, grown: 0.0, aside }),
         });
     }
     if state.released() && state.swing.is_some_and(|swing| tick >= swing.ready_at(&class.def().attack)) {
@@ -89,7 +89,7 @@ pub fn start_attack_hasted(tick: u32, class: ClassId, input: &PlayerInput, mut s
     {
         let primed = state.primed.is_some();
         let haste = haste + state.primed.map_or(0.0, |(_, speed)| speed);
-        state.swing = Some(Swing { started_at: tick, dir, quick: state.quick_at(tick as f32), hastened: false, haste, primed, held: 0 });
+        state.swing = Some(Swing { started_at: tick, dir, quick: state.quick_at(tick as f32), hastened: false, haste, primed, held: 0, aside: input.aside });
     }
     state
 }
@@ -153,8 +153,9 @@ pub fn swing_reaches(from: f32, feet: f32) -> bool {
     feet < from + BODY_HEIGHT && feet + BODY_HEIGHT > from - REACH_DOWN
 }
 
-/// Does a swing from `attacker` toward `dir` (`empowered` by its `follow_up` or not) reach
-/// `target`, each with how high its feet are? Its lane (`AttackDef::lane`) reaches the target's
+/// Does a swing whose lane starts across from its striker at `attacker` (`LastSwing::lane_from`)
+/// toward `dir` (`empowered` by its `follow_up` or not) reach `target`, each with how high its
+/// feet are? Its lane (`AttackDef::lane`) reaches the target's
 /// body, as high or low as the swing sweeps (`swing_reaches`), and not through a wall. Only the
 /// server decides this.
 pub fn melee_hits(map: &Map, (attacker, attacker_feet): (Vec2, f32), dir: Vec2, (empowered, grown): (bool, f32), class: ClassId, (target, feet): (Vec2, f32)) -> bool {

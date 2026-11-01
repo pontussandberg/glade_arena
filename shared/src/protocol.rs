@@ -169,9 +169,23 @@ pub struct Swing {
     /// Ticks its shot has been held drawn past its windup (`PlayerInput::draw`): it goes off that
     /// much later, and its backswing runs on from then.
     pub held: u32,
+    /// How far to the attacker's right its lane runs (meters): on the action camera's line of
+    /// sight (`PlayerInput::aside`), so a blow comes down straight along the crosshair's line.
+    pub aside: f32,
+}
+
+/// Where a melee lane toward `dir` starts across from a striker at `pos`: `aside` to its right.
+pub fn lane_start(pos: Vec2, dir: Vec2, aside: f32) -> Vec2 {
+    let dir = dir.normalize_or_zero();
+    pos + Vec2::new(dir.y, -dir.x) * aside
 }
 
 impl Swing {
+    /// Where its lane starts across from its striker at `pos` (`aside`).
+    pub fn lane_from(&self, pos: Vec2) -> Vec2 {
+        lane_start(pos, self.dir, self.aside)
+    }
+
     // Its timing depends only on the attack (`AttackDef`), so any attack can be timed and
     // tested, not just the classes'.
 
@@ -576,6 +590,15 @@ pub struct LastSwing {
     /// An empowered swing's lane grown bigger again (0.2: a fifth), by an item
     /// (`AttackDef::lane_grown`).
     pub grown: f32,
+    /// How far to the striker's right its lane ran (`Swing::aside`, less by a wall beside).
+    pub aside: f32,
+}
+
+impl LastSwing {
+    /// Where its lane starts across from its striker at `pos` (`aside`).
+    pub fn lane_from(&self, pos: Vec2) -> Vec2 {
+        lane_start(pos, self.dir, self.aside)
+    }
 }
 
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
@@ -649,6 +672,10 @@ pub struct PlayerInput {
     /// How much the aim rises per meter ahead (the tangent of its pitch), with the action camera
     /// (`PlayerCommand::Aim`): what a shot's `climb` is. 0 is level, the MOBA's.
     pub climb: f32,
+    /// How far to the fighter's right the action camera's line of sight passes (`ACTION_SHOULDER`,
+    /// less by a wall beside them; 0 in first person, and in the MOBA): the line a shot starts on
+    /// (`sim::onto_sight`).
+    pub aside: f32,
     /// Left click: auto-attack toward `aim`, if the last attack is done (else the click is
     /// dropped). Set by `PlayerCommand::Attack`, used up by the next tick.
     pub fire: bool,
@@ -711,13 +738,15 @@ pub enum PlayerCommand {
     Attack(Vec2, u32),
     /// An ability's key (1, 2, 3, 4): use the ability in this slot toward this aim.
     Cast(AbilitySlot, Vec2),
-    /// Action mode only: the aim as the camera turns (at most once a tick), its direction and
-    /// its pitch (`PlayerInput::climb`), so an attack winding up goes off the way the player
-    /// looks then, not the way they looked when it started.
-    Aim(Vec2, f32),
+    /// Action mode only: the aim as the camera turns (at most once a tick), its direction, its
+    /// pitch (`PlayerInput::climb`) and how far right of the fighter its line passes
+    /// (`PlayerInput::aside`), so an attack winding up goes off the way the player looks then,
+    /// not the way they looked when it started.
+    Aim(Vec2, f32, f32),
     /// Space pressed (true) or let go (false): jump, and while it's held again each time it
-    /// lands (`PlayerInput::jump`). Sent as it changes.
-    Jump(bool),
+    /// lands (`PlayerInput::jump`). From the tick given, as a walk is (`Walk`), so the prediction
+    /// jumps just when the server does. Sent as it changes.
+    Jump(bool, u32),
     /// The attack button held down (true) or let go, from the tick given, as a walk is (`Walk`),
     /// so the prediction walks it as the server does: a shot is held drawn while it's down
     /// (`PlayerInput::draw`). Sent as it changes.
@@ -733,7 +762,7 @@ impl PlayerCommand {
         match *self {
             PlayerCommand::MoveTo(_) | PlayerCommand::Stop => true,
             PlayerCommand::Walk(dir, _) => dir != Vec2::ZERO,
-            PlayerCommand::Attack(..) | PlayerCommand::Cast(..) | PlayerCommand::Aim(..) | PlayerCommand::Jump(_) | PlayerCommand::Draw(..) => false,
+            PlayerCommand::Attack(..) | PlayerCommand::Cast(..) | PlayerCommand::Aim(..) | PlayerCommand::Jump(..) | PlayerCommand::Draw(..) => false,
         }
     }
 
@@ -760,11 +789,12 @@ impl PlayerCommand {
                 input.fire = true;
             }
             PlayerCommand::Cast(slot, aim) => input.order_cast(slot, aim),
-            PlayerCommand::Aim(aim, climb) => {
+            PlayerCommand::Aim(aim, climb, aside) => {
                 input.aim = aim;
                 input.climb = climb;
+                input.aside = aside;
             }
-            PlayerCommand::Jump(held) => {
+            PlayerCommand::Jump(held, _) => {
                 input.jump |= held;
                 input.jump_held = held;
             }
@@ -925,12 +955,12 @@ mod tests {
     fn space_held_jumps_every_tick_and_a_tap_once() {
         let tick = |input: &mut PlayerInput| std::mem::take(&mut input.jump) || input.jump_held;
         let mut input = PlayerInput::default();
-        PlayerCommand::Jump(true).apply(&mut input);
+        PlayerCommand::Jump(true, 0).apply(&mut input);
         assert!(tick(&mut input) && tick(&mut input) && tick(&mut input), "held, but not jumping");
-        PlayerCommand::Jump(false).apply(&mut input);
+        PlayerCommand::Jump(false, 0).apply(&mut input);
         assert!(!tick(&mut input), "let go, still jumping");
-        PlayerCommand::Jump(true).apply(&mut input);
-        PlayerCommand::Jump(false).apply(&mut input);
+        PlayerCommand::Jump(true, 0).apply(&mut input);
+        PlayerCommand::Jump(false, 0).apply(&mut input);
         assert!(tick(&mut input) && !tick(&mut input), "a tap doesn't jump just once");
     }
 
@@ -961,7 +991,7 @@ mod tests {
     #[test]
     fn a_hasted_swing_is_quicker() {
         let attack = &crate::classes::ClassId(0).def().attack;
-        let plain = Swing { started_at: 0, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0 };
+        let plain = Swing { started_at: 0, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0, aside: 0.0 };
         let hasted = Swing { haste: 0.3, ..plain };
         assert!(hasted.windup_ticks(attack) < plain.windup_ticks(attack));
         assert!(hasted.ready_at(attack) < plain.ready_at(attack));

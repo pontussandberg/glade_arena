@@ -36,6 +36,8 @@ pub(super) const PYRE_WITCH: Moves = Moves {
     lead_knee: [0.0, 0.5, 0.1, 0.7],
     back_knee: [0.0, 0.45, 0.1, 0.7],
     hip_turn: 0.15,
+    back_leg_turn: [0.0; 4],
+    lead_leg_turn: [0.0; 4],
     // Wound back and round over the staff, then opening through the toss.
     twist: [0.0, -0.5, 0.5, 0.15],
     // Bowed down over the staff behind her, then rising up and a touch back as the fire goes;
@@ -57,6 +59,7 @@ pub(super) const PYRE_WITCH: Moves = Moves {
     },
     // Looking down into the bow, up after the fire.
     head_dip: [0.0, 0.35, -0.3, -0.2],
+    head_turn: [0.0; 4],
     // Tipped a little forward in the cradle; laid nearly flat back as it swings behind, the
     // ember down by the ground (the scoop); swung up through the toss to lean forward over it,
     // the ember high, the fire thrown up and out; planted for the ring.
@@ -74,6 +77,9 @@ pub(super) const PYRE_WITCH: Moves = Moves {
     damping: JOINT_DAMPING,
     head_follow: 0.4,
     swing_yaw: 0.0,
+    lands_on_lane: false,
+    body_leads: 0.0,
+    aim_turn: 0.0,
     // The fire leaves as the staff comes up level.
     contact: 0.8,
 };
