@@ -238,6 +238,8 @@ pub struct Map {
     colliders: Vec<Collider>,
     near: Vec<Vec<u16>>,
     stands: Vec<Option<Vec2>>,
+    /// Which way the stairs on each tile go up, if it has any (by tile index; `stairs_up`).
+    stairs: Vec<Option<Vec2>>,
     /// Which steps a walker can take from each tile (by tile index; `work_out_steps`).
     open_steps: Vec<u8>,
     /// Meters inside the playable area's edge (negative outside). Continuous, for terrain and
@@ -477,6 +479,7 @@ impl Map {
             colliders: Vec::new(),
             near: Vec::new(),
             stands: Vec::new(),
+            stairs: Vec::new(),
             open_steps: Vec::new(),
             edge,
             relief: flat,
@@ -552,6 +555,7 @@ impl Map {
     fn finished(mut self) -> Map {
         self.colliders = colliders::build(&self);
         self.index_colliders();
+        self.stairs = (0..self.tiles.len()).map(|i| self.find_stairs_up(self.tile_at(i))).collect();
         self.work_out_steps();
         self
     }

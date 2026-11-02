@@ -78,3 +78,7 @@ web-sys = { version = "0.3", features = [
     "AudioBuffer", "AudioBufferSourceNode", "AudioScheduledSourceNode", "DynamicsCompressorNode", "StereoPannerNode",
 ] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[dev-dependencies]
+# Writes the textures baked from shapes in code (`swish/bake.rs`).
+png = "0.18"
