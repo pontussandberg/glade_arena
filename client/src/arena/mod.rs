@@ -26,8 +26,6 @@ mod zombie;
 use zombie::*;
 mod merchant;
 use merchant::*;
-mod recruits;
-use recruits::*;
 mod shots;
 pub use shots::*;
 mod scene;
@@ -72,8 +70,6 @@ pub mod palette {
     pub const AWNING_RED: Color = Color::srgb_u8(0xA8, 0x32, 0x2E);
     pub const AWNING_CREAM: Color = Color::srgb_u8(0xE6, 0xD8, 0xB6);
     pub const DARK_LEATHER: Color = Color::srgb_u8(0x17, 0x14, 0x14);
-    /// Ashen fur trim (mantles, tails).
-    pub const FUR: Color = Color::srgb_u8(0x55, 0x55, 0x52);
     /// Charred, ash-black antlers; pauldrons, gauntlets, sword guards.
     pub const ASH: Color = Color::srgb_u8(0x2B, 0x2A, 0x2E);
     /// The executioner's coat, hood and cape: a cold near-black with a breath of moss in it, its
@@ -81,15 +77,6 @@ pub mod palette {
     pub const HUNTER: Color = Color::srgb_u8(0x1A, 0x1E, 0x1C);
     pub const HUNTER_DARK: Color = Color::srgb_u8(0x0D, 0x10, 0x0F);
     pub const HUNTER_ASH: Color = Color::srgb_u8(0x3A, 0x3E, 0x3C);
-    /// The shade's: a tunic of cold near-black with a breath of green in it, the ash grey of
-    /// the wraps on its arms and head, the paler band round its brow (what's seen of it from
-    /// above), a dusk-purple scarf, and a chest strap of old blood not yet gone black. Dark, but
-    /// lit: a figure, not a hole in the ground.
-    pub const SHADE_CLOTH: Color = Color::srgb_u8(0x2C, 0x34, 0x30);
-    pub const SHADE_WRAP: Color = Color::srgb_u8(0x58, 0x5E, 0x58);
-    pub const SHADE_PALE: Color = Color::srgb_u8(0x84, 0x8A, 0x84);
-    pub const SHADE_SCARF: Color = Color::srgb_u8(0x5E, 0x52, 0x74);
-    pub const SHADE_STRAP: Color = Color::srgb_u8(0x62, 0x22, 0x26);
     /// Old blood gone black-brown: the executioner's leather apron and the rag on its spear.
     pub const OXBLOOD: Color = Color::srgb_u8(0x33, 0x1D, 0x1B);
     /// Pale, cold bone: the death hunter's bandana, faded.
@@ -224,8 +211,7 @@ pub fn faceted(mesh: Mesh) -> Mesh {
 /// Class ids that have their own figure in `fighter_mesh`. Every class in `assets/classes/` needs
 /// one (and its parts in `fighter_rig` and its moves in `rig/`): the client won't start
 /// without them, and a test checks every class has one.
-pub const FIGHTER_LOOKS: [&str; 10] =
-    ["javelinist", "revenant", "frost_mage", "zombie", "merchant", "warden", "pyre_witch", "shade", "breaker", "stormweaver"];
+pub const FIGHTER_LOOKS: [&str; 5] = ["javelinist", "revenant", "frost_mage", "zombie", "merchant"];
 
 /// Class ids whose shots have their own look in `shot_look` (the rest throw round bolts).
 pub const SHOT_LOOKS: [&str; 2] = ["javelinist", "frost_mage"];
@@ -240,9 +226,8 @@ pub struct RigMeshes {
     pub arm: Mesh,
     /// The forearm hanging down from the elbow, in its own space.
     pub forearm: Mesh,
-    /// The left arm, if it isn't `arm` and `forearm` again: its own upper arm, and its forearm if
-    /// it has one (an empty sleeve has none).
-    pub lead_arm: Option<(Mesh, Option<Mesh>)>,
+    /// The left upper arm, if it isn't `arm` again: an empty sleeve, with no forearm.
+    pub lead_arm: Option<Mesh>,
     /// The thigh, hanging down from the hip to the knee (`RIG_KNEE`).
     pub leg: Mesh,
     /// The shin hanging down from the knee, in its own space.
@@ -284,40 +269,9 @@ pub const RIG_KNEE: Vec3 = Vec3::new(0.0, -0.4, 0.0);
 pub const RIG_ELBOW: Vec3 = Vec3::new(0.0, -0.26, 0.0);
 
 /// A class's moving parts: its hood, sleeves, legs, weapon and (if it has one) cape.
-/// Where a figure's gripped weapon cuts, along its length up from the grip (meters): where its
-/// blade (or its head) starts, and how far its point reaches. The trail and the mark it leaves in
-/// the air follow that stretch, not the whole shaft.
-pub fn blade_span(class_key: &str) -> (f32, f32) {
-    match class_key {
-        "warden" => (0.18, 1.02),
-        "breaker" => (0.88, 1.2),
-        "shade" => (0.1, 0.48),
-        _ => (BLADE_START, BLADE_LENGTH),
-    }
-}
-
-/// Where a figure's other hand's blade runs along its lead forearm (meters along the forearm's
-/// own axis from the elbow, its base to its point), if it holds one: the shade's reversed knife.
-pub fn off_blade_span(class_key: &str) -> Option<(f32, f32)> {
-    match class_key {
-        "shade" => Some((-0.2, -0.46)),
-        _ => None,
-    }
-}
-
-/// How bright a figure's blades' trails are and how long they linger, as shares of the usual
-/// (`swish::trail`): a knife's cut is nothing but its flash, so the shade's are the brightest,
-/// and the shortest-lived, so the flash is where the knife ends up, not where it came from.
-pub fn blade_flash(class_key: &str) -> (f32, f32) {
-    match class_key {
-        "shade" => (2.0, 0.6),
-        _ => (1.0, 1.0),
-    }
-}
-
 pub fn fighter_rig(class_key: &str) -> RigMeshes {
     // Every figure's parts: its upper arm and forearm, its thigh and shin, and the rest.
-    let rig = |(arm, forearm): (Mesh, Mesh), lead_arm: Option<(Mesh, Option<Mesh>)>, (leg, shin): (Mesh, Mesh), head: Mesh, held: Mesh, eyes: Mesh, glow: Color| RigMeshes {
+    let rig = |(arm, forearm): (Mesh, Mesh), lead_arm: Option<Mesh>, (leg, shin): (Mesh, Mesh), head: Mesh, held: Mesh, eyes: Mesh, glow: Color| RigMeshes {
         head,
         arm,
         forearm,
@@ -338,7 +292,7 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
             held_aura: Some(spear_aura()),
             held_glint: Some((glint(), spear_edge)),
             wardrobe: Some(javelinist_wardrobe()),
-            ..rig((javelinist_arm(), javelinist_forearm()), Some((javelinist_stump(), None)), (javelinist_leg(), javelinist_shin()), javelinist_hood(), held_spear(), slit_eyes(HUNTER_EYES), palette::DEADEYE)
+            ..rig((javelinist_arm(), javelinist_forearm()), Some(javelinist_stump()), (javelinist_leg(), javelinist_shin()), javelinist_hood(), held_spear(), slit_eyes(HUNTER_EYES), palette::DEADEYE)
         },
         "revenant" => RigMeshes {
             held_glow: Some(glaive_glow()),
@@ -358,23 +312,6 @@ pub fn fighter_rig(class_key: &str) -> RigMeshes {
         "merchant" => RigMeshes {
             held_glow: Some(merchant_lantern()),
             ..rig(merchant_arm(), None, booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.1, 0.085), merchant_head(), merchant_staff(), slit_eyes(MERCHANT_EYES), palette::TORCH_FLAME)
-        },
-        "warden" => {
-            let (shield_arm, shield_forearm) = warden_shield_arm();
-            rig(warden_arm(), Some((shield_arm, Some(shield_forearm))), booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.085, 0.07), warden_helm(), arming_sword(), slit_eyes(WARDEN_EYES), palette::GOLD)
-        }
-        "pyre_witch" => RigMeshes {
-            held_glow: Some(pyre_staff_glow()),
-            ..rig(pyre_witch_arm(), None, booted_leg(palette::ASH, palette::DARK_LEATHER, 0.08, 0.065), pyre_witch_hood(), pyre_staff(), spectral_eyes(Vec2::ONE), palette::TORCH_FLAME)
-        },
-        "shade" => {
-            let (offhand, offhand_forearm) = shade_offhand();
-            rig(shade_arm(), Some((offhand, Some(offhand_forearm))), booted_leg(palette::SHADE_CLOTH, palette::DARK_LEATHER, 0.075, 0.062), shade_hood(), shade_knife(), spectral_eyes(Vec2::ONE), palette::HEATHER)
-        }
-        "breaker" => rig(breaker_arm(), None, booted_leg(palette::LEATHER, palette::DARK_LEATHER, 0.095, 0.078), breaker_helm(), maul(), slit_eyes(BREAKER_EYES), palette::TORCH_LIGHT),
-        "stormweaver" => RigMeshes {
-            held_glow: Some(storm_staff_glow()),
-            ..rig(stormweaver_arm(), None, booted_leg(recruits::STORM_DARK, palette::DARK_LEATHER, 0.08, 0.065), stormweaver_hood(), storm_staff(), spectral_eyes(Vec2::ONE), recruits::STORM_GLOW)
         },
         _ => unreachable!("no rig for class {class_key:?} (add it to FIGHTER_LOOKS)"),
     }
@@ -406,12 +343,6 @@ pub fn fighter_mesh(class_key: &str) -> Mesh {
         // The shopkeeper (no one picks it): a stout trader in a long burgundy coat, a pack piled
         // with wares on its back, a wide hat with a feather, a lantern hanging off its staff.
         "merchant" => merchant_body(),
-        // The recruits (`recruits.rs`): the five classes that joined after the first three.
-        "warden" => warden_body(),
-        "pyre_witch" => pyre_witch_body(),
-        "shade" => shade_body(),
-        "breaker" => breaker_body(),
-        "stormweaver" => stormweaver_body(),
         _ => unreachable!("no figure for class {class_key:?} (add it to FIGHTER_LOOKS)"),
     }
 }

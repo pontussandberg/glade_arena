@@ -57,8 +57,10 @@ for (const step of steps) {
     await send("Input.dispatchKeyEvent", { type: "keyUp", key: rest, code });
   }
   else if (cmd === "down" || cmd === "up") {
+    // A letter's code is KeyX; Space's key is the space character (its name is only its code).
     const code = /^[a-z]$/.test(rest) ? "Key" + rest.toUpperCase() : rest;
-    await send("Input.dispatchKeyEvent", { type: cmd === "down" ? "keyDown" : "keyUp", key: rest, code, text: cmd === "down" ? rest : undefined });
+    const key = rest === "Space" ? " " : rest;
+    await send("Input.dispatchKeyEvent", { type: cmd === "down" ? "keyDown" : "keyUp", key, code, text: cmd === "down" && key.length === 1 ? key : undefined });
   } else if (cmd === "mdown" || cmd === "mup") {
     const [x, y] = rest.split(",").map(Number);
     await send("Input.dispatchMouseEvent", { type: cmd === "mdown" ? "mousePressed" : "mouseReleased", x, y, button: "left", buttons: cmd === "mdown" ? 1 : 0, clickCount: 1 });

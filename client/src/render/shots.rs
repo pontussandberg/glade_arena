@@ -29,10 +29,8 @@ const SETTLE_SECONDS: f32 = 0.2;
 /// How far (meters) a thrown spear flies before it has come in from where it left the hand (to
 /// the side and above) onto its real path at `THROWN_HEIGHT`: one long, gentle curve, no dive.
 const CONVERGE_METERS: f32 = 7.0;
-/// Our own spear starts just beside the crosshair's line (meters), on the side of the hand that
-/// threw it, so it's seen leaving it and not end-on, and comes in onto the line over a long
-/// stretch of flight (meters): to the eye it starts on the crosshair.
-const OWN_ASIDE: f32 = 0.15;
+/// Our own spear starts dead on the crosshair's line; how far (meters) it takes to settle from
+/// the hand's tilt to its flight's.
 const OWN_CONVERGE_METERS: f32 = 20.0;
 /// Others' spears reach us a round trip (and a bit) after they're thrown, when their real path
 /// is already meters ahead of the hand. A spear never starts more than this far (meters) behind
@@ -104,9 +102,9 @@ pub(crate) fn leaving_hand(held: &Transform) -> Transform {
 /// relative to us. Never before where it starts.
 ///
 /// A thrown spear leaves the hand: out of sight until the thrower's hand has let go of it (our
-/// own fighter is drawn a moment behind the news of its throw). Our own then appears just beside
-/// its real path, the crosshair's line, as the hand empties (the throw sells it), and comes in onto
-/// it over `OWN_CONVERGE_METERS`. Another's takes over
+/// own fighter is drawn a moment behind the news of its throw). Our own then appears dead on its
+/// real path, the crosshair's line, as the hand empties (the throw sells it), settling into its
+/// flight over `OWN_CONVERGE_METERS`. Another's takes over
 /// the held javelin's place (where the throw sends it, see `HeldAt`),
 /// then comes in onto its real path (which starts at the thrower's center, where hits are judged)
 /// along one gentle curve over its first `CONVERGE_METERS`, across and down (or up) at once:
@@ -124,7 +122,6 @@ pub(super) fn fly_shots(
     time: Res<Time>,
     clock: AttackClock,
     visuals: Res<Visuals>,
-    mode: Res<crate::camera::CameraMode>,
     mut holders: Query<(&PlayerId, &mut HeldAt, Has<Me>)>,
     mut shots: Query<(&Projectile, &mut Transform, &mut Visibility, Option<&mut Thrown>, Option<&Spin>), With<Mesh3d>>,
 ) {
@@ -133,7 +130,7 @@ pub(super) fn fly_shots(
     for (projectile, mut transform, mut visibility, thrown, spin) in &mut shots {
         let speed = projectile.class.def().shot(projectile.ability).map_or(0.0, |s| s.speed);
         let at_tick = tick.max(projectile.spawn_tick as f32 - 1.0);
-        // Just where the sim has it: aimed up or down (the action camera's), it rises or falls
+        // Just where the sim has it: aimed up or down (the camera's), it rises or falls
         // as it flies (and a thrown one drops from the hand on), its nose along its flight. A
         // thrown one is let go a little higher than that and comes onto its path (`Thrown`).
         let path_at = |tick: f32| {
@@ -177,15 +174,11 @@ pub(super) fn fly_shots(
                         held.launched = held.launched.max(Some(projectile.spawn_tick));
                         let leaving = leaving_hand(&held.at);
                         if me {
-                            // One held drawn, let go a drive after it went off, that far behind
-                            // its real path along it; just beside it on the throwing hand's side
-                            // (the fighter's, left of the crosshair; in first person, the arm in
-                            // view's, right of it).
+                            // Dead on its real path, the crosshair's line; one held drawn, let go
+                            // a drive after it went off, that far behind along it.
                             let lag = if held.released_from.is_some() && held.let_go == Some(projectile.spawn_tick) { held.drive } else { 0.0 };
                             let (_, from, along, tilt) = path_at(at_tick - lag);
-                            let right = (along * Vec3::X).cross(Vec3::Y).normalize_or_zero();
-                            let side = if mode.through_my_eyes() { 1.0 } else { -1.0 };
-                            (from + right * side * OWN_ASIDE, along * tilt, leaving.scale, lag, OWN_CONVERGE_METERS)
+                            (from, along * tilt, leaving.scale, lag, OWN_CONVERGE_METERS)
                         } else {
                             (leaving.translation, leaving.rotation, leaving.scale, 0.0, CONVERGE_METERS)
                         }
@@ -258,10 +251,8 @@ const SPLINTER_STRETCH: f32 = 4.0;
 const SPLINTER_FALL: f32 = 9.0;
 /// A spear gone this much short of its range (meters) was stopped by something, not spent.
 const STOPPED_SHORT: f32 = 0.4;
-/// A spear ending this near a fighter's body (meters) struck it, not what's around it; how far
-/// off (meters) the ting of one striking anything else is heard.
+/// A spear ending this near a fighter's body (meters) struck it, not what's around it.
 const TING_SLACK: f32 = 0.4;
-const TING_EARSHOT: f32 = 30.0;
 /// A bolt bursting as it's spent (`strike_home`): how long its flash lasts and how big it gets
 /// (seconds, meters); how many sparks fly out of it every way, how fast (m/s) and for how long.
 const BURST_SECONDS: f32 = 0.12;
@@ -298,7 +289,7 @@ pub(super) fn strike_home(
     mut materials: ResMut<Assets<PlainMaterial>>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
     shots: Query<(&Projectile, &Transform, Option<&Thrown>, &InheritedVisibility, &MeshMaterial3d<PlainMaterial>)>,
-    fighters: Query<(&Transform, Has<Me>), (With<PlayerId>, Without<Projectile>)>,
+    fighters: Query<&Transform, (With<PlayerId>, Without<Projectile>)>,
 ) {
     let cleared = room.0.as_ref().is_some_and(|view| view.winner.is_some()) || map.is_changed();
     let Ok((projectile, transform, thrown, visible, own_light)) = shots.get(trigger.entity) else { return };
@@ -333,15 +324,15 @@ pub(super) fn strike_home(
         let life = SPLINTER_LIFE.0 + (SPLINTER_LIFE.1 - SPLINTER_LIFE.0) * r(4);
         commands.spawn((Impact { started: now, life, size, velocity: Some(velocity) }, bit()));
     }
-    // Into anything but a fighter (whose hit sounds for itself), a miss: a faint chip on stone, as
-    // near as it is.
-    let into_fighter = fighters.iter().any(|(body, _)| {
+    // Into anything but a fighter (whose hit sounds for itself), a miss: a faint chip on stone,
+    // heard near it, or however far off if it's our own spear.
+    let into_fighter = fighters.iter().any(|body| {
         let feet = body.translation.y;
         arena::to_gameplay(body.translation).distance(arena::to_gameplay(point)) < PLAYER_RADIUS + shot.radius + TING_SLACK
             && (feet - TING_SLACK..feet + BODY_HEIGHT + TING_SLACK).contains(&point.y)
     });
-    if !into_fighter && let Some((ear, _)) = fighters.iter().find(|(_, me)| *me) {
-        sounds.push(crate::audio::Sfx::SpearTing, crate::audio::earshot(ear.translation.distance(point), TING_EARSHOT));
+    if !into_fighter {
+        sounds.add(crate::audio::Sfx::SpearTing, 1.0).from(arena::to_gameplay(point), crate::audio::Reach::Combat).by(projectile.owner);
     }
 }
 

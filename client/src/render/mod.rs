@@ -73,7 +73,7 @@ impl Plugin for RenderPlugin {
         app.init_resource::<crate::feedback::LatestClock>();
         app.add_systems(
             RunFixedMainLoop,
-            (crate::feedback::advance_latest_clock, glide_me.run_if(|mode: Res<crate::camera::CameraMode>| !mode.free), predict_me.run_if(|mode: Res<crate::camera::CameraMode>| mode.free))
+            (crate::feedback::advance_latest_clock, predict_me)
                 .chain()
                 .in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
         );
@@ -88,8 +88,6 @@ impl Plugin for RenderPlugin {
                 // material with its body.
                 show_frost.after(crate::rig::Posing),
                 align_to_world.after(crate::rig::Posing).after(fly_shots),
-                toggle_range_circle,
-                fit_range_circle,
                 (update_status, update_key_hints, fold_controls, show_crosshair),
                 (mark_relations, light_buttons),
             ),
@@ -140,15 +138,12 @@ impl Relation {
     }
 }
 
-/// Meshes and materials shared by every player and projectile (one figure, one range circle,
-/// one body material per class), so attacking doesn't create and upload new GPU assets, and a
+/// Meshes and materials shared by every player and projectile (one figure and one body material
+/// per class), so attacking doesn't create and upload new GPU assets, and a
 /// crowd of one kind draws in a few batches.
 #[derive(Resource)]
 pub(crate) struct Visuals {
     fighters: HashMap<ClassId, Handle<Mesh>>,
-    /// A circle at the edge of a class's auto-attack range, shown around you.
-    /// Each class's range circle, plain and empowered (`AttackDef::edge_reach`).
-    range_circles: HashMap<ClassId, [Handle<Mesh>; 2]>,
     /// Each nova's burst (see `arena::NovaMeshes`), by its class and slot.
     novas: HashMap<(ClassId, AbilitySlot), arena::NovaMeshes<Handle<Mesh>>>,
     /// The ring an elite monster stands in, and its material by its twist.
@@ -193,8 +188,6 @@ pub(crate) enum Look {
     Deadeye,
     /// The faint dark streak on the ground under a thrown spear.
     Shadow,
-    /// The faint circle at the edge of your auto-attack's range.
-    Range,
     /// See-through, glowing ice: novas and frozen fighters, whoever's.
     Frost,
     /// Brighter, bluer see-through glow: the frost under a slowed fighter's feet.
@@ -240,7 +233,6 @@ impl Visuals {
                     Look::Spark => arena::glow(Color::WHITE, 5.0),
                     Look::Deadeye => arena::glow(palette::DEADEYE, 9.0),
                     Look::Shadow => arena::translucent(palette::INK, 0.4, 0.0),
-                    Look::Range => arena::translucent(Color::WHITE, 0.2, 1.0),
                     Look::Frost => arena::translucent(palette::ICE, 0.45, 1.6),
                     Look::Chill => arena::translucent(palette::FROST_GLOW, 0.75, 2.5),
                     Look::Ember => arena::glow(palette::TORCH_FLAME, 7.0),
@@ -273,19 +265,6 @@ fn setup_scene(
     commands.insert_resource(Visuals {
         // Smooth-shaded: rounded organic figures, their forms read by the light itself.
         fighters: ClassId::all().map(|c| (c, meshes.add(arena::fighter_mesh(c.def().figure())))).collect(),
-        // Where an auto-attack stops reaching: a fighter whose body reaches over the circle can be
-        // hit.
-        // None for an uncapped shot.
-        range_circles: ClassId::all()
-            .filter(|c| c.def().attack.edge_reach(false).is_finite())
-            .map(|c| {
-                let mut circle = |empowered| {
-                    let outer = c.def().attack.edge_reach(empowered);
-                    meshes.add(Annulus::new(outer - RANGE_CIRCLE_WIDTH, outer).mesh().resolution(96).build())
-                };
-                (c, [circle(false), circle(true)])
-            })
-            .collect(),
         novas: ClassId::all()
             .flat_map(|c| c.def().abilities().map(move |(slot, ability)| (c, slot, ability.kind)))
             .filter_map(|(c, slot, kind)| {
@@ -349,14 +328,15 @@ fn add_visuals(
     mut commands: Commands,
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<PlainMaterial>>,
-    players: Query<(Entity, &PlayerId, &ClassId, &Pos, Option<&Elite>, Option<&Cooldowns>), Without<Mesh3d>>,
+    players: Query<(Entity, &ClassId, &Pos, Option<&Elite>, Option<&Cooldowns>), (With<PlayerId>, Without<Mesh3d>)>,
     projectiles: Query<(Entity, &Projectile, &Pos), Without<Mesh3d>>,
     me: Query<&PlayerId, With<Me>>,
 ) {
     // Wait until we know which player is ours, so colors are right from the first frame.
-    let Ok(me) = me.single() else { return };
-    for (entity, id, class, pos, elite, cooldowns) in &players {
-        let is_me = id.0 == me.0;
+    if me.single().is_err() {
+        return;
+    }
+    for (entity, class, pos, elite, cooldowns) in &players {
         let material = visuals.body(&mut materials, *class, false);
         // An elite stands in a ring of its twist's color.
         if let Some(elite) = elite {
@@ -394,15 +374,6 @@ fn add_visuals(
                 Frost { prison, rune, shown: (false, false) },
             ))
             .add_children(&[prison, rune]);
-        if is_me && let Some([circle, _]) = visuals.range_circles.get(class).cloned() {
-            commands.entity(entity).with_child((
-                Mesh3d(circle),
-                MeshMaterial3d(visuals.material(&mut materials, Look::Range)),
-                WorldAligned(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2), 0.03),
-                RangeCircle,
-                Visibility::Hidden,
-            ));
-        }
     }
     for (entity, projectile, pos) in &projectiles {
         let Some(arena::ShotLook { mesh, glow, thrown, aura, spin }) =

@@ -6,8 +6,7 @@ use super::*;
 use std::fmt::Write;
 
 use crate::Me;
-use crate::camera::CameraMode;
-use crate::casting::{CastMode, key_label};
+use crate::casting::key_label;
 use crate::rooms::save_setting;
 use crate::arena::palette;
 
@@ -242,14 +241,13 @@ pub(super) struct FrameRate {
     pub(super) shown: u32,
 }
 
-/// The ping and frame rate (with the action camera, for watching the netcode, also the jitter), or
-/// that we're connecting or cut off.
+/// The ping and frame rate (and, for watching the netcode, the jitter and the prediction's
+/// numbers), or that we're connecting or cut off.
 pub(super) fn update_status(
     time: Res<Time<Real>>,
     mut frame_rate: Local<FrameRate>,
     mut status: Single<&mut Text, With<Status>>,
     client: Query<(&Link, Has<Connected>, Option<&Disconnected>), With<Client>>,
-    mode: Res<CameraMode>,
     predicted: Query<(&PredictedWalk, &Pos, &arena_shared::protocol::Motion), With<crate::Me>>,
 ) {
     frame_rate.seconds += time.delta_secs();
@@ -268,17 +266,14 @@ pub(super) fn update_status(
         text.push_str("connecting...");
     } else {
         let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
-        let _ = write!(text, "ping {:.0} ms   {} fps", ms(link.stats.rtt), frame_rate.shown);
-        if mode.free {
-            let _ = write!(text, "   jitter {:.0} ms", ms(link.stats.jitter));
-            // The prediction's numbers: how far ahead of the server it steps our keys, the glide
-            // it still has to show away, and the last correction worth noticing.
-            if let Ok((predicted, pos, motion)) = predicted.single() {
-                let lead = predicted.lead().map_or("?".to_string(), |lead| format!("{lead:.1}"));
-                let _ = write!(text, "   lead {lead} t   glide {:.2} m   fix {:.2} m", predicted.error(), predicted.last_fix());
-                // Where we are: our position, and how high we're shown (and told we are).
-                let _ = write!(text, "   at {:.1}, {:.1}   up {:.2} ({:.2}) m", pos.0.x, pos.0.y, predicted.height, motion.height);
-            }
+        let _ = write!(text, "ping {:.0} ms   {} fps   jitter {:.0} ms", ms(link.stats.rtt), frame_rate.shown, ms(link.stats.jitter));
+        // The prediction's numbers: how far ahead of the server it steps our keys, the glide it
+        // still has to show away, and the last correction worth noticing.
+        if let Ok((predicted, pos, motion)) = predicted.single() {
+            let lead = predicted.lead().map_or("?".to_string(), |lead| format!("{lead:.1}"));
+            let _ = write!(text, "   lead {lead} t   glide {:.2} m   fix {:.2} m", predicted.error(), predicted.last_fix());
+            // Where we are: our position, and how high we're shown (and told we are).
+            let _ = write!(text, "   at {:.1}, {:.1}   up {:.2} ({:.2}) m", pos.0.x, pos.0.y, predicted.height, motion.height);
         }
     }
     // Only touch the component when the text changed, so Bevy doesn't re-layout it every frame.
@@ -287,8 +282,6 @@ pub(super) fn update_status(
     }
 }
 
-/// The keys for the camera you're using, one per row: the key in a chip, then what it does.
-/// Rebuilt when the camera changes.
 /// A click on "Controls" folds the key hints away or out (and the browser remembers it).
 pub(super) fn fold_controls(
     header: Single<(Ref<Interaction>, &ControlsHeader)>,
@@ -308,19 +301,19 @@ pub(super) fn fold_controls(
     turn_fold_sign(header.sign, open.0, &mut uprights);
 }
 
+/// The keys, one per row: the key in a chip, then what it does. Rebuilt when our class changes,
+/// for its abilities' keys.
 pub(super) fn update_key_hints(
     mut commands: Commands,
-    mode: Res<CameraMode>,
-    cast_mode: Res<CastMode>,
     me: Query<&ClassId, With<Me>>,
     hints: Single<Entity, With<KeyHints>>,
-    mut built_for: Local<Option<(bool, bool, Option<ClassId>)>>,
+    mut built_for: Local<Option<Option<ClassId>>>,
 ) {
     let class = me.single().ok().copied();
-    if *built_for == Some((mode.free, cast_mode.quick, class)) {
+    if *built_for == Some(class) {
         return;
     }
-    *built_for = Some((mode.free, cast_mode.quick, class));
+    *built_for = Some(class);
     // Our class's abilities' keys (none before our fighter is in).
     let abilities = class
         .iter()
@@ -328,35 +321,22 @@ pub(super) fn update_key_hints(
         .map(|(slot, _)| key_label(slot))
         .collect::<Vec<_>>();
     let abilities = (abilities.join(" "), if abilities.len() == 1 { "ability" } else { "abilities" });
-    let keys: Vec<(&str, &str)> = if mode.free {
-        vec![
-            ("Click", "capture the mouse"),
-            ("Mouse", "look / aim"),
-            ("WASD", "move"),
-            ("Hold left click", "attack"),
-            (&abilities.0, abilities.1),
-            ("Space", "jump"),
-            ("Wheel, + -", "zoom"),
-            ("Hold Tab", "scoreboard"),
-            ("F1", "watch next fighter"),
-            ("Esc", "free the mouse"),
-        ]
-    } else {
-        vec![
-            ("Right click", "move"),
-            ("S", "stop"),
-            ("Left click", "attack"),
-            (&abilities.0, abilities.1),
-            ("A", "show range"),
-            ("Wheel", "zoom"),
-            ("Y", "lock / unlock camera"),
-        ]
-    };
+    let keys: [(&str, &str); 10] = [
+        ("Click", "capture the mouse"),
+        ("Mouse", "look / aim"),
+        ("WASD", "move"),
+        ("Hold left click", "attack"),
+        (&abilities.0, abilities.1),
+        ("Space", "jump"),
+        ("Wheel, + -", "zoom"),
+        ("Hold Tab", "scoreboard"),
+        ("F1", "watch next fighter"),
+        ("Esc", "free the mouse"),
+    ];
     commands.entity(*hints).despawn_children().with_children(|grid| {
-        for (key, action) in &keys {
-            grid.spawn(key_chip(*key, 11.0, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5)));
-            grid.spawn(ui_text(*action, 12.0, palette::ui::MUTED));
+        for (key, action) in keys {
+            grid.spawn(key_chip(key, 11.0, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5)));
+            grid.spawn(ui_text(action, 12.0, palette::ui::MUTED));
         }
-        crate::casting::spawn_toggle_row(grid, cast_mode.quick);
     });
 }

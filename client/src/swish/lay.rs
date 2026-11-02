@@ -18,7 +18,7 @@ use crate::arena::{FlatMesh, to_world};
 /// How far apart (meters) the surfaces under a lane are looked up, going out from the striker
 /// as the sim does (`struck_surface`): in between, smoothly where the looks round a point are
 /// all on one surface, afresh at the point itself where they aren't.
-const LOOK_STEP: f32 = STRUCK_STEP;
+pub(super) const LOOK_STEP: f32 = STRUCK_STEP;
 
 /// The surfaces under a strike's lane, from `origin` (in the world's plane) along `dir` and
 /// across it to its right, for a striker with its feet `feet` high: followed out along the lane
@@ -36,11 +36,13 @@ pub(crate) struct Underfoot {
     /// Round a splash, the grid points looked at that are past a drop on the way out to them
     /// (down off an edge, more than a step).
     fallen: HashSet<IVec2>,
+    /// The plane each block of looks asked about lies on, if it's one (`plane`).
+    planes: HashMap<IVec2, Option<(f32, Vec2)>>,
 }
 
 impl Underfoot {
     pub(crate) fn new(map: &'static Map, origin: Vec2, dir: Vec2, feet: f32) -> Self {
-        Underfoot { map, origin, dir: dir.normalize_or(Vec2::X), feet, round: false, looked: HashMap::default(), fallen: HashSet::default() }
+        Underfoot { map, origin, dir: dir.normalize_or(Vec2::X), feet, round: false, looked: HashMap::default(), fallen: HashSet::default(), planes: HashMap::default() }
     }
 
     /// Round a splash landed at `origin` on a surface `feet` high (its marks turned toward
@@ -109,12 +111,76 @@ impl Underfoot {
     /// How high the surface under the lane's point `local` is.
     pub(crate) fn height(&mut self, local: Vec2) -> f32 {
         let h = self.surface(local);
-        // On the ground of a stair's slope, up on the tread drawn over it.
+        self.treaded(local, h)
+    }
+
+    /// How high the surface is at the grid point `k`, as `height` has it.
+    fn drawn(&mut self, k: IVec2) -> f32 {
+        let h = self.look(k);
+        self.treaded(k.as_vec2() * LOOK_STEP, h)
+    }
+
+    /// `drawn` at the grid points `y` across the lane, from `first` to `last` along it: each
+    /// followed out to along the lane as `look` does, but none kept (they're looked at once).
+    pub(super) fn row(&mut self, y: i32, first: i32, last: i32) -> Vec<f32> {
+        if self.round {
+            return (first..=last).map(|x| self.drawn(IVec2::new(x, y))).collect();
+        }
+        let mut before = f32::NEG_INFINITY;
+        let mut row = Vec::with_capacity((last - first + 1).max(0) as usize);
+        for x in first.min(0)..=last {
+            let local = IVec2::new(x, y).as_vec2() * LOOK_STEP;
+            // Beside the striker each afresh; on out along the lane from the one before.
+            let h = surface_on(self.map, self.at(local), self.feet, if x > 0 { before } else { f32::NEG_INFINITY }, LOOK_STEP);
+            before = h;
+            if x >= first {
+                row.push(self.treaded(local, h));
+            }
+        }
+        row
+    }
+
+    /// The surface `h` high under the lane's point `local`, as it's drawn: on the ground of a
+    /// stair's slope, up on the tread drawn over it.
+    fn treaded(&self, local: Vec2, h: f32) -> f32 {
         let p = self.at(local);
         match self.map.tread_top(p) {
             Some(top) if (h - self.map.height_at(p)).abs() < 0.05 => top,
             _ => h,
         }
+    }
+
+    /// The lane's frame in the world: from its origin, along it +X, across it to its right +Z.
+    pub(crate) fn frame(&self) -> Transform {
+        Transform::from_translation(to_world(self.origin, 0.0)).with_rotation(Quat::from_rotation_y(self.dir.to_angle()))
+    }
+
+    /// Whether what a mark lies on under a triangle (its corners `flat`) is one plane all over,
+    /// no steeper than a climb, with no drop under it: laid on it whole, it lies just as it would
+    /// cut into pieces.
+    fn plain(&mut self, flat: [Vec2; 3]) -> bool {
+        let [lo, hi] = [flat[0].min(flat[1]).min(flat[2]), flat[0].max(flat[1]).max(flat[2])].map(|p| (p / LOOK_STEP).floor().as_ivec2().div_euclid(IVec2::splat(BLOCK)));
+        // The blocks of looks it's over (`plane`) all on one.
+        let Some((h, slope)) = self.plane(lo) else { return false };
+        grid(lo, hi).all(|b| self.plane(b).is_some_and(|(other_h, other)| (other_h - h).abs() < 1e-3 && (other - slope).abs().max_element() < 1e-4))
+    }
+
+    /// The plane what a mark lies on (`height`, a stair's treads and all) is in block `b` of
+    /// looks (`BLOCK` a side, its first corner `b * BLOCK`, its far edges the next blocks' near
+    /// ones), if it's one there, no steeper than a climb, with no drop in it: how high it is at
+    /// the lane's origin, and its slope.
+    fn plane(&mut self, b: IVec2) -> Option<(f32, Vec2)> {
+        if let Some(&plane) = self.planes.get(&b) {
+            return plane;
+        }
+        let first = b * BLOCK;
+        let drawn = |under: &mut Self, k: IVec2| under.drawn(first + k);
+        let h = drawn(self, IVec2::ZERO);
+        let slope = Vec2::new(drawn(self, IVec2::X * BLOCK) - h, drawn(self, IVec2::Y * BLOCK) - h) / (BLOCK as f32 * LOOK_STEP);
+        let fits = |under: &mut Self, k: IVec2| (drawn(under, k) - h - slope.dot(k.as_vec2() * LOOK_STEP)).abs() < 1e-3 && !under.fallen.contains(&(first + k));
+        let plane = (slope.length() <= CLIMB && grid(IVec2::ZERO, IVec2::splat(BLOCK)).all(|k| fits(self, k))).then(|| (h - slope.dot(first.as_vec2() * LOOK_STEP), slope));
+        self.planes.insert(b, plane);
+        plane
     }
 
     /// `height`, on the surfaces the sim knows (a stair's slope, not its treads).
@@ -137,32 +203,36 @@ impl Underfoot {
     }
 }
 
-/// A mark's `shape` laid over the surfaces `under` a strike's lane, `lift` over them, `place`
-/// putting each of its points in the lane's frame (along it +X, up +Y, across it to its right
-/// +Z; how far up is over the surface): cut into triangles no more than `edge` a side, each
-/// lying on what's under it, and dropped where it runs across an edge from one surface onto
-/// another, so the mark breaks there into pieces.
-/// In the world.
-pub(crate) fn lay(shape: &FlatMesh, under: &mut Underfoot, lift: f32, edge: f32, place: impl Fn(Vec3) -> Vec3) -> Mesh {
-    lay_flat(shape, under, lift, edge, place).build()
+/// How big (meters, its longest side) a triangle of a laid mark may be left whole, where the
+/// surface under it is one plane (`Underfoot::plain`).
+pub(super) const WHOLE: f32 = 0.4;
+
+/// How many looks a side (`LOOK_STEP` apart) the blocks are that the surface under a lane is
+/// found plane in (`Underfoot::plane`).
+const BLOCK: i32 = 4;
+
+/// The grid points from `lo` to `hi` (both inclusive).
+pub(super) fn grid(lo: IVec2, hi: IVec2) -> impl Iterator<Item = IVec2> {
+    (lo.y..=hi.y).flat_map(move |y| (lo.x..=hi.x).map(move |x| IVec2::new(x, y)))
 }
 
-/// `lay`, its triangles not yet made a mesh.
+/// A mark's `shape` laid over the surfaces `under` a strike's lane, `lift` over them, `place`
+/// putting each of its points in the lane's frame (along it +X, up +Y, across it to its right
+/// +Z; how far up is over the surface): cut into triangles no more than `edge` a side (or left
+/// whole, up to `WHOLE`, where what's under one is one plane), each lying on what's under it,
+/// and dropped where it runs across an edge from one surface onto another, so the mark breaks
+/// there into pieces. In the world. (A mark that plays out on a lane, stretching, lies there by
+/// the GPU instead: `lying`.)
 pub(crate) fn lay_flat(shape: &FlatMesh, under: &mut Underfoot, lift: f32, edge: f32, place: impl Fn(Vec3) -> Vec3) -> FlatMesh {
     let mut laid = FlatMesh::default();
     let mut left: Vec<([Vec3; 3], [f32; 3])> = shape.faded_triangles().map(|(corners, alphas)| (corners.map(&place), alphas)).collect();
     while let Some((corners, alphas)) = left.pop() {
         let flat = corners.map(|p| p.xz());
-        let (longest, i) = (0..3).map(|i| (flat[i].distance(flat[(i + 1) % 3]), i)).fold((0.0, 0), |most, side| if side.0 > most.0 { side } else { most });
-        // Halved across its longest side until small enough to follow what it's on.
-        if longest > edge {
-            let j = (i + 1) % 3;
-            let (mid, alpha) = (corners[i].lerp(corners[j], 0.5), (alphas[i] + alphas[j]) / 2.0);
-            let (mut first, mut first_alphas, mut second, mut second_alphas) = (corners, alphas, corners, alphas);
-            (first[j], first_alphas[j]) = (mid, alpha);
-            (second[i], second_alphas[i]) = (mid, alpha);
-            left.push((first, first_alphas));
-            left.push((second, second_alphas));
+        let (longest, i) = longest_side(flat);
+        // Halved across its longest side until small enough to follow what it's on, or left
+        // whole where what it's on is one plane all under it.
+        if longest > edge && !(longest <= WHOLE && under.plain(flat)) {
+            left.extend(halved(corners, alphas, i));
             continue;
         }
         let [a, b, c] = flat.map(|p| under.height(p));
@@ -175,38 +245,35 @@ pub(crate) fn lay_flat(shape: &FlatMesh, under: &mut Underfoot, lift: f32, edge:
     laid
 }
 
-/// How a laid mark was last laid (`Laid`): which of its shapes, stretched how (to a fortieth).
-type LaidAs = (usize, IVec3);
-
-/// A mark lying on the surfaces under a strike's lane (`lay`), one of `shapes` (by step: a
-/// thinner one as it closes, say) stretched as it plays out, laid again into `mesh` when what's
-/// drawn has changed enough to show.
-pub(crate) struct Laid {
-    pub(crate) mesh: Handle<Mesh>,
-    shapes: Vec<FlatMesh>,
-    lift: f32,
-    edge: f32,
-    laid: Option<LaidAs>,
+/// A triangle laid by `lay_flat` (in the world) cut on into pieces no more than `edge` a side,
+/// seen from above: just as `lay_flat` would have cut it, as one it left whole lies on one plane.
+pub(crate) fn cut_laid(corners: [Vec3; 3], alphas: [f32; 3], edge: f32) -> Vec<([Vec3; 3], [f32; 3])> {
+    let (mut left, mut cut) = (vec![(corners, alphas)], Vec::new());
+    while let Some((corners, alphas)) = left.pop() {
+        match longest_side(corners.map(|p| p.xz())) {
+            (longest, i) if longest > edge => left.extend(halved(corners, alphas, i)),
+            _ => cut.push((corners, alphas)),
+        }
+    }
+    cut
 }
 
-impl Laid {
-    pub(crate) fn new(meshes: &mut Assets<Mesh>, shapes: Vec<FlatMesh>, lift: f32, edge: f32) -> Self {
-        Laid { mesh: meshes.add(FlatMesh::default().build()), shapes, lift, edge, laid: None }
-    }
+/// The longest side of a triangle seen from above (its corners `flat`): how long it is, and
+/// which (from corner `i` to the next).
+fn longest_side(flat: [Vec2; 3]) -> (f32, usize) {
+    let (most, i) = (0..3).map(|i| (flat[i].distance_squared(flat[(i + 1) % 3]), i)).fold((0.0, 0), |most, side| if side.0 > most.0 { side } else { most });
+    (most.sqrt(), i)
+}
 
-    /// Its shape `step` laid with each point at `from + stretch * point` in the lane's frame (if
-    /// that's not how it lies already).
-    pub(crate) fn lay(&mut self, meshes: &mut Assets<Mesh>, under: &mut Underfoot, step: usize, from: Vec3, stretch: Vec3) {
-        let step = step.min(self.shapes.len() - 1);
-        let laid_as = (step, (stretch * 40.0).round().as_ivec3());
-        if self.laid == Some(laid_as) {
-            return;
-        }
-        self.laid = Some(laid_as);
-        if let Some(mut mesh) = meshes.get_mut(&self.mesh) {
-            *mesh = lay(&self.shapes[step], under, self.lift, self.edge, |p| from + stretch * p);
-        }
-    }
+/// A triangle (its corners, and how opaque each is) halved across its side from corner `i` to
+/// the next.
+fn halved(corners: [Vec3; 3], alphas: [f32; 3], i: usize) -> [([Vec3; 3], [f32; 3]); 2] {
+    let j = (i + 1) % 3;
+    let (half, half_alpha) = (corners[i].lerp(corners[j], 0.5), (alphas[i] + alphas[j]) / 2.0);
+    let (mut first, mut second) = ((corners, alphas), (corners, alphas));
+    (first.0[j], first.1[j]) = (half, half_alpha);
+    (second.0[i], second.1[i]) = (half, half_alpha);
+    [first, second]
 }
 
 #[cfg(test)]
@@ -226,9 +293,7 @@ mod tests {
         let mut under = Underfoot::new(MapId::Yard.map(), pos, dir, feet);
         let mut laid = Vec::new();
         for shape in tear(range - from, width) {
-            let mesh = lay(&shape, &mut under, 0.0, 0.05, |p| Vec3::X * from + p);
-            let Some(positions) = mesh.attribute(Mesh::ATTRIBUTE_POSITION).and_then(|a| a.as_float3()) else { panic!("no positions") };
-            laid.extend(positions.chunks_exact(3).map(|t| [0, 1, 2].map(|i| Vec3::from_array(t[i]))));
+            laid.extend(triangles(lay_flat(&shape, &mut under, 0.0, 0.05, |p| Vec3::X * from + p)));
         }
         laid
     }
@@ -342,6 +407,11 @@ mod tests {
         assert!((area(&laid) - whole()).abs() < whole() * 0.01, "laid {} m2 of {} m2", area(&laid), whole());
     }
 
+    /// The triangles of a laid mark.
+    fn triangles(laid: FlatMesh) -> Vec<[Vec3; 3]> {
+        laid.faded_triangles().map(|(corners, _)| corners).collect()
+    }
+
     /// A splash's round mark, 1.5 across its radius, laid round where it landed at `pos` on a
     /// surface `feet` high (`Underfoot::round`): its triangles in the world.
     fn splashed(pos: Vec2, feet: f32) -> Vec<[Vec3; 3]> {
@@ -354,9 +424,7 @@ mod tests {
         for i in 0..24 {
             disc.tri_faded([Vec3::ZERO, rim(i), rim(i + 1)], [1.0; 3]);
         }
-        let mesh = lay(&disc, &mut under, 0.0, 0.05, |p| p);
-        let Some(positions) = mesh.attribute(Mesh::ATTRIBUTE_POSITION).and_then(|a| a.as_float3()) else { panic!("no positions") };
-        positions.chunks_exact(3).map(|t| [0, 1, 2].map(|i| Vec3::from_array(t[i]))).collect()
+        triangles(lay_flat(&disc, &mut under, 0.0, 0.05, |p| p))
     }
 
     #[test]

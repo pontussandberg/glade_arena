@@ -74,6 +74,8 @@ pub struct Hit {
     /// Health lost (or, for a heal, gained).
     pub amount: i32,
     pub kind: HitKind,
+    /// Who dealt it, so they hear it however far off it lands: `None` for a heal.
+    pub by: Option<PeerId>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
@@ -94,12 +96,12 @@ impl RecentHits {
         self.0.last().map_or(0, |hit| hit.seq)
     }
 
-    pub fn push(&mut self, amount: i32, kind: HitKind) {
+    pub fn push(&mut self, amount: i32, kind: HitKind, by: Option<PeerId>) {
         let seq = self.seq() + 1;
         if self.0.len() == Self::KEEP {
             self.0.remove(0);
         }
-        self.0.push(Hit { seq, amount, kind });
+        self.0.push(Hit { seq, amount, kind, by });
     }
 }
 
@@ -113,11 +115,11 @@ pub struct AttackState {
     /// The tick the last attack went off (`None`: never).
     pub released_at: Option<u32>,
     /// An attack started by this tick is quick (`FollowUp`; `None`: not armed). Used up when an
-    /// attack goes off, not when one is cancelled.
+    /// attack goes off, not when one is lost (`sim::interrupt_attack`).
     pub quick_until: Option<u32>,
     /// The next attack is primed (`abilities::prime`) by the ability in this slot: sure to crit,
     /// and this much more attack speed. Used up when a primed attack goes off, not when one is
-    /// cancelled.
+    /// lost (`sim::interrupt_attack`).
     pub primed: Option<(AbilitySlot, f32)>,
 }
 
@@ -169,7 +171,7 @@ pub struct Swing {
     /// Ticks its shot has been held drawn past its windup (`PlayerInput::draw`): it goes off that
     /// much later, and its backswing runs on from then.
     pub held: u32,
-    /// How far to the attacker's right its lane runs (meters): on the action camera's line of
+    /// How far to the attacker's right its lane runs (meters): on the camera's line of
     /// sight (`PlayerInput::aside`), so a blow comes down straight along the crosshair's line.
     pub aside: f32,
 }
@@ -264,8 +266,6 @@ pub struct Chilled {
     pub rooted: Span,
     /// Knocked up: off its feet, no walking, dashing or attacking (an attack winding up is lost).
     pub lifted: Span,
-    /// Unstoppable (`AttackDef::unstoppable`, winding up): nothing applied meanwhile takes.
-    pub steady: Span,
 }
 
 /// Ticks `from` (inclusive) to `until` (exclusive). The default covers none.
@@ -291,11 +291,8 @@ impl Span {
 
 impl Chilled {
     /// A hit at `now` applies `chill`, from the next tick. A new slow replaces a running one if
-    /// it's at least as strong; a root extends a running one. Nothing takes while `steady`.
+    /// it's at least as strong; a root extends a running one.
     pub fn apply(&mut self, chill: Chill, now: u32) {
-        if self.steady.covers(now as f32) {
-            return;
-        }
         if chill.slow > 0.0 && chill.slow_ticks > 0 {
             let running = self.slowed.covers(now as f32 + 1.0);
             if !running || chill.slow >= self.slow {
@@ -323,27 +320,6 @@ impl Chilled {
 
     pub fn rooted_at(&self, tick: u32) -> bool {
         self.rooted.covers(tick as f32)
-    }
-
-    /// Unstoppable at `tick` (a fractional one for drawing in between).
-    pub fn steady_at(&self, tick: f32) -> bool {
-        self.steady.covers(tick)
-    }
-}
-
-/// Ablaze (`BurnDef`): how many stacks of fire are on a fighter, and until when (a tick; none
-/// once it's past). Server-authoritative like `Chilled`, and in ticks for the same reason;
-/// clients draw the flames.
-#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
-pub struct Burning {
-    pub stacks: u32,
-    pub until: u32,
-}
-
-impl Burning {
-    /// How many stacks burn at `tick` (a fractional one for drawing in between).
-    pub fn at(&self, tick: f32) -> u32 {
-        if tick < self.until as f32 { self.stacks } else { 0 }
     }
 }
 
@@ -381,6 +357,25 @@ pub struct Frenzy {
 /// replicated.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct Fury(pub Frenzy);
+
+/// Practice only: attacking this much faster (0.25 = 25% more attack speed; below 0, slower), as
+/// its player sets it in the shop (`RoomRequest::AttackSpeed`), in steps of `STEP` within
+/// `RANGE`: kept through dying, till it's set again or they leave the room. Server-authoritative
+/// and replicated: an attack's speed is fixed as it starts (`Swing::haste`, `attack_haste`).
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
+pub struct PracticeHaste(pub f32);
+
+impl PracticeHaste {
+    pub const STEP: f32 = 0.25;
+    pub const RANGE: (f32, f32) = (-0.75, 3.0);
+}
+
+/// How much faster an attack started at `tick` goes (`sim::start_attack_hasted`): its fighter's
+/// frenzy, a fury stone's rush and practice's set speed, added up. The server, our prediction and
+/// the live stats all work it out here, so they agree.
+pub fn attack_haste(tick: f32, (frenzy, fury, practice): (Option<&Frenzy>, Option<&Fury>, Option<&PracticeHaste>)) -> f32 {
+    frenzy.map_or(0.0, |f| f.at(tick)) + fury.map_or(0.0, |f| f.0.at(tick)) + practice.map_or(0.0, |p| p.0)
+}
 
 impl Frenzy {
     /// The frenzy from a zombie kill at `now`, after `kills` others this match, for a fighter
@@ -524,10 +519,6 @@ pub enum FxKind {
     Blink,
     /// A Doom Bell's mark on its victim, where it was struck, until the bell tolls at `until`.
     Doom,
-    /// Someone shoved into a wall at `at` (`ShoveDef`): the slam, dust and grit off it.
-    Wallop,
-    /// A burning fighter at `at` igniting (`BurnDef`): fire bursting out to `radius`.
-    Ignite,
 }
 
 /// A passing effect of an item or a monster, for the client to draw: what, where, and from when
@@ -547,17 +538,25 @@ pub struct Fx {
     /// Which way the side of what it struck faces (a wall, a terrace's face: unit, on the plane),
     /// for one that happens on that side, `height` up it, rather than on top of something.
     pub wall: Option<Vec2>,
+    /// The player whose doing it is (their shot, spell or item), who hears it however far off it
+    /// is: `None` for what no player caused (a monster's, the world's).
+    pub by: Option<PeerId>,
 }
 
 impl Fx {
     /// An effect at one spot, out to `radius`, from `now` for `ticks`.
     pub fn at(kind: FxKind, at: Vec2, radius: f32, now: u32, ticks: u32) -> Fx {
-        Fx { kind, at, to: at, radius, from: now, until: now + ticks, height: None, wall: None }
+        Fx { kind, at, to: at, radius, from: now, until: now + ticks, height: None, wall: None, by: None }
     }
 
     /// An effect from `at` to `to` (an arc, a lob), from `now` for `ticks`.
     pub fn between(kind: FxKind, at: Vec2, to: Vec2, radius: f32, now: u32, ticks: u32) -> Fx {
-        Fx { kind, at, to, radius, from: now, until: now + ticks, height: None, wall: None }
+        Fx { kind, at, to, radius, from: now, until: now + ticks, height: None, wall: None, by: None }
+    }
+
+    /// `owner`'s, heard by them however far off it is (`by`).
+    pub fn by(self, owner: PeerId) -> Fx {
+        Fx { by: Some(owner), ..self }
     }
 
     /// Happening `height` up at `at`: on what's there that high (a roof, a body's feet).
@@ -644,7 +643,7 @@ pub struct Projectile {
     /// where it starts, and nothing an auto-attack's throw sets off goes off again for it.
     pub extra: bool,
     /// How much it rises per meter flown (the tangent of its pitch) as it leaves, aimed up or
-    /// down with the action camera; 0 leaves level, as the MOBA's do. It falls into the ground or
+    /// down with the camera; 0 leaves level, as a monster's does. It falls into the ground or
     /// flies over bodies accordingly, and a thrown one drops from that line as it flies
     /// (`sim::projectile_height`).
     pub climb: f32,
@@ -694,11 +693,11 @@ pub struct PlayerInput {
     pub walk: Vec2,
     /// Aim direction on the gameplay plane; the sim normalizes it.
     pub aim: Vec2,
-    /// How much the aim rises per meter ahead (the tangent of its pitch), with the action camera
-    /// (`PlayerCommand::Aim`): what a shot's `climb` is. 0 is level, the MOBA's.
+    /// How much the aim rises per meter ahead (the tangent of its pitch), with the camera
+    /// (`PlayerCommand::Aim`): what a shot's `climb` is. 0 is level, a monster's.
     pub climb: f32,
-    /// How far to the fighter's right the action camera's line of sight passes (`ACTION_SHOULDER`,
-    /// less by a wall beside them; 0 in first person, and in the MOBA): the line a shot starts on
+    /// How far to the fighter's right the camera's line of sight passes (`ACTION_SHOULDER`, less
+    /// by a wall beside them; 0 in first person, and for a monster): the line a shot starts on
     /// (`sim::onto_sight`).
     pub aside: f32,
     /// Left click: auto-attack toward `aim`, if the last attack is done (else the click is
@@ -748,11 +747,11 @@ impl PlayerInput {
 /// predicted: the client sees the result once the server's next update comes back.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub enum PlayerCommand {
-    /// Right click: walk to this point (`Map::walk_target` of the click).
+    /// Walk to this point (a bot's order: players walk with `Walk`).
     MoveTo(Vec2),
-    /// Stop walking (S).
+    /// Stop walking.
     Stop,
-    /// Keys held to walk (WASD, action mode), this way; zero when none are. Stepped from the
+    /// Keys held to walk (WASD), this way; zero when none are. Stepped from the
     /// tick given, the one the client's prediction steps it from (`render::glide`), so the two
     /// agree; a tick already past (or 0) means at once.
     Walk(Vec2, u32),
@@ -763,7 +762,7 @@ pub enum PlayerCommand {
     Attack(Vec2, u32),
     /// An ability's key (1, 2, 3, 4): use the ability in this slot toward this aim.
     Cast(AbilitySlot, Vec2),
-    /// Action mode only: the aim as the camera turns (at most once a tick), its direction, its
+    /// The aim as the camera turns (at most once a tick), its direction, its
     /// pitch (`PlayerInput::climb`) and how far right of the fighter its line passes
     /// (`PlayerInput::aside`), so an attack winding up goes off the way the player looks then,
     /// not the way they looked when it started.
@@ -779,18 +778,6 @@ pub enum PlayerCommand {
 }
 
 impl PlayerCommand {
-    /// Is it an order to move (or stop)? One cancels an attack still winding up, as in League
-    /// (`sim::cancel_attack`); a click (`MoveTo`, `Stop`) drops a click no tick has seen yet
-    /// too: the last order wins. The walking keys don't: they're the action camera's, which
-    /// walks through an attack, and they change with every turn of the camera.
-    pub fn moves(&self) -> bool {
-        match *self {
-            PlayerCommand::MoveTo(_) | PlayerCommand::Stop => true,
-            PlayerCommand::Walk(dir, _) => dir != Vec2::ZERO,
-            PlayerCommand::Attack(..) | PlayerCommand::Cast(..) | PlayerCommand::Aim(..) | PlayerCommand::Jump(..) | PlayerCommand::Draw(..) => false,
-        }
-    }
-
     /// What the command does to a player's intent.
     pub fn apply(self, input: &mut PlayerInput) {
         match self {
@@ -871,11 +858,13 @@ pub enum RoomRequest {
     /// Practice only: a target dummy at this point, the next class in turn: standing there, or
     /// (`walks`) walking back and forth along a line through it.
     PlaceDummy { at: Vec2, walks: bool },
-    /// Practice only: three slow zombies side by side at this point, coming for us.
-    PlaceZombies { at: Vec2 },
+    /// Practice only: this many slow zombies at this point, side by side in rows, coming for us.
+    PlaceZombies { at: Vec2, count: u8 },
     /// Practice only: our abilities with no cooldowns of their own (ready again the moment
     /// they're used), or back to normal.
     NoCooldowns(bool),
+    /// Practice only: our attacks this much faster (`PracticeHaste`), or slower below 0.
+    AttackSpeed(f32),
     /// Practice only, while dead: back on our feet now instead of when `Respawning` says.
     RespawnNow,
     /// Waves only, near the shopkeeper: buy this item, or raise it a level.
@@ -934,11 +923,11 @@ impl Plugin for ProtocolPlugin {
         app.component::<Team>().replicate();
         app.component::<Health>().replicate();
         app.component::<Chilled>().replicate();
-        app.component::<Burning>().replicate();
         app.component::<RecentHits>().replicate();
         app.component::<Hasted>().replicate();
         app.component::<Frenzy>().replicate();
         app.component::<Fury>().replicate();
+        app.component::<PracticeHaste>().replicate();
         app.component::<Pickup>().replicate();
         app.component::<MaxHealth>().replicate();
         app.component::<crate::items::Satchel>().replicate();
@@ -967,14 +956,13 @@ mod tests {
     use super::*;
     use crate::config::{FRENZY_MELEE_TICKS, FRENZY_RANGED_TICKS};
 
-    /// The attack button's hold sets whether it's held, and is no order to move: it cancels no
-    /// windup and drops no click.
+    /// The attack button's hold sets whether it's held, and drops no click.
     #[test]
     fn the_attack_button_held_or_let_go_is_held_or_not() {
         let mut input = PlayerInput { move_to: Some(Vec2::X), ..default() };
         PlayerCommand::Attack(Vec2::Y, 0).apply(&mut input);
         PlayerCommand::Draw(true, 7).apply(&mut input);
-        assert!(input.draw && input.fire && input.move_to.is_some() && !PlayerCommand::Draw(true, 7).moves());
+        assert!(input.draw && input.fire && input.move_to.is_some());
         PlayerCommand::Draw(false, 9).apply(&mut input);
         assert!(!input.draw && input.fire, "let go, still held");
     }
@@ -1006,16 +994,6 @@ mod tests {
         assert!((first.at(half) - 0.05).abs() < 1e-6, "fades linearly");
         assert_eq!(first.at(99.0), 0.0);
         assert_eq!(first.at(first.until as f32), 0.0);
-    }
-
-    #[test]
-    fn nothing_takes_while_steady() {
-        let chill = Chill { slow: 0.5, slow_ticks: 20, root_ticks: 10, lift_ticks: 5 };
-        let mut chilled = Chilled { steady: Span { from: 10, until: 20 }, ..Chilled::default() };
-        chilled.apply(chill, 15);
-        assert_eq!(chilled, Chilled { steady: Span { from: 10, until: 20 }, ..Chilled::default() }, "unstoppable mid-windup");
-        chilled.apply(chill, 20);
-        assert!(chilled.rooted_at(21) && chilled.lifted_at(21) && chilled.speed_factor(21) < 1.0, "takes once the blow is off");
     }
 
     #[test]

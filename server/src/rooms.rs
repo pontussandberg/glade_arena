@@ -521,6 +521,8 @@ struct Ctx<'w, 's> {
     /// Everything in a room: its fighters, monsters, decoys, shots, effects, pickups, gates.
     in_rooms: Query<'w, 's, (Entity, &'static InRoom)>,
     zombies: Query<'w, 's, (Entity, &'static InRoom, Has<crate::Dead>), With<crate::Zombie>>,
+    /// Where every fighter is (players, dummies, monsters), and which room it's in.
+    fighters: Query<'w, 's, (&'static InRoom, &'static Pos), With<PlayerId>>,
     senders: Query<'w, 's, &'static mut MessageSender<LobbyEvent>>,
 }
 
@@ -857,31 +859,51 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
             room.dummies.push(dummy);
             info!(room = key.0, class = class.def().name, walks, "target dummy placed");
         }
-        RoomRequest::PlaceZombies { at } => {
+        RoomRequest::PlaceZombies { at, count } => {
             let key = room_key.ok_or("You're not in a room")?;
             let room = lobby.rooms.get(&key).expect("in it");
             if !room.practice {
                 return Err("Zombies to order are for practice");
             }
-            if ctx.zombies.iter().filter(|(_, r, dead)| r.key == key && !dead).count() + 3 > MAX_PRACTICE_ZOMBIES {
-                return Err("That's enough zombies");
+            if count == 0 {
+                return Err("No zombies to place");
             }
             let map = room.map.map();
             if !at.is_finite() || !map.walkable_at(at) {
                 return Err("Zombies can't stand there");
             }
             let in_room = room.in_room(key);
-            // Side by side, across the way to us (each where there's room, else on the spot).
+            // Side by side across the way to us, the spot's first, then the places nearest it with
+            // room for one, reached from it (wider than deep: in rows), each `ZOMBIE_SPACING` from
+            // the next and as far from anyone there already (us, dummies, a horde placed before);
+            // on the spot itself where there are none.
             let toward = ctx.fighter_of(link).and_then(|(pos, _)| (pos - at).try_normalize()).unwrap_or(Vec2::Y);
-            let side = toward.perp() * 1.1;
-            for spot in [at - side, at, at + side] {
-                let spot = if map.walkable_at(spot) && map.line_walkable(at, spot) { spot } else { at };
+            let (side, back) = (toward.perp() * ZOMBIE_SPACING, -toward * ZOMBIE_SPACING);
+            let there: Vec<Vec2> = ctx.fighters.iter().filter(|(r, _)| r.key == key).map(|(_, pos)| pos.0).collect();
+            let mut places: Vec<IVec2> = (-ZOMBIE_REACH..=ZOMBIE_REACH).flat_map(|j| (-ZOMBIE_REACH..=ZOMBIE_REACH).map(move |i| IVec2::new(i, j))).collect();
+            places.sort_by_key(|k| k.x * k.x + 4 * k.y * k.y);
+            let open = places.into_iter().map(|k| at + side * k.x as f32 + back * k.y as f32).filter(|spot| {
+                map.walkable_at(*spot) && map.line_walkable(at, *spot) && there.iter().all(|other| other.distance(*spot) >= ZOMBIE_SPACING)
+            });
+            for spot in open.chain(std::iter::repeat(at)).take(count as usize) {
                 let zombie = crate::zombies::spawn_zombie(&mut ctx.commands, lobby.next_local(), in_room, spot);
                 // Sent to clients from the start: placed already, they skip `place_players`, where
                 // others start being sent.
                 ctx.commands.entity(zombie).insert((crate::zombies::Sluggish(crate::zombies::PRACTICE_ZOMBIE_SPEED), crate::replicated_npc()));
             }
-            info!(room = key.0, "practice zombies placed");
+            info!(room = key.0, count, "practice zombies placed");
+        }
+        RoomRequest::AttackSpeed(haste) => {
+            let key = room_key.ok_or("You're not in a room")?;
+            if !lobby.rooms[&key].practice {
+                return Err("Setting attack speed is for practice");
+            }
+            if !haste.is_finite() {
+                return Err("That's no attack speed");
+            }
+            let player = ctx.player_of(link).ok_or("You're not in the arena")?;
+            let (least, most) = PracticeHaste::RANGE;
+            ctx.commands.entity(player).insert(PracticeHaste(haste.clamp(least, most)));
         }
         RoomRequest::NoCooldowns(on) => {
             let key = room_key.ok_or("You're not in a room")?;
@@ -999,8 +1021,10 @@ fn stand_dummies(lobby: &mut Lobby, ctx: &mut Ctx, key: RoomKey) {
         lobby.rooms.get_mut(&key).expect("in it").dummies.push(dummy);
     }
 }
-/// The most zombies a practice room may have about.
-const MAX_PRACTICE_ZOMBIES: usize = 12;
+/// How far apart (meters) practice's zombies are placed, and how many places out from the spot
+/// (each way, across and along) there are for them.
+const ZOMBIE_SPACING: f32 = 1.1;
+const ZOMBIE_REACH: i32 = 15;
 
 /// A new room on `map`, led by `leader` (who still has to `join` it).
 #[allow(clippy::too_many_arguments)]

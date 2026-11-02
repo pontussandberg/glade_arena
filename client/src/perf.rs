@@ -9,19 +9,22 @@
 //!
 //! `ARENA_PERF_OFF` (a comma-separated list; `?off=` on the page in local dev) switches parts of
 //! the scene off, to see what each costs: `lights` (the torches' point lights), `shadows` (the
-//! sun's), `fog`, `ui` (all of it), `fx` (effects' parts), `blend` (everything see-through).
+//! sun's), `fog`, `ui` (all of it), `fx` (effects' parts, and the blades' trails drawn with them),
+//! `blend` (everything see-through).
 
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use bevy::camera::visibility::VisibilitySystems;
 use bevy::prelude::*;
 use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::window::PresentMode;
 
 use crate::fx::Parts as FxParts;
 use crate::plain::PlainMaterial;
+use crate::swish::LyingMaterial;
 
 pub struct PerfPlugin {
     pub out: std::path::PathBuf,
@@ -123,11 +126,13 @@ impl Plugin for OffPlugin {
             ui: off.contains("ui"),
             blend: off.contains("blend"),
         });
-        app.add_systems(PostUpdate, switch_off);
+        // Before what's hidden is worked out, over what showed it this frame (`drive_impacts`).
+        app.add_systems(PostUpdate, switch_off.before(VisibilitySystems::VisibilityPropagate));
         // Before the effects' parts are laid out to be drawn, so none that's switched off is: on
-        // its own, as `switch_off` before them would hold them up behind its commands.
+        // its own, as `switch_off` before them would hold them up behind its commands. And the
+        // trails laid out with them, after they are.
         if off.contains("fx") || off.contains("blend") {
-            app.add_systems(PostUpdate, clear_parts.before(crate::fx::DrawParts));
+            app.add_systems(PostUpdate, (clear_parts.before(crate::fx::DrawParts), clear_drawn.after(crate::swish::trail_blades)));
         }
     }
 }
@@ -163,6 +168,7 @@ fn switch_off(
     fog: Query<Entity, With<bevy::pbr::DistanceFog>>,
     mut roots: Query<&mut Node, Without<ChildOf>>,
     mut drawn: Query<(&MeshMaterial3d<PlainMaterial>, &mut Visibility)>,
+    mut lying: Query<&mut Visibility, (With<MeshMaterial3d<LyingMaterial>>, Without<MeshMaterial3d<PlainMaterial>>)>,
     materials: Res<Assets<PlainMaterial>>,
 ) {
     if off.lights {
@@ -191,12 +197,21 @@ fn switch_off(
                 visibility.set_if_neq(Visibility::Hidden);
             }
         }
+        // Marks lying on the ground are all see-through.
+        for mut visibility in &mut lying {
+            visibility.set_if_neq(Visibility::Hidden);
+        }
     }
 }
 
 /// The effects' parts gone, switched off (`fx`) or as they're all see-through (`blend`).
 fn clear_parts(mut parts: ResMut<FxParts>) {
     parts.0.clear();
+}
+
+/// What's laid out to be drawn with them gone too (the blades' trails).
+fn clear_drawn(mut drawn: ResMut<crate::fx::draw::Drawn>) {
+    drawn.clear();
 }
 
 /// Once, a while into the run: what's drawn, by what it belongs to (the class of the fighter whose

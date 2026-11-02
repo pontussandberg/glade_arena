@@ -72,9 +72,9 @@ fn toggle_menu(
     mode: Res<crate::camera::CameraMode>,
 ) {
     let esc = keys.just_pressed(KeyCode::Escape);
-    // While the action camera has the cursor, ESC only lets it go (`camera::follow_camera`,
-    // before or after this); the next one opens the menu.
-    if esc && mode.free && (mode.locked || mode.just_unlocked) {
+    // While the camera has the cursor, ESC only lets it go (`camera::follow_camera`, before or
+    // after this); the next one opens the menu.
+    if esc && (mode.locked || mode.just_unlocked) {
         return;
     }
     // ESC first drops a normal cast's aim; the next one opens the menu.

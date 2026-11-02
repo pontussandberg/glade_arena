@@ -102,8 +102,8 @@ pub(crate) fn pose_releasing(class: ClassId, moves: &Moves, attack: &AttackState
     let (look, step, walking, stride) = walk;
     let drive = held_drive(class, moves, attack);
     let (windup, released, ahead) = ahead_of_springs(class, moves, None, Some(drive), at + drive);
-    let (draw, throw, smear, second) = strike_phase(class, moves, attack, windup, released, ahead);
-    let phase = Phase { draw, throw: throw.max(flick), dashing: 0.0, second };
+    let (draw, throw, smear) = strike_phase(class, moves, attack, windup, released, ahead);
+    let phase = Phase { draw, throw: throw.max(flick), dashing: 0.0 };
     let angles = joints.clone().follow(&targets(moves, phase, step, walking), dt, moves);
     let aimed = targets(moves, phase, Vec2::ZERO, walking);
     assemble(moves, &angles, &aimed, look, stride, walking * (1.0 - phase.braced()), moves.stretch * smear, 1.0, 1.0 - phase.braced())

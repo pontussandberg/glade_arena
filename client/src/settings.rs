@@ -1,4 +1,4 @@
-//! The player's settings (`Settings`): how fast the mouse turns the action camera, and how loud
+//! The player's settings (`Settings`): how fast the mouse turns the camera, and how loud
 //! the game is. Kept in the browser (`localStorage`) across reloads, and set from the ESC
 //! menu's settings pane (`esc_menu`): a slider each (`slider`), dragged with the mouse
 //! (`drag_sliders`).

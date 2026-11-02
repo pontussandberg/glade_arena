@@ -24,7 +24,6 @@ use lightyear::prelude::*;
 
 use crate::{FakeLatency, Me};
 use crate::arena::palette;
-use crate::camera::CameraMode;
 use crate::render::{FoldUpright, HUD_FOLD_SIGN, HudButton, button_fill, clicked, corner_panel, fold_header, fold_sign, shown, turn_fold_sign, ui_text};
 use crate::rooms::{CurrentRoom, Screen, request};
 use dummies::Placing;
@@ -60,18 +59,16 @@ enum Switch {
     NoCooldowns,
     Hitboxes,
     Hitboxes3d,
-    UncappedZoom,
 }
 
 impl Switch {
-    const ALL: [Switch; 4] = [Switch::NoCooldowns, Switch::Hitboxes, Switch::Hitboxes3d, Switch::UncappedZoom];
+    const ALL: [Switch; 3] = [Switch::NoCooldowns, Switch::Hitboxes, Switch::Hitboxes3d];
 
     fn label(self) -> &'static str {
         match self {
             Switch::NoCooldowns => "No cooldowns",
             Switch::Hitboxes => "Hitboxes",
             Switch::Hitboxes3d => "3D hitboxes",
-            Switch::UncappedZoom => "Uncapped zoom",
         }
     }
 }
@@ -86,7 +83,6 @@ struct Switched<'w, 's> {
     me: Query<'w, 's, &'static Cooldowns, With<Me>>,
     hitboxes: ResMut<'w, ShowHitboxes>,
     hitboxes_3d: ResMut<'w, ShowHitboxes3d>,
-    camera: ResMut<'w, CameraMode>,
     sender: Single<'w, 's, &'static mut MessageSender<RoomRequest>, With<Client>>,
 }
 
@@ -96,7 +92,6 @@ impl Switched<'_, '_> {
             Switch::NoCooldowns => self.me.iter().next().is_some_and(|cooldowns| cooldowns.free),
             Switch::Hitboxes => self.hitboxes.0,
             Switch::Hitboxes3d => self.hitboxes_3d.0,
-            Switch::UncappedZoom => self.camera.uncapped,
         }
     }
 
@@ -108,7 +103,6 @@ impl Switched<'_, '_> {
             Switch::NoCooldowns => request(&mut self.sender, RoomRequest::NoCooldowns(!on)),
             Switch::Hitboxes => self.hitboxes.0 = !on,
             Switch::Hitboxes3d => self.hitboxes_3d.0 = !on,
-            Switch::UncappedZoom => self.camera.uncapped = !on,
         }
     }
 }
@@ -204,16 +198,12 @@ fn close_tools(mut commands: Commands, tools: Query<Entity, With<Tools>>) {
 fn tools_off(
     mut hitboxes: ResMut<ShowHitboxes>,
     mut hitboxes_3d: ResMut<ShowHitboxes3d>,
-    mut camera: ResMut<CameraMode>,
     mut placing: ResMut<Placing>,
     mut fake_ping: ResMut<FakeLatency>,
 ) {
     hitboxes.set_if_neq(ShowHitboxes(false));
     hitboxes_3d.set_if_neq(ShowHitboxes3d(false));
     fake_ping.set_if_neq(FakeLatency::default());
-    if camera.uncapped {
-        camera.uncapped = false;
-    }
     placing.set_if_neq(Placing::default());
 }
 

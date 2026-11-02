@@ -74,12 +74,11 @@ fn figure(class: &str) -> Vec<Tri> {
     triangles(&rig.head, at(RIG_NECK), &mut tris, false);
     triangles(&rig.eyes, at(RIG_NECK), &mut tris, true);
     let left = Vec3::new(RIG_SHOULDER.x, RIG_SHOULDER.y, -RIG_SHOULDER.z);
-    let lead = rig.lead_arm.as_ref();
-    triangles(lead.map_or(&rig.arm, |(arm, _)| arm), at(left), &mut tris, false);
+    triangles(rig.lead_arm.as_ref().unwrap_or(&rig.arm), at(left), &mut tris, false);
     triangles(&rig.arm, at(RIG_SHOULDER), &mut tris, false);
     triangles(&rig.forearm, at(RIG_SHOULDER + moves.elbow_at), &mut tris, false);
-    if let Some(forearm) = lead.map_or(Some(&rig.forearm), |(_, forearm)| forearm.as_ref()) {
-        triangles(forearm, at(left + moves.elbow_at), &mut tris, false);
+    if rig.lead_arm.is_none() {
+        triangles(&rig.forearm, at(left + moves.elbow_at), &mut tris, false);
     }
     triangles(&rig.held, at(RIG_SHOULDER + moves.hand_at), &mut tris, false);
     if let Some(glow) = &rig.held_glow {
@@ -308,7 +307,7 @@ fn preview_cloth_on_arm() {
     let width = SIZE * views.len();
     let mut image = vec![[200u8, 204, 200]; width * SIZE * 2];
     for (row, draw) in [0.0, 1.0].into_iter().enumerate() {
-        let phase = Phase { draw, throw: 0.0, dashing: 0.0, second: 0.0 };
+        let phase = Phase { draw, throw: 0.0, dashing: 0.0 };
         let angles = targets(moves, phase, Vec2::ZERO, 0.0);
         let posed = assemble(moves, &angles, &angles, Vec2::X, 0.0, 0.0, 0.0, 1.0, 1.0 - phase.braced());
         let cloth = crate::cloth::settled(&wardrobe, &posed, 2.0);
@@ -342,9 +341,9 @@ fn posed_figure(class: &str, posed: &crate::rig::Posed, length: f32, cloth: Opti
     let elbows = [0, 1].map(|i| arms[i] * Mat4::from_rotation_translation(posed.elbows[i], elbow_at));
     for (i, (arm, elbow)) in arms.into_iter().zip(elbows).enumerate() {
         let lead = rig.lead_arm.as_ref().filter(|_| i == 1);
-        triangles(lead.map_or(&rig.arm, |(arm, _)| arm), arm, &mut tris, false);
-        if let Some(forearm) = lead.map_or(Some(&rig.forearm), |(_, forearm)| forearm.as_ref()) {
-            triangles(forearm, elbow, &mut tris, false);
+        triangles(lead.unwrap_or(&rig.arm), arm, &mut tris, false);
+        if lead.is_none() {
+            triangles(&rig.forearm, elbow, &mut tris, false);
         }
     }
     for (i, hip) in [RIG_HIP, mirrored(RIG_HIP)].into_iter().enumerate() {
@@ -411,7 +410,7 @@ fn preview_impact() {
     let key = "revenant";
     let class = ClassId::by_key(key).unwrap();
     let moves = moves(key);
-    let landed = targets(moves, Phase { draw: 0.0, throw: 1.0, dashing: 0.0, second: 1.0 }, Vec2::ZERO, 0.0);
+    let landed = targets(moves, Phase { draw: 0.0, throw: 1.0, dashing: 0.0 }, Vec2::ZERO, 0.0);
     // Plain, and grown to strike (`follow_up`): the blade grown, smeared out at its longest.
     for empowered in [false, true] {
     let (smear, blade) = if empowered { (moves.stretch + EMPOWERED_STRETCH, EMPOWERED_BLADE) } else { (0.0, 1.0) };
@@ -498,7 +497,7 @@ fn preview_attacks() {
             Some(file) => crate::rig::tweaked(key, &std::fs::read_to_string(file).unwrap()),
             None => moves(key),
         };
-        let length = arena::blade_span(key).1;
+        let length = arena::BLADE_LENGTH;
         let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0, aside: 0.0 };
         let (windup, period) = (swing.windup_ticks(&class.def().attack) as f32, swing.ticks(&class.def().attack) as f32);
         let release = 10.0 + windup;
@@ -534,8 +533,8 @@ fn preview_attacks() {
             }
             let released = attack.released_at.map(|at| now - at as f32);
             let (shown, shown_released, ahead) = ahead_of_springs(class, moves, attack.winding_up(), released, now);
-            let (draw, throw, smear, second) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
-            let phase = Phase { draw, throw, dashing: 0.0, second };
+            let (draw, throw, smear) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
+            let phase = Phase { draw, throw, dashing: 0.0 };
             let angles = joints.follow(&targets(moves, phase, Vec2::ZERO, 0.0), dt, moves);
             // The blade's point every frame through the strike, to catch it jumping sideways.
             if std::env::var_os("PREVIEW_TRACE").is_some() && key == "revenant" && now > release - 4.0 && now < release + 3.0 {
@@ -604,7 +603,7 @@ fn preview_action_view() {
         Some(file) => tweaked(&key, &std::fs::read_to_string(file).unwrap()),
         None => moves(&key),
     };
-    let (from, length) = arena::blade_span(&key);
+    let (from, length) = (arena::BLADE_START, arena::BLADE_LENGTH);
     let size = drawn_size(class, false);
     // Its blade growing to strike (`rig::EMPOWERED_BLADE`), unless `PREVIEW_PLAIN`.
     let grows = def.attack.follow_up.is_some() && std::env::var_os("PREVIEW_PLAIN").is_none();
@@ -642,8 +641,8 @@ fn preview_action_view() {
             }
             let released = attack.released_at.map(|at| now - at as f32);
             let (shown, shown_released, ahead) = ahead_of_springs(class, moves, attack.winding_up(), released, now);
-            let (draw, throw, smear, second) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
-            let phase = Phase { draw, throw, dashing: 0.0, second };
+            let (draw, throw, smear) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
+            let phase = Phase { draw, throw, dashing: 0.0 };
             // Posed as `rig::pose_rigs` does, the blow onto the crosshair's line.
             let grown = if grows { draw.max(throw) } else { 0.0 };
             let blade = 1.0 + (EMPOWERED_BLADE - 1.0) * grown;

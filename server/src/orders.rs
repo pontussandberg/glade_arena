@@ -7,13 +7,6 @@ use arena_shared::sim;
 
 use crate::rooms::{InRoom, Lobby};
 
-/// A fighter in action mode (every player's: `spawning::spawn_player`; not a monster's or a
-/// dummy's): it walks while its attack winds up, an order to move doesn't cancel the windup, and
-/// the windup follows its aim (`combat`). Everything else is as normal: the blow goes off from
-/// wherever it stands then.
-#[derive(Component)]
-pub struct ActionMode;
-
 /// Server-only: walks, attack clicks, Space and the attack button's holds ordered for ticks still
 /// to come (`PlayerCommand::Walk`'s, `Attack`'s, `Jump`'s and `Draw`'s tick), in the order they
 /// were sent, each with the tick it arrived on; and the arrival tick of the walk being stepped
@@ -136,20 +129,21 @@ pub(super) fn take_due_orders(timeline: Res<LocalTimeline>, mut players: Query<(
 
 /// Walking (or dashing), with momentum, and jumping and falling (`sim::move_player_boosted`).
 /// Arriving forgets the destination, so nothing lingers. A frenzy speeds up
-/// walking, like a rift, and a shot winding up slows it (`sim::winding_speed`). In action mode
-/// the windup doesn't root the fighter: the sim is shown no swing.
+/// walking, like a rift, and a shot winding up slows it (`sim::winding_speed`). A player's
+/// fighter (`ControlledBy`: not a monster or a dummy) isn't rooted by its windup: the sim is
+/// shown no swing.
 pub(super) fn move_players(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     rifts: Res<Rifts>,
-    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, (&AttackState, Has<ActionMode>), &mut Dashing, &Chilled, &Hasted, &InRoom, &Frenzy, Option<&Sluggish>, (&mut Walking, &WalkOrders), &mut arena_shared::protocol::Motion), InPlay>,
+    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, (&AttackState, Has<ControlledBy>), &mut Dashing, &Chilled, &Hasted, &InRoom, &Frenzy, Option<&Sluggish>, (&mut Walking, &WalkOrders), &mut arena_shared::protocol::Motion), InPlay>,
 ) {
     let now = timeline.tick().0;
-    for (id, mut pos, class, mut input, (attack, action), mut dashing, chilled, hasted, room, frenzy, sluggish, (mut walking, orders), mut motion) in &mut players {
+    for (id, mut pos, class, mut input, (attack, player), mut dashing, chilled, hasted, room, frenzy, sluggish, (mut walking, orders), mut motion) in &mut players {
         let map = lobby.map(room);
         let mut next = *dashing;
         let winding = sim::winding_speed(*class, attack);
-        let attack = if action { AttackState { swing: None, ..*attack } } else { *attack };
+        let attack = if player { AttackState { swing: None, ..*attack } } else { *attack };
         // Hasted in its own rift (the most hasting, if it stands in several).
         let boost = rifts.0.iter().filter(|(r, rift)| r == room && rift.owner == id.0 && rift.holds(map, pos.0, motion.height, now)).fold(1.0f32, |most, (_, rift)| most.max(1.0 + rift.haste));
         let boost = boost * (1.0 + frenzy.at(now as f32)) * sluggish.map_or(1.0, |s| s.0) * winding;

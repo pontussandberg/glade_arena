@@ -1,5 +1,4 @@
-//! Our own fighter drawn smoothly between the server's positions, on our clock (`Glide`), or,
-//! with the action camera, where our keys will have taken it by the time the server says so
+//! Our own fighter drawn where our keys will have taken it by the time the server says so
 //! (`PredictedWalk`); and every fighter's transform kept on its position.
 
 use super::*;
@@ -11,73 +10,6 @@ use arena_shared::sim;
 use crate::Me;
 use crate::feedback::{AttackClock, ME_BEHIND_TICKS};
 use crate::arena::{to_gameplay, to_world};
-
-/// Our own fighter, drawn smoothly: each position from the server is noted with the server tick
-/// it's from, and the fighter is drawn on our clock (`AttackClock`, a tick behind the latest
-/// state), in between those. Updates come 32 times a second, unevenly; drawn as they arrive it
-/// would move in jerks, and the camera with it. Others are interpolated by Lightyear; ours isn't,
-/// for the least delay after a command, so this adds a tick. A jump (respawn, teleport) isn't
-/// eased.
-#[derive(Component, Default)]
-pub(super) struct Glide {
-    /// (server tick, position), oldest first.
-    pub(super) samples: std::collections::VecDeque<(f32, Vec2)>,
-    /// What it last drew, to tell a new position from the server (anything else) from its own.
-    pub(super) drawn: Vec2,
-}
-
-impl Glide {
-    /// Where it was at `tick`, between the samples around it (the first or last outside them).
-    pub(super) fn at(&self, tick: f32) -> Option<Vec2> {
-        let after = self.samples.iter().position(|(t, _)| *t > tick);
-        match after {
-            None => self.samples.back().map(|(_, p)| *p),
-            Some(0) => self.samples.front().map(|(_, p)| *p),
-            Some(i) => {
-                let ((t0, p0), (t1, p1)) = (self.samples[i - 1], self.samples[i]);
-                Some(p0.lerp(p1, (tick - t0) / (t1 - t0)))
-            }
-        }
-    }
-}
-
-
-pub(super) fn glide_me(mut commands: Commands, clock: AttackClock, mut me: Query<(Entity, &mut Pos, Option<&mut Glide>), With<Me>>) {
-    let (Some(latest), now) = (clock.latest_tick(), clock.now(true)) else { return };
-    for (entity, mut pos, glide) in &mut me {
-        let Some(mut glide) = glide else {
-            let mut glide = Glide { drawn: pos.0, ..default() };
-            glide.samples.push_back((latest as f32, pos.0));
-            commands.entity(entity).insert(glide);
-            continue;
-        };
-        if pos.0 != glide.drawn {
-            let tick = latest as f32;
-            let last = glide.samples.back().copied();
-            if pos.0.distance(glide.drawn) > JUMP {
-                glide.samples.clear();
-            } else if let Some((last_tick, last_pos)) = last
-                && last_tick < tick - 1.0
-            {
-                // It stood still since: the server only sends a position when it changes.
-                glide.samples.push_back((tick - 1.0, last_pos));
-            }
-            if glide.samples.back().is_some_and(|(t, _)| *t >= tick) {
-                glide.samples.pop_back();
-            }
-            glide.samples.push_back((tick, pos.0));
-        }
-        // Keep one sample before now, to draw from.
-        while glide.samples.len() > 2 && glide.samples[1].0 <= now {
-            glide.samples.pop_front();
-        }
-        let drawn = glide.at(now).unwrap_or(pos.0);
-        glide.drawn = drawn;
-        if pos.0 != drawn {
-            pos.0 = drawn;
-        }
-    }
-}
 
 /// How much of what the server put the prediction off by is shown away each second.
 const CORRECTION_RATE: f32 = 8.0;
@@ -94,7 +26,7 @@ const LEAD_PULL: f32 = 0.2;
 /// stalled connection doesn't run off).
 const PREDICT_MOST_TICKS: u32 = 64;
 
-/// Our own fighter with the action camera, drawn where it will be once the server has our keys
+/// Our own fighter, drawn where it will be once the server has our keys
 /// rather than where it was: its latest position walked on by the walks we've sent since
 /// (`SentWalks`), a round trip's worth (`predict_me`), by the same sim the server walks it with.
 /// Where the server turns out to disagree, the difference is shown away smoothly rather than
@@ -168,7 +100,7 @@ fn predict(sends: &VecDeque<(u32, Vec2)>, base: Base, at: f32, mut step: impl Fn
     (before.0.lerp(pos, at.fract()), before.1 + (motion.height - before.1) * at.fract())
 }
 
-/// Our fighter's position with the action camera: predicted from the server's latest position
+/// Our fighter's position: predicted from the server's latest position
 /// (see `PredictedWalk`). A new position from the server replaces the base; what that changes in the
 /// prediction goes into the error shown away. A position that hasn't changed since is still news
 /// each tick (the server only sends one when it changes). Each walk we send is ordered for the
@@ -185,13 +117,13 @@ pub(super) fn predict_me(
     (sends, draws, attacks, jumps): (Res<crate::SentWalks>, Res<crate::SentDraws>, Res<crate::SentAttacks>, Res<crate::SentJumps>),
     mut schedule: ResMut<crate::WalkSchedule>,
     link: Query<&Link, With<Client>>,
-    mut me: Query<(Entity, &mut Pos, (&Motion, Option<&AttackState>), &ClassId, Option<&Dashing>, Option<&Chilled>, Option<&Hasted>, (Option<&Frenzy>, Option<&Fury>), Option<&Walking>, Option<&mut PredictedWalk>, Option<&Health>), With<Me>>,
+    mut me: Query<(Entity, &mut Pos, (&Motion, Option<&AttackState>), &ClassId, Option<&Dashing>, Option<&Chilled>, Option<&Hasted>, (Option<&Frenzy>, Option<&Fury>, Option<&PracticeHaste>), Option<&Walking>, Option<&mut PredictedWalk>, Option<&Health>), With<Me>>,
 ) {
     let Some(latest) = clock.latest_tick() else { return };
     let rtt = link.single().map_or(0.0, |link| link.stats.rtt.as_secs_f32());
     let guessed_lead = rtt * TICK_HZ as f32 + PREDICT_SLACK_TICKS;
     let (map, draws, attacks, jumps) = (map.map(), &*draws, &*attacks, &*jumps);
-    for (entity, mut pos, (motion, attack), class, dashing, chilled, hasted, (frenzy, fury), walking, predicted, health) in &mut me {
+    for (entity, mut pos, (motion, attack), class, dashing, chilled, hasted, (frenzy, fury, practice), walking, predicted, health) in &mut me {
         let Some(mut predicted) = predicted else {
             commands.entity(entity).insert(PredictedWalk { drawn: pos.0, motion_seen: *motion, height: motion.height, server_walk: walking.map_or(Vec2::ZERO, |w| w.0), ..default() });
             schedule.0 = 0;
@@ -230,7 +162,7 @@ pub(super) fn predict_me(
         // sent, unless that was left far ahead by a lead that shrank.
         let next = at.floor() as u32 + 1;
         schedule.0 = if schedule.0 > next + 4 { next } else { schedule.0.max(next) };
-        // The server's step for one tick of ours: walking (never rooted by a windup, in action
+        // The server's step for one tick of ours: walking (never rooted by a windup, as a player's
         // mode; faster in a frenzy, slower while a shot winds up, as the server walks it), jumping
         // as Space was sent (held, it jumps again just as it lands), or a dash running on; then our attack, as the server steps it after the walk
         // (`combat::attack`), by the clicks and the attack button as we sent them, so we know
@@ -249,11 +181,11 @@ pub(super) fn predict_me(
                 let to = sim::move_player_boosted(map, from, &input, *class, &AttackState::default(), &mut dashing, &mut motion, &chilled, &hasted, tick, boost);
                 // Knocked up, no attacking, and one winding up is lost.
                 *attack = if chilled.lifted_at(tick) {
-                    sim::cancel_attack(*attack)
+                    sim::interrupt_attack(*attack)
                 } else {
                     let clicked = PlayerInput { aim: Vec2::X, fire: attacks.clicked_at(tick), draw: draws.held_at(tick), ..default() };
                     let (next, _) = sim::release_attack(tick, PeerId::Server, *class, to, clicked.draw, *attack);
-                    let haste = frenzy.at(tick as f32) + fury.map_or(0.0, |fury| fury.0.at(tick as f32));
+                    let haste = attack_haste(tick as f32, (Some(&frenzy), fury.as_ref(), practice));
                     sim::start_attack_hasted(tick, *class, &clicked, next, haste)
                 };
                 (to, motion)
