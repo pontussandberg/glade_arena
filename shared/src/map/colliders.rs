@@ -1,5 +1,5 @@
 //! What stands in the way on a map, as boxes: every wall, rock, crate, house and roof, fence,
-//! parapet, post and chimney is one or a few (`Collider`), worked out once from the map
+//! parapet, post, tree trunk and chimney is one or a few (`Collider`), worked out once from the map
 //! (`build`) and listed by the tiles they're near, so a move only looks at what's around it.
 //! A box stops a body from the side up to its top, holds it up from above, and lets it under if
 //! the body fits beneath (`Map::colliders_block`, `Map::floor_at`, `Map::ceiling_at`); it stops a
@@ -11,7 +11,7 @@
 
 use bevy::math::{IVec2, Vec2, Vec3};
 
-use super::{CLIMB, CRATE, FENCE_TOP, House, Map, NAV_RADIUS, Tower, PARAPET_DROP, PARAPET_HEIGHT, PARAPET_IN, PARAPET_THICK, SIDES, STEP_UP, STEPS, TORCH_POST, TORCH_STAKE, Tile};
+use super::{CLIMB, CRATE, FENCE_TOP, House, Map, NAV_RADIUS, Tower, PARAPET_DROP, PARAPET_HEIGHT, PARAPET_IN, PARAPET_THICK, SIDES, STEP_UP, STEPS, TORCH_POST, TORCH_STAKE, TREE_TRUNK, TREE_TRUNK_HALF, Tile};
 use crate::config::BODY_HEIGHT;
 
 /// A box standing in the way (on the gameplay plane, `lo` to `hi`; heights in meters), or a
@@ -24,6 +24,10 @@ pub struct Collider {
     /// Its top; a roof's along its ridge.
     pub top: f32,
     pub roof: Option<Roof>,
+    /// Whether it cuts what flies through it, a shot or a line of sight (`cut_by`'s callers): a
+    /// tree's trunk doesn't — the tree's tile stops shots, crown and all (`Tile::blocks_shots_at`),
+    /// and sight is kept clear past trees so what's behind one shows.
+    pub cuts: bool,
 }
 
 /// A roof's slope: its ridge runs along x (else along y) at `ridge` across it, and its top falls
@@ -38,7 +42,7 @@ pub struct Roof {
 impl Collider {
     /// A plain box, from `lo` to `hi` (each the lesser and greater corner).
     pub(super) fn block(lo: Vec2, hi: Vec2, bottom: f32, top: f32) -> Collider {
-        Collider { lo, hi, bottom, top, roof: None }
+        Collider { lo, hi, bottom, top, roof: None, cuts: true }
     }
 
     /// How high its top is over `p`.
@@ -228,6 +232,7 @@ pub(super) fn build(map: &Map) -> Vec<Collider> {
             bottom: g + house.walls() - House::EAVES * House::SLOPE - 0.05,
             top: g + house.ridge(),
             roof: Some(Roof { along_x: house.long_x(), ridge, slope: House::SLOPE }),
+            cuts: true,
         });
         let chimney = house.chimney();
         let half = Vec2::splat(House::CHIMNEY / 2.0);
@@ -330,6 +335,10 @@ pub(super) fn build(map: &Map) -> Vec<Collider> {
                 let (size, _) = boulder(t);
                 let half = Vec2::new(size.x, size.z) * ROCK_RADIUS * 0.85;
                 out.push(Collider::block(c - half, c + half, g, g + (ROCK_LIFT + ROCK_RADIUS * 0.85) * size.y));
+            }
+            Tile::Tree => {
+                let half = Vec2::splat(TREE_TRUNK_HALF);
+                out.push(Collider { cuts: false, ..Collider::block(c - half, c + half, g, g + TREE_TRUNK) });
             }
             _ => {}
         }
@@ -600,7 +609,7 @@ impl Map {
     /// terrace's, a cliff's); back the way it came from a tree.
     fn struck_side(&self, last: (Vec2, f32), next: (Vec2, f32)) -> Vec2 {
         let back = (last.0 - next.0).normalize_or(Vec2::X);
-        let boxed = [last.0, next.0].into_iter().flat_map(|p| self.colliders_on(Map::tile_of(p))).find(|collider| collider.cut_by(last, next));
+        let boxed = [last.0, next.0].into_iter().flat_map(|p| self.colliders_on(Map::tile_of(p))).find(|collider| collider.cuts && collider.cut_by(last, next));
         if let Some(collider) = boxed {
             let off = last.0 - last.0.clamp(collider.lo, collider.hi);
             return if off.length_squared() < 1e-8 {
@@ -634,7 +643,7 @@ impl Map {
     /// `shot_meets` and `sight_meets`: a collider on the way, or the ground (looked at every
     /// `step` meters), or (`trees`) a tree or the forest there.
     fn line_meets(&self, (a, from): (Vec2, f32), (b, to): (Vec2, f32), step: f32, trees: bool) -> bool {
-        if self.line_blocker_by(a, b, |t| self.colliders_on(t).any(|collider| collider.cut_by((a, from), (b, to)))).is_some() {
+        if self.line_blocker_by(a, b, |t| self.colliders_on(t).any(|collider| collider.cuts && collider.cut_by((a, from), (b, to)))).is_some() {
             return true;
         }
         let steps = (a.distance(b) / step).ceil().max(1.0) as i32;
@@ -716,6 +725,23 @@ mod tests {
         // Round the corner: further from it, though closer along one axis.
         let at = Vec2::new(0.07 + 0.1, 0.07 + 0.25);
         assert!(!post.blocks(at, Vec2::new(0.07 + 0.2, 0.07 + 0.2), 0.0), "rounding the corner at {at}");
+    }
+
+    /// To a body a tree is its trunk: in the way on the ground, passed over and stood on by one
+    /// high enough (leapt from somewhere high). To a shot it's still the whole tree.
+    #[test]
+    fn a_tree_is_its_trunk_to_a_body_and_a_whole_tree_to_a_shot() {
+        let yard = MapId::Yard.map();
+        let level_open = |m: &Map, t: IVec2, g: f32| [t - IVec2::X, t + IVec2::X].iter().all(|&n| m.walkable(n) && m.height_at(Map::center(n)) == g);
+        let t = yard.tiles().map(|(t, _)| t).find(|&t| yard.get(t) == Tile::Tree && level_open(yard, t, yard.height_at(Map::center(t)))).expect("a tree in the open");
+        let (c, g) = (Map::center(t), yard.height_at(Map::center(t)));
+        let (a, b) = (Map::center(t - IVec2::X), Map::center(t + IVec2::X));
+        assert!(!yard.line_walkable_at(a, b, g), "walked through the tree");
+        assert!(yard.line_walkable_at(a, b, g + TREE_TRUNK), "stopped over the trunk");
+        assert_eq!(yard.floor_at(c, g + TREE_TRUNK + 0.1), g + TREE_TRUNK, "nothing to stand on atop the trunk");
+        assert!(yard.shot_meets((a, g + 1.0), (b, g + 1.0)), "a shot through the trunk");
+        assert!(yard.shot_meets((a, g + TREE_TRUNK + 0.5), (b, g + TREE_TRUNK + 0.5)), "a shot through the crown");
+        assert!(!yard.shot_meets((a, g + 7.0), (b, g + 7.0)), "a shot over the tree");
     }
 
     /// Sight (`sight_meets`) is hidden by a house between, and by the ground, but not by a tree
