@@ -59,7 +59,6 @@ pub(super) fn show_novas(
     mut materials: ResMut<Assets<PlainMaterial>>,
     art: Res<crate::fx::FxArt>,
     mut casters: Query<(&ClassId, &Pos, &Cooldowns, &mut SeenCasts, (Option<&Motion>, Option<&PredictedWalk>)), (With<PlayerId>, Changed<Cooldowns>)>,
-    me: Query<&Pos, With<crate::Me>>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
     map: Res<crate::rooms::CurrentMap>,
 ) {
@@ -67,15 +66,13 @@ pub(super) fn show_novas(
         for slot in seen.new_casts(cooldowns) {
             let Some(AbilityKind::Nova(def)) = class.def().ability(slot).map(|ability| ability.kind) else { continue };
             let Some(nova) = visuals.novas.get(&(*class, slot)).cloned() else { continue };
-            if let Ok(my) = me.single() {
-                // A nova sounds like what the caster brings up out of the ground.
-                let sfx = match class.def().figure() {
-                    "frost_mage" => crate::audio::Sfx::FrostNova,
-                    "pyre_witch" => crate::audio::Sfx::FireNova,
-                    _ => crate::audio::Sfx::Slam,
-                };
-                sounds.push(sfx, 0.8 * crate::audio::earshot(pos.0.distance(my.0), 18.0));
-            }
+            // A nova sounds like what the caster brings up out of the ground.
+            let sfx = match class.def().figure() {
+                "frost_mage" => crate::audio::Sfx::FrostNova,
+                "pyre_witch" => crate::audio::Sfx::FireNova,
+                _ => crate::audio::Sfx::Slam,
+            };
+            sounds.add(sfx, 0.8).from(pos.0, crate::audio::Reach::Big);
             let seed = cooldowns.used_at(slot).unwrap_or(0).wrapping_mul(2_654_435_761) ^ pos.0.x.to_bits();
             // On what the caster stands on.
             let at = (pos.0, ground_under(map.map(), motion, predicted, pos.0));

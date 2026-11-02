@@ -323,7 +323,6 @@ fn burst_on_take(
     time: Res<Time>,
     looks: Res<PickupLooks>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
-    me: Query<&Pos, With<crate::Me>>,
     mut pickups: Query<(Entity, &Pickup, Option<&mut SeenTaken>), Changed<Pickup>>,
     players: Query<(Entity, &PlayerId)>,
 ) {
@@ -336,11 +335,10 @@ fn burst_on_take(
             continue;
         }
         // Every taking sounds, fainter with distance: a chest is coins, the rest a chime.
-        if let Ok(me) = me.single() {
+        {
             use crate::audio::Sfx;
-            let gain = crate::audio::earshot(pickup.at.distance(me.0), 20.0);
             let sfx = if pickup.kind == PickupKind::Chest { Sfx::Coin } else { Sfx::Heal };
-            sounds.push(sfx, gain);
+            sounds.add(sfx, 1.0).from(pickup.at, crate::audio::Reach::Small);
         }
         let taker = pickup.taken_by.and_then(|by| players.iter().find(|(_, id)| id.0 == by));
         let (Some((player, _)), PickupKind::Heal) = (taker, pickup.kind) else { continue };

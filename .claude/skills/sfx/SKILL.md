@@ -1,6 +1,6 @@
 ---
 name: sfx
-description: Remake or add a game sound from the player's description of what it sounds like now, using CC0 recordings cut and measured with scripts/sfx. Use when Pontus says a sound is wrong, or asks for a new one.
+description: Remake or add a game sound from the player's description of what it sounds like now, using CC0 or CC BY sounds (recorded or AI-generated) cut and measured with scripts/sfx. Use when Pontus says a sound is wrong, or asks for a new one.
 argument-hint: "[hero or sound] [what it sounds like now / should sound like]"
 ---
 
@@ -18,9 +18,11 @@ his ear. Never declare a sound good; say what it is made of and let him listen.
 2. **Write the target** as the body does it: gather, release, flight, landing; what moves, what
    it's made of. A javelin is wood, sinew, a lash of air, fletching. A revenant is breath, a
    heavy blade, earth, a cold ring. No layer may be describable as a kitchen or workshop sound.
-3. **Source recordings (CC0 only).** First the 115 already in `client/web/sfx/`. Then
-   OpenGameArt (search with the advanced search URL and `field_art_licenses_tid[]=4` for CC0),
-   Kenney, the Internet Archive's SSE libraries. Downloads need his yes: state file, source, size
+3. **Source sounds (CC0, or CC BY credited).** First the ones already in `client/web/sfx/`.
+   Then OpenGameArt (search with the advanced search URL and `field_art_licenses_tid[]=4` for
+   CC0), Kenney, the Internet Archive's SSE libraries, Freesound (check each page's license;
+   no NonCommercial). AI-generated sounds are as welcome as recordings, especially for magic
+   with no real-world source (arcane, holy). Downloads need his yes: state file, source, size
    in one AskUserQuestion. Archives go under `%LOCALAPPDATA%\Temp\arena-sfx\src\<pack>\`, each in
    its own folder, never in the repo. `C:\Windows\System32\tar.exe -xf x.7z` opens 7z.
 4. **Cut takes with `scripts/sfx/`.** Headless Chrome must be running muted

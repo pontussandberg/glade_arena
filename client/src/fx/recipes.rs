@@ -19,7 +19,7 @@ pub(super) fn play_new(
     art: Res<FxArt>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
-    me: Query<&Pos, With<crate::Me>>,
+    me: Query<&PlayerId, With<crate::Me>>,
     new: Query<&Fx, Added<Fx>>,
     map: Res<crate::rooms::CurrentMap>,
 ) {
@@ -246,25 +246,26 @@ pub(super) fn quake(c: &mut Commands, art: &FxArt, now: f32, (at, floor): (Vec2,
     }
 }
 
-/// The sound an effect makes, if any: loud up close, faint far off; what lands later (a meteor,
-/// a lob, a bolt gathering) sounds as it lands, not as the warning shows.
-fn sound_of(fx: &Fx, sounds: &mut crate::audio::SoundQueue, me: &Query<&Pos, With<crate::Me>>, now: f32) {
-    use crate::audio::{Sfx, earshot};
-    let Ok(me) = me.single() else { return };
+/// The sound an effect makes, if any, where it happens: carrying as far as what it is (our own
+/// farthest); what lands later (a meteor, a lob, a bolt gathering) sounds as it lands, not as
+/// the warning shows.
+fn sound_of(fx: &Fx, sounds: &mut crate::audio::SoundQueue, me: &Query<&PlayerId, With<crate::Me>>, now: f32) {
+    use crate::audio::{Reach, Sfx};
     let lands = secs((fx.until as f32 - now).max(0.0));
     let (sfx, reach, delay) = match fx.kind {
-        FxKind::Blast(FxColor::Fire) => (Sfx::Explosion, 34.0, 0.0),
-        FxKind::Meteor => (Sfx::Explosion, 44.0, lands),
-        FxKind::Blast(FxColor::Storm) => (Sfx::Thunder, 44.0, 0.0),
-        FxKind::Blast(FxColor::Frost) => (Sfx::Shatter, 24.0, 0.0),
-        FxKind::Bolt => (Sfx::Thunder, 44.0, lands),
-        FxKind::Coins => (Sfx::Coin, 16.0, 0.0),
-        FxKind::Wallop => (Sfx::Wallop, 22.0, 0.0),
-        FxKind::Ignite => (Sfx::Ignite, 26.0, 0.0),
-        FxKind::Arc => (Sfx::Arc, 20.0, 0.0),
+        FxKind::Blast(FxColor::Fire) => (Sfx::Explosion, Reach::Big, 0.0),
+        FxKind::Meteor => (Sfx::Explosion, Reach::Big, lands),
+        FxKind::Blast(FxColor::Storm) => (Sfx::Thunder, Reach::Big, 0.0),
+        FxKind::Blast(FxColor::Frost) => (Sfx::Shatter, Reach::Combat, 0.0),
+        FxKind::Bolt => (Sfx::Thunder, Reach::Big, lands),
+        FxKind::Coins => (Sfx::Coin, Reach::Small, 0.0),
+        FxKind::Wallop => (Sfx::Wallop, Reach::Combat, 0.0),
+        FxKind::Ignite => (Sfx::Ignite, Reach::Combat, 0.0),
+        FxKind::Arc => (Sfx::Arc, Reach::Combat, 0.0),
         _ => return,
     };
-    sounds.push_in(sfx, earshot(fx.at.distance(me.0), reach), delay);
+    let ours = fx.by.is_some() && me.single().is_ok_and(|id| fx.by == Some(id.0));
+    sounds.add(sfx, 1.0).from(fx.at, if ours { Reach::Own } else { reach }).after(delay);
 }
 
 /// Where and when an effect plays: from `start` (seconds), at `at` (and toward `to`, in the

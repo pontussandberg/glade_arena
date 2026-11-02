@@ -439,8 +439,9 @@ fn update_trail(trail: &mut HealthTrail, health: f32, crit_at: Option<f32>, now:
     }
 }
 
-/// A hit when health drops: the camera stirred and a thud for a blow we take, a slap for one
-/// landing near us, the body flinching. `Health` is server-authoritative, so this shows
+/// A hit when health drops: the camera stirred and a thud for a blow we take, the body
+/// flinching (the slap of a blow landing on someone else is `spawn_damage_numbers`', which knows
+/// who dealt it). `Health` is server-authoritative, so this shows
 /// confirmed hits only, about one round trip after the swing or shot. A fighter's health is only
 /// noted when it's first seen, so the first hit isn't spent on noting it.
 fn react_to_hits(
@@ -448,16 +449,15 @@ fn react_to_hits(
     time: Res<Time>,
     mut shake: ResMut<crate::camera::Shake>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
-    me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     mut players: Query<
-        (Entity, &Health, &Pos, Option<&mut ShownHealth>, Has<Me>),
+        (Entity, &Health, Option<&mut ShownHealth>, Has<Me>),
         Changed<Health>,
     >,
-    // When a Hit and a Hurt last sounded.
-    mut heard: Local<(f32, f32)>,
+    // When a Hurt last sounded.
+    mut heard: Local<f32>,
 ) {
     let now = time.elapsed_secs();
-    for (player, health, pos, shown, is_me) in &mut players {
+    for (player, health, shown, is_me) in &mut players {
         let Some(mut shown) = shown else {
             commands.entity(player).insert(ShownHealth(health.0));
             continue;
@@ -468,21 +468,13 @@ fn react_to_hits(
         if !was_hit {
             continue;
         }
-        // A blow we take stirs the camera and thuds; one landing near us slaps, fainter with
-        // distance and lighter for chip damage. Rate-limited, or burning ground pulsing through
-        // a pack would be a wall of slaps.
+        // A blow we take stirs the camera and thuds, rate-limited.
         if is_me {
             shake.add((lost as f32 / 120.0).clamp(0.08, 0.3));
-            if now - heard.1 > 0.15 {
-                heard.1 = now;
+            if now - *heard > 0.15 {
+                *heard = now;
                 sounds.push(crate::audio::Sfx::Hurt, (0.5 + lost as f32 / 60.0).min(1.0));
             }
-        } else if now - heard.0 > 0.09
-            && let Ok(me) = me.single()
-        {
-            heard.0 = now;
-            let heft = (0.4 + lost as f32 / 50.0).min(1.0);
-            sounds.push(crate::audio::Sfx::Hit, crate::audio::earshot(pos.0.distance(me.0), 18.0) * heft);
         }
         // Chip damage (a burn's pulse) doesn't flinch the body or spark: a blow does.
         if lost >= SQUASH_DAMAGE {
@@ -513,11 +505,14 @@ fn spawn_damage_numbers(
     world_ui: Single<Entity, With<WorldUi>>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
     mut shake: ResMut<crate::camera::Shake>,
-    me: Query<&Pos, (With<Me>, With<PlayerId>)>,
+    me: Query<(&Pos, &PlayerId), With<Me>>,
     mut players: Query<(Entity, &RecentHits, &Pos, Option<&mut ShownHits>, Has<Me>), Changed<RecentHits>>,
     mut numbers: Query<(&mut DamageNumber, &mut Text)>,
-    mut chimed: Local<f32>,
+    // When a heal last chimed, and a blow last slapped.
+    mut chimed: Local<(f32, f32)>,
 ) {
+    use crate::audio::{Reach, Sfx};
+    let my_id = me.single().ok().map(|(_, id)| id.0);
     let now = time.elapsed_secs();
     for (player, recent, pos, shown, is_me) in &mut players {
         let Some(mut shown) = shown else {
@@ -527,6 +522,16 @@ fn spawn_damage_numbers(
         let last = std::mem::replace(&mut shown.0, recent.seq());
         // Plain damage first adds to a number just shown, or comes as one number for all of it.
         let new: Vec<_> = recent.0.iter().filter(|hit| hit.seq > last).copied().collect();
+        // A blow landing on someone else slaps where it lands, lighter for chip damage: heard
+        // near it, or however far off if we dealt it. Rate-limited, or burning ground pulsing
+        // through a pack would be a wall of slaps.
+        let lost: i32 = new.iter().filter(|hit| hit.kind != HitKind::Heal).map(|hit| hit.amount).sum();
+        if !is_me && lost > 0 && now - chimed.1 > 0.09 {
+            chimed.1 = now;
+            let ours = my_id.is_some() && new.iter().any(|hit| hit.by == my_id);
+            let heft = (0.4 + lost as f32 / 50.0).min(1.0);
+            sounds.add(Sfx::Hit, heft).from(pos.0, if ours { Reach::Own } else { Reach::Combat });
+        }
         let plain: i32 = new.iter().filter(|hit| hit.kind == HitKind::Damage).map(|hit| hit.amount).sum();
         let merged = plain > 0
             && numbers.iter_mut().filter(|(n, _)| n.player == player && n.merges.is_some() && now - n.born < NUMBER_MERGE_SECONDS).last().is_some_and(|(mut number, mut text)| {
@@ -550,8 +555,8 @@ fn spawn_damage_numbers(
             let crit = hit.kind == HitKind::Crit;
             if crit {
                 commands.entity(player).insert(CritAt(time.elapsed_secs()));
-                let near = me.single().map_or(1.0, |me| crate::audio::earshot(pos.0.distance(me.0), 24.0));
-                sounds.push(crate::audio::Sfx::Crit, 0.4 + 0.5 * near);
+                let near = me.single().map_or(1.0, |(me, _)| crate::audio::heard(pos.0.distance(me.0), Reach::Combat));
+                sounds.push(Sfx::Crit, 0.4 + 0.5 * near);
                 // A nudge of shake for a crit landing on someone else (ours, nearly always,
                 // when it's this close); a crit on us already shakes through react_to_hits.
                 if !is_me {
@@ -560,9 +565,9 @@ fn spawn_damage_numbers(
             }
             // One soft chime, however the healing comes in: a regen or a full between-waves
             // restore lands as a pulse of heal hits, and a chime per pulse rang like an alarm.
-            if hit.kind == HitKind::Heal && is_me && now - *chimed > 1.2 {
-                *chimed = now;
-                sounds.push(crate::audio::Sfx::Heal, 0.5);
+            if hit.kind == HitKind::Heal && is_me && now - chimed.0 > 1.2 {
+                chimed.0 = now;
+                sounds.push(Sfx::Heal, 0.5);
             }
             let (text, color) = match (hit.kind, is_me) {
                 (HitKind::Heal, _) => (format!("+{}", hit.amount), palette::HEAL),

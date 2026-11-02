@@ -74,6 +74,8 @@ pub struct Hit {
     /// Health lost (or, for a heal, gained).
     pub amount: i32,
     pub kind: HitKind,
+    /// Who dealt it, so they hear it however far off it lands: `None` for a heal.
+    pub by: Option<PeerId>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
@@ -94,12 +96,12 @@ impl RecentHits {
         self.0.last().map_or(0, |hit| hit.seq)
     }
 
-    pub fn push(&mut self, amount: i32, kind: HitKind) {
+    pub fn push(&mut self, amount: i32, kind: HitKind, by: Option<PeerId>) {
         let seq = self.seq() + 1;
         if self.0.len() == Self::KEEP {
             self.0.remove(0);
         }
-        self.0.push(Hit { seq, amount, kind });
+        self.0.push(Hit { seq, amount, kind, by });
     }
 }
 
@@ -547,17 +549,25 @@ pub struct Fx {
     /// Which way the side of what it struck faces (a wall, a terrace's face: unit, on the plane),
     /// for one that happens on that side, `height` up it, rather than on top of something.
     pub wall: Option<Vec2>,
+    /// The player whose doing it is (their shot, spell or item), who hears it however far off it
+    /// is: `None` for what no player caused (a monster's, the world's).
+    pub by: Option<PeerId>,
 }
 
 impl Fx {
     /// An effect at one spot, out to `radius`, from `now` for `ticks`.
     pub fn at(kind: FxKind, at: Vec2, radius: f32, now: u32, ticks: u32) -> Fx {
-        Fx { kind, at, to: at, radius, from: now, until: now + ticks, height: None, wall: None }
+        Fx { kind, at, to: at, radius, from: now, until: now + ticks, height: None, wall: None, by: None }
     }
 
     /// An effect from `at` to `to` (an arc, a lob), from `now` for `ticks`.
     pub fn between(kind: FxKind, at: Vec2, to: Vec2, radius: f32, now: u32, ticks: u32) -> Fx {
-        Fx { kind, at, to, radius, from: now, until: now + ticks, height: None, wall: None }
+        Fx { kind, at, to, radius, from: now, until: now + ticks, height: None, wall: None, by: None }
+    }
+
+    /// `owner`'s, heard by them however far off it is (`by`).
+    pub fn by(self, owner: PeerId) -> Fx {
+        Fx { by: Some(owner), ..self }
     }
 
     /// Happening `height` up at `at`: on what's there that high (a roof, a body's feet).

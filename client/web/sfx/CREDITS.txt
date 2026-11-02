@@ -1,6 +1,7 @@
-Sound recordings used by the game, all released under CC0 1.0 (public domain dedication,
-https://creativecommons.org/publicdomain/zero/1.0/). No attribution is required; it is given
-here with thanks. Files were trimmed, mixed to mono and normalized; some were halved in
+Sound recordings used by the game, released under CC0 1.0 (public domain dedication,
+https://creativecommons.org/publicdomain/zero/1.0/), unless marked CC BY 4.0 below. CC0 needs
+no attribution; it is given here with thanks. The CC BY 4.0 sounds (Attribution 4.0,
+https://creativecommons.org/licenses/by/4.0/) must be credited as they are here. Files were trimmed, mixed to mono and normalized; some were halved in
 sample rate. The game layers and pitches them at play time (client/src/audio.rs).
 
 Pontus Sandberg, the game's author (not CC0; part of the game):
@@ -44,6 +45,14 @@ Textures"), single takes cut from the texture files:
   a lowpass)
 
 qubodup (OpenGameArt), "Ghost breath": ghost_breath.wav (the swell of it)
+
+saturdaysoundguy (Freesound), "Arrow Whoosh 2 .R.wav" from the "Whooshes" pack
+(https://freesound.org/people/saturdaysoundguy/sounds/391444/): jav_draw.wav (0.14-0.32 s, its first
+swish), jav_whoosh.wav (0.41-0.76 s, its second whoosh)
+
+EminYILDIRIM (Freesound), CC BY 4.0, cut and changed for the game:
+  frost_impact.wav: "Magic Ice Spell Impact & Punch", its lead-in silence trimmed
+    (https://freesound.org/people/EminYILDIRIM/sounds/541479/)
 
 Made from the above: draw_air.wav (swish_heavy_1 reversed and slowed), rift_tear.wav (magic.wav
 slowed to half speed under a lowpass), ice_thump.wav (boom.wav's first knock, under a low
