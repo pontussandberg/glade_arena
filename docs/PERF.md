@@ -17,16 +17,20 @@ ARENA_PERF=perf.txt ARENA_PERF_SECS=30 ./target/debug/arena-client.exe 11 revena
 ```
 
 - It turns **vsync off**, so the frame rate is what the work allows, not the monitor's.
-- It notes every frame's time and, once a second, a line of counts: entities, meshes and meshes
-  drawn, fx parts, lights, UI nodes, mesh/material/image assets.
+- It notes every frame's time and, once a second, a line of counts: main/render/extract times,
+  entities, meshes and meshes drawn, batches, fx parts and corners, lights, UI nodes,
+  mesh/material/image assets.
 - At the end it writes a summary line (frames, avg, median, p99, p999, worst) and the per-second
-  lines, then quits.
-- `ARENA_PERF_OFF=lights,shadows,fog,ui,fx` switches parts of the scene off, for A/B tests:
+  lines, plus an entity census (`<out>.census.txt`: what kinds make up the world, taken near the
+  end), then quits.
+- `ARENA_PERF_OFF=lights,shadows,fog,ui,fx,blend` switches parts of the scene off, for A/B tests
+  (matched by substring; in the browser, the same words go on the URL as `?off=...`):
   - `lights` removes the torches' point lights;
   - `shadows` turns off the sun's shadows;
   - `fog` removes distance fog;
   - `ui` hides every UI root;
-  - `fx` despawns effect parts.
+  - `fx` despawns effect parts and clears the blade trails;
+  - `blend` hides everything see-through (blended materials, the lying ground marks, fx, trails).
 
 ### Rules for numbers you can trust
 
@@ -46,10 +50,12 @@ Test both a steady scene and a busy one:
 | Scene | How |
 |---|---|
 | Home screen (the stage, the backdrop) | the client with no class argument |
-| The Wilds camp, steady | `ARENA_ROOM="Waves 1"` with no bot: a run's shop phase, nothing fighting |
+| A camp, steady | `ARENA_ROOM="Waves 1"` with no bot: a run's shop phase, nothing fighting — but the first shop lasts only 25 s, so keep the run inside it (or expect wave 1) |
 | A busy fight | `ARENA_ROOM="Waves 6" ARENA_BOT=1` (or `"Waves 8"`): the bot fights a mid-run wave |
 
-Room names that don't start with "Waves" quick-join a PvP room on Keep instead. `ARENA_SHOTS=<dir>`
+`ARENA_ROOM` only applies when a class argument is given. "Waves..." runs start on Ravenhold (the
+waves' first map); "Ravenhold..." does the same; any other name quick-joins a started FFA room on
+River Crossing; "Practice <map label>" opens that map in peace. `ARENA_SHOTS=<dir>`
 saves a screenshot every few seconds, so you can check afterwards what the run actually showed.
 
 ### Where the time goes: `--features profile`
@@ -65,9 +71,29 @@ cargo build -p arena-client --features profile    # turns on bevy/trace_chrome
   has filled up before).
 - Sum it with `scripts/trace_sum.py <trace> <from_s> <to_s> [filter]`. It streams the file,
   matching begin/end events with a regex, and prints ms per frame and calls per frame per span,
-  most costly first. Skip the first few seconds (startup and pipeline compilation).
+  most costly first (the filter is a plain substring). Skip the first few seconds (startup and
+  pipeline compilation).
+
+### The browser, and crowds
+
+The wasm build is the real target, and it has its own probes:
+
+- The page takes `?off=` (the `ARENA_PERF_OFF` words), `?room=`, `?class=`, `?bot` (or
+  `?bot=stand`, natively `ARENA_BOT=stand`, to stand still in the fray), and `?pkg=pkg-xxx` to
+  load another saved build for an A/B (`client/web/index.html`).
+- `ARENA_HORDE=N` on the server keeps every wave at N monsters, coming out quickly and never
+  running out, with an unkillable party: a steady crowd to measure against.
+- `scripts/capture/shoot.mjs` drives a muted headless Chrome: `fps:SECONDS` measures frame
+  times, `throttle:N` slows the tab's CPU, `profile:SECONDS,PATH` takes a CPU profile;
+  `scripts/capture/profsum.mjs` sums one by crate and function (its `systems` mode gives
+  inclusive time per Bevy system).
+- The client's `webgpu` feature builds for WebGPU, to compare against WebGL.
 
 ## What we found (this machine: fast desktop GPU, native, dev profile)
+
+These numbers are from October 2026 and predate the later rounds (the Bevy feature trim, health
+bars leaving the UI tree, fx parts drawn from GPU buffers, the baked rift tears): treat them as
+history and the method as the point. Re-measure before leaning on any of them.
 
 ### Baseline numbers
 
@@ -105,7 +131,7 @@ out), and **fewer lights**.
 - The two stage lights on the home screen took it from 5.1 ms to 9.4 ms, nearly doubling it.
   Their shadows are now off (`client/src/lobby/stage.rs`).
 - Rule: only the sun casts shadows. Any new `PointLight`/`SpotLight` gets
-  `shadows_enabled: false` unless there's a measured reason.
+  `shadow_maps_enabled: false` unless there's a measured reason.
 
 ### Tried, no gain
 

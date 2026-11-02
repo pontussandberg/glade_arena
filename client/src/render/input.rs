@@ -22,10 +22,9 @@ pub(super) struct DestinationMarker;
 /// Mouse and keys -> `DesiredInput`: you aim where the camera looks, WASD walks relative to it,
 /// and holding the left button attacks again each time the last attack is done (the server drops
 /// a click before then, so it's asked each tick until it takes). A click that only captures the
-/// cursor doesn't attack. An ability's key (1, 2, 3, 4) casts it right away, but for a strike's,
-/// which first shows where it will land, called by the next left click and dropped by a right
-/// click (see `casting.rs`). Clicking an ability's icon aims it that way first, unless it has
-/// nothing to aim.
+/// cursor doesn't attack. An ability's key (1, 2, 3, 4) casts it right away. Clicking its icon
+/// aims it first, called by the next left click and dropped by a right click (see `casting.rs`),
+/// unless it has nothing to aim.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn read_local_input(
     mouse: Res<ButtonInput<MouseButton>>,
@@ -100,7 +99,8 @@ pub(super) fn read_local_input(
         aiming.0 = None;
     }
     // A left click that casts, aims (on an ability's icon) or is for a HUD control doesn't also
-    // attack. Any other one does: once per click (holding it doesn't attack again). A right
+    // attack. Any other one does, and held down it attacks again each time the attack is ready
+    // (one `Attack` command per attack). A right
     // click drops the aim (`drops_aim`); ESC does too (`esc_menu`).
     if mouse.just_pressed(MouseButton::Left) {
         if on_control || mode.just_locked {

@@ -245,8 +245,8 @@ impl Visuals {
 }
 
 /// A child that keeps this orientation and size in the world, this high above the ground,
-/// whatever its parent does (fighters turn, lean, crouch and are drawn bigger, see `rig/`): the range circle and the frost
-/// stay flat on the ground.
+/// whatever its parent does (fighters turn, lean, crouch and are drawn bigger, see `rig/`): the
+/// frost stays flat on the ground.
 #[derive(Component)]
 pub(crate) struct WorldAligned(pub Quat, pub f32);
 

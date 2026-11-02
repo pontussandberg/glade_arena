@@ -50,10 +50,10 @@ pub enum ShotGlow {
 /// Turns a mesh pointing up (+Y) to point along +X: how a shot flies.
 pub(super) const ALONG_X: Quat = Quat::from_xyzw(0.0, 0.0, -std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2);
 
-/// A class's shot (auto-attack or, `ability`, Q), flying along world +X, the point that hits at
-/// the origin, picked by class id: the javelinist throws the very javelin it carries (and its Q
-/// is a plain spectral spear, drawn glowing); the frost mage a frostbolt; the rest round bolts of
-/// the shot's radius.
+/// A class's shot (auto-attack or an ability's), flying along world +X, the point that hits at
+/// the origin, picked by class id: the javelinist throws the very javelin it carries (a thrown
+/// ability's, had it one, would be a plain spectral spear, drawn glowing); the frost mage a
+/// frostbolt; the rest round bolts of the shot's radius.
 pub fn shot_look(class: &ClassDef, shot: Shot, ability: bool) -> ShotLook {
     let plain = |mesh, glow| ShotLook { mesh, glow, thrown: false, aura: None, spin: 0.0 };
     // Casters borrowing another's figure throw their own (`LookDef::bolts`): fire, the void,

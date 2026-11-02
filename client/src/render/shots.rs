@@ -114,7 +114,7 @@ pub(crate) fn leaving_hand(held: &Transform) -> Transform {
 /// below 3/4 speed; one behind it is caught up within `SETTLE_SECONDS` however far behind it is,
 /// so others' spears (which reach us late, already meters down their path) shoot out of the hand
 /// fast and are where they really are almost at once. It leaves its wake behind it as it goes
-/// (`Wake`). A thrown Q isn't the held javelin (that stays in the hand), nor is one an item threw
+/// (`Wake`). A thrown ability's shot isn't the held javelin (that stays in the hand), nor is one an item threw
 /// (a barrage's, a bounce): it shoots straight out from where the sim threw it, already pointing
 /// the way it flies.
 pub(super) fn fly_shots(

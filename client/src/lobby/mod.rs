@@ -5,12 +5,13 @@
 //! - who we are in a badge over the fighter's head, at one height for every fighter
 //! - what it is and does on the left, a pane that folds open and shut like the lobbies: its
 //!   header (role and name) always; open, cards under it with its stat frame (as in the arena),
-//!   and its passive and Q ability
+//!   and its passive and ability
 //! - the fighters to pick from in a row of tiles at the bottom (click, or press the number)
-//! - on the right, the side panel: at home, the lobbies to join or create (`browser.rs`, opened
-//!   with "Lobbies"); in a room, its name, mode and map, who's in it (by team), the
+//! - on the right, the side panel: at home, the lobbies to join or create and the leaderboards
+//!   (`browser.rs`: "Play with friends" and "Leaderboards"); in a room, its name, mode and map,
+//!   who's in it (by team), the
 //!   team buttons, and for the leader the mode and map switches
-//! - the way in at the bottom right: at home, practice; in a room, the
+//! - the way in at the bottom right: at home, play solo and practice; in a room, the
 //!   leader's start, or once the match is on, into the arena
 //!
 //! In a room, the picked fighter goes to the server as it's picked: the others see it, and the

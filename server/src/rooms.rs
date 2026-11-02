@@ -6,7 +6,7 @@
 //! The room's leader (its creator, then the longest-standing member) picks free-for-all or two
 //! teams and starts the match, which takes everyone in; members pick their team and class, and
 //! once it's on go in and out of the arena as they like (back to the room's lobby to pick another
-//! class), latecomers included. Leaving the room takes a member's fighter out of the arena; the
+//! class). Leaving the room takes a member's fighter out of the arena; the
 //! room is gone when its last member leaves. A member idle for `AfkTimeout` is taken out as if
 //! they'd left.
 //!
@@ -16,7 +16,7 @@
 //! once everyone else in the room is ready. A room may have a password: only those who give it
 //! join.
 //!
-//! A waves room (`Mode::Waves`) plays on the wilds instead: its start opens a run (`waves.rs`),
+//! A waves room (`Mode::Waves`) plays on the waves' maps instead (Ravenhold, or the wilds): its start opens a run (`waves.rs`),
 //! everyone on one side against the monsters, buying items from its shopkeeper between waves,
 //! until the party falls; the wave they reached shows until each leaves the room. Playing solo is
 //! such a room of one's own, never listed.
@@ -623,7 +623,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
         RoomRequest::Create { name, mode, map, password } => {
             let name = clean_room_name(&name).ok_or("Give the room a name")?;
             leave(lobby, ctx, link);
-            // Each mode on its own maps: the waves on theirs, fights on any of the others.
+            // Each mode on its own maps (`Mode::maps`).
             let map = mode.fit_map(map);
             let key = create(lobby, allocator, ctx, link, name, mode, map);
             lobby.rooms.get_mut(&key).expect("just made").password = password.as_deref().and_then(clean_password);
@@ -687,7 +687,7 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                     let hold = lower.starts_with("ravenhold");
                     let mode = if lower.starts_with("waves") || hold { Mode::Waves } else { Mode::Ffa };
                     let from_wave = name.split_whitespace().nth(1).and_then(|n| n.parse::<u32>().ok()).filter(|n| (1..=200).contains(n));
-                    // The default map, if it's one of the mode's; else the mode's own (the wilds).
+                    // The default map, if it's one of the mode's; else the mode's first.
                     let map = if hold {
                         MapId::Hold
                     } else {

@@ -4,20 +4,21 @@
 //! - `crossing`: a forest clearing split by a river, crossed by a stone bridge and two fords.
 //! - `gorge`: highlands split by a chasm that shots fly over and the bold leap, crossed by a stone
 //!   arch and two rope bridges, and by waygates that jump a fighter to the far side.
-//! - `wilds`: the waves mode's map, far bigger: a camp in the middle and places to explore all
-//!   round it, monsters coming out of lairs out there.
-//! - `hold`: the waves mode's second map, fought on too: a village by a river under a fortress on its crag,
+//! - `wilds`: the waves mode's other map, far bigger: a camp in the middle and places to explore
+//!   all round it, monsters coming out of lairs out there.
+//! - `hold`: the waves' first map, and a PvP one too (`Mode::maps`): a village by a river under a fortress on its crag,
 //!   walls and towers to climb, bridges to cross and gaps to leap.
-//! - `yard`: practice's: a flat field with two target dummies standing on it from the start.
+//! - `yard`: practice's: a village in open meadow, on several levels, target dummies standing
+//!   about it from the start.
 //!
-//! Every PvP layout (`MapId::PVP`) is point-symmetric, (x, y) -> (-x, -y), so both halves are
-//! equally good; the wilds aren't, there are no sides there. Tile
+//! Every mirrored layout (`MapId::PVP`) is point-symmetric, (x, y) -> (-x, -y), so both halves are
+//! equally good; the maps outside it (the waves', practice's) aren't. Tile
 //! `t` covers [t, t + 1) in meters: the grid of a map of `size` tiles runs from `-size / 2` to
 //! `size / 2`, centered on (0, 0), and where a point is on it doesn't depend on the map.
 //!
 //! Everything here must give identical results on every platform (native server, wasm client),
-//! so both agree on it (the client picks the point a click walks to, `walk_target`, and draws
-//! shots by `sim`). So the shapes use only +, -, *, / and sqrt,
+//! so both agree on it (the client predicts its own fighter's walk with the same code, a bot
+//! picks the point it walks to, `walk_target`, and shots are drawn by `sim`). So the shapes use only +, -, *, / and sqrt,
 //! which IEEE floats compute identically everywhere; no sin/atan2 from the platform's libm.
 
 use std::cell::RefCell;
@@ -120,13 +121,13 @@ impl Tile {
 /// Which map a room plays on.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum MapId {
-    /// Where every game starts, and the map rooms play on unless their leader picks another.
+    /// The default: a quick-joined fight's map.
     #[default]
     Crossing,
     Gorge,
-    /// The waves mode's.
+    /// The waves mode's second map.
     Wilds,
-    /// The waves mode's second: a fortress on its crag over a village, built in levels.
+    /// The waves' first map, and a PvP one too: a fortress on its crag over a village, built in levels.
     Hold,
     /// Practice's own: open ground with target dummies on it from the start.
     Yard,
@@ -135,7 +136,8 @@ pub enum MapId {
 impl MapId {
     /// Every pickable map.
     pub const ALL: [MapId; 5] = [MapId::Crossing, MapId::Gorge, MapId::Wilds, MapId::Hold, MapId::Yard];
-    /// The maps for fighting each other: mirrored, of a size for it.
+    /// The mirrored maps for fighting each other, of a size for it (Ravenhold is fought on too:
+    /// `Mode::maps`).
     pub const PVP: [MapId; 2] = [MapId::Crossing, MapId::Gorge];
 
     pub fn map(self) -> &'static Map {
@@ -948,7 +950,7 @@ impl Map {
         None
     }
 
-    /// Where a click at `p` sends a walker: `p` itself if a body fits there; pulled toward where
+    /// Where an order to walk to `p` (a bot's) sends a walker: `p` itself if a body fits there; pulled toward where
     /// a body stands on its tile (`stand`) if it's too close to something blocked to stand on;
     /// or, if `p` isn't on walkable ground, where one stands on the nearest walkable tile (up to
     /// `max_radius` tiles out). `next_waypoint` reaches whatever this returns.

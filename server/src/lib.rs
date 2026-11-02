@@ -1,11 +1,11 @@
 //! Authoritative match server.
 //!
 //! Guests meet in rooms (`rooms.rs`); each room is its own arena, all in this one world. In a
-//! started room, clients pick a class, then only send commands (`PlayerCommand`: walk there,
-//! attack, cast), League style: each is applied the moment it arrives. The server runs the shared sim,
+//! started room, clients pick a class, then only send commands (`PlayerCommand`: walk, attack,
+//! cast), each tick-stamped and held until its tick (`orders`). The server runs the shared sim,
 //! decides hits, damage and crowd control against where everyone is now, and replicates the
-//! result every tick. Nothing is predicted: a client shows its own fighter as the server last
-//! said, and others interpolated.
+//! result every tick. A client predicts only its own fighter's movement and attack timing
+//! (`render::glide`); on everything else it takes the server's word.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;

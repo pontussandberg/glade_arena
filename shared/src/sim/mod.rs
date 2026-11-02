@@ -1,8 +1,9 @@
 //! Gameplay rules as pure functions of (state, input, tick).
 //!
 //! No wall-clock time and no randomness. The server runs them; clients use the few they draw
-//! with (where a projectile is at a tick, whether a player has arrived). Per-class numbers come
-//! from `ClassDef`.
+//! with (where a projectile is at a tick, whether a player has arrived) and the movement and
+//! attack steps the prediction of our own fighter replays (`render::glide`). Per-class numbers
+//! come from `ClassDef`.
 
 use bevy::prelude::*;
 

@@ -1,6 +1,7 @@
 //! Sound, built from recordings: every effect is layered at the moment it plays out of a few
-//! short public-domain recordings (`web/sfx/`, fetched and decoded at startup) in the order the
-//! event happens — a maul blow is a heavy swish, then wood-and-iron landing, stone breaking,
+//! short CC0 and CC BY recordings (`web/sfx/`, fetched and decoded at startup; credited in
+//! `web/sfx/CREDITS.txt`) in the order the
+//! event happens — a nova's slam is a heavy blow into the ground, stone breaking,
 //! grit rattling down — each pitched a little differently every time, with WebAudio synthesis
 //! only for what no recording gives (a spectral hum, a sub thump, a horn). Gameplay systems
 //! push `Sfx` onto the `SoundQueue` with a gain, and for one that happens somewhere, where and

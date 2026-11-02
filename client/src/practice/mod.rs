@@ -3,12 +3,13 @@
 //! of its own, the panel only switches it:
 //!
 //! - "Map" switches practice to the next map, everyone starting over on it.
-//! - Switches (`Switch`), lit while on: "No cooldowns" (our Q's cooldown off: what the server
-//!   says, via our `Cooldowns`), "Hitboxes" (`hitboxes`: what hits are judged by, drawn on the
-//!   ground) and "3D hitboxes" (the same standing up, colored by height).
+//! - Switches (`Switch`), lit while on: "No cooldowns" (our ability's cooldown off: what the
+//!   server says, via our `Cooldowns`), "Hitboxes" (`hitboxes`: what hits are judged by, drawn on
+//!   the ground) and "3D hitboxes" (the same standing up, colored by height).
 //! - "Fake ping" steps through extra latency on what we receive (`FakeLatency`), and back off, to
 //!   feel how the game plays at a higher ping.
-//! - "Target dummy" and "Moving dummy" place one (`dummies`).
+//! - "Target dummy" and "Moving dummy" place one; "3 slow zombies" and "50 slow zombies" place
+//!   them in rows (`dummies`).
 //!
 //! Outside practice every tool is off (`tools_off`).
 

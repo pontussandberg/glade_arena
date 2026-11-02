@@ -116,7 +116,7 @@ pub(crate) struct Moves {
     /// turns it in across the body): a blow in one straight plane, aimed where it lands.
     pub(super) swing_yaw: f32,
     /// Its blow comes down onto its lane's middle line, wherever that runs beside its striker
-    /// (`LastSwing::aside`: in action mode the crosshair's line), lying straight along it: the
+    /// (`LastSwing::aside`: the crosshair's line), lying straight along it: the
     /// plane the arm swings in through its shoulder rolled out onto it as the blow comes over and
     /// down (`Angles::arm_tilt`), so it comes over diagonally from in over the head, not turned
     /// in across it (`swing_yaw`).

@@ -321,7 +321,8 @@ fn way_in(screen: Screen, view: Option<&RoomView>, me: Option<&Me>) -> WayIn {
     match view {
         _ if screen == Screen::Home => WayIn::Solo,
         None => WayIn::Solo,
-        // A won match or a lost run doesn't start again: the server turns `EnterArena` away.
+        // A won match or a lost run doesn't start again: the server turns `EnterArena` away
+        // after a lost run; after a won match the way in is just closed here.
         Some(view) if view.run.as_ref().is_some_and(|run| matches!(run.phase, Phase::Over { .. })) => WayIn::Over(true),
         Some(view) if view.started && view.winner.is_some() => WayIn::Over(false),
         Some(view) if view.started => WayIn::Enter,

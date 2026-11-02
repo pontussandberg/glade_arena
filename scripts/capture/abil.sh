@@ -1,7 +1,7 @@
 #!/bin/bash
 # abil.sh CLASS TAG KEY [aimed]: as CLASS in practice with a dummy up-right of the player, cast
-# the ability on KEY (q or w; an aimed one is confirmed with a click at the dummy) and capture a
-# frame burst of it from the game camera into scratchpad/TAG/KEY.png.
+# the ability on KEY (1-4; each hero has one, on 1; an aimed one is confirmed with a click at the
+# dummy) and capture a frame burst of it from the game camera into $S/TAG/KEY.png.
 S=/c/Users/PONTUS~1/AppData/Local/Temp/arena-sfx
 W="C:/Users/PONTUS~1/AppData/Local/Temp/arena-sfx"
 cls=$1; tag=$2; key=$3; aimed=$4

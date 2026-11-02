@@ -242,7 +242,7 @@ pub(super) fn tick_items(
     let due: Vec<Volley> = barrages.0.iter().filter(|v| v.at <= now).copied().collect();
     barrages.0.retain(|v| v.at > now);
     for volley in due {
-        // As the first was thrown (from the hand, onto the crosshair's line, in action mode),
+        // As the first was thrown (from the hand, onto the crosshair's line),
         // moved with the thrower to where they are now, if they're still in the fight; all but
         // straight after the first: just enough scatter that they don't fly as one.
         let Some((_, _, pos, .., motion)) = holders.iter().find(|(id, ..)| id.0 == volley.shot.owner) else { continue };

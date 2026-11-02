@@ -1,6 +1,7 @@
 //! Game client: connects to the server, joins a room (`rooms.rs`), picks a class, and sends
-//! commands (`PlayerCommand`), League style: nothing is predicted. Our own fighter is shown as the
-//! server last said it was; others are interpolated.
+//! commands (`PlayerCommand`). Our own fighter's movement is predicted from the walks, jumps and
+//! attacks we sent (`render::glide`) and corrected smoothly; others are interpolated. Headless
+//! (bots, tests), it's shown as the server last said it was.
 //!
 //! The networking part (`ClientNetPlugin`) has no rendering, so integration tests can run it
 //! headless as a bot. `render` adds the window, 3D scene and keyboard/mouse input on top.

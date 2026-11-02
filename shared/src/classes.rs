@@ -1,4 +1,5 @@
-//! Playable classes, loaded from `assets/classes/`: one file per class, and `common.ron` for
+//! Classes, loaded from `assets/classes/`: the heroes players pick, and the monsters, bosses and
+//! merchant the server fields; one file per class, and `common.ron` for
 //! what they all share (see the README there).
 //!
 //! Gameplay code never names a class: it reads a `ClassDef` (HP, speed, auto-attack, abilities)
@@ -83,7 +84,7 @@ pub struct ClassDef {
     pub max_hp: i32,
     pub move_speed: f32,
     pub attack: AttackDef,
-    /// On Q, W, E and R, in that order (`AbilitySlot`). A playable class has at least one.
+    /// On keys 1 to 4, in that order (`AbilitySlot`). A playable class has at least one.
     pub abilities: Vec<AbilityDef>,
     /// What the class always has going for it, nothing to press (none by default).
     #[serde(default)]
@@ -131,7 +132,7 @@ pub struct MobDef {
     pub bounty: u32,
     /// How much of a wave's budget one takes.
     pub cost: f32,
-    /// The first wave it comes in (bosses: the waves they lead, `boss_every`).
+    /// The first wave it comes in (bosses: the waves they lead, `rooms::BOSS_EVERY`).
     pub from_wave: u32,
     /// How many come at once.
     #[serde(default = "one_u32")]
@@ -564,8 +565,8 @@ impl AttackDef {
     }
 
     /// How far from your center a target's body can reach and still be hit (`AttackKind::edge_reach`),
-    /// `empowered` by the `follow_up` or not: its longer lane's far end. What the range circle and
-    /// the attack range stat show.
+    /// `empowered` by the `follow_up` or not: its longer lane's far end. What the attack range
+    /// stat shows.
     pub fn edge_reach(&self, empowered: bool) -> f32 {
         match self.lane(empowered) {
             Some((_, range, _)) => range,
@@ -611,7 +612,7 @@ impl AttackKind {
 
     /// How far from your center a target's body can reach and still be hit: a thrust reaches a
     /// body whose center is within its reach; a shot's front edge starts at the edge of you and
-    /// flies its range. (What the range circle shows.)
+    /// flies its range. (What the attack range stat shows.)
     pub fn edge_reach(&self) -> f32 {
         match *self {
             AttackKind::Melee { range, .. } => range,

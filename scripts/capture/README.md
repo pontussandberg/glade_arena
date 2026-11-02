@@ -1,10 +1,11 @@
 # Capture scripts
 
 Drive a muted headless Chrome over the DevTools protocol to see and hear the game as an agent:
-`shoot.mjs` (navigate, size the viewport, click, press or hold keys and the mouse button, scroll,
-screenshot, eval, preload, throttle the tab's CPU, take a CPU profile), `profsum.mjs` (sum a
-profile up by crate and by function), `sheet.mjs` (lay burst frames out as one labelled contact
-sheet),
+`shoot.mjs` (navigate, size the viewport, click left or right, press or hold keys and the mouse
+button, scroll, screenshot a region or the page, eval, preload, throttle the tab's CPU, measure
+frame times with `fps:SECONDS`, take a CPU profile; `CDP_PORT=9223` drives a second Chrome),
+`profsum.mjs` (sum a profile up by crate and by function; its `systems` mode gives inclusive time
+per Bevy system), `sheet.mjs` (lay burst frames out as one labelled contact sheet),
 `cap.sh CLASS TAG` (attack + idle + walk bursts of a hero from the game camera),
 `abil.sh CLASS TAG KEY [aimed]` (an ability burst), `action.sh CLASS OUTDIR [TAG]` (the action
 camera: at rest, turned, looking down, against a wall, out in the open, and bursts walking while
@@ -23,5 +24,7 @@ Chrome must be running first, always muted, or its sound plays through the speak
       --autoplay-policy=no-user-gesture-required --mute-audio --window-size=1600,900 \
       --hide-scrollbars --remote-debugging-port=9222 --user-data-dir=<a temp folder> about:blank
 
-The shell scripts write under `%LOCALAPPDATA%\Temp\arena-sfx` (the `N`/`S` variables at the
-top). The game must be up on http://localhost:8080 (`./scripts/dev.sh dev`).
+`cap.sh`, `abil.sh` and `audio.sh` write under `%LOCALAPPDATA%\Temp\arena-sfx` (the `N`/`S`
+variables at their top) and run `node shoot.mjs` / `node sheet.mjs` from inside it, so copies of
+both must sit in that folder; `action.sh` and `aim.sh` take an OUTDIR argument and run the
+scripts from this folder. The game must be up on http://localhost:8080 (`./scripts/dev.sh dev`).

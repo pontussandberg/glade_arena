@@ -6,14 +6,14 @@ pub const TICK_DURATION: Duration = Duration::from_nanos(1_000_000_000 / TICK_HZ
 /// Seconds per tick, for the sim's per-tick math.
 pub const TICK_DT: f32 = 1.0 / TICK_HZ as f32;
 /// How often the server sends replication updates: every tick, so a command's result comes back
-/// as soon as it's there (nothing is predicted).
+/// as soon as it's there (corrections to our own prediction, everything else).
 pub const SEND_INTERVAL: Duration = TICK_DURATION;
 
 pub const SERVER_PORT: u16 = 5888;
-/// Includes the class file's hash: clients built with different class numbers can't connect.
 /// The game's version (the workspace's): kept with every run on the leaderboards.
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Includes the class file's hash: clients built with different class numbers can't connect.
 pub const PROTOCOL_ID: u64 = 0xA4E7_0009 ^ crate::classes::classes_hash();
 /// Netcode key shared by server and client. Fine for local dev; real auth will have the
 /// account service mint connect tokens instead (see README).
