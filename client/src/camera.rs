@@ -403,8 +403,12 @@ fn follow_camera(
     }
     // While Tab holds the scoreboard up, a right click lets the cursor go, and it stays free past
     // the key: pointing, not aiming. A click takes it back — off the HUD, and only once Tab is up.
+    // The freeing click is spent: no drag state off it, or moving the mouse before letting the
+    // button go would count as a turn (`turning`) and refuse the click that takes the cursor back.
     if mode.locked && keys.pressed(KeyCode::Tab) && mouse.just_pressed(MouseButton::Right) {
         mode.locked = false;
+        mode.dragged = 0.0;
+        mode.grabbed_at = None;
         release_cursor(&mut cursor);
     }
     if !mode.locked && mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]) && !mode.turning() && !on_hud && !keys.pressed(KeyCode::Tab) {
@@ -422,11 +426,12 @@ fn follow_camera(
         if delta != Vec2::ZERO {
             mode.orbit.turn(delta * turn, pitch_range);
         }
-    } else if mouse.just_pressed(MouseButton::Right) {
+    } else if mouse.just_pressed(MouseButton::Right) && !keys.pressed(KeyCode::Tab) {
         mode.dragged = 0.0;
         mode.grabbed_at = window.cursor_position();
     }
-    if !mode.locked && mouse.pressed(MouseButton::Right) {
+    // A drag only off a right press of its own (`grabbed_at`): not the one that freed the cursor.
+    if !mode.locked && mouse.pressed(MouseButton::Right) && mode.grabbed_at.is_some() {
         let was_turning = mode.turning();
         mode.dragged += motion.delta.length();
         if mode.turning() {

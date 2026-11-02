@@ -77,6 +77,11 @@ fn toggle_menu(
     mut cursor: Single<&mut CursorOptions>,
 ) {
     let esc = keys.just_pressed(KeyCode::Escape) || mode.escaped;
+    // The flag is spent here: its setter stops running once the menu is open (`CameraControl`),
+    // and left standing it would read as another ESC and shut the menu at once.
+    if mode.escaped {
+        mode.escaped = false;
+    }
     // ESC first drops a normal cast's aim; the next one opens the menu.
     if esc && aiming.0.is_some() {
         aiming.0 = None;
