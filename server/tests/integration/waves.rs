@@ -557,7 +557,7 @@ fn practice_places_three_slow_zombies() {
         p.update();
     }
     p.ask(RoomRequest::PlaceDummy { at: dummy, walks: false });
-    p.ask(RoomRequest::PlaceZombies { at });
+    p.ask(RoomRequest::PlaceZombies { at, count: 3 });
     let zombies = |p: &mut Party| {
         let world = p.server.world_mut();
         world.query::<(&Team, &Pos)>().iter(world).filter(|(t, _)| t.0 == ZOMBIES).map(|(_, pos)| pos.0).collect::<Vec<_>>()
@@ -569,8 +569,8 @@ fn practice_places_three_slow_zombies() {
         world.query::<&Team>().iter(world).filter(|t| t.0 == ZOMBIES).count() == 3
     });
     let placed = zombies(&mut p);
-    assert!(placed.iter().all(|z| z.distance(at) < 1.5), "not where asked: {placed:?}");
-    let apart = placed.iter().flat_map(|a| placed.iter().map(move |b| a.distance(*b))).filter(|d| *d > 0.0).fold(f32::MAX, f32::min);
+    assert!(placed.iter().all(|z| z.distance(at) < 2.5), "not where asked: {placed:?}");
+    let apart = placed.iter().enumerate().flat_map(|(i, a)| placed[i + 1..].iter().map(move |b| a.distance(*b))).fold(f32::MAX, f32::min);
     assert!(apart > 0.5, "on top of each other: {placed:?}");
 
     // A second and a half's walk: toward us, at half a zombie's speed.
@@ -586,6 +586,55 @@ fn practice_places_three_slow_zombies() {
     assert!(walked < speed * 0.7, "not slow: {walked} m/s, a zombie walks {speed} m/s");
     let nearer = |zs: &[Vec2]| zs.iter().map(|z| z.distance(me)).sum::<f32>();
     assert!(nearer(&moved) < nearer(&placed), "they didn't come for us: {placed:?} -> {moved:?}");
+}
+
+/// Practice's horde: fifty slow zombies at once, in rows where asked, none on top of another nor
+/// of us; another asked for there goes round the first.
+#[test]
+fn practice_places_a_horde_of_slow_zombies() {
+    let mut p = Party::new(5850, "revenant", false);
+    p.ask(RoomRequest::Practice(MapId::Crossing));
+    p.until(Duration::from_secs(10), "practicing", |p| p.room().is_some_and(|r| r.practice) && player::<Health>(&mut p.server, 1).is_some());
+    let shop = MapId::Crossing.map().shop.unwrap();
+    let me = open_near(MapId::Crossing, shop + Vec2::new(-1.0, 0.0));
+    let at = open_near(MapId::Crossing, me + Vec2::new(0.0, -8.0));
+    place(&mut p.server, 1, me);
+    let zombies = |p: &mut Party| {
+        let world = p.server.world_mut();
+        world.query::<(&Team, &Pos)>().iter(world).filter(|(t, _)| t.0 == ZOMBIES).map(|(_, pos)| pos.0).collect::<Vec<_>>()
+    };
+    p.ask(RoomRequest::PlaceZombies { at, count: 50 });
+    p.until(Duration::from_secs(3), "fifty zombies", |p| zombies(p).len() == 50);
+    let placed = zombies(&mut p);
+    let apart = placed.iter().enumerate().flat_map(|(i, a)| placed[i + 1..].iter().map(move |b| a.distance(*b))).fold(f32::MAX, f32::min);
+    assert!(apart > 0.5, "on top of each other: {apart} m apart");
+    assert!(placed.iter().all(|z| z.distance(at) < 12.0), "not where asked: {placed:?}");
+    // Another horde on the same spot, round the first.
+    p.ask(RoomRequest::PlaceZombies { at, count: 50 });
+    p.until(Duration::from_secs(3), "a hundred zombies", |p| zombies(p).len() == 100);
+    let placed = zombies(&mut p);
+    let apart = placed.iter().enumerate().flat_map(|(i, a)| placed[i + 1..].iter().map(move |b| a.distance(*b))).fold(f32::MAX, f32::min);
+    assert!(apart > 0.5, "the second horde on the first: {apart} m apart");
+    assert!(placed.iter().all(|z| z.distance(me) > 0.5), "one on top of us: {placed:?}");
+}
+
+/// In practice the shop sets our attack speed: an attack started after starts that much faster
+/// (`Swing::haste`), within its bounds.
+#[test]
+fn practice_sets_attack_speed() {
+    let mut p = Party::new(5851, "revenant", false);
+    p.ask(RoomRequest::Practice(MapId::Crossing));
+    p.until(Duration::from_secs(10), "practicing", |p| p.room().is_some_and(|r| r.practice) && player::<Health>(&mut p.server, 1).is_some());
+    p.ask(RoomRequest::AttackSpeed(1.0));
+    p.until(Duration::from_secs(3), "faster", |p| player::<PracticeHaste>(&mut p.client, 1) == Some(PracticeHaste(1.0)));
+    edit_input(&mut p.client, |i| (i.aim, i.fire) = (Vec2::X, true));
+    p.until(Duration::from_secs(3), "a hasted swing", |p| attack_state(&mut p.server, 1).swing.is_some_and(|s| (s.haste - 1.0).abs() < 1e-4));
+    edit_input(&mut p.client, |i| i.fire = false);
+    let (least, most) = PracticeHaste::RANGE;
+    p.ask(RoomRequest::AttackSpeed(-50.0));
+    p.until(Duration::from_secs(3), "as slow as it goes", |p| player::<PracticeHaste>(&mut p.server, 1) == Some(PracticeHaste(least)));
+    p.ask(RoomRequest::AttackSpeed(50.0));
+    p.until(Duration::from_secs(3), "as fast as it goes", |p| player::<PracticeHaste>(&mut p.server, 1) == Some(PracticeHaste(most)));
 }
 
 /// A Void Acolyte blinks away from whoever comes close: gone from beside them, back well away.
@@ -645,7 +694,7 @@ fn leaving_practice_leaves_nothing_behind() {
         let near = open_near(MapId::Crossing, me + Vec2::new(0.0, -5.0));
         place(&mut p.server, 1, me);
         p.ask(RoomRequest::PlaceDummy { at: open_near(MapId::Crossing, me + Vec2::new(4.0, 0.0)), walks: true });
-        p.ask(RoomRequest::PlaceZombies { at: near });
+        p.ask(RoomRequest::PlaceZombies { at: near, count: 3 });
         p.until(Duration::from_secs(3), "zombies out", |p| {
             let world = p.server.world_mut();
             world.query::<&Team>().iter(world).filter(|t| t.0 == ZOMBIES).count() == 3

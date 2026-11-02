@@ -548,7 +548,7 @@ fn draw_parts(
         middle += center;
     }
     shown.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let draw::Drawn { corners, triangles, center } = &mut *drawn;
+    let draw::Drawn { corners, triangles, middle: sum } = &mut *drawn;
     corners.clear();
     triangles.clear();
     for (_, id, placed, tint, haze) in shown.iter() {
@@ -562,7 +562,7 @@ fn draw_parts(
         }));
         triangles.extend(shape.indices.iter().map(|&i| first + i));
     }
-    *center = middle / shown.len().max(1) as f32;
+    *sum = (middle, shown.len() as u32);
 }
 
 /// A wisp's wake: a mote of its light left `at` (in the world), drifting up as it fades.

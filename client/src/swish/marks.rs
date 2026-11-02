@@ -6,6 +6,7 @@ use super::*;
 
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
+use bevy::mesh::MeshTag;
 
 use crate::arena::{FlatMesh, palette};
 use crate::plain::PlainMaterial;
@@ -14,21 +15,23 @@ use crate::plain::PlainMaterial;
 /// its tip, `Blade::from`), and how many steps it fades in (one shared material each).
 const MARK_LIFE: f32 = 0.32;
 /// How high over what it lies on a mark lies along its strike's lane (meters): over the tear.
-const MARK_HEIGHT: f32 = 0.05;
+pub(super) const MARK_HEIGHT: f32 = 0.05;
 pub(super) const MARK_FADES: usize = 8;
 /// The air's color, and how see-through the mark is at its brightest.
 pub(super) const AIR: Color = palette::SILVER;
 pub(super) const MARK_ALPHA: f32 = 0.85;
 
+/// How wide the mark is (meters, from its spine out to either edge) at its widest.
+pub(super) const MARK_HALF_WIDTH: f32 = 0.025;
+
 /// The mark's shape: one thin, sharp line of wind along +X, 1 long, in two crossed planes (flat
 /// and upright, so it shows from any angle): tapering to a needle point at its far end and fading
-/// out at its near one, a bright core down its middle. Both faces.
+/// out at its near one, a bright core down its middle (as `lying.wgsl` draws it along a lane).
 pub(super) fn mark_shape() -> FlatMesh {
     const STEPS: usize = 12;
-    const HALF_WIDTH: f32 = 0.025;
     let mut b = FlatMesh::default();
     // Widest a little short of the tip, a needle point at it; clear at the near end.
-    let width = |t: f32| HALF_WIDTH * (t / 0.17).min(1.0) * ((1.0 - t) / 0.23).min(1.0).powf(0.6);
+    let width = |t: f32| MARK_HALF_WIDTH * (t / 0.17).min(1.0) * ((1.0 - t) / 0.23).min(1.0).powf(0.6);
     let alpha = |t: f32| (t / 0.35).min(1.0).powf(1.5);
     for across in [Vec3::Z, Vec3::Y] {
         for i in 0..STEPS {
@@ -46,22 +49,19 @@ pub(super) fn mark_shape() -> FlatMesh {
     b
 }
 
-/// How long (meters) the sides of the triangles a mark lying along a lane is cut into are at
-/// most, to follow what it lies on.
-const MARK_EDGE: f32 = 0.05;
+/// The grid a mark lying along a lane is drawn on (`lying_grid`), 1 long and as wide as the mark,
+/// flat and upright: how many cells it has along it, to follow what it lies on the longest lane.
+const MARK_CELLS: u32 = 64;
 
-/// Where a strike's mark lies along its lane's middle: over the surfaces `under` it, `near` to
-/// `far` out along it.
-pub(crate) struct LaneMark {
-    pub(super) under: Underfoot,
-    pub(super) near: f32,
-    pub(super) far: f32,
+pub(super) fn lane_mark_grid() -> Mesh {
+    lying_grid(Vec2::new(0.0, -MARK_HALF_WIDTH), Vec2::new(1.0, MARK_HALF_WIDTH), UVec2::new(MARK_CELLS, 1), true)
 }
 
 /// Where a strike's mark is drawn.
 pub(super) enum Lies {
-    /// Along its lane, on what's under it.
-    Laid(LaneMark, Laid),
+    /// Along its lane, from its frame (`Underfoot::frame`), this long: lying on what's under it
+    /// (`lying`).
+    Lane(Transform, f32),
     /// In the air, from the blade's base to its tip as the strike landed.
     Air(Vec3, Vec3),
 }
@@ -74,24 +74,16 @@ pub(super) struct Mark {
 }
 
 impl Mark {
-    /// Shown `t` (0..1) of the way through: drawn on out to the tip in an instant, then
-    /// lingering, thinning as it fades. Along its lane it's laid again on what's under it (and
-    /// stands where it's laid); in the air, it's where it stands.
-    pub(super) fn show(&mut self, meshes: &mut Assets<Mesh>, t: f32) -> Transform {
+    /// Where it stands `t` (0..1) of the way through: drawn on out to the tip in an instant, then
+    /// lingering, thinning as it fades. Along its lane, stretched so from its frame (`lying_at`).
+    pub(super) fn show(&self, t: f32) -> Transform {
         let drawn = 0.4 + 0.6 * (t / 0.12).min(1.0);
         let thin = 1.0 - 0.6 * t;
-        match &mut self.lies {
-            Lies::Laid(lane, laid) => {
-                // Thinning a step at a time, with its fade (`faded`), so it's laid again only that
-                // often, not every frame: a crowd strikes all the time.
-                let thin = 1.0 - 0.6 * (t * MARK_FADES as f32).floor() / MARK_FADES as f32;
-                let from = Vec3::X * lane.near;
-                laid.lay(meshes, &mut lane.under, 0, from, Vec3::new((lane.far - lane.near) * drawn, thin, thin));
-                Transform::IDENTITY
-            }
+        match self.lies {
+            Lies::Lane(frame, length) => lying_at(frame, Vec3::new(length * drawn, thin, thin)),
             Lies::Air(from, to) => {
-                let along = *to - *from;
-                Transform::from_translation(*from).with_rotation(Quat::from_rotation_arc(Vec3::X, along.normalize_or(Vec3::X))).with_scale(Vec3::new(along.length() * drawn, thin, thin))
+                let along = to - from;
+                Transform::from_translation(from).with_rotation(Quat::from_rotation_arc(Vec3::X, along.normalize_or(Vec3::X))).with_scale(Vec3::new(along.length() * drawn, thin, thin))
             }
         }
     }
@@ -107,22 +99,12 @@ pub(super) fn show_marks(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<SwishAssets>,
-    mut meshes: ResMut<Assets<Mesh>>,
+    mut heights: ResMut<LyingHeights>,
     map: Res<crate::rooms::CurrentMap>,
     mut swings: Query<(&LastSwing, &mut Blade, &Pos, &ClassId, (Option<&Motion>, Option<&crate::render::PredictedWalk>)), Changed<LastSwing>>,
     blades: Query<&GlobalTransform>,
 ) {
     let now = time.elapsed_secs();
-    let mut draw = |lies: Lies, meshes: &mut Assets<Mesh>| {
-        let mesh = match &lies {
-            Lies::Laid(_, laid) => laid.mesh.clone(),
-            Lies::Air(..) => assets.mark.clone(),
-        };
-        let mut mark = Mark { started: now, lies };
-        let transform = mark.show(meshes, 0.0);
-        commands.spawn((Mesh3d(mesh), MeshMaterial3d(assets.fades[0].clone()), transform, GlobalTransform::from(transform), mark, NoFrustumCulling, NotShadowCaster, NotShadowReceiver));
-    };
-    let laid = |meshes: &mut Assets<Mesh>, lane: LaneMark| Lies::Laid(lane, Laid::new(meshes, vec![mark_shape()], MARK_HEIGHT, MARK_EDGE));
     for (swing, mut blade, pos, class, (motion, predicted)) in &mut swings {
         if swing.tick <= blade.shown {
             continue;
@@ -136,37 +118,55 @@ pub(super) fn show_marks(
         // The ground breaks over its hitbox at once, as the hit is dealt (`strike_ground`), on
         // what's under it there.
         (blade.striking, blade.struck) = (true, lane.map(|_| under.clone()));
-        let lies = match lane {
-            Some((near, far, _)) => laid(&mut meshes, LaneMark { under, near, far }),
+        match lane {
+            // Laid on what's under it all along its lane (none if there's no room in the heights).
+            Some((near, far, _)) => {
+                let mut under = under;
+                let reach = under.heights(Vec2::new(near, -MARK_HALF_WIDTH), Vec2::new(far, MARK_HALF_WIDTH));
+                let Some(slot) = heights.keep(&reach, near, near) else { continue };
+                let tag = lying_tag((&slot, 0, false), 1.0, 1.0);
+                draw(&mut commands, now, Lies::Lane(under.frame(), far - near), assets.lane_mark.0.clone()).insert((MeshMaterial3d(assets.lane_mark.1.clone()), tag, slot));
+            }
             None => {
                 let Ok(held) = blades.get(blade.held) else { continue };
-                Lies::Air(blade.at(held, blade.from), blade.at(held, 1.0))
+                draw(&mut commands, now, Lies::Air(blade.at(held, blade.from), blade.at(held, 1.0)), assets.mark.clone()).insert(MeshMaterial3d(assets.fades[0].clone()));
             }
-        };
-        draw(lies, &mut meshes);
+        }
     }
 }
 
-/// Marks draw on, linger, thin and fade, and are gone.
+/// A strike's mark, from `started` (seconds), where it `lies`, drawn as `mesh` (its material yet to
+/// come).
+fn draw<'a>(commands: &'a mut Commands, started: f32, lies: Lies, mesh: Handle<Mesh>) -> EntityCommands<'a> {
+    let mark = Mark { started, lies };
+    let transform = mark.show(0.0);
+    commands.spawn((Mesh3d(mesh), transform, GlobalTransform::from(transform), mark, NoFrustumCulling, NotShadowCaster, NotShadowReceiver))
+}
+
+/// Marks draw on, linger, thin and fade, and are gone: in the air, in steps of one shared
+/// material each; along a lane, by its tag (`lying_tag`).
 pub(super) fn drive_marks(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<SwishAssets>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut marks: Query<(Entity, &mut Mark, &mut Transform, &mut MeshMaterial3d<PlainMaterial>)>,
+    mut marks: Query<(Entity, &Mark, &mut Transform, Option<&mut MeshMaterial3d<PlainMaterial>>, Option<(&mut MeshTag, &HeightsSlot)>)>,
 ) {
     let now = time.elapsed_secs();
-    for (entity, mut mark, mut transform, mut material) in &mut marks {
+    for (entity, mark, mut transform, material, lying) in &mut marks {
         let t = (now - mark.started) / MARK_LIFE;
         if t >= 1.0 {
             commands.entity(entity).despawn();
             continue;
         }
-        let shown = mark.show(&mut meshes, t);
-        transform.set_if_neq(shown);
-        let fade = faded(&assets.fades, t);
-        if material.0 != *fade {
-            material.0 = fade.clone();
+        transform.set_if_neq(mark.show(t));
+        if let Some((mut tag, slot)) = lying {
+            tag.set_if_neq(lying_tag((slot, 0, false), 1.0, 1.0 - t));
+        }
+        if let Some(mut material) = material {
+            let fade = faded(&assets.fades, t);
+            if material.0 != *fade {
+                material.0 = fade.clone();
+            }
         }
     }
 }

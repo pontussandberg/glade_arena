@@ -37,8 +37,9 @@ pub(super) fn layered(opacity: f32, over: u32) -> f32 {
 pub(crate) struct Drawn {
     pub(super) corners: Vec<Corner>,
     pub(super) triangles: Vec<u32>,
-    /// About where they are: they're sorted among the other see-through things as one, from here.
-    pub(super) center: Vec3,
+    /// About where they are, they're sorted among the other see-through things as one from: where
+    /// each thing laid out is, added up, and how many there are.
+    pub(super) middle: (Vec3, u32),
 }
 
 impl Drawn {
@@ -46,11 +47,36 @@ impl Drawn {
     pub(crate) fn corners(&self) -> usize {
         self.corners.len()
     }
+
+    /// Nothing laid out to be drawn this frame.
+    pub(crate) fn clear(&mut self) {
+        self.corners.clear();
+        self.triangles.clear();
+        self.middle = (Vec3::ZERO, 0);
+    }
+
+    /// Lays out corners beyond the parts' (after `draw_parts`): each where it is in the world,
+    /// its color (linear) and how opaque it is, drawn on one side only.
+    pub(crate) fn add_corners(&mut self, corners: impl IntoIterator<Item = (Vec3, Vec4)>) {
+        let first = self.corners.len();
+        self.corners.extend(corners.into_iter().map(|(p, color)| [p.x, p.y, p.z, color.x, color.y, color.z, layered(color.w, 1)]));
+        // Sorted with the parts as one more thing, where its corners are.
+        let added = &self.corners[first..];
+        if !added.is_empty() {
+            self.middle.0 += added.iter().map(|&[x, y, z, ..]| Vec3::new(x, y, z)).sum::<Vec3>() / added.len() as f32;
+            self.middle.1 += 1;
+        }
+    }
+
+    /// Lays out triangles through corners laid out (by their place in the frame's corners).
+    pub(crate) fn add_triangles(&mut self, triangles: impl IntoIterator<Item = u32>) {
+        self.triangles.extend(triangles);
+    }
 }
 
 /// How much of the haze lies over what's `distance` from the eye, as Bevy's shaders work it out
 /// for everything else (the scene's haze falls off linearly; the other kinds aren't worked in).
-pub(super) fn haze(fog: &DistanceFog, distance: f32) -> f32 {
+pub(crate) fn haze(fog: &DistanceFog, distance: f32) -> f32 {
     let FogFalloff::Linear { start, end } = fog.falloff else { return 0.0 };
     fog.color.alpha() * (1.0 - ((end - distance) / (end - start)).clamp(0.0, 1.0))
 }
@@ -139,7 +165,7 @@ fn take_drawn(mut main: ResMut<MainWorld>, mut buffers: ResMut<Buffers>) {
     std::mem::swap(buffers.triangles.values_mut(), &mut drawn.triangles);
     drawn.corners.clear();
     drawn.triangles.clear();
-    buffers.center = drawn.center;
+    buffers.center = drawn.middle.0 / drawn.middle.1.max(1) as f32;
 }
 
 fn write_buffers(mut buffers: ResMut<Buffers>, device: Res<RenderDevice>, queue: Res<RenderQueue>) {

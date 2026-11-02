@@ -148,8 +148,17 @@ fn laid(meshes: &mut Assets<Mesh>, s: &Scene, under: &mut crate::swish::Underfoo
     }
     let mut both = FlatMesh::default();
     for (corners, alphas) in crate::swish::lay_flat(&up, under, lift, FROST_EDGE, |p| Vec3::new(p.x * size, p.y, p.z * size)).faded_triangles() {
-        if keep((corners[0] + corners[1] + corners[2]) / 3.0) {
-            both.tri_faded_both(corners.map(|p| p - s.at), alphas);
+        // One left whole that runs over the edge of what's kept (a wall's face) is cut as fine as
+        // the rest first, so what's kept follows that edge.
+        let kept = corners.map(&keep);
+        let pieces = match kept.contains(&true) && kept.contains(&false) {
+            true => crate::swish::cut_laid(corners, alphas, FROST_EDGE),
+            false => vec![(corners, alphas)],
+        };
+        for (corners, alphas) in pieces {
+            if keep((corners[0] + corners[1] + corners[2]) / 3.0) {
+                both.tri_faded_both(corners.map(|p| p - s.at), alphas);
+            }
         }
     }
     meshes.add(both.build())

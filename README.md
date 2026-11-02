@@ -101,8 +101,9 @@ thrown); what items deal (a ricochet's bounce, an arc, a burst), and a frostbolt
 the one it struck, doesn't.
 
 Every map has a merchant. In practice everything is free, to try items out on the target dummies,
-or on three slow zombies placed side by side ("3 slow zombies" in the practice tools; they walk at
-half speed and come for you).
+or on slow zombies placed side by side ("3 slow zombies", or a horde of them with "50 slow zombies",
+in rows, in the practice tools; they walk at half speed and come for you). In practice the shop also
+sets your attack speed, slower or faster by a quarter at a time.
 In a PvP match everyone starts with nothing and earns gold only by their own kills (25 a zombie,
 60 a player), so items there are few and far between.
 

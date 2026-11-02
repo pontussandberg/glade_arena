@@ -258,7 +258,7 @@ pub(super) fn attack(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut attackers: Query<
-        (Entity, &PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), (&Frenzy, Option<&Fury>), (&mut Cooldowns, Option<&Might>, Option<&arena_shared::items::Satchel>), Has<ControlledBy>, Option<&arena_shared::protocol::Motion>),
+        (Entity, &PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), (&Frenzy, Option<&Fury>, Option<&PracticeHaste>), (&mut Cooldowns, Option<&Might>, Option<&arena_shared::items::Satchel>), Has<ControlledBy>, Option<&arena_shared::protocol::Motion>),
         InPlay,
     >,
     mut targets: Targets,
@@ -266,7 +266,7 @@ pub(super) fn attack(
     mut log: ResMut<HitLog>,
 ) {
     let now = timeline.tick();
-    for (entity, id, class, pos, mut input, mut state, mut last_swing, (room, team), (frenzy, fury), (mut cooldowns, might, satchel), player, motion) in &mut attackers {
+    for (entity, id, class, pos, mut input, mut state, mut last_swing, (room, team), (frenzy, fury, practice), (mut cooldowns, might, satchel), player, motion) in &mut attackers {
         let might = might_of(might);
         let side = (*room, *team);
         // Knocked up: no attacking; one winding up is lost.
@@ -344,8 +344,9 @@ pub(super) fn attack(
                 }
             }
         }
-        // A frenzy (or a fury stone's rush) speeds up the attack it starts, all through.
-        let haste = frenzy.at(now.0 as f32) + fury.map_or(0.0, |f| f.0.at(now.0 as f32));
+        // A frenzy (or a fury stone's rush, or practice's set speed) speeds up the attack it
+        // starts, all through.
+        let haste = attack_haste(now.0 as f32, (Some(frenzy), fury, practice));
         let next = sim::start_attack_hasted(now.0, *class, &input, next, haste);
         if next.swing.is_some_and(|w| w.started_at == now.0) {
             input.move_to = None;
