@@ -716,10 +716,11 @@ impl Props {
         let yaw = Quat::from_rotation_y(rng.range(0.0, TAU));
         let at = |h: f32| Transform::from_translation(to_world(p, h)).with_rotation(yaw);
         let top = base + height;
+        let fire = (self.ground)(p) + top;
         if base > 0.0 {
             self.block(Vec3::new(0.12, height, 0.12), self.theme.bark, at(base + height / 2.0));
             self.block(Vec3::new(0.16, 0.05, 0.16), IRON, at(top - 0.14));
-            return (self.ground)(p) + top;
+            return fire;
         }
         // The plinth, in two steps of stone.
         self.block(Vec3::new(0.46, 0.2, 0.46), self.theme.stone, at(0.1));
@@ -742,7 +743,7 @@ impl Props {
             let t = Transform::from_translation(to_world(p, top - 0.03) + out * Vec3::X * 0.155).with_rotation(out);
             self.block(Vec3::new(0.05, 0.16, 0.36), IRON, t);
         }
-        (self.ground)(p) + top
+        fire
     }
 
     /// Fences (`Map::fences`): posts a meter apart with two rails between.
