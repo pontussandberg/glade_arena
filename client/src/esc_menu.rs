@@ -149,16 +149,7 @@ fn menu_buttons(
             (Ok(pane), _) => commands.entity(pane).despawn(),
             (Err(_), Ok(menu)) => {
                 commands.entity(menu).with_children(|menu| {
-                    menu.spawn((
-                        SettingsPane,
-                        Node { flex_direction: FlexDirection::Column, row_gap: px(14.0), padding: UiRect::axes(px(20.0), px(16.0)), border: UiRect::all(px(1.0)), ..default() },
-                        BackgroundColor(palette::ui::PANEL),
-                        BorderColor::all(palette::ui::MUTED.with_alpha(0.5)),
-                    ))
-                    .with_children(|pane| {
-                        crate::settings::slider(pane, crate::settings::Setting::Sensitivity, &settings);
-                        crate::settings::slider(pane, crate::settings::Setting::Volume, &settings);
-                    });
+                    crate::settings::spawn_pane(menu, &settings).insert(SettingsPane);
                 });
             }
             _ => {}
