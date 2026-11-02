@@ -378,9 +378,10 @@ fn follow_camera(
     mode.just_unlocked = false;
     // The browser lets the pointer go on its own (the window left for another, its own ESC):
     // then the mouse is free, seen, and the next click takes it again. Only once it has been
-    // seen holding it: it takes a moment to, and a headless browser never does.
+    // seen holding it: it takes a moment to, and a headless browser never does. And not while
+    // Tab holds it let go (below): that was asked for, and the key coming up takes it back.
     #[cfg(target_family = "wasm")]
-    if mode.locked {
+    if mode.locked && !keys.pressed(KeyCode::Tab) && !keys.just_released(KeyCode::Tab) {
         let held = web_sys::window().and_then(|w| w.document()).is_some_and(|document| document.pointer_lock_element().is_some());
         if held {
             mode.lock_seen = true;
@@ -402,12 +403,14 @@ fn follow_camera(
         cursor.visible = false;
         cursor.grab_mode = CursorGrabMode::Locked;
     }
-    // While the scoreboard is held up (Tab) the mouse is free, to point at it, and the camera
-    // holds still; let go, the mouse is captured again.
+    // While the scoreboard is held up (Tab) the mouse is let go, to point at it, and the camera
+    // holds still; let go, the cursor is taken again, unseen anew (`lock_seen`): the browser
+    // grants it a moment later, and the gap mustn't read as it letting go.
     if mode.locked && keys.just_pressed(KeyCode::Tab) {
         release_cursor(&mut cursor);
     }
     if mode.locked && keys.just_released(KeyCode::Tab) {
+        mode.lock_seen = false;
         cursor.visible = false;
         cursor.grab_mode = CursorGrabMode::Locked;
     }
