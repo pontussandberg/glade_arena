@@ -14,9 +14,10 @@ line and end mark at rest, pitched, on a dummy ahead and against a wall, a throw
 along it, and a walk at a faked ping) and `audio.sh CLASS` (tap the audio output with an
 AnalyserNode and print the loud spans while the hero attacks a practice dummy).
 
-Start every `shoot.mjs` run with `size:1600,900`: the viewport override doesn't outlive the run's
-DevTools session, and the lobby's buttons sit where `cap.sh`, `action.sh` and `aim.sh` click only at that
-size.
+Start every `shoot.mjs` run with a `size:` step: the viewport override doesn't outlive the run's
+DevTools session, and each script's clicks only land at the size it was tuned for (`action.sh`
+and `aim.sh` at 1600x900; `cap.sh`, `abil.sh` and `audio.sh` at 1584x749 — they set it
+themselves).
 
 Chrome must be running first, always muted, or its sound plays through the speakers:
 
@@ -24,7 +25,7 @@ Chrome must be running first, always muted, or its sound plays through the speak
       --autoplay-policy=no-user-gesture-required --mute-audio --window-size=1600,900 \
       --hide-scrollbars --remote-debugging-port=9222 --user-data-dir=<a temp folder> about:blank
 
-`cap.sh`, `abil.sh` and `audio.sh` write under `%LOCALAPPDATA%\Temp\arena-sfx` (the `N`/`S`
-variables at their top) and run `node shoot.mjs` / `node sheet.mjs` from inside it, so copies of
-both must sit in that folder; `action.sh` and `aim.sh` take an OUTDIR argument and run the
-scripts from this folder. The game must be up on http://localhost:8080 (`./scripts/dev.sh dev`).
+Every script runs `shoot.mjs` / `sheet.mjs` from this folder. `cap.sh`, `abil.sh` and `audio.sh`
+write under `%LOCALAPPDATA%\Temp\arena-sfx` (the `N`/`S` variables at their top); `action.sh`
+and `aim.sh` take an OUTDIR argument. The game must be up on http://localhost:8080
+(`./scripts/dev.sh dev`).

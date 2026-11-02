@@ -311,7 +311,7 @@ struct Sent {
 }
 
 /// Sends the server what changed in `DesiredInput`: a new destination, a stop, walking keys, an
-/// attack click, a Q press. Clicks go out right away (attacks at most once a tick); changes that
+/// attack click, an ability key. Clicks go out right away (attacks at most once a tick); changes that
 /// come with every mouse or camera move (walking direction) at most once a tick. Nothing is sent
 /// while we have no fighter.
 fn send_commands(

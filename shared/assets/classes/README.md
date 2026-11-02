@@ -79,8 +79,8 @@ Units: meters, meters per second, ticks (32 per second).
     lane `reach` times as far out, as long and as wide, and `lift_ticks` of knock-up on the
     empowered hit. Used up as an attack goes off (one lost to a knock-up first leaves it armed):
     a miss loses it, an empowered one that lands arms the next.
-- `abilities`: one to four (none is fine for an unplayable class), on the number keys 1 to 4 (the
-  Q, W, E and R slots, as the code calls them) in this order, each aimed at the cursor: `name`,
+- `abilities`: one to four (none is fine for an unplayable class), on the number keys 1 to 4
+  (`AbilitySlot` is the place in this list) in this order, each aimed at the cursor: `name`,
   `description`, `cooldown_ticks`, and
   - `kind`:
     - `Projectile(speed, radius, range, damage)`: thrown instantly: no windup, no root.

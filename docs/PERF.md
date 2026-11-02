@@ -1,7 +1,7 @@
 # Client performance: how to measure, what we know
 
-Notes from the first round of perf work (October 2026): the tools, how to use them so the numbers
-mean something, what costs what, and what's still open. Written as a starting point for a perf
+Notes from the first round of perf work (October 2026; baselines re-measured November 2026): the
+tools, how to use them so the numbers mean something, what costs what, and what's still open. Written as a starting point for a perf
 loop: measure, change one thing, measure again, keep it only if the frame time drops.
 
 ## Measuring
@@ -91,17 +91,23 @@ The wasm build is the real target, and it has its own probes:
 
 ## What we found (this machine: fast desktop GPU, native, dev profile)
 
-These numbers are from October 2026 and predate the later rounds (the Bevy feature trim, health
-bars leaving the UI tree, fx parts drawn from GPU buffers, the baked rift tears): treat them as
-history and the method as the point. Re-measure before leaning on any of them.
+The baselines below were re-measured 2 November 2026, after the big rounds (the Bevy feature
+trim, health bars leaving the UI tree, fx parts drawn from GPU buffers, the baked rift tears).
+The trace-derived proportions further down are still from October's traces; read those for
+proportions and re-trace before leaning on them.
 
 ### Baseline numbers
 
 | Scene | Frame time | Notes |
 |---|---|---|
-| Home screen | 9.4 ms → **5.1 ms** | after turning off the stage point lights' shadows |
-| Wilds camp, steady | ~5.3 ms | |
-| Waves fight (bot) | ~5.9 ms avg, ~6.4 ms under load | 2,000–2,500 entities, ~500 meshes, ~900 UI nodes, 34 lights |
+| Home screen | ~4.1 ms avg, ~5.5 ms p99 | ~870 entities, ~180 meshes, ~160 UI nodes, 22 lights |
+| Ravenhold camp, steady (`"Waves 1"`, the shop) | ~4.4 ms avg, ~6.1 ms p99 | much the same counts as the home screen |
+| Waves fight (bot, `"Waves 6"`) | ~4.7 ms avg, ~6.6 ms p99 | ~1,300 entities, ~500 meshes, ~180 UI nodes, 20 lights |
+
+(October, before those rounds: the fight ran ~5.9 ms with 2,000–2,500 entities and ~900 UI
+nodes, and the home screen 5.1 ms.) Every scene's first frame is 170–180 ms (startup and
+pipeline compilation), and rare 13–16 ms hitches remain in the p999 — the pipeline-prewarm lead
+below still stands.
 
 ### The game's own systems are cheap
 
@@ -117,7 +123,8 @@ The top items in a trace:
 
 - per-entity render work: extract, prepare, queue, and the mesh/material bind work, which scale
   with the number of drawn meshes;
-- UI layout, about **0.7 ms** (around 900 nodes in a fight);
+- UI layout, about **0.7 ms** then (around 900 nodes in a fight; health bars have since left the
+  UI tree, and a fight is now ~180 nodes);
 - transform propagation and visibility checks, which scale with entity count;
 - light clustering, `prepare_clusters` about **0.9 ms** with tracing on.
 
@@ -148,9 +155,9 @@ out), and **fewer lights**.
 - **The browser (wasm) is the real target.** It's single-threaded and likely 2–4× slower than
   native, so a native 6 ms frame may be 15–25 ms in the browser. Check the browser's fps
   counter and devtools performance tab on the `wasm-release` build, not just native numbers.
-- **UI node count** in fights (~900): find out which panels make up most of it.
-- **Entity count** in fights (2,000–2,500): see which kinds dominate (fx parts, rig bones,
-  health bars) and whether they can be merged or pooled.
+- **Entity count** in fights (~1,300, ~500 meshes): see which kinds dominate (fx parts, rig
+  bones) and whether they can be merged or pooled. (UI nodes used to be a lead at ~900; health
+  bars leaving the UI tree took a fight to ~180.)
 - **Fog**: once, removing it unexpectedly showed a gain on the home screen; it didn't
   reproduce clearly. Worth an A/B with several runs each.
 

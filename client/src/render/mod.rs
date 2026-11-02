@@ -152,7 +152,7 @@ pub(crate) struct Visuals {
     /// The ice around a frozen (rooted) fighter's feet, and the frost under a slowed one's.
     ice_prison: Handle<Mesh>,
     frost_rune: Handle<Mesh>,
-    /// Per class and shot (auto-attack: false, Q: true).
+    /// Per class and shot (`None`: the auto-attack's; `Some`: that ability's).
     projectiles: HashMap<(ClassId, Option<AbilitySlot>), arena::ShotLook<Handle<Mesh>>>,
     shot_tip: Handle<Mesh>,
     /// A piece of a thrown spear's wake.

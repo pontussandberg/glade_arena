@@ -88,9 +88,6 @@ pub enum Sfx {
     SpearTing,
     /// A gout of fire tossed: it catches with a snap, whoomps away, and crackles after.
     FireLoose,
-    /// A frostbolt leaving the hand: a hard close snap of ice with a deep crack and a thump of
-    /// weight under it, crackling trailing after, the snap coming back off the walls.
-    FrostLoose,
     /// A storm bolt let go: one hard crack, a buzz of charge under it, a fizz of static after.
     StormLoose,
     /// Lightning arcing from one to the next.
@@ -305,7 +302,7 @@ fn release_sound(queue: &mut SoundQueue, clock: Option<&crate::feedback::AttackC
 
 /// Every shot loosed nearby sounds as it leaves the hand: a hero's as its attack's release
 /// (`release_sound`; a shot has no swing for `swing_sounds` to hear), a monster's as its bolts
-/// look: a whoof of fire, a shiver of frost, a crackle of storm.
+/// look: a whoof of fire, a crackle of storm, a plain swing of air for the rest.
 fn loose_sounds(
     clock: Option<crate::feedback::AttackClock>,
     me: Query<&arena_shared::protocol::PlayerId, With<crate::Me>>,
@@ -322,7 +319,6 @@ fn loose_sounds(
         }
         let sfx = match def.look.as_ref().and_then(|look| look.bolts) {
             Some(FxColor::Fire) => Sfx::FireLoose,
-            Some(FxColor::Frost | FxColor::Spirit) => Sfx::FrostLoose,
             Some(FxColor::Storm) => Sfx::StormLoose,
             _ => Sfx::Loose,
         };
@@ -533,10 +529,8 @@ mod web {
         "fire_whoosh.wav", "fire_pop.wav", "fire_bed.wav",
         // Storm (faxcorp, rubberduck).
         "zap_hit.wav", "zap_bloom.wav", "crackle.wav", "boom.wav", "thunder_01.ogg",
-        // Frost (bart, IgnasD, artisticdude, rubberduck): ice crackling, snapping, cracking and
-        // breaking.
-        "ice.wav", "magic.wav", "ice_crack_1.wav", "ice_crack_2.wav", "ice_crack_3.wav",
-        "ice_deep_1.wav", "ice_deep_2.wav", "ice_deep_3.wav", "ice_thump.wav",
+        // A spectral hum (artisticdude).
+        "magic.wav",
         // Frost channelled, a frost spell's climax and a frost nova (Pontus's, generated); a frostbolt's impact
         // (eminyildirim, Freesound).
         "frost_channel.wav", "frost_cast.wav", "frost_nova.wav", "frost_impact.wav",
@@ -874,16 +868,6 @@ mod web {
             }
         }
 
-        /// A sharp sound at `peak` from `when` coming back off the walls round it: twice, each
-        /// time quieter and duller. The mix has no reverb; this gives a hit some room.
-        fn echo(&mut self, key: &str, when: f64, rate: f32, peak: f32) {
-            for (after, share, dull) in [(0.09, 0.14, 2500.0), (0.2, 0.07, 1500.0)] {
-                if let Some(e) = self.held(when + after, peak * share, 0.03, 0.12) {
-                    self.clip_through(key, when + after, 0.0, None, rate, BiquadFilterType::Lowpass, dull, &e);
-                }
-            }
-        }
-
         /// A whole recording at `peak`, from `when`, `rate` times its speed, held `hold` seconds
         /// and let go over `release`: the plain way most layers go in.
         fn sample(&mut self, key: &str, when: f64, peak: f32, rate: f32, hold: f64, release: f64) {
@@ -1041,8 +1025,6 @@ mod web {
             const WOOD_HEAVY: [&str; 2] = ["impactWood_heavy_000", "impactWood_heavy_001"];
             const STONES: [&str; 2] = ["stones_01", "stones_02"];
             const CLASHES: [&str; 3] = ["clash_1", "clash_2", "clash_3"];
-            const ICE_CRACKS: [&str; 3] = ["ice_crack_1", "ice_crack_2", "ice_crack_3"];
-            const ICE_DEEP: [&str; 3] = ["ice_deep_1", "ice_deep_2", "ice_deep_3"];
             match kind {
                 Sfx::Swing => {
                     // A blade through the air: a real swish, a heavy weapon's lower and longer.
@@ -1162,24 +1144,6 @@ mod web {
                     if let Some(lingering) = voice.and_then(|voice| self.lingering.remove(&voice)) {
                         self.fade(&lingering, now);
                     }
-                }
-                Sfx::FrostLoose => {
-                    // A frostbolt let go. The front: a hard close snap of ice, the loudest of
-                    // it, a deep crack and a thump of weight under it (the thump's peak is a
-                    // little way in, so the snap waits for it). Then crackling trailing off,
-                    // and the snap coming back quieter and duller off the walls.
-                    let v = 0.92 + 0.16 * self.r();
-                    let knock = 0.95 + 0.1 * self.r();
-                    self.sample("ice_thump", now, 0.3 * g, knock * p, 0.05, 0.12);
-                    let crack = self.pick(&ICE_CRACKS);
-                    self.sample(crack, now + 0.018, 0.65 * g, 1.15 * v * p, 0.03, 0.12);
-                    let deep = self.pick(&ICE_DEEP);
-                    self.sample(deep, now + 0.02, 0.32 * g, v * p, 0.06, 0.15);
-                    if let Some(e) = self.held(now + 0.07, 0.09 * g, 0.2, 0.4) {
-                        let from = 0.04 + 0.16 * self.r() as f64;
-                        self.clip("ice", now + 0.07, from, Some(0.6), 1.1 * v * p, &e);
-                    }
-                    self.echo(crack, now + 0.018, 1.15 * v * p, 0.65 * g);
                 }
                 Sfx::FireLoose => {
                     // A gout of fire tossed: it catches with a pop, whooshes away, and

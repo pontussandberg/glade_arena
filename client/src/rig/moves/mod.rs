@@ -84,7 +84,7 @@ pub(crate) struct Moves {
     /// negative toward the weapon side, like `twist`).
     pub(super) head_turn: [f32; 4],
     pub(super) held: Held,
-    // (The fourth keyframe of each is the class's Q pose: a nova's slam. A dash has none.)
+    // (The fourth keyframe of each is the class's ability pose: a nova's slam. A dash has none.)
     /// Throws its weapon with the auto-attack: the hand is empty until a new one is drawn.
     pub(super) throws: bool,
     /// How big the fighter is drawn (1 = the joints in `arena`).

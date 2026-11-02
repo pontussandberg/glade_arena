@@ -52,8 +52,8 @@ pub struct LobbyPlugin;
 
 impl Plugin for LobbyPlugin {
     fn build(&self, app: &mut App) {
-        // Fighting and the arena's camera only in the arena. No fighting input while picking: a
-        // Q pressed here would otherwise be kept until it's sent, and go off the moment we spawn.
+        // Fighting and the arena's camera only in the arena. No fighting input while picking: an
+        // ability pressed here would otherwise be kept until it's sent, and go off the moment we spawn.
         app.configure_sets(Update, CameraControl.run_if(in_state(Screen::InGame)));
         app.configure_sets(Update, crate::PlayerControls.run_if(in_state(Screen::InGame)));
         app.insert_resource(DetailsOpen(true));

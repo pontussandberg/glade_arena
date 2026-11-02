@@ -12,8 +12,9 @@ The layouts live in `shared/src/map/` (one file per map), the shared types in
 `shared/src/map.rs`; the scene is built from them, so what you see is exactly
 what blocks movement and shots.
 
-Live reference with a 3D preview (still shows the earlier square arena in afternoon light):
-https://claude.ai/artifact/WgUKXJpxy2GkzWjWRVUfXY
+An early 3D mock survives at https://claude.ai/artifact/WgUKXJpxy2GkzWjWRVUfXY — the square
+arena from before the real maps, in afternoon light. Read it for the mood it was reaching for,
+not for layout, palette or light: this file and the code are the reference now.
 Code: `client/src/arena/` (palette, map themes, scene, mesh helpers), used by `client/src/render/`.
 
 ## Map themes

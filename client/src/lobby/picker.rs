@@ -162,8 +162,8 @@ pub(super) fn show_details(
     });
 }
 
-/// A passive or the Q: a badge (`badge` in `color`), its name, its cooldown if it has one, then
-/// what it does.
+/// A passive or an ability: a badge (`badge` in `color`), its name, its cooldown if it has one,
+/// then what it does.
 pub(super) fn power(column: &mut ChildSpawnerCommands, badge: &str, color: Color, blurb: stat_frame::Blurb) {
     column.spawn(Node { column_gap: px(GAP * 1.5), align_items: AlignItems::Center, ..default() }).with_children(|row| {
         row.spawn(key_chip(badge, 13.0, color, color));
