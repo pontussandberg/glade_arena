@@ -21,6 +21,9 @@ pub struct EscMenuPlugin;
 impl Plugin for EscMenuPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(Update, (PlayerControls, CameraControl).run_if(not(menu_open)));
+        // After the camera's controls: in the browser, the lock's watchdog presses the ESC the
+        // browser swallowed (`camera::follow_camera`), and the menu takes it this same frame.
+        app.configure_sets(Update, MenuKey.after(CameraControl));
         app.add_systems(Update, (toggle_menu.in_set(MenuKey), menu_buttons).chain().run_if(in_state(Screen::InGame)));
         app.add_systems(OnExit(Screen::InGame), close_menu);
     }
@@ -62,7 +65,7 @@ fn menu_open(menu: Query<(), With<EscMenu>>) -> bool {
 }
 
 /// ESC opens the menu straight away (in the browser, where the camera's lock swallows the key,
-/// by way of its own ESC freeing the pointer: `CameraMode::escaped`), or closes it; the Home
+/// the watchdog presses it as the lock goes: `camera::follow_camera`), or closes it; the Home
 /// button opens it. Opening it lets the cursor go, to click it with.
 #[allow(clippy::too_many_arguments)]
 fn toggle_menu(
@@ -76,12 +79,7 @@ fn toggle_menu(
     mut mode: ResMut<crate::camera::CameraMode>,
     mut cursor: Single<&mut CursorOptions>,
 ) {
-    let esc = keys.just_pressed(KeyCode::Escape) || mode.escaped;
-    // The flag is spent here: its setter stops running once the menu is open (`CameraControl`),
-    // and left standing it would read as another ESC and shut the menu at once.
-    if mode.escaped {
-        mode.escaped = false;
-    }
+    let esc = keys.just_pressed(KeyCode::Escape);
     // ESC first drops a normal cast's aim; the next one opens the menu.
     if esc && aiming.0.is_some() {
         aiming.0 = None;

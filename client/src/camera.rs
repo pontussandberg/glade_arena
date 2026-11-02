@@ -106,9 +106,6 @@ pub struct CameraMode {
     pub(crate) locked: bool,
     /// A click took the cursor this frame (so it's no attack: `render::read_local_input`).
     pub(crate) just_locked: bool,
-    /// The browser's own ESC let the pointer go this frame (the page never sees the key): the
-    /// menu opens on it (`esc_menu`).
-    pub(crate) escaped: bool,
     orbit: Orbit,
     /// How far back the camera is this frame: its orbit's distance, or less while a wall
     /// holds it in (`follow_camera`).
@@ -135,7 +132,7 @@ pub struct CameraMode {
 
 impl Default for CameraMode {
     fn default() -> Self {
-        CameraMode { first_person: false, locked: false, just_locked: false, escaped: false, orbit: Orbit { yaw: 0.0, pitch: START_PITCH, distance: START_DISTANCE }, held_at: START_DISTANCE, held_aside: ACTION_SHOULDER, aim: Vec2::Y, climb: 0.0, watching: None, dragged: 0.0, grabbed_at: None, lock_seen: false }
+        CameraMode { first_person: false, locked: false, just_locked: false, orbit: Orbit { yaw: 0.0, pitch: START_PITCH, distance: START_DISTANCE }, held_at: START_DISTANCE, held_aside: ACTION_SHOULDER, aim: Vec2::Y, climb: 0.0, watching: None, dragged: 0.0, grabbed_at: None, lock_seen: false }
     }
 }
 
@@ -366,8 +363,9 @@ fn first_person(keys: Res<ButtonInput<KeyCode>>, typing: Option<Res<crate::brows
 fn follow_camera(
     time: Res<Time>,
     map: Res<crate::rooms::CurrentMap>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    // Written only on wasm: the browser's own ESC is pressed into it.
+    #[cfg_attr(not(target_family = "wasm"), allow(unused_mut))] mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut mouse: ResMut<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     hud: Query<
@@ -385,31 +383,30 @@ fn follow_camera(
     let (mut window, mut cursor) = window.into_inner();
     let on_hud = window.physical_cursor_position().is_some_and(|at| hud.iter().any(|(node, place, visible)| visible.get() && node.contains_point(*place, at)));
     mode.just_locked = false;
-    mode.escaped = false;
     // The browser lets the pointer go on its own: its own ESC (the page never sees the key), or
     // the window left for another. The mouse is free either way; freed with the page still
-    // focused, it was ESC, and the menu opens on it (`esc_menu`). Judged only once the browser
-    // has been seen holding the pointer: it takes a moment to, and a headless browser never does.
+    // focused, it was ESC, pressed here for every reader that takes ESC in turn (the dummy being
+    // placed, then the menu: `MenuKey` runs after this). Judged only once the browser has been
+    // seen holding the pointer: it takes a moment to, and a headless browser never does.
     #[cfg(target_family = "wasm")]
     if mode.locked {
         let document = web_sys::window().and_then(|w| w.document());
         if document.as_ref().is_some_and(|document| document.pointer_lock_element().is_some()) {
             mode.lock_seen = true;
         } else if mode.lock_seen {
-            mode.locked = false;
-            mode.escaped = document.is_some_and(|document| document.has_focus().unwrap_or(false));
-            release_cursor(&mut cursor);
+            mode.unlock(&mut cursor);
+            if document.is_some_and(|document| document.has_focus().unwrap_or(false)) {
+                keys.press(KeyCode::Escape);
+                keys.release(KeyCode::Escape);
+            }
         }
     }
     // While Tab holds the scoreboard up, a right click lets the cursor go, and it stays free past
-    // the key: pointing, not aiming. A click takes it back — off the HUD, and only once Tab is up.
-    // The freeing click is spent: no drag state off it, or moving the mouse before letting the
-    // button go would count as a turn (`turning`) and refuse the click that takes the cursor back.
+    // the key: pointing, not aiming. The click is spent whole, so nothing downstream drags, aims
+    // or captures off it. A click takes it back — off the HUD, and only once Tab is up.
     if mode.locked && keys.pressed(KeyCode::Tab) && mouse.just_pressed(MouseButton::Right) {
-        mode.locked = false;
-        mode.dragged = 0.0;
-        mode.grabbed_at = None;
-        release_cursor(&mut cursor);
+        mode.unlock(&mut cursor);
+        mouse.reset(MouseButton::Right);
     }
     if !mode.locked && mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]) && !mode.turning() && !on_hud && !keys.pressed(KeyCode::Tab) {
         mode.locked = true;
@@ -426,12 +423,11 @@ fn follow_camera(
         if delta != Vec2::ZERO {
             mode.orbit.turn(delta * turn, pitch_range);
         }
-    } else if mouse.just_pressed(MouseButton::Right) && !keys.pressed(KeyCode::Tab) {
+    } else if mouse.just_pressed(MouseButton::Right) {
         mode.dragged = 0.0;
         mode.grabbed_at = window.cursor_position();
     }
-    // A drag only off a right press of its own (`grabbed_at`): not the one that freed the cursor.
-    if !mode.locked && mouse.pressed(MouseButton::Right) && mode.grabbed_at.is_some() {
+    if !mode.locked && mouse.pressed(MouseButton::Right) {
         let was_turning = mode.turning();
         mode.dragged += motion.delta.length();
         if mode.turning() {

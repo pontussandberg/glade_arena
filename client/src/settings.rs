@@ -15,7 +15,6 @@ pub struct SettingsPlugin;
 impl Plugin for SettingsPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Settings::load());
-        app.init_resource::<Dragging>();
         app.add_systems(Update, (drag_sliders, show_settings).chain());
     }
 }
@@ -119,13 +118,9 @@ struct Knob(Setting);
 #[derive(Component)]
 struct Reading(Setting);
 
-/// The slider being dragged, while one is: whatever else drags with the mouse (the lobby's
-/// stage) stands aside for it.
-#[derive(Resource, Default)]
-pub(crate) struct Dragging(pub(crate) Option<Setting>);
-
 /// The settings pane under `parent`: every setting's slider in a panel. It minds the mouse
-/// (`Interaction`), so what drags behind it stands aside while the mouse is over it.
+/// (`Interaction`), held pressed for the whole of a press that starts on it, even dragged off
+/// the pane: what else drags with the mouse (the lobby's stage) stands aside for a pressed node.
 pub(crate) fn spawn_pane<'a>(parent: &'a mut ChildSpawnerCommands, settings: &Settings) -> EntityCommands<'a> {
     let mut pane = parent.spawn((
         Node { flex_direction: FlexDirection::Column, row_gap: px(14.0), padding: UiRect::axes(px(20.0), px(16.0)), border: UiRect::all(px(1.0)), ..default() },
@@ -168,19 +163,19 @@ fn drag_sliders(
     window: Single<&Window>,
     mut settings: ResMut<Settings>,
     sliders: Query<(&Slider, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
-    mut held: ResMut<Dragging>,
+    mut held: Local<Option<Setting>>,
 ) {
-    if mouse.just_released(MouseButton::Left) && held.0.take().is_some() {
+    if mouse.just_released(MouseButton::Left) && held.take().is_some() {
         settings.save();
     }
     if !mouse.pressed(MouseButton::Left) {
         return;
     }
     let Some(cursor) = window.physical_cursor_position() else { return };
-    if held.0.is_none() && mouse.just_pressed(MouseButton::Left) {
-        held.0 = sliders.iter().find(|(_, node, place, visible)| visible.get() && node.contains_point(**place, cursor)).map(|(slider, ..)| slider.0);
+    if held.is_none() && mouse.just_pressed(MouseButton::Left) {
+        *held = sliders.iter().find(|(_, node, place, visible)| visible.get() && node.contains_point(**place, cursor)).map(|(slider, ..)| slider.0);
     }
-    let Some(setting) = held.0 else { return };
+    let Some(setting) = *held else { return };
     let Some((_, node, place, _)) = sliders.iter().find(|(slider, ..)| slider.0 == setting) else { return };
     let width = node.size().x.max(1.0);
     let along = ((cursor.x - (place.translation.x - width / 2.0)) / width).clamp(0.0, 1.0);

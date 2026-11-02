@@ -38,7 +38,7 @@ use crate::camera::{CameraControl, CameraMoves, Orbit};
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::{self, palette};
 use crate::plain::PlainMaterial;
-use crate::render::{ButtonFill, GameUi, button, clicked, ui_text};
+use crate::render::{ButtonFill, GameUi, button, clicked, shown, ui_text};
 use crate::rooms::{CurrentMap, Me, Picking, Screen};
 
 mod stage;
@@ -342,7 +342,7 @@ fn toggle_settings(button: Query<Ref<Interaction>, With<SettingsButton>>, mut pa
         return;
     }
     for mut pane in &mut panes {
-        *pane = if *pane == Visibility::Hidden { Visibility::Inherited } else { Visibility::Hidden };
+        *pane = shown(*pane == Visibility::Hidden);
     }
 }
 

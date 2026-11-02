@@ -235,7 +235,6 @@ pub(super) fn turn_stage_camera(
     mouse: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     buttons: Query<&Interaction>,
-    dragging: Res<crate::settings::Dragging>,
     mut lobby: ResMut<Lobby>,
     camera: Single<(&mut Transform, &mut DistanceFog), With<crate::camera::CameraRig>>,
     mut swaying_for: Local<f32>,
@@ -243,8 +242,7 @@ pub(super) fn turn_stage_camera(
     let (mut camera, mut haze) = camera.into_inner();
     let on_button = buttons.iter().any(|i| *i != Interaction::None);
     let held = mouse.any_pressed([MouseButton::Left, MouseButton::Right]);
-    // Not while a settings slider is dragged (it runs off the track; the stage would spin under it).
-    if held && !on_button && dragging.0.is_none() {
+    if held && !on_button {
         lobby.facing -= motion.delta.x * STAGE_DRAG;
     }
     if !held {

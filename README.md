@@ -340,12 +340,12 @@ support WebTransport with certificate hashes.
 
 Controls: in the lobby, pick a class with a click or its number key and enter with the button.
 In the arena the camera is third person, behind you over your right shoulder: a click
-captures the mouse, which then turns it (Esc frees it again, and pressed again opens the menu;
-until then, dragging with the right
+captures the mouse, which then turns it (Esc opens the menu, freeing it; a right click while Tab
+is held frees it to point with, and a click takes it back; until then, dragging with the right
 button or the arrow keys turn it). WASD walks relative to it, holding left click attacks onto the
 crosshair, the number keys use your abilities, Space jumps, the wheel (or + / -) zooms, down to
-arm's length, holding Tab shows the scoreboard, M opens the full map, F readies up between
-waves, and F1 moves the camera on to the next fighter,
+arm's length, holding Tab shows the scoreboard, M opens the full map, F interacts (the merchant's
+shop) and readies up between waves, and F1 moves the camera on to the next fighter,
 to watch them play (and after the last, back to you). V puts it in first person, at your
 fighter's eyes, and back (not finished yet). The keys are in the Controls fold-out top left,
 under the ping.
