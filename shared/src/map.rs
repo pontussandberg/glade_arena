@@ -80,6 +80,13 @@ impl Tile {
         matches!(self, Tile::Grass | Tile::Path | Tile::Ford | Tile::Bridge | Tile::Planks | Tile::Marsh)
     }
 
+    /// Whether what stands on it blocks bodies as its own collider(s) (`colliders::build`) —
+    /// a ruined wall's blocks, a boulder, a tree's trunk — rather than the whole tile at any
+    /// height (`Map::line_walkable_at`).
+    pub(crate) fn stands_as_colliders(self) -> bool {
+        matches!(self, Tile::Wall | Tile::Rock | Tile::Tree)
+    }
+
     /// Projectiles fly over water and chasms but not through walls, rocks or trees (at the
     /// height a shot flies level; a shot high enough clears what it's over: `blocks_shots_at`).
     pub fn blocks_shots(self) -> bool {
@@ -790,7 +797,7 @@ impl Map {
             }
             // What blocks at any height: its tile as a box as tall as there is. A deep chasm only
             // a body on the ground: one in the air goes out over it.
-            let void = !tile.walkable() && !matches!(tile, Tile::Wall | Tile::Rock | Tile::Tree) && {
+            let void = !tile.walkable() && !tile.stands_as_colliders() && {
                 let c = Map::center(t);
                 let top = if self.deep_chasms && tile == Tile::Chasm { (self.relief)(c) + CHASM_LIP + STEP_UP } else { f32::INFINITY };
                 Collider::block(c - Vec2::splat(0.5), c + Vec2::splat(0.5), f32::NEG_INFINITY, top).blocks(a, b, feet)

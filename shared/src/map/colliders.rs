@@ -24,8 +24,8 @@ pub struct Collider {
     /// Its top; a roof's along its ridge.
     pub top: f32,
     pub roof: Option<Roof>,
-    /// Whether it cuts what flies through it, a shot or a line of sight (`cut_by`'s callers): a
-    /// tree's trunk doesn't — the tree's tile stops shots, crown and all (`Tile::blocks_shots_at`),
+    /// Whether it cuts what flies through it, a shot or a line of sight (`cut_by`): a tree's
+    /// trunk doesn't — the tree's tile stops shots, crown and all (`Tile::blocks_shots_at`),
     /// and sight is kept clear past trees so what's behind one shows.
     pub cuts: bool,
 }
@@ -92,8 +92,12 @@ impl Collider {
     }
 
     /// Whether something going straight from `a`, `from` high, to `b`, `to` high, meets it on
-    /// the way: is ever within it (between its bottom and its top, a roof's sloping one).
+    /// the way: is ever within it (between its bottom and its top, a roof's sloping one) — unless
+    /// it cuts nothing that flies (`cuts`).
     fn cut_by(&self, (a, from): (Vec2, f32), (b, to): (Vec2, f32)) -> bool {
+        if !self.cuts {
+            return false;
+        }
         // How much of the way (0 at `a`, 1 at `b`) is within it across the plane and between
         // its bottom and its highest top, each way at once.
         let mut span = (0.0f32, 1.0f32);
@@ -227,12 +231,8 @@ pub(super) fn build(map: &Map) -> Vec<Collider> {
         let reach = if house.long_x() { Vec2::new(House::GABLE_EAVES, House::EAVES) } else { Vec2::new(House::EAVES, House::GABLE_EAVES) };
         let ridge = if house.long_x() { house.center().y } else { house.center().x };
         out.push(Collider {
-            lo: lo - reach,
-            hi: hi + reach,
-            bottom: g + house.walls() - House::EAVES * House::SLOPE - 0.05,
-            top: g + house.ridge(),
             roof: Some(Roof { along_x: house.long_x(), ridge, slope: House::SLOPE }),
-            cuts: true,
+            ..Collider::block(lo - reach, hi + reach, g + house.walls() - House::EAVES * House::SLOPE - 0.05, g + house.ridge())
         });
         let chimney = house.chimney();
         let half = Vec2::splat(House::CHIMNEY / 2.0);
@@ -609,7 +609,7 @@ impl Map {
     /// terrace's, a cliff's); back the way it came from a tree.
     fn struck_side(&self, last: (Vec2, f32), next: (Vec2, f32)) -> Vec2 {
         let back = (last.0 - next.0).normalize_or(Vec2::X);
-        let boxed = [last.0, next.0].into_iter().flat_map(|p| self.colliders_on(Map::tile_of(p))).find(|collider| collider.cuts && collider.cut_by(last, next));
+        let boxed = [last.0, next.0].into_iter().flat_map(|p| self.colliders_on(Map::tile_of(p))).find(|collider| collider.cut_by(last, next));
         if let Some(collider) = boxed {
             let off = last.0 - last.0.clamp(collider.lo, collider.hi);
             return if off.length_squared() < 1e-8 {
@@ -643,7 +643,7 @@ impl Map {
     /// `shot_meets` and `sight_meets`: a collider on the way, or the ground (looked at every
     /// `step` meters), or (`trees`) a tree or the forest there.
     fn line_meets(&self, (a, from): (Vec2, f32), (b, to): (Vec2, f32), step: f32, trees: bool) -> bool {
-        if self.line_blocker_by(a, b, |t| self.colliders_on(t).any(|collider| collider.cuts && collider.cut_by((a, from), (b, to)))).is_some() {
+        if self.line_blocker_by(a, b, |t| self.colliders_on(t).any(|collider| collider.cut_by((a, from), (b, to)))).is_some() {
             return true;
         }
         let steps = (a.distance(b) / step).ceil().max(1.0) as i32;
