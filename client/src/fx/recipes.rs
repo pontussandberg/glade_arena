@@ -19,14 +19,13 @@ pub(super) fn play_new(
     art: Res<FxArt>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
-    me: Query<&PlayerId, With<crate::Me>>,
     new: Query<&Fx, Added<Fx>>,
     map: Res<crate::rooms::CurrentMap>,
 ) {
     let now = fx_now(&clock);
     let m = map.map();
     for fx in &new {
-        sound_of(fx, &mut sounds, &me, now);
+        sound_of(fx, &mut sounds, now);
         let late = secs((now - fx.from as f32).max(0.0));
         let start = time.elapsed_secs() - late;
         let seed = fx.from.wrapping_mul(2_654_435_761) ^ fx.at.x.to_bits() ^ fx.at.y.to_bits().rotate_left(16);
@@ -249,7 +248,7 @@ pub(super) fn quake(c: &mut Commands, art: &FxArt, now: f32, (at, floor): (Vec2,
 /// The sound an effect makes, if any, where it happens: carrying as far as what it is (our own
 /// farthest); what lands later (a meteor, a lob, a bolt gathering) sounds as it lands, not as
 /// the warning shows.
-fn sound_of(fx: &Fx, sounds: &mut crate::audio::SoundQueue, me: &Query<&PlayerId, With<crate::Me>>, now: f32) {
+fn sound_of(fx: &Fx, sounds: &mut crate::audio::SoundQueue, now: f32) {
     use crate::audio::{Reach, Sfx};
     let lands = secs((fx.until as f32 - now).max(0.0));
     let (sfx, reach, delay) = match fx.kind {
@@ -264,8 +263,7 @@ fn sound_of(fx: &Fx, sounds: &mut crate::audio::SoundQueue, me: &Query<&PlayerId
         FxKind::Arc => (Sfx::Arc, Reach::Combat, 0.0),
         _ => return,
     };
-    let ours = fx.by.is_some() && me.single().is_ok_and(|id| fx.by == Some(id.0));
-    sounds.add(sfx, 1.0).from(fx.at, if ours { Reach::Own } else { reach }).after(delay);
+    sounds.add(sfx, 1.0).from(fx.at, reach).after(delay).by(fx.by);
 }
 
 /// Where and when an effect plays: from `start` (seconds), at `at` (and toward `to`, in the

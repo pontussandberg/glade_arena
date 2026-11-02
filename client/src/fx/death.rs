@@ -74,7 +74,7 @@ pub(super) fn burst_deaths(
                 true => sounds.push(Sfx::BossKill, 1.0),
                 false => {
                     let gain = (0.3 + 0.7 * heard(away, Reach::Combat)) * if elite { 1.0 } else { 0.8 };
-                    sounds.push_pitched(Sfx::Kill, gain, 0.0, 1.0 + CHAIN_STEP * chain.1 as f32);
+                    sounds.add(Sfx::Kill, gain).pitched(1.0 + CHAIN_STEP * chain.1 as f32);
                 }
             }
             if bounty {

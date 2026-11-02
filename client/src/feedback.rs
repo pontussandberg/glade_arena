@@ -509,7 +509,8 @@ fn spawn_damage_numbers(
     mut players: Query<(Entity, &RecentHits, &Pos, Option<&mut ShownHits>, Has<Me>), Changed<RecentHits>>,
     mut numbers: Query<(&mut DamageNumber, &mut Text)>,
     // When a heal last chimed, and a blow last slapped.
-    mut chimed: Local<(f32, f32)>,
+    mut chimed: Local<f32>,
+    mut slapped: Local<f32>,
 ) {
     use crate::audio::{Reach, Sfx};
     let my_id = me.single().ok().map(|(_, id)| id.0);
@@ -526,11 +527,11 @@ fn spawn_damage_numbers(
         // near it, or however far off if we dealt it. Rate-limited, or burning ground pulsing
         // through a pack would be a wall of slaps.
         let lost: i32 = new.iter().filter(|hit| hit.kind != HitKind::Heal).map(|hit| hit.amount).sum();
-        if !is_me && lost > 0 && now - chimed.1 > 0.09 {
-            chimed.1 = now;
-            let ours = my_id.is_some() && new.iter().any(|hit| hit.by == my_id);
+        if !is_me && lost > 0 && now - *slapped > 0.09 {
+            *slapped = now;
+            let ours = my_id.filter(|&id| new.iter().any(|hit| hit.by == Some(id)));
             let heft = (0.4 + lost as f32 / 50.0).min(1.0);
-            sounds.add(Sfx::Hit, heft).from(pos.0, if ours { Reach::Own } else { Reach::Combat });
+            sounds.add(Sfx::Hit, heft).from(pos.0, Reach::Combat).by(ours);
         }
         let plain: i32 = new.iter().filter(|hit| hit.kind == HitKind::Damage).map(|hit| hit.amount).sum();
         let merged = plain > 0
@@ -565,8 +566,8 @@ fn spawn_damage_numbers(
             }
             // One soft chime, however the healing comes in: a regen or a full between-waves
             // restore lands as a pulse of heal hits, and a chime per pulse rang like an alarm.
-            if hit.kind == HitKind::Heal && is_me && now - chimed.0 > 1.2 {
-                chimed.0 = now;
+            if hit.kind == HitKind::Heal && is_me && now - *chimed > 1.2 {
+                *chimed = now;
                 sounds.push(Sfx::Heal, 0.5);
             }
             let (text, color) = match (hit.kind, is_me) {

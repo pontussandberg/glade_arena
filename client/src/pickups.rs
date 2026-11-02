@@ -335,11 +335,8 @@ fn burst_on_take(
             continue;
         }
         // Every taking sounds, fainter with distance: a chest is coins, the rest a chime.
-        {
-            use crate::audio::Sfx;
-            let sfx = if pickup.kind == PickupKind::Chest { Sfx::Coin } else { Sfx::Heal };
-            sounds.add(sfx, 1.0).from(pickup.at, crate::audio::Reach::Small);
-        }
+        let sfx = if pickup.kind == PickupKind::Chest { crate::audio::Sfx::Coin } else { crate::audio::Sfx::Heal };
+        sounds.add(sfx, 1.0).from(pickup.at, crate::audio::Reach::Small);
         let taker = pickup.taken_by.and_then(|by| players.iter().find(|(_, id)| id.0 == by));
         let (Some((player, _)), PickupKind::Heal) = (taker, pickup.kind) else { continue };
         let (glow, faint) = looks.heal.clone();

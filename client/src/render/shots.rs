@@ -289,7 +289,7 @@ pub(super) fn strike_home(
     mut materials: ResMut<Assets<PlainMaterial>>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
     shots: Query<(&Projectile, &Transform, Option<&Thrown>, &InheritedVisibility, &MeshMaterial3d<PlainMaterial>)>,
-    fighters: Query<(&Transform, &PlayerId, Has<Me>), Without<Projectile>>,
+    fighters: Query<&Transform, (With<PlayerId>, Without<Projectile>)>,
 ) {
     let cleared = room.0.as_ref().is_some_and(|view| view.winner.is_some()) || map.is_changed();
     let Ok((projectile, transform, thrown, visible, own_light)) = shots.get(trigger.entity) else { return };
@@ -326,15 +326,13 @@ pub(super) fn strike_home(
     }
     // Into anything but a fighter (whose hit sounds for itself), a miss: a faint chip on stone,
     // heard near it, or however far off if it's our own spear.
-    let into_fighter = fighters.iter().any(|(body, ..)| {
+    let into_fighter = fighters.iter().any(|body| {
         let feet = body.translation.y;
         arena::to_gameplay(body.translation).distance(arena::to_gameplay(point)) < PLAYER_RADIUS + shot.radius + TING_SLACK
             && (feet - TING_SLACK..feet + BODY_HEIGHT + TING_SLACK).contains(&point.y)
     });
     if !into_fighter {
-        let ours = fighters.iter().any(|(_, id, me)| me && id.0 == projectile.owner);
-        let reach = if ours { crate::audio::Reach::Own } else { crate::audio::Reach::Combat };
-        sounds.add(crate::audio::Sfx::SpearTing, 1.0).from(arena::to_gameplay(point), reach);
+        sounds.add(crate::audio::Sfx::SpearTing, 1.0).from(arena::to_gameplay(point), crate::audio::Reach::Combat).by(projectile.owner);
     }
 }
 

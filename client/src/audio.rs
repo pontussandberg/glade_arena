@@ -26,7 +26,10 @@ impl Plugin for AudioPlugin {
             app.add_systems(Update, (web::play_sounds, web::apply_volume.run_if(resource_changed::<crate::settings::Settings>)));
         }
         #[cfg(not(target_family = "wasm"))]
-        app.add_systems(Update, |mut queue: ResMut<SoundQueue>| queue.sounds.clear());
+        app.add_systems(Update, |mut queue: ResMut<SoundQueue>| {
+            queue.sounds.clear();
+            queue.hushes.clear();
+        });
     }
 }
 
@@ -72,9 +75,6 @@ pub enum Sfx {
     /// The revenant's glaive coming over and down, just before it lands (`strike_whoosh`): a
     /// long, heavy haft pushing through the air, the coat flapping with it.
     GlaiveWhoosh,
-    /// The revenant gathering: silent, its strike's whoosh (`GlaiveWhoosh`) is all that's heard
-    /// before the blow lands.
-    GlaiveReady,
     /// The javelinist gathering: a soft swish as it goes into stance, just before the throw.
     JavReady,
     /// The javelinist's throw: the arm lashing the spear away, a hard whoosh.
@@ -104,8 +104,6 @@ pub enum Sfx {
     ClawSwing,
     /// The faint gather of air before any attack goes off.
     Windup,
-    /// A windup cut off before its attack went off: whatever still sounds of it fades out.
-    Hush,
     /// A shot loosed, with nothing more telling to say about it.
     Loose,
     /// A thrown spear that missed, striking what isn't a fighter (a wall, a rock, the ground): its
@@ -172,14 +170,11 @@ pub struct Sound {
     delay: f32,
     /// A pitch multiplier: a kill chain climbs, so a cleared swarm sings up a little scale.
     pitch: f32,
-    /// How long (seconds) from now what it sounds takes, for a sound fitted to it: a gather that
-    /// ends as the attack goes off. Nothing for the rest.
-    lasts: f32,
     /// How long ago (seconds) it began, for one heard late: it plays from that far in.
     begun: f32,
-    /// Whose it is, for a windup's sound that lingers until its attack goes off (or is cut
-    /// off), so the release (or `Sfx::Hush`) finds it.
-    voice: Option<u64>,
+    /// Whose doing it is, if anyone's: ours carries as far as our own doing does (`Reach::Own`),
+    /// and a windup's lingering sound is found by its release (or hush) through it.
+    by: Option<lightyear::prelude::PeerId>,
     /// Where it happens (on the gameplay plane) and how far it carries; `None` for one that's
     /// ours alone, heard as it is (a blow we take, our heart).
     at: Option<(Vec2, Reach)>,
@@ -203,18 +198,9 @@ impl Sound {
         self
     }
 
-    /// Fitted to something that takes `lasts` seconds from now.
-    pub fn lasting(&mut self, lasts: f32) -> &mut Self {
-        self.lasts = lasts;
-        self
-    }
-
-    /// `id`'s: its windup's lingering sound and that windup's release (or hush) find each other.
-    pub fn of(&mut self, id: lightyear::prelude::PeerId) -> &mut Self {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        id.hash(&mut hasher);
-        self.voice = Some(hasher.finish());
+    /// `owner`'s doing (`Sound::by`).
+    pub fn by(&mut self, owner: impl Into<Option<lightyear::prelude::PeerId>>) -> &mut Self {
+        self.by = owner.into();
         self
     }
 
@@ -227,17 +213,19 @@ impl Sound {
     }
 }
 
-/// What wants to sound this frame.
+/// What wants to sound this frame, and whose lingering windup sounds to hush (a windup cut
+/// off, or one whose release never came).
 #[derive(Resource, Default)]
 pub struct SoundQueue {
     sounds: Vec<Sound>,
+    hushes: Vec<lightyear::prelude::PeerId>,
 }
 
 impl SoundQueue {
     /// A sound at `gain` (0 to 1, as loud as it is up close), to be placed and timed with
     /// `Sound`'s methods. One too faint to hear once placed is dropped.
     pub fn add(&mut self, kind: Sfx, gain: f32) -> &mut Sound {
-        self.sounds.push(Sound { kind, gain: gain.min(1.0), delay: 0.0, pitch: 1.0, lasts: 0.0, begun: 0.0, voice: None, at: None });
+        self.sounds.push(Sound { kind, gain: gain.min(1.0), delay: 0.0, pitch: 1.0, begun: 0.0, by: None, at: None });
         self.sounds.last_mut().expect("just pushed")
     }
 
@@ -245,12 +233,9 @@ impl SoundQueue {
         self.add(kind, gain);
     }
 
-    pub fn push_in(&mut self, kind: Sfx, gain: f32, delay: f32) {
-        self.add(kind, gain).after(delay);
-    }
-
-    pub fn push_pitched(&mut self, kind: Sfx, gain: f32, delay: f32, pitch: f32) {
-        self.add(kind, gain).after(delay).pitched(pitch);
+    /// `id`'s lingering windup sound, if one is playing, fades out.
+    pub fn hush(&mut self, id: lightyear::prelude::PeerId) {
+        self.hushes.push(id);
     }
 }
 
@@ -306,31 +291,35 @@ fn weapon_pitch(class: arena_shared::protocol::ClassId) -> f32 {
     (40.0 / class.def().attack.attack_ticks as f32).clamp(0.65, 1.35)
 }
 
-/// What a class's auto-attack sounds like: as it gathers (the windup) and as it goes off, and
-/// the pitch both play at. Each hero's is engineered for its weapon and the fantasy behind it; a
-/// figure without its own gets the plain gather and swish, pitched by its weapon's weight.
-fn attack_voice(class: arena_shared::protocol::ClassId) -> (Sfx, Sfx, f32) {
+/// What a class's auto-attack sounds like: as it gathers (the windup; silent for some, whose
+/// windup is only `strike_whoosh`) and as it goes off, and the pitch both play at. Each hero's
+/// is engineered for its weapon and the fantasy behind it; a figure without its own gets the
+/// plain gather and swish, pitched by its weapon's weight.
+fn attack_voice(class: arena_shared::protocol::ClassId) -> (Option<Sfx>, Sfx, f32) {
     match class.def().figure() {
-        "revenant" => (Sfx::GlaiveReady, Sfx::GlaiveSwing, 1.0),
-        "javelinist" => (Sfx::JavReady, Sfx::SpearThrow, 1.0),
-        "frost_mage" => (Sfx::FrostReady, Sfx::FrostCast, 1.0),
-        "warden" => (Sfx::ShieldReady, Sfx::ShieldThrust, 1.0),
-        "breaker" => (Sfx::MaulReady, Sfx::MaulSwing, 1.0),
+        "revenant" => (None, Sfx::GlaiveSwing, 1.0),
+        "javelinist" => (None, Sfx::SpearThrow, 1.0),
+        "frost_mage" => (Some(Sfx::FrostReady), Sfx::FrostCast, 1.0),
+        "warden" => (Some(Sfx::ShieldReady), Sfx::ShieldThrust, 1.0),
+        "breaker" => (Some(Sfx::MaulReady), Sfx::MaulSwing, 1.0),
         // Casters' shots sound as they leave the hand (`loose_sounds`): only the gather is theirs here.
-        "pyre_witch" => (Sfx::KindleReady, Sfx::Swing, 1.0),
-        "stormweaver" => (Sfx::StormReady, Sfx::Swing, 1.0),
-        "shade" => (Sfx::KnifeReady, Sfx::KnifeSwing, 1.0),
-        "zombie" => (Sfx::Windup, Sfx::ClawSwing, 1.0),
-        _ => (Sfx::Windup, Sfx::Swing, weapon_pitch(class)),
+        "pyre_witch" => (Some(Sfx::KindleReady), Sfx::Swing, 1.0),
+        "stormweaver" => (Some(Sfx::StormReady), Sfx::Swing, 1.0),
+        "shade" => (Some(Sfx::KnifeReady), Sfx::KnifeSwing, 1.0),
+        "zombie" => (Some(Sfx::Windup), Sfx::ClawSwing, 1.0),
+        _ => (Some(Sfx::Windup), Sfx::Swing, weapon_pitch(class)),
     }
 }
 
-/// A heavy blow's whoosh, for a class that has one: what it is, and how long (seconds) before
-/// the attack goes off it starts, its loudest just as the blow lands. The swing's own sound
-/// plays as it goes off, too late for the air the blade pushes on the way down.
+/// What sounds late in a class's windup, for one that has it: what it is, and how long
+/// (seconds) before the attack goes off it starts. A heavy blow's whoosh, its loudest just as
+/// the blow lands (the swing's own sound plays as it goes off, too late for the air the blade
+/// pushes on the way down); the javelinist going into stance, as far before the throw as
+/// `jav_draw` and `jav_whoosh` are in the recording they're cut from.
 fn strike_whoosh(class: arena_shared::protocol::ClassId) -> Option<(Sfx, f32)> {
     match class.def().figure() {
         "revenant" => Some((Sfx::GlaiveWhoosh, 0.3)),
+        "javelinist" => Some((Sfx::JavReady, 0.27)),
         _ => None,
     }
 }
@@ -358,7 +347,7 @@ fn loose_sounds(
                 let (_, release, pitch) = attack_voice(projectile.class);
                 let is_me = my_id == Some(projectile.owner);
                 let due = clock.as_ref().map_or(0.0, |clock| (projectile.spawn_tick as f32 - clock.now(is_me)) / arena_shared::config::TICK_HZ as f32);
-                queue.add(release, 0.42).from(pos.0, Reach::Combat).pitched(pitch).due(due).of(projectile.owner);
+                queue.add(release, 0.42).from(pos.0, Reach::Combat).pitched(pitch).due(due).by(projectile.owner);
                 continue;
             }
             "pyre_witch" => Sfx::FireLoose,
@@ -418,7 +407,7 @@ fn windup_sounds(
         {
             winding.remove(&attacker);
             if clock.as_ref().is_some_and(|clock| clock.now(is_me) < release as f32) {
-                queue.add(Sfx::Hush, 1.0).of(id.0);
+                queue.hush(id.0);
             } else {
                 lapsed.insert(attacker, (now + RELEASE_GRACE, id.0));
             }
@@ -428,15 +417,16 @@ fn windup_sounds(
         winding.insert(attacker, (swing.started_at, swing.releases_at(&class.def().attack), id.0));
         if unheard(&mut heard, attacker, swing.started_at, clock.as_ref().map(|clock| clock.now(is_me))) {
             let (gather, _, pitch) = attack_voice(*class);
-            let windup_ticks = swing.windup_ticks(&class.def().attack);
-            let windup = windup_ticks as f32 / arena_shared::config::TICK_HZ as f32;
-            // Ended by the clock on the tick the attack goes off, however late the news of it
-            // came, so a gather runs straight into its release (`loose_sounds` times that by the
-            // same clock).
-            let left = clock.as_ref().map_or(windup, |clock| (((swing.started_at + windup_ticks) as f32 - clock.now(is_me)) / arena_shared::config::TICK_HZ as f32).clamp(0.0, windup));
-            queue.add(gather, 0.4).from(pos.0, Reach::Small).pitched(pitch).lasting(left).of(id.0);
+            if let Some(gather) = gather {
+                queue.add(gather, 0.4).from(pos.0, Reach::Small).pitched(pitch).by(id.0);
+            }
             if let Some((whoosh, lead)) = strike_whoosh(*class) {
-                queue.add(whoosh, 0.42).from(pos.0, Reach::Combat).after((windup - lead).max(0.0)).pitched(pitch);
+                // Timed by the clock to the tick the attack goes off, however late the news of
+                // it came, as its release is (`loose_sounds`).
+                let windup_ticks = swing.windup_ticks(&class.def().attack);
+                let windup = windup_ticks as f32 / arena_shared::config::TICK_HZ as f32;
+                let left = clock.as_ref().map_or(windup, |clock| (((swing.started_at + windup_ticks) as f32 - clock.now(is_me)) / arena_shared::config::TICK_HZ as f32).clamp(0.0, windup));
+                queue.add(whoosh, 0.42).from(pos.0, Reach::Combat).after((left - lead).max(0.0)).pitched(pitch);
             }
         }
     }
@@ -444,13 +434,13 @@ fn windup_sounds(
     winding.retain(|&attacker, &mut (_, _, id)| {
         let here = fighters.contains(attacker);
         if !here {
-            queue.add(Sfx::Hush, 1.0).of(id);
+            queue.hush(id);
         }
         here
     });
     lapsed.retain(|_, &mut (due, id)| {
         if now >= due {
-            queue.add(Sfx::Hush, 1.0).of(id);
+            queue.hush(id);
         }
         now < due
     });
@@ -620,7 +610,7 @@ mod web {
         /// The wind is started once, the first time sound gets through.
         ambience_on: bool,
         /// Windup sounds lingering until their attack goes off, by whose (`Sound::voice`).
-        lingering: HashMap<u64, Lingering>,
+        lingering: HashMap<lightyear::prelude::PeerId, Lingering>,
     }
 
     /// A windup's sound still playing, waiting on its release: its source and its level.
@@ -651,15 +641,14 @@ mod web {
     /// How the air dulls a far sound: the lowpass's cutoff (Hz) up close, how steeply it falls
     /// with distance, and the dullest it gets.
     const DULLING: (f32, f32, f32) = (18000.0, 0.6, 1500.0);
+    /// Above this cutoff (Hz) the dulling can't be heard, so none is made.
+    const DULL_UNHEARD: f32 = 10000.0;
     /// How loud the frost mage's spell is as its bolt goes.
     const FROST_SPELL: f32 = 0.354;
     /// The frost mage's channelled crackle: how loud, and where (seconds in `frost_channel`) its
     /// rise gives way to the bed it crackles on in (looped to its end).
     const FROST_CHANNEL: f32 = 0.0225;
     const FROST_BED: f64 = 1.0;
-    /// How long (seconds) before the javelin's throw its stance swish starts: as far apart as
-    /// `jav_draw` and `jav_whoosh` are in the recording they're cut from.
-    const JAV_LEAD: f64 = 0.27;
 
     /// Opens the audio (suspended until the page's first click, as browsers want) and starts
     /// fetching the recordings, so they're decoded by the time anything sounds.
@@ -693,7 +682,7 @@ mod web {
             let away = off.length();
             let pan = off.normalize_or_zero().dot(right) * PAN_WIDTH * (away / PAN_NEAR).min(1.0);
             let (clear, steep, dullest) = DULLING;
-            let dull = (away > NEAR).then(|| (clear * (NEAR / away).powf(steep)).max(dullest));
+            let dull = Some((clear * (NEAR / away.max(NEAR)).powf(steep)).max(dullest)).filter(|&cutoff| cutoff < DULL_UNHEARD);
             Place { pan, dull }
         }
     }
@@ -701,13 +690,14 @@ mod web {
     pub(super) fn play_sounds(
         mut queue: ResMut<SoundQueue>,
         mut audio: NonSendMut<AudioLazy>,
-        me: Query<&arena_shared::protocol::Pos, With<crate::Me>>,
+        me: Query<(&arena_shared::protocol::Pos, &arena_shared::protocol::PlayerId), With<crate::Me>>,
         camera: Query<&GlobalTransform, With<crate::camera::CameraRig>>,
     ) {
-        if queue.sounds.is_empty() {
+        if queue.sounds.is_empty() && queue.hushes.is_empty() {
             return;
         }
         let sounds = std::mem::take(&mut queue.sounds);
+        let hushes = std::mem::take(&mut queue.hushes);
         if audio.0.is_none() {
             audio.0 = AudioOut::new();
         }
@@ -719,9 +709,12 @@ mod web {
             return;
         }
         out.ambience();
+        for id in hushes {
+            out.hush(id);
+        }
         // Each placed round us: as loud as it is from here, off to its side. One that happens
         // somewhere is heard only with us somewhere to hear it from.
-        let ear = me.single().ok().map(|pos| pos.0);
+        let (ear, mine) = me.single().ok().map_or((None, None), |(pos, id)| (Some(pos.0), Some(id.0)));
         let right = camera.single().ok().map_or(Vec2::X, |camera| crate::arena::to_gameplay(*camera.right()).normalize_or(Vec2::X));
         let mut placed: Vec<(&Sound, f32, Place)> = sounds
             .iter()
@@ -730,6 +723,7 @@ mod web {
                     None => (sound.gain, Place::HERE),
                     Some((at, reach)) => {
                         let ear = ear?;
+                        let reach = if sound.by.is_some() && sound.by == mine { Reach::Own } else { reach };
                         (sound.gain * heard(at.distance(ear), reach), Place::of(at - ear, right))
                     }
                 };
@@ -748,7 +742,7 @@ mod web {
             }
             let crowd = placed.iter().filter(|s| s.0.kind == sound.kind).count();
             let gain = gain * (1.0 + (crowd.saturating_sub(VOICES) as f32) * 0.1).min(1.6);
-            out.play(sound.kind, gain.min(1.0), sound.delay as f64 + k as f64 * STAGGER, sound.pitch, (sound.lasts as f64, sound.begun as f64, sound.voice), place);
+            out.play(sound, gain.min(1.0), sound.delay as f64 + k as f64 * STAGGER, place);
         }
     }
 
@@ -965,6 +959,13 @@ mod web {
             Some(Lingering { source, level })
         }
 
+        /// `id`'s lingering windup sound, if one is playing, faded out now.
+        fn hush(&mut self, id: lightyear::prelude::PeerId) {
+            if let Some(lingering) = self.lingering.remove(&id) {
+                self.fade(&lingering, self.ctx.current_time());
+            }
+        }
+
         /// A lingering sound faded out quickly from `when`, and stopped.
         fn fade(&self, lingering: &Lingering, when: f64) {
             let p = lingering.level.gain();
@@ -1064,7 +1065,8 @@ mod web {
         /// Every sound is built from recordings layered in the order the event happens, each
         /// pitched a little differently every time, with synthesis only for what no recording
         /// gives (a spectral hum, a sub thump under a blow).
-        fn play(&mut self, kind: Sfx, gain: f32, delay: f64, pitch: f32, (lasts, begun, voice): (f64, f64, Option<u64>), place: Place) {
+        fn play(&mut self, sound: &Sound, gain: f32, delay: f64, place: Place) {
+            let (kind, pitch, begun, voice) = (sound.kind, sound.pitch, sound.begun as f64, sound.by);
             use BiquadFilterType::{Bandpass, Highpass, Lowpass};
             use OscillatorType::{Sine, Triangle};
             self.bus = self.placed(place).unwrap_or_else(|| self.squeeze.clone().into());
@@ -1073,7 +1075,7 @@ mod web {
             // A small random spread keeps a flurry from repeating. A voice tuned by ear to one
             // speed (the revenant's, the javelin's throw) only drifts off it very slightly, so
             // no two of its attacks are twins either.
-            let tuned = matches!(kind, Sfx::GlaiveReady | Sfx::GlaiveSwing | Sfx::GlaiveWhoosh | Sfx::SpearThrow | Sfx::FrostCast | Sfx::Shatter);
+            let tuned = matches!(kind, Sfx::GlaiveSwing | Sfx::GlaiveWhoosh | Sfx::SpearThrow | Sfx::FrostCast | Sfx::Shatter);
             let p = self.vary(if tuned { 0.03 } else { 0.08 }) * pitch;
             const SWISH_LIGHT: [&str; 3] = ["swish_light_1", "swish_light_2", "swish_light_3"];
             const SWISH_HEAVY: [&str; 3] = ["swish_heavy_1", "swish_heavy_2", "swish_heavy_3"];
@@ -1167,7 +1169,6 @@ mod web {
                     // A shot leaving the hand: a short swing of air.
                     self.sample("swing_2", now, 0.34 * g, p * 1.05, 0.1, 0.1);
                 }
-                Sfx::GlaiveReady => {}
                 Sfx::GlaiveWhoosh => {
                     // A long haft and a heavy blade shoving through the air (a staff's swing
                     // slowed down, its whistle dulled away), the coat flapping with it.
@@ -1268,12 +1269,11 @@ mod web {
                     self.sample("cloth_heavy", now + 0.02, 0.28 * g, 0.9 * p, 0.15, 0.1);
                 }
                 Sfx::JavReady => {
-                    // Going into stance: a soft swish late in the windup, as far before the throw
-                    // as it is in the recording. Never slowed. Only a faint confirmation that the
-                    // attack is coming: well under the throw, though the recording's own balance
-                    // already has it quieter.
-                    let starts = now + (lasts - JAV_LEAD).max(0.0);
-                    self.sample("jav_draw", starts, 0.0275 * g, 1.0, 0.3, 0.05);
+                    // Going into stance: a soft swish late in the windup (`strike_whoosh` times
+                    // it). Never slowed. Only a faint confirmation that the attack is coming:
+                    // well under the throw, though the recording's own balance already has it
+                    // quieter.
+                    self.sample("jav_draw", now, 0.0262 * g, 1.0, 0.3, 0.05);
                 }
                 Sfx::SpearThrow => {
                     // The arm lashing the spear away: a hard whoosh, as recorded. The spear flies
@@ -1286,7 +1286,7 @@ mod web {
                     // Frost channelled up: the crackle rising from its start, and if the windup
                     // outlasts it (a shot held drawn), crackling on (a long, even bed of it,
                     // never a pattern) until the bolt goes (`FrostCast` ends it) or the windup is
-                    // cut off (`Sfx::Hush`).
+                    // cut off (`SoundQueue::hush`).
                     let Some(voice) = voice else { return };
                     if let Some(old) = self.lingering.remove(&voice) {
                         self.fade(&old, now);
@@ -1301,11 +1301,6 @@ mod web {
                         self.clip("frost_cast", now, begun, None, 1.0, &e);
                     }
                     // The windup's crackle ends under it: the spell has its own tail.
-                    if let Some(lingering) = voice.and_then(|voice| self.lingering.remove(&voice)) {
-                        self.fade(&lingering, now);
-                    }
-                }
-                Sfx::Hush => {
                     if let Some(lingering) = voice.and_then(|voice| self.lingering.remove(&voice)) {
                         self.fade(&lingering, now);
                     }
