@@ -8,7 +8,7 @@ use std::f32::consts::TAU;
 use super::*;
 use crate::Me;
 use crate::arena::to_world;
-use crate::audio::{Sfx, SoundQueue, earshot};
+use crate::audio::{Reach, Sfx, SoundQueue, heard};
 use crate::camera::Shake;
 use crate::swish::noise;
 
@@ -73,12 +73,12 @@ pub(super) fn burst_deaths(
             match def.is_boss() {
                 true => sounds.push(Sfx::BossKill, 1.0),
                 false => {
-                    let gain = (0.3 + 0.7 * earshot(away, 22.0)) * if elite { 1.0 } else { 0.8 };
-                    sounds.push_pitched(Sfx::Kill, gain, 0.0, 1.0 + CHAIN_STEP * chain.1 as f32);
+                    let gain = (0.3 + 0.7 * heard(away, Reach::Combat)) * if elite { 1.0 } else { 0.8 };
+                    sounds.add(Sfx::Kill, gain).pitched(1.0 + CHAIN_STEP * chain.1 as f32);
                 }
             }
             if bounty {
-                sounds.push_in(Sfx::Coin, 0.3 * earshot(away, 16.0), 0.1);
+                sounds.add(Sfx::Coin, 0.3).from(pos.0, Reach::Small).after(0.1);
             }
         }
     }

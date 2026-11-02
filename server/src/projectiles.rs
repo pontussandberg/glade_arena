@@ -64,7 +64,7 @@ fn burst_at(
     side: Side,
 ) {
     let at = end.at;
-    crate::fx::spawn_fx(commands, side.0, Fx::at(FxKind::Blast(burst.color), at, burst.radius, now, 10).ended(end));
+    crate::fx::spawn_fx(commands, side.0, Fx::at(FxKind::Blast(burst.color), at, burst.radius, now, 10).ended(end).by(projectile.owner));
     let reach = burst.radius + PLAYER_RADIUS;
     let blow = Blow::attack(amount, sim::projectile_chill(projectile), false, projectile.crit);
     hit_foes(commands, log, now, targets, (projectile.owner, projectile.class, "auto-attack"), (side, Source::Splash), blow, |id, p, _| Some(id) != spares && p.distance(at) <= reach);
@@ -163,7 +163,7 @@ pub(super) fn resolve_projectile_hits(
                 .min_by(|a, b| a.3.0.distance(from).total_cmp(&b.3.0.distance(from)))
                 .map(|(entity, id, _, pos, ..)| (entity, id.0, pos.0));
             let Some((entity, id, at)) = next else { break };
-            crate::fx::spawn_fx(&mut commands, side.0, Fx::between(FxKind::Arc, from, at, 0.0, now.0, 6));
+            crate::fx::spawn_fx(&mut commands, side.0, Fx::between(FxKind::Arc, from, at, 0.0, now.0, 6).by(projectile.owner));
             let Ok((.., mut health, mut chilled, mut recent, _, _)) = targets.get_mut(entity) else { break };
             let blow = Blow::attack(amount, chill, false, projectile.crit);
             damage(&mut commands, &mut log, now.0, (entity, id, at), (&mut health, &mut chilled, &mut recent), blow, (projectile.owner, projectile.class, "auto-attack"), (side, Source::Splash, None));

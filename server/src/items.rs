@@ -141,7 +141,7 @@ pub(crate) struct Pending(pub(crate) Vec<Delayed>);
 
 /// Sets `blast` to go off, `look` showing where and when until it does.
 pub(crate) fn arm(commands: &mut Commands, pending: &mut Pending, now: u32, blast: Delayed, look: FxKind) {
-    spawn_fx(commands, blast.by.side.0, Fx::at(look, blast.at, blast.radius, now, blast.fire_at.saturating_sub(now)));
+    spawn_fx(commands, blast.by.side.0, Fx::at(look, blast.at, blast.radius, now, blast.fire_at.saturating_sub(now)).by(blast.by.id));
     pending.0.push(blast);
 }
 
@@ -177,7 +177,7 @@ pub(crate) fn blast(commands: &mut Commands, log: &mut HitLog, now: u32, targets
 /// A `blast` looking like `look` (an echo's own, say).
 #[allow(clippy::too_many_arguments)]
 fn blast_as(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut Targets, by: By, at: Vec2, radius: f32, damage: i32, chill: Chill, look: FxKind) -> usize {
-    spawn_fx(commands, by.side.0, Fx::at(look, at, radius, now, 10));
+    spawn_fx(commands, by.side.0, Fx::at(look, at, radius, now, 10).by(by.id));
     strike(commands, log, now, targets, by, Blow::ability(damage, chill), |_, p| p.distance(at) <= radius + PLAYER_RADIUS)
 }
 
@@ -285,7 +285,7 @@ pub(super) fn tick_items(
                     let (every, damage, radius, fuse, reach) = items::powder_keg(level);
                     let Some((_, at, _)) = nearest_foe(&targets, (id.0, side), pos.0, reach, |_| false) else { continue };
                     state.keg_at = now + every;
-                    spawn_fx(&mut commands, side.0, Fx::between(FxKind::Lob(FxColor::Fire), pos.0, at, radius, now, fuse));
+                    spawn_fx(&mut commands, side.0, Fx::between(FxKind::Lob(FxColor::Fire), pos.0, at, radius, now, fuse).by(id.0));
                     pending.0.push(Delayed { by: by(item), at, radius, damage, chill: Chill::default(), fire_at: now + fuse, look: FxKind::Blast(FxColor::Fire) });
                 }
                 Item::HoarfrostBoots if now >= state.trail.0 && pos.0.distance(state.trail.1) >= 0.8 => {
@@ -293,7 +293,7 @@ pub(super) fn tick_items(
                     state.trail = (now + every, pos.0);
                     let radius = items::FROST_PATCH_RADIUS;
                     zones.0.push(Zone { by: by(item), at: pos.0, radius, damage: 0, slow, pull: 0.0, until: now + lasts });
-                    spawn_fx(&mut commands, side.0, Fx::at(FxKind::Rime, pos.0, radius, now, lasts));
+                    spawn_fx(&mut commands, side.0, Fx::at(FxKind::Rime, pos.0, radius, now, lasts).by(id.0));
                 }
                 _ => {}
             }
@@ -345,7 +345,7 @@ pub(super) fn tick_items(
             continue;
         }
         let victim = victim.0;
-        spawn_fx(&mut commands, doom.side.0, Fx::at(FxKind::Blast(FxColor::Void), pos.0, 1.2, now, 12));
+        spawn_fx(&mut commands, doom.side.0, Fx::at(FxKind::Blast(FxColor::Void), pos.0, 1.2, now, 12).by(doom.by));
         let by = By { id: doom.by, class: doom.class, side: doom.side, source: Source::Item(Item::DoomBell) };
         strike(&mut commands, &mut log, now, &mut targets, by, Blow::ability(toll, Chill::default()), |p, _| p == victim);
     }
@@ -428,7 +428,7 @@ fn ability_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (E
                 let map = r.lobby.map(&hit.side.0);
                 let at = map.nearest_walkable(Map::tile_of(hit.at), 3).map_or(hit.at, |t| map.stand(t));
                 r.zones.0.push(Zone { by: by(item), at, radius, damage, slow: 0.0, pull, until: now + lasts });
-                spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Zone(FxColor::Void), at, radius, now, lasts));
+                spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Zone(FxColor::Void), at, radius, now, lasts).by(hit.attacker));
             }
             Item::MirrorShard => {
                 let (lasts, damage, radius, recharge) = items::mirror_shard(level);
@@ -445,7 +445,7 @@ fn ability_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (E
                     PlayerInput::default(),
                     replicated_npc(),
                 ));
-                spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Blast(FxColor::Spirit), stand, 1.0, now, 8));
+                spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Blast(FxColor::Spirit), stand, 1.0, now, 8).by(hit.attacker));
             }
             Item::HeartOfWinter => {
                 let nova = match hit.source {
@@ -455,7 +455,7 @@ fn ability_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (E
                 if nova {
                     let (radius, slow, damage, lasts) = items::heart_of_winter(level);
                     r.zones.0.push(Zone { by: by(item), at: stand, radius, damage, slow, pull: 0.0, until: now + lasts });
-                    spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Zone(FxColor::Frost), stand, radius, now, lasts));
+                    spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Zone(FxColor::Frost), stand, radius, now, lasts).by(hit.attacker));
                 }
             }
             _ => {}
@@ -527,7 +527,7 @@ fn kindle(r: &mut Reacting, now: u32, hit: &Landed) {
     let (at, reach) = (hit.at, burn.ignite_radius + PLAYER_RADIUS);
     let amount = (hit.class.def().attack.damage as f32 * burn.ignite_share).round() as i32;
     let by = By { id: hit.attacker, class: hit.class, side: hit.side, source: Source::Splash };
-    spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Ignite, at, burn.ignite_radius, now, 8));
+    spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Ignite, at, burn.ignite_radius, now, 8).by(hit.attacker));
     strike(&mut r.commands, &mut r.log, now, &mut r.targets, by, Blow::ability(amount, Chill::default()), |id, p| id != struck && p.distance(at) <= reach);
 }
 
@@ -610,7 +610,7 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                 let mut from = hit.at;
                 for _ in 0..jumps {
                     let Some((next, at, _)) = nearest_foe(&r.targets, (hit.attacker, hit.side), from, reach, |p| struck.contains(&p)) else { break };
-                    spawn_fx(&mut r.commands, hit.side.0, Fx::between(FxKind::Arc, from, at, 0.0, now, 8));
+                    spawn_fx(&mut r.commands, hit.side.0, Fx::between(FxKind::Arc, from, at, 0.0, now, 8).by(hit.attacker));
                     strike(&mut r.commands, &mut r.log, now, &mut r.targets, by(item), Blow::ability(damage, Chill::default()), |p, _| p == next);
                     struck.push(next);
                     from = at;
@@ -639,7 +639,7 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                     Err(_) => {
                         let doom = Doomed { by: hit.attacker, class: hit.class, side: hit.side, at: now + lasts, stored: hit.amount, share };
                         r.commands.entity(hit.victim).try_insert(doom);
-                        spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Doom, hit.at, 0.9, now, lasts));
+                        spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Doom, hit.at, 0.9, now, lasts).by(hit.attacker));
                     }
                 }
             }
@@ -660,7 +660,7 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                 if !called_up {
                     r.lobby.reward(hit.side.0.key, hit.attacker, gold);
                 }
-                spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Coins, at, 1.0, now, 20));
+                spawn_fx(&mut r.commands, hit.side.0, Fx::at(FxKind::Coins, at, 1.0, now, 20).by(hit.attacker));
             }
             _ => {}
         }

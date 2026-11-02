@@ -62,7 +62,7 @@ pub(crate) fn mend(health: &mut Health, max: &MaxHealth, hits: &mut RecentHits, 
         return 0;
     }
     let gained = healed - health.0;
-    hits.push(gained, HitKind::Heal);
+    hits.push(gained, HitKind::Heal, None);
     health.0 = healed;
     gained
 }
@@ -154,7 +154,7 @@ pub(super) fn damage(
     health.0 = (health.0 - amount).max(least);
     // A blow of crowd control alone (a slow, a freeze) shows no number.
     if amount > 0 {
-        hits.push(amount, if crit { HitKind::Crit } else { HitKind::Damage });
+        hits.push(amount, if crit { HitKind::Crit } else { HitKind::Damage }, Some(by));
     }
     if !blow.chill.is_none() {
         chilled.apply(blow.chill, now);

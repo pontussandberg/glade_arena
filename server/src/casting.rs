@@ -112,7 +112,7 @@ pub(super) fn use_abilities(
                     // where it will land, then the blast.
                     let (warning, look) = match strike.shell {
                         Shell::Bomb => {
-                            spawn_fx(&mut commands, side.0, Fx::between(FxKind::Lob(FxColor::Poison), pos.0, at, strike.radius, now.0, strike.fuse_ticks));
+                            spawn_fx(&mut commands, side.0, Fx::between(FxKind::Lob(FxColor::Poison), pos.0, at, strike.radius, now.0, strike.fuse_ticks).by(id.0));
                             (FxKind::Warn(FxColor::Poison), FxKind::Blast(FxColor::Poison))
                         }
                         Shell::Lightning => (FxKind::Warn(FxColor::Storm), FxKind::Blast(FxColor::Storm)),

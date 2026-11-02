@@ -3,8 +3,9 @@
 //! event happens — a maul blow is a heavy swish, then wood-and-iron landing, stone breaking,
 //! grit rattling down — each pitched a little differently every time, with WebAudio synthesis
 //! only for what no recording gives (a spectral hum, a sub thump, a horn). Gameplay systems
-//! push `Sfx` onto the `SoundQueue` with a gain (loudness, usually by how close it is);
-//! `play_sounds` drains it each frame.
+//! push `Sfx` onto the `SoundQueue` with a gain, and for one that happens somewhere, where and
+//! how far it carries (`Reach`); `play_sounds` drains it each frame, placing each sound round
+//! us: fainter and duller the farther off, and off to the side it's on.
 //!
 //! The browser keeps an `AudioContext` suspended until the page is interacted with, so the
 //! queue is dropped (and a resume asked for) until it's running: nothing can sound before the
@@ -25,7 +26,10 @@ impl Plugin for AudioPlugin {
             app.add_systems(Update, (web::play_sounds, web::apply_volume.run_if(resource_changed::<crate::settings::Settings>)));
         }
         #[cfg(not(target_family = "wasm"))]
-        app.add_systems(Update, |mut queue: ResMut<SoundQueue>| queue.sounds.clear());
+        app.add_systems(Update, |mut queue: ResMut<SoundQueue>| {
+            queue.sounds.clear();
+            queue.hushes.clear();
+        });
     }
 }
 
@@ -71,18 +75,14 @@ pub enum Sfx {
     /// The revenant's glaive coming over and down, just before it lands (`strike_whoosh`): a
     /// long, heavy haft pushing through the air, the coat flapping with it.
     GlaiveWhoosh,
-    /// The revenant gathering: silent, its strike's whoosh (`GlaiveWhoosh`) is all that's heard
-    /// before the blow lands.
-    GlaiveReady,
-    /// The javelinist gathering: the spear drawn back over the shoulder, cloth shifting and the
-    /// shaft groaning in the grip.
+    /// The javelinist gathering: a soft swish as it goes into stance, just before the throw.
     JavReady,
-    /// The javelinist's throw: the arm lashing the spear away (Pontus's own recording).
+    /// The javelinist's throw: the arm lashing the spear away, a hard whoosh.
     SpearThrow,
-    /// The frost mage gathering: frost creeping crackling over the staff, a crystal ticking as
-    /// it sets.
+    /// The frost mage gathering: crackling frost channelled up, lingering on as long as the
+    /// windup lasts, ending under the cast (`FrostCast`) as the bolt goes.
     FrostReady,
-    /// The frost mage's staff thrust out: a breath of cold air pushed out with it.
+    /// The frost mage's bolt going: a spell's climax and icy tail.
     FrostCast,
     /// The warden's thrust: the shield's face driven in first, the sword's steel a beat behind.
     ShieldThrust,
@@ -106,8 +106,6 @@ pub enum Sfx {
     Windup,
     /// A shot loosed, with nothing more telling to say about it.
     Loose,
-    /// A spear in flight: the heavy shaft droning away through the air.
-    SpearLoose,
     /// A thrown spear that missed, striking what isn't a fighter (a wall, a rock, the ground): its
     /// iron tip chipping on grimy stone, high, short and very faint, nothing more.
     SpearTing,
@@ -150,8 +148,7 @@ pub enum Sfx {
     FrostNova,
     /// A ring of cinders: fire going up all round.
     FireNova,
-    /// A frostbolt shattering where it hit or ended: a big crack with weight under it, the ice
-    /// going to pieces, splinters ringing down, and a long soft settle of frost.
+    /// A frostbolt shattering where it hit or ended: a punch of ice breaking.
     Shatter,
     /// A wave starting.
     Horn,
@@ -166,40 +163,126 @@ pub enum Sfx {
 /// A sound asked for: played next frame (or `delay` seconds later, for one whose cause is yet
 /// to land, like a meteor). Only the web client reads it; native drains the queue unread.
 #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
-struct Sound {
+pub struct Sound {
     kind: Sfx,
+    /// How loud it is up close, 0 to 1.
     gain: f32,
     delay: f32,
     /// A pitch multiplier: a kill chain climbs, so a cleared swarm sings up a little scale.
     pitch: f32,
+    /// How long ago (seconds) it began, for one heard late: it plays from that far in.
+    begun: f32,
+    /// Whose doing it is, if anyone's: ours carries as far as our own doing does (`Reach::Own`),
+    /// and a windup's lingering sound is found by its release (or hush) through it.
+    by: Option<lightyear::prelude::PeerId>,
+    /// Where it happens (on the gameplay plane) and how far it carries; `None` for one that's
+    /// ours alone, heard as it is (a blow we take, our heart).
+    at: Option<(Vec2, Reach)>,
 }
 
-/// What wants to sound this frame. Push with a gain of 0 to 1 — usually how close the cause is;
-/// a gain of nothing is dropped here.
+impl Sound {
+    /// Happening at `at`, heard as far as `reach` says.
+    pub fn from(&mut self, at: Vec2, reach: Reach) -> &mut Self {
+        self.at = Some((at, reach));
+        self
+    }
+
+    /// Starting `delay` seconds from now.
+    pub fn after(&mut self, delay: f32) -> &mut Self {
+        self.delay = delay;
+        self
+    }
+
+    pub fn pitched(&mut self, pitch: f32) -> &mut Self {
+        self.pitch = pitch;
+        self
+    }
+
+    /// `owner`'s doing (`Sound::by`).
+    pub fn by(&mut self, owner: impl Into<Option<lightyear::prelude::PeerId>>) -> &mut Self {
+        self.by = owner.into();
+        self
+    }
+
+    /// Due `ago` seconds from now: later if it's positive; if it's negative, begun that long
+    /// ago, heard from that far in.
+    pub fn due(&mut self, ago: f32) -> &mut Self {
+        self.delay = ago.max(0.0);
+        self.begun = (-ago).max(0.0);
+        self
+    }
+}
+
+/// What wants to sound this frame, and whose lingering windup sounds to hush (a windup cut
+/// off, or one whose release never came).
 #[derive(Resource, Default)]
 pub struct SoundQueue {
     sounds: Vec<Sound>,
+    hushes: Vec<lightyear::prelude::PeerId>,
 }
 
 impl SoundQueue {
+    /// A sound at `gain` (0 to 1, as loud as it is up close), to be placed and timed with
+    /// `Sound`'s methods. One too faint to hear once placed is dropped.
+    pub fn add(&mut self, kind: Sfx, gain: f32) -> &mut Sound {
+        self.sounds.push(Sound { kind, gain: gain.min(1.0), delay: 0.0, pitch: 1.0, begun: 0.0, by: None, at: None });
+        self.sounds.last_mut().expect("just pushed")
+    }
+
     pub fn push(&mut self, kind: Sfx, gain: f32) {
-        self.push_in(kind, gain, 0.0);
+        self.add(kind, gain);
     }
 
-    pub fn push_in(&mut self, kind: Sfx, gain: f32, delay: f32) {
-        self.push_pitched(kind, gain, delay, 1.0);
+    /// `id`'s lingering windup sound, if one is playing, fades out.
+    pub fn hush(&mut self, id: lightyear::prelude::PeerId) {
+        self.hushes.push(id);
     }
+}
 
-    pub fn push_pitched(&mut self, kind: Sfx, gain: f32, delay: f32, pitch: f32) {
-        if gain > 0.01 {
-            self.sounds.push(Sound { kind, gain: gain.min(1.0), delay, pitch });
+/// How far a sound carries, by what it is.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Reach {
+    /// Steps, cloth, a gather: heard close by.
+    Small,
+    /// Swings, casts, shots, impacts, hits.
+    Combat,
+    /// Explosions, thunder, novas, a boss.
+    Big,
+    /// Our own doing (a shot's impact, a spell cast far off): heard much farther, and never
+    /// fading out entirely.
+    Own,
+    /// Heard across the whole map, never fading out: a moment everyone must know of.
+    #[allow(dead_code)]
+    Global,
+}
+
+impl Reach {
+    /// How far (meters) it carries before it's gone, and the least it ever fades to.
+    fn span(self) -> (f32, f32) {
+        match self {
+            Reach::Small => (15.0, 0.0),
+            Reach::Combat => (35.0, 0.0),
+            Reach::Big => (70.0, 0.0),
+            Reach::Own => (100.0, 0.015),
+            Reach::Global => (f32::INFINITY, 0.25),
         }
     }
 }
 
-/// How loud a sound `away` meters off is, out to `reach`: full up close, nothing past it.
-pub fn earshot(away: f32, reach: f32) -> f32 {
-    (1.0 - away / reach).clamp(0.0, 1.0)
+/// Within this (meters) a sound is as loud as it gets; past it, it halves each time the
+/// distance doubles, as sound does in the open.
+const NEAR: f32 = 3.0;
+
+/// The share of its reach over which a sound fades out to nothing at the end of it.
+const FADE_OUT: f32 = 0.3;
+
+/// How loud a sound `away` meters off is, 0 to 1: full up close, halving with each doubling of
+/// the distance, faded smoothly away over the end of its reach to the least it's heard at.
+pub fn heard(away: f32, reach: Reach) -> f32 {
+    let (far, least) = reach.span();
+    let open = NEAR / away.max(NEAR);
+    let t = if far.is_finite() { ((far - away) / (FADE_OUT * far)).clamp(0.0, 1.0) } else { 1.0 };
+    (open * t * t * (3.0 - 2.0 * t)).max(least)
 }
 
 /// How heavy a class's weapon sounds, from how slowly it attacks: a knife rides high and quick,
@@ -208,31 +291,35 @@ fn weapon_pitch(class: arena_shared::protocol::ClassId) -> f32 {
     (40.0 / class.def().attack.attack_ticks as f32).clamp(0.65, 1.35)
 }
 
-/// What a class's auto-attack sounds like: as it gathers (the windup) and as it goes off, and
-/// the pitch both play at. Each hero's is engineered for its weapon and the fantasy behind it; a
-/// figure without its own gets the plain gather and swish, pitched by its weapon's weight.
-fn attack_voice(class: arena_shared::protocol::ClassId) -> (Sfx, Sfx, f32) {
+/// What a class's auto-attack sounds like: as it gathers (the windup; silent for some, whose
+/// windup is only `strike_whoosh`) and as it goes off, and the pitch both play at. Each hero's
+/// is engineered for its weapon and the fantasy behind it; a figure without its own gets the
+/// plain gather and swish, pitched by its weapon's weight.
+fn attack_voice(class: arena_shared::protocol::ClassId) -> (Option<Sfx>, Sfx, f32) {
     match class.def().figure() {
-        "revenant" => (Sfx::GlaiveReady, Sfx::GlaiveSwing, 1.0),
-        "javelinist" => (Sfx::JavReady, Sfx::SpearThrow, 1.0),
-        "frost_mage" => (Sfx::FrostReady, Sfx::FrostCast, 1.0),
-        "warden" => (Sfx::ShieldReady, Sfx::ShieldThrust, 1.0),
-        "breaker" => (Sfx::MaulReady, Sfx::MaulSwing, 1.0),
+        "revenant" => (None, Sfx::GlaiveSwing, 1.0),
+        "javelinist" => (None, Sfx::SpearThrow, 1.0),
+        "frost_mage" => (Some(Sfx::FrostReady), Sfx::FrostCast, 1.0),
+        "warden" => (Some(Sfx::ShieldReady), Sfx::ShieldThrust, 1.0),
+        "breaker" => (Some(Sfx::MaulReady), Sfx::MaulSwing, 1.0),
         // Casters' shots sound as they leave the hand (`loose_sounds`): only the gather is theirs here.
-        "pyre_witch" => (Sfx::KindleReady, Sfx::Swing, 1.0),
-        "stormweaver" => (Sfx::StormReady, Sfx::Swing, 1.0),
-        "shade" => (Sfx::KnifeReady, Sfx::KnifeSwing, 1.0),
-        "zombie" => (Sfx::Windup, Sfx::ClawSwing, 1.0),
-        _ => (Sfx::Windup, Sfx::Swing, weapon_pitch(class)),
+        "pyre_witch" => (Some(Sfx::KindleReady), Sfx::Swing, 1.0),
+        "stormweaver" => (Some(Sfx::StormReady), Sfx::Swing, 1.0),
+        "shade" => (Some(Sfx::KnifeReady), Sfx::KnifeSwing, 1.0),
+        "zombie" => (Some(Sfx::Windup), Sfx::ClawSwing, 1.0),
+        _ => (Some(Sfx::Windup), Sfx::Swing, weapon_pitch(class)),
     }
 }
 
-/// A heavy blow's whoosh, for a class that has one: what it is, and how long (seconds) before
-/// the attack goes off it starts, its loudest just as the blow lands. The swing's own sound
-/// plays as it goes off, too late for the air the blade pushes on the way down.
+/// What sounds late in a class's windup, for one that has it: what it is, and how long
+/// (seconds) before the attack goes off it starts. A heavy blow's whoosh, its loudest just as
+/// the blow lands (the swing's own sound plays as it goes off, too late for the air the blade
+/// pushes on the way down); the javelinist going into stance, as far before the throw as
+/// `jav_draw` and `jav_whoosh` are in the recording they're cut from.
 fn strike_whoosh(class: arena_shared::protocol::ClassId) -> Option<(Sfx, f32)> {
     match class.def().figure() {
         "revenant" => Some((Sfx::GlaiveWhoosh, 0.3)),
+        "javelinist" => Some((Sfx::JavReady, 0.27)),
         _ => None,
     }
 }
@@ -240,18 +327,29 @@ fn strike_whoosh(class: arena_shared::protocol::ClassId) -> Option<(Sfx, f32)> {
 /// Every shot loosed nearby sounds as it leaves the hand, as what it is: wind over a spear, a
 /// whoof of fire, a shiver of frost, a crackle of storm.
 fn loose_sounds(
-    me: Query<&arena_shared::protocol::Pos, With<crate::Me>>,
+    clock: Option<crate::feedback::AttackClock>,
+    me: Query<&arena_shared::protocol::PlayerId, With<crate::Me>>,
     shots: Query<(&arena_shared::protocol::Pos, &arena_shared::protocol::Projectile), Added<arena_shared::protocol::Projectile>>,
     mut queue: ResMut<SoundQueue>,
 ) {
+    let my_id = me.single().ok().map(|id| id.0);
     use arena_shared::protocol::FxColor;
-    let Ok(me) = me.single() else { return };
     for (pos, projectile) in &shots {
         let def = projectile.class.def();
         // Each hero's own shot; a monster's as its bolts look.
         let sfx = match def.figure() {
-            "javelinist" => Sfx::SpearLoose,
-            "frost_mage" => Sfx::FrostLoose,
+            // The throw or cast that lets it go (its attack's release, `attack_voice`): a shot
+            // has no swing for `swing_sounds` to hear, so it sounds here, as the shot leaves the
+            // hand. The javelin and the frostbolt then fly silent.
+            "javelinist" | "frost_mage" => {
+                // On the tick it was let go, by the same clock its gather ended on
+                // (`windup_sounds`): from partway in if the news came late.
+                let (_, release, pitch) = attack_voice(projectile.class);
+                let is_me = my_id == Some(projectile.owner);
+                let due = clock.as_ref().map_or(0.0, |clock| (projectile.spawn_tick as f32 - clock.now(is_me)) / arena_shared::config::TICK_HZ as f32);
+                queue.add(release, 0.42).from(pos.0, Reach::Combat).pitched(pitch).due(due).by(projectile.owner);
+                continue;
+            }
             "pyre_witch" => Sfx::FireLoose,
             "stormweaver" => Sfx::StormLoose,
             _ => match def.look.as_ref().and_then(|look| look.bolts) {
@@ -261,7 +359,7 @@ fn loose_sounds(
                 _ => Sfx::Loose,
             },
         };
-        queue.push(sfx, 0.36 * earshot(pos.0.distance(me.0), 14.0));
+        queue.add(sfx, 0.36).from(pos.0, Reach::Combat);
     }
 }
 
@@ -283,36 +381,77 @@ fn unheard(heard: &mut bevy::platform::collections::HashMap<Entity, u32>, attack
 /// The gather before any attack: as a swing starts winding up, each figure's own sound of it.
 fn windup_sounds(
     clock: Option<crate::feedback::AttackClock>,
-    me: Query<&arena_shared::protocol::Pos, With<crate::Me>>,
     attackers: Query<
-        (Entity, &arena_shared::protocol::Pos, &arena_shared::protocol::ClassId, &arena_shared::protocol::AttackState, Has<crate::Me>),
-        (Changed<arena_shared::protocol::AttackState>, With<arena_shared::protocol::PlayerId>),
+        (Entity, &arena_shared::protocol::PlayerId, &arena_shared::protocol::Pos, &arena_shared::protocol::ClassId, &arena_shared::protocol::AttackState, Has<crate::Me>),
+        Changed<arena_shared::protocol::AttackState>,
     >,
     mut queue: ResMut<SoundQueue>,
     mut heard: Local<bevy::platform::collections::HashMap<Entity, u32>>,
+    time: Res<Time>,
+    fighters: Query<(), With<arena_shared::protocol::PlayerId>>,
+    // Each fighter's windup under way: its swing's start, the tick it goes off, and whose.
+    mut winding: Local<bevy::platform::collections::HashMap<Entity, (u32, u32, lightyear::prelude::PeerId)>>,
+    // Windups that went off: hushed a moment later in case their release was never heard
+    // (`Time` elapsed seconds), unless the fighter has started another by then.
+    mut lapsed: Local<bevy::platform::collections::HashMap<Entity, (f32, lightyear::prelude::PeerId)>>,
 ) {
-    let Ok(me) = me.single() else { return };
-    for (attacker, pos, class, attack, is_me) in &attackers {
+    // How long (seconds) a windup that went off waits on its release before it's hushed.
+    const RELEASE_GRACE: f32 = 0.5;
+    let now = time.elapsed_secs();
+    for (attacker, id, pos, class, attack, is_me) in &attackers {
+        // A windup that ended before it went off (a stop, a stun, a walk) hushes what still
+        // sounds of it; one that went off leaves it to its release, as a lingering sound lasts
+        // until then however long the shot is held drawn.
+        if let Some(&(started, release, _)) = winding.get(&attacker)
+            && attack.swing.is_none_or(|swing| swing.started_at != started)
+        {
+            winding.remove(&attacker);
+            if clock.as_ref().is_some_and(|clock| clock.now(is_me) < release as f32) {
+                queue.hush(id.0);
+            } else {
+                lapsed.insert(attacker, (now + RELEASE_GRACE, id.0));
+            }
+        }
         let Some(swing) = attack.swing else { continue };
+        lapsed.remove(&attacker);
+        winding.insert(attacker, (swing.started_at, swing.releases_at(&class.def().attack), id.0));
         if unheard(&mut heard, attacker, swing.started_at, clock.as_ref().map(|clock| clock.now(is_me))) {
             let (gather, _, pitch) = attack_voice(*class);
-            queue.push_pitched(gather, 0.4 * earshot(pos.0.distance(me.0), 10.0), 0.0, pitch);
+            if let Some(gather) = gather {
+                queue.add(gather, 0.4).from(pos.0, Reach::Small).pitched(pitch).by(id.0);
+            }
             if let Some((whoosh, lead)) = strike_whoosh(*class) {
-                let windup = swing.windup_ticks(&class.def().attack) as f32 / arena_shared::config::TICK_HZ as f32;
-                queue.push_pitched(whoosh, 0.42 * earshot(pos.0.distance(me.0), 13.0), (windup - lead).max(0.0), pitch);
+                // Timed by the clock to the tick the attack goes off, however late the news of
+                // it came, as its release is (`loose_sounds`).
+                let windup_ticks = swing.windup_ticks(&class.def().attack);
+                let windup = windup_ticks as f32 / arena_shared::config::TICK_HZ as f32;
+                let left = clock.as_ref().map_or(windup, |clock| (((swing.started_at + windup_ticks) as f32 - clock.now(is_me)) / arena_shared::config::TICK_HZ as f32).clamp(0.0, windup));
+                queue.add(whoosh, 0.42).from(pos.0, Reach::Combat).after((left - lead).max(0.0)).pitched(pitch);
             }
         }
     }
+    // A fighter gone mid-windup, or a release never heard: nothing is left sounding.
+    winding.retain(|&attacker, &mut (_, _, id)| {
+        let here = fighters.contains(attacker);
+        if !here {
+            queue.hush(id);
+        }
+        here
+    });
+    lapsed.retain(|_, &mut (due, id)| {
+        if now >= due {
+            queue.hush(id);
+        }
+        now < due
+    });
 }
 
 /// Every dash nearby sounds as the figure dashing does: plate on the move, cloth, a gale.
 fn dash_sounds(
-    me: Query<&arena_shared::protocol::Pos, With<crate::Me>>,
     dashes: Query<(Entity, &arena_shared::protocol::Pos, &arena_shared::protocol::ClassId, &arena_shared::protocol::Dashing), Changed<arena_shared::protocol::Dashing>>,
     mut queue: ResMut<SoundQueue>,
     mut heard: Local<bevy::platform::collections::HashMap<Entity, u32>>,
 ) {
-    let Ok(me) = me.single() else { return };
     for (dasher, pos, class, dashing) in &dashes {
         let Some(dash) = dashing.0 else { continue };
         // Changed fires every tick of the dash: only its first sounds.
@@ -327,7 +466,7 @@ fn dash_sounds(
             "stormweaver" => DashVoice::Gale,
             _ => DashVoice::Air,
         };
-        queue.push(Sfx::Dash(voice), 0.6 * earshot(pos.0.distance(me.0), 14.0));
+        queue.add(Sfx::Dash(voice), 0.6).from(pos.0, Reach::Combat);
     }
 }
 
@@ -335,13 +474,11 @@ fn dash_sounds(
 /// on what it lands on: grass, stone or planks. Our own are quiet and close; a big figure's are
 /// lower; a monster's shuffle is softer still.
 fn footstep_sounds(
-    me: Query<&arena_shared::protocol::Pos, With<crate::Me>>,
     map: Res<crate::rooms::CurrentMap>,
     steps: Query<(&arena_shared::protocol::Pos, &arena_shared::protocol::ClassId, Has<crate::Me>), Changed<crate::rig::Footfalls>>,
     mut queue: ResMut<SoundQueue>,
 ) {
     use arena_shared::map::{Map, Tile};
-    let Ok(me) = me.single() else { return };
     for (pos, class, is_me) in &steps {
         let surface = match map.map().get(Map::tile_of(pos.0)) {
             Tile::Bridge | Tile::Planks => Surface::Wood,
@@ -349,8 +486,8 @@ fn footstep_sounds(
             _ => Surface::Grass,
         };
         let def = class.def();
-        let gain = if is_me { 0.3 } else { 0.26 * earshot(pos.0.distance(me.0), 9.0) * if def.mob.is_some() { 0.6 } else { 1.0 } };
-        queue.push_pitched(Sfx::Step(surface), gain, 0.0, (1.0 / def.size()).clamp(0.75, 1.25));
+        let gain = if is_me { 0.3 } else { 0.26 * if def.mob.is_some() { 0.6 } else { 1.0 } };
+        queue.add(Sfx::Step(surface), gain).from(pos.0, Reach::Small).pitched((1.0 / def.size()).clamp(0.75, 1.25));
     }
 }
 
@@ -381,7 +518,6 @@ fn heartbeat(
 /// of swishes from anyone standing near (the merchant at every camp).
 fn swing_sounds(
     clock: Option<crate::feedback::AttackClock>,
-    me: Query<&arena_shared::protocol::Pos, With<crate::Me>>,
     swings: Query<
         (Entity, &arena_shared::protocol::Pos, &arena_shared::protocol::ClassId, &arena_shared::protocol::LastSwing, Has<crate::Me>),
         (Changed<arena_shared::protocol::LastSwing>, With<arena_shared::protocol::PlayerId>),
@@ -389,11 +525,10 @@ fn swing_sounds(
     mut queue: ResMut<SoundQueue>,
     mut heard: Local<bevy::platform::collections::HashMap<Entity, u32>>,
 ) {
-    let Ok(me) = me.single() else { return };
     for (swinger, pos, class, swing, is_me) in &swings {
         if unheard(&mut heard, swinger, swing.tick, clock.as_ref().map(|clock| clock.now(is_me))) {
             let (_, strike, pitch) = attack_voice(*class);
-            queue.push_pitched(strike, 0.42 * earshot(pos.0.distance(me.0), 13.0), 0.0, pitch);
+            queue.add(strike, 0.42).from(pos.0, Reach::Combat).pitched(pitch);
         }
     }
 }
@@ -408,23 +543,23 @@ mod web {
 
     use wasm_bindgen::{JsCast, JsValue};
     use wasm_bindgen_futures::{JsFuture, spawn_local};
-    use web_sys::{AudioBuffer, AudioContext, AudioContextState, AudioNode, BiquadFilterType, DynamicsCompressorNode, GainNode, OscillatorType, Response};
+    use web_sys::{AudioBuffer, AudioBufferSourceNode, AudioContext, AudioContextState, AudioNode, AudioScheduledSourceNode, BiquadFilterType, DynamicsCompressorNode, GainNode, OscillatorType, Response};
 
     /// The recordings, by file, under `sfx/` next to the page (see `sfx/CREDITS.txt` for where
-    /// each is from; all CC0 but the author's own). A sound names one by its stem.
+    /// each is from; CC0 but the author's own and the CC BY ones, which must stay credited
+    /// there). A sound names one by its stem.
     const SAMPLES: &[&str] = &[
         // Air: swishes and swings (artisticdude), a rush of air (rubberduck).
         "swish_light_1.wav", "swish_light_2.wav", "swish_light_3.wav", "swish_heavy_1.wav", "swish_heavy_2.wav", "swish_heavy_3.wav",
         "swing_1.wav", "swing_2.wav", "air_01.ogg",
         // Weapons in the air (Still North Media): spear swings, a long blade's slice slowed to a
-        // glaive, a bow drawn, a heavy arrow going by slowed to a spear.
+        // glaive.
         "spear_swing_1.wav", "spear_swing_2.wav", "spear_swing_3.wav", "blade_swing_1.wav", "blade_swing_2.wav", "blade_swing_3.wav",
-        // A javelin thrown (Pontus's own recording).
-        "jav_throw.wav",
-        "bow_draw_1.wav", "bow_draw_2.wav", "bow_draw_3.wav", "spear_flight_1.wav", "spear_flight_2.wav", "spear_flight_3.wav",
-        // Breath and the other side (qubodup; made from the above): a slowed breath, air drawn
-        // back, a tear between worlds.
-        "ghost_breath.wav", "draw_air.wav", "rift_tear.wav",
+        // A javelin drawn back and thrown (saturdaysoundguy, Freesound).
+        "jav_draw.wav", "jav_whoosh.wav",
+        // Breath and the other side (qubodup; made from the above): a slowed breath, a tear
+        // between worlds.
+        "ghost_breath.wav", "rift_tear.wav",
         // Steel: swords drawn, knives, clashes, rings (artisticdude, StarNinjas, Kenney, rubberduck).
         "unsheathe_1.wav", "unsheathe_2.wav", "ring.wav", "drawKnife1.ogg", "drawKnife2.ogg", "knifeSlice.ogg", "knifeSlice2.ogg",
         "sword_1.ogg", "sword_2.ogg", "sword_3.ogg", "clash_1.ogg", "clash_2.ogg", "clash_3.ogg", "metalClick.ogg", "chop.ogg",
@@ -434,7 +569,7 @@ mod web {
         "impactPunch_medium_000.ogg", "impactPunch_medium_001.ogg", "impactPunch_medium_002.ogg", "impactPunch_heavy_000.ogg", "impactPunch_heavy_001.ogg",
         "impactMetal_heavy_000.ogg", "impactMetal_heavy_001.ogg", "impactMetal_medium_000.ogg", "impactMetal_medium_001.ogg",
         "impactPlate_heavy_000.ogg", "impactPlate_heavy_001.ogg", "impactPlate_medium_000.ogg",
-        "impactWood_heavy_000.ogg", "impactWood_heavy_001.ogg", "impactGlass_light_000.ogg", "impactGlass_light_001.ogg", "impactGlass_medium_000.ogg",
+        "impactWood_heavy_000.ogg", "impactWood_heavy_001.ogg", "impactGlass_light_000.ogg", "impactGlass_light_001.ogg",
         "impactMining_000.ogg", "impactMining_001.ogg", "impactGeneric_light_000.ogg", "impactBell_heavy_000.ogg",
         "hit_01.ogg", "hit_02.ogg", "stones_01.ogg", "stones_02.ogg", "glass_01.ogg", "groundhit.wav",
         // Leather, cloth, coin (Kenney, artisticdude).
@@ -445,10 +580,12 @@ mod web {
         // Storm (faxcorp, rubberduck).
         "zap_hit.wav", "zap_bloom.wav", "crackle.wav", "charge.wav", "boom.wav", "thunder_01.ogg",
         // Frost (bart, IgnasD, artisticdude, rubberduck): ice crackling, snapping, cracking and
-        // breaking; a puff of cold air; splinters of ice ringing.
-        "ice.wav", "coldsnap.wav", "shatter_1.ogg", "shatter_2.ogg", "magic.wav", "ice_crack_1.wav", "ice_crack_2.wav", "ice_crack_3.wav",
-        "ice_break_1.wav", "ice_break_2.wav", "frost_air.wav", "ice_tinkle_1.wav", "ice_tinkle_2.wav", "ice_deep_1.wav", "ice_deep_2.wav",
-        "ice_deep_3.wav", "ice_thump.wav",
+        // breaking.
+        "ice.wav", "magic.wav", "ice_crack_1.wav", "ice_crack_2.wav", "ice_crack_3.wav",
+        "ice_deep_1.wav", "ice_deep_2.wav", "ice_deep_3.wav", "ice_thump.wav",
+        // Frost channelled, a frost spell's climax and a frost nova (Pontus's, generated); a frostbolt's impact
+        // (eminyildirim, Freesound).
+        "frost_channel.wav", "frost_cast.wav", "frost_nova.wav", "frost_impact.wav",
         // Footsteps (Kenney).
         "step_grass_0.ogg", "step_grass_1.ogg", "step_grass_2.ogg", "step_grass_3.ogg", "step_grass_4.ogg",
         "step_wood_0.ogg", "step_wood_1.ogg", "step_wood_2.ogg", "step_wood_3.ogg", "step_wood_4.ogg",
@@ -465,11 +602,21 @@ mod web {
         ctx: AudioContext,
         master: GainNode,
         squeeze: DynamicsCompressorNode,
+        /// What the sound being built feeds: its own place in the mix (`placed`), into `squeeze`.
+        bus: AudioNode,
         noise: AudioBuffer,
         samples: Samples,
         seed: u32,
         /// The wind is started once, the first time sound gets through.
         ambience_on: bool,
+        /// Windup sounds lingering until their attack goes off, by whose (`Sound::voice`).
+        lingering: HashMap<lightyear::prelude::PeerId, Lingering>,
+    }
+
+    /// A windup's sound still playing, waiting on its release: its source and its level.
+    struct Lingering {
+        source: AudioBufferSourceNode,
+        level: GainNode,
     }
 
     /// Built at startup (`warm_up`), so the recordings are in before the first blow.
@@ -485,6 +632,23 @@ mod web {
     /// how far apart they start, so a cleared swarm crackles instead of phasing into one blast.
     const VOICES: usize = 3;
     const STAGGER: f64 = 0.014;
+    /// How far to the side a sound off to one side is put (1: all the way): never in one ear
+    /// only.
+    const PAN_WIDTH: f32 = 0.8;
+    /// Within this (meters) a sound is right on us, in the middle; it moves out to its side
+    /// over it.
+    const PAN_NEAR: f32 = 2.0;
+    /// How the air dulls a far sound: the lowpass's cutoff (Hz) up close, how steeply it falls
+    /// with distance, and the dullest it gets.
+    const DULLING: (f32, f32, f32) = (18000.0, 0.6, 1500.0);
+    /// Above this cutoff (Hz) the dulling can't be heard, so none is made.
+    const DULL_UNHEARD: f32 = 10000.0;
+    /// How loud the frost mage's spell is as its bolt goes.
+    const FROST_SPELL: f32 = 0.354;
+    /// The frost mage's channelled crackle: how loud, and where (seconds in `frost_channel`) its
+    /// rise gives way to the bed it crackles on in (looped to its end).
+    const FROST_CHANNEL: f32 = 0.0225;
+    const FROST_BED: f64 = 1.0;
 
     /// Opens the audio (suspended until the page's first click, as browsers want) and starts
     /// fetching the recordings, so they're decoded by the time anything sounds.
@@ -501,11 +665,39 @@ mod web {
         }
     }
 
-    pub(super) fn play_sounds(mut queue: ResMut<SoundQueue>, mut audio: NonSendMut<AudioLazy>) {
-        if queue.sounds.is_empty() {
+    /// Where a sound is heard from: how far to the side (-1 left, 1 right) and how dulled by the
+    /// air between (a lowpass's cutoff, Hz), if at all.
+    #[derive(Clone, Copy)]
+    pub(super) struct Place {
+        pan: f32,
+        dull: Option<f32>,
+    }
+
+    impl Place {
+        /// Right on us: in the middle, clear.
+        const HERE: Place = Place { pan: 0.0, dull: None };
+
+        /// A sound `off` (meters, on the gameplay plane) from us, the camera's right being `right`.
+        fn of(off: Vec2, right: Vec2) -> Place {
+            let away = off.length();
+            let pan = off.normalize_or_zero().dot(right) * PAN_WIDTH * (away / PAN_NEAR).min(1.0);
+            let (clear, steep, dullest) = DULLING;
+            let dull = Some((clear * (NEAR / away.max(NEAR)).powf(steep)).max(dullest)).filter(|&cutoff| cutoff < DULL_UNHEARD);
+            Place { pan, dull }
+        }
+    }
+
+    pub(super) fn play_sounds(
+        mut queue: ResMut<SoundQueue>,
+        mut audio: NonSendMut<AudioLazy>,
+        me: Query<(&arena_shared::protocol::Pos, &arena_shared::protocol::PlayerId), With<crate::Me>>,
+        camera: Query<&GlobalTransform, With<crate::camera::CameraRig>>,
+    ) {
+        if queue.sounds.is_empty() && queue.hushes.is_empty() {
             return;
         }
-        let mut sounds = std::mem::take(&mut queue.sounds);
+        let sounds = std::mem::take(&mut queue.sounds);
+        let hushes = std::mem::take(&mut queue.hushes);
         if audio.0.is_none() {
             audio.0 = AudioOut::new();
         }
@@ -517,19 +709,40 @@ mod web {
             return;
         }
         out.ambience();
+        for id in hushes {
+            out.hush(id);
+        }
+        // Each placed round us: as loud as it is from here, off to its side. One that happens
+        // somewhere is heard only with us somewhere to hear it from.
+        let (ear, mine) = me.single().ok().map_or((None, None), |(pos, id)| (Some(pos.0), Some(id.0)));
+        let right = camera.single().ok().map_or(Vec2::X, |camera| crate::arena::to_gameplay(*camera.right()).normalize_or(Vec2::X));
+        let mut placed: Vec<(&Sound, f32, Place)> = sounds
+            .iter()
+            .filter_map(|sound| {
+                let (gain, place) = match sound.at {
+                    None => (sound.gain, Place::HERE),
+                    Some((at, reach)) => {
+                        let ear = ear?;
+                        let reach = if sound.by.is_some() && sound.by == mine { Reach::Own } else { reach };
+                        (sound.gain * heard(at.distance(ear), reach), Place::of(at - ear, right))
+                    }
+                };
+                (gain > 0.01).then_some((sound, gain, place))
+            })
+            .collect();
         // The loudest few of each kind sound, briefly staggered; the rest only thicken them.
-        sounds.sort_by(|a, b| a.kind.cmp(&b.kind).then(b.gain.total_cmp(&a.gain)));
+        placed.sort_by(|a, b| a.0.kind.cmp(&b.0.kind).then(b.1.total_cmp(&a.1)));
         let mut k = 0;
         let mut kind = None;
-        for sound in &sounds {
+        for &(sound, gain, place) in &placed {
             k = if Some(sound.kind) == kind { k + 1 } else { 0 };
             kind = Some(sound.kind);
             if k >= VOICES {
                 continue;
             }
-            let crowd = sounds.iter().filter(|s| s.kind == sound.kind).count();
-            let gain = sound.gain * (1.0 + (crowd.saturating_sub(VOICES) as f32) * 0.1).min(1.6);
-            out.play(sound.kind, gain.min(1.0), sound.delay as f64 + k as f64 * STAGGER, sound.pitch);
+            let crowd = placed.iter().filter(|s| s.0.kind == sound.kind).count();
+            let gain = gain * (1.0 + (crowd.saturating_sub(VOICES) as f32) * 0.1).min(1.6);
+            out.play(sound, gain.min(1.0), sound.delay as f64 + k as f64 * STAGGER, place);
         }
     }
 
@@ -610,7 +823,25 @@ mod web {
             noise.copy_to_channel(&samples, 0).ok()?;
             let recordings: Samples = Rc::default();
             load_samples(&ctx, &recordings);
-            Some(AudioOut { ctx, master, squeeze, noise, samples: recordings, seed: 1, ambience_on: false })
+            let bus = squeeze.clone().into();
+            Some(AudioOut { ctx, master, squeeze, bus, noise, samples: recordings, seed: 1, ambience_on: false, lingering: HashMap::new() })
+        }
+
+        /// A sound's own way into the mix, from where it is (`Place`): panned to its side, and
+        /// dulled first if it's far. `None` for one right on us, or if the nodes can't be made.
+        fn placed(&self, place: Place) -> Option<AudioNode> {
+            if place.pan.abs() < 0.01 && place.dull.is_none() {
+                return None;
+            }
+            let panner = self.ctx.create_stereo_panner().ok()?;
+            panner.pan().set_value(place.pan);
+            panner.connect_with_audio_node(&self.squeeze).ok()?;
+            let Some(cutoff) = place.dull else { return Some(panner.into()) };
+            let filter = self.ctx.create_biquad_filter().ok()?;
+            filter.set_type(BiquadFilterType::Lowpass);
+            filter.frequency().set_value(cutoff);
+            filter.connect_with_audio_node(&panner).ok()?;
+            Some(filter.into())
         }
 
         /// A number in 0..1, never the same twice.
@@ -637,7 +868,7 @@ mod web {
             let _ = p.set_value_at_time(0.0001, when);
             let _ = p.linear_ramp_to_value_at_time(peak.max(0.0002), when + attack);
             let _ = p.exponential_ramp_to_value_at_time(0.0001, when + dur);
-            g.connect_with_audio_node(&self.squeeze).ok()?;
+            g.connect_with_audio_node(&self.bus).ok()?;
             Some(g)
         }
 
@@ -655,7 +886,7 @@ mod web {
             let _ = p.set_value_at_time(peak, when + 0.003 + hold);
             let _ = p.exponential_ramp_to_value_at_time(peak * 0.06, when + 0.003 + hold + release);
             let _ = p.linear_ramp_to_value_at_time(0.0001, when + 0.003 + hold + release * 1.3);
-            g.connect_with_audio_node(&self.squeeze).ok()?;
+            g.connect_with_audio_node(&self.bus).ok()?;
             Some(g)
         }
 
@@ -704,6 +935,44 @@ mod web {
             if let Some(e) = self.held(when, peak, hold, release) {
                 self.clip(key, when, 0.0, None, rate, &e);
             }
+        }
+
+        /// A recording played from its start at `peak` from `when`, looping from `from` (seconds
+        /// in) to its end once it gets there, until it's faded (`fade`). `None` until it has
+        /// loaded.
+        fn linger(&self, key: &str, when: f64, peak: f32, from: f64) -> Option<Lingering> {
+            let buffer = self.samples.borrow().get(key)?.clone();
+            let source = self.ctx.create_buffer_source().ok()?;
+            source.set_buffer(Some(&buffer));
+            source.set_loop(true);
+            source.set_loop_start(from);
+            source.set_loop_end(buffer.duration());
+            let level = self.ctx.create_gain().ok()?;
+            let p = level.gain();
+            let peak = peak.max(0.0002);
+            let _ = p.set_value_at_time(0.0001, when);
+            let _ = p.linear_ramp_to_value_at_time(peak, when + 0.01);
+            source.connect_with_audio_node(&level).ok()?;
+            level.connect_with_audio_node(&self.bus).ok()?;
+            let scheduled: &AudioScheduledSourceNode = source.as_ref();
+            scheduled.start_with_when(when).ok()?;
+            Some(Lingering { source, level })
+        }
+
+        /// `id`'s lingering windup sound, if one is playing, faded out now.
+        fn hush(&mut self, id: lightyear::prelude::PeerId) {
+            if let Some(lingering) = self.lingering.remove(&id) {
+                self.fade(&lingering, self.ctx.current_time());
+            }
+        }
+
+        /// A lingering sound faded out quickly from `when`, and stopped.
+        fn fade(&self, lingering: &Lingering, when: f64) {
+            let p = lingering.level.gain();
+            let _ = p.cancel_scheduled_values(when);
+            let _ = p.set_target_at_time(0.0, when, 0.006);
+            let scheduled: &AudioScheduledSourceNode = lingering.source.as_ref();
+            let _ = scheduled.stop_with_when(when + 0.06);
         }
 
         /// An oscillator gliding `from` to `to` Hz through `into`, from `when` for `dur`.
@@ -796,21 +1065,21 @@ mod web {
         /// Every sound is built from recordings layered in the order the event happens, each
         /// pitched a little differently every time, with synthesis only for what no recording
         /// gives (a spectral hum, a sub thump under a blow).
-        fn play(&mut self, kind: Sfx, gain: f32, delay: f64, pitch: f32) {
+        fn play(&mut self, sound: &Sound, gain: f32, delay: f64, place: Place) {
+            let (kind, pitch, begun, voice) = (sound.kind, sound.pitch, sound.begun as f64, sound.by);
             use BiquadFilterType::{Bandpass, Highpass, Lowpass};
             use OscillatorType::{Sine, Triangle};
+            self.bus = self.placed(place).unwrap_or_else(|| self.squeeze.clone().into());
             let now = self.ctx.current_time() + 0.01 + delay;
             let g = gain;
             // A small random spread keeps a flurry from repeating. A voice tuned by ear to one
             // speed (the revenant's, the javelin's throw) only drifts off it very slightly, so
             // no two of its attacks are twins either.
-            let tuned = matches!(kind, Sfx::GlaiveReady | Sfx::GlaiveSwing | Sfx::GlaiveWhoosh | Sfx::SpearThrow);
+            let tuned = matches!(kind, Sfx::GlaiveSwing | Sfx::GlaiveWhoosh | Sfx::SpearThrow | Sfx::FrostCast | Sfx::Shatter);
             let p = self.vary(if tuned { 0.03 } else { 0.08 }) * pitch;
             const SWISH_LIGHT: [&str; 3] = ["swish_light_1", "swish_light_2", "swish_light_3"];
             const SWISH_HEAVY: [&str; 3] = ["swish_heavy_1", "swish_heavy_2", "swish_heavy_3"];
             const SPEAR_SWINGS: [&str; 3] = ["spear_swing_1", "spear_swing_2", "spear_swing_3"];
-            const BOW_DRAWS: [&str; 3] = ["bow_draw_1", "bow_draw_2", "bow_draw_3"];
-            const SPEAR_FLIGHTS: [&str; 3] = ["spear_flight_1", "spear_flight_2", "spear_flight_3"];
             const FLESH: [&str; 5] = ["impactPunch_medium_000", "impactPunch_medium_001", "impactPunch_medium_002", "impactSoft_medium_000", "impactSoft_medium_001"];
             const FLESH_HEAVY: [&str; 4] = ["impactPunch_heavy_000", "impactPunch_heavy_001", "impactSoft_heavy_000", "impactSoft_heavy_001"];
             const METAL_HEAVY: [&str; 2] = ["impactMetal_heavy_000", "impactMetal_heavy_001"];
@@ -820,7 +1089,6 @@ mod web {
             const SWORDS: [&str; 3] = ["sword_1", "sword_2", "sword_3"];
             const CLASHES: [&str; 3] = ["clash_1", "clash_2", "clash_3"];
             const ICE_CRACKS: [&str; 3] = ["ice_crack_1", "ice_crack_2", "ice_crack_3"];
-            const ICE_TINKLES: [&str; 2] = ["ice_tinkle_1", "ice_tinkle_2"];
             const ICE_DEEP: [&str; 3] = ["ice_deep_1", "ice_deep_2", "ice_deep_3"];
             match kind {
                 Sfx::Swing => {
@@ -901,7 +1169,6 @@ mod web {
                     // A shot leaving the hand: a short swing of air.
                     self.sample("swing_2", now, 0.34 * g, p * 1.05, 0.1, 0.1);
                 }
-                Sfx::GlaiveReady => {}
                 Sfx::GlaiveWhoosh => {
                     // A long haft and a heavy blade shoving through the air (a staff's swing
                     // slowed down, its whistle dulled away), the coat flapping with it.
@@ -1002,41 +1269,41 @@ mod web {
                     self.sample("cloth_heavy", now + 0.02, 0.28 * g, 0.9 * p, 0.15, 0.1);
                 }
                 Sfx::JavReady => {
-                    // The spear drawn back over the shoulder: cloth shifting, the wooden shaft
-                    // groaning in the grip (a bow's creak slowed and darkened), and the air
-                    // drawn back with the arm.
-                    let cloth = self.pick(&["cloth1", "cloth2"]);
-                    self.sample(cloth, now, 0.14 * g, 0.9 * p, 0.15, 0.1);
-                    let draw = self.pick(&BOW_DRAWS);
-                    if let Some(e) = self.held(now + 0.02, 0.14 * g, 0.3, 0.1) {
-                        self.clip_through(draw, now + 0.02, 0.0, Some(0.5), 0.7 * p, Lowpass, 1100.0, &e);
-                    }
-                    self.sample("draw_air", now + 0.08, 0.12 * g, 1.3 * p, 0.1, 0.08);
+                    // Going into stance: a soft swish late in the windup (`strike_whoosh` times
+                    // it). Never slowed. Only a faint confirmation that the attack is coming:
+                    // well under the throw, though the recording's own balance already has it
+                    // quieter.
+                    self.sample("jav_draw", now, 0.0262 * g, 1.0, 0.3, 0.05);
                 }
                 Sfx::SpearThrow => {
-                    // The arm lashing the spear away: one recording, as it is.
-                    self.sample("jav_throw", now, 0.5 * g, p, 0.15, 0.15);
-                }
-                Sfx::SpearLoose => {
-                    // The heavy shaft droning away through the air.
-                    let flight = self.pick(&SPEAR_FLIGHTS);
-                    self.sample(flight, now + 0.04, 0.45 * g, p, 0.25, 0.25);
+                    // The arm lashing the spear away: a hard whoosh, as recorded. The spear flies
+                    // silent after it.
+                    if let Some(e) = self.held(now, 0.55 * g, 0.8, 0.05) {
+                        self.clip("jav_whoosh", now, begun, None, 1.0, &e);
+                    }
                 }
                 Sfx::FrostReady => {
-                    // Frost creeping over the staff: ice crackling, swelling as it spreads, and
-                    // a crystal ticking as it sets.
-                    // Quiet, so the release lands.
-                    if let Some(e) = self.env(now, 0.2, 0.2 * g, 0.4) {
-                        self.clip("ice", now, 0.0, Some(0.4), p, &e);
+                    // Frost channelled up: the crackle rising from its start, and if the windup
+                    // outlasts it (a shot held drawn), crackling on (a long, even bed of it,
+                    // never a pattern) until the bolt goes (`FrostCast` ends it) or the windup is
+                    // cut off (`SoundQueue::hush`).
+                    let Some(voice) = voice else { return };
+                    if let Some(old) = self.lingering.remove(&voice) {
+                        self.fade(&old, now);
                     }
-                    let tick = self.pick(&ICE_TINKLES);
-                    self.sample(tick, now + 0.18, 0.05 * g, 1.5 * p, 0.05, 0.1);
+                    let Some(lingering) = self.linger("frost_channel", now, FROST_CHANNEL * g, FROST_BED) else { return };
+                    self.lingering.insert(voice, lingering);
                 }
                 Sfx::FrostCast => {
-                    // The staff thrust out, a breath of cold air pushed out with it, trailing
-                    // under the bolt's snap.
-                    let v = 0.92 + 0.16 * self.r();
-                    self.sample("frost_air", now + 0.03, 0.09 * g, v * p, 0.08, 0.25);
+                    // The spell as the bolt goes: its climax and icy tail, as recorded (from
+                    // partway in if the news of it came late).
+                    if let Some(e) = self.held(now, FROST_SPELL * g, 3.0, 0.2) {
+                        self.clip("frost_cast", now, begun, None, 1.0, &e);
+                    }
+                    // The windup's crackle ends under it: the spell has its own tail.
+                    if let Some(lingering) = voice.and_then(|voice| self.lingering.remove(&voice)) {
+                        self.fade(&lingering, now);
+                    }
                 }
                 Sfx::FrostLoose => {
                     // A frostbolt let go. The front: a hard close snap of ice, the loudest of
@@ -1199,14 +1466,9 @@ mod web {
                     }
                 }
                 Sfx::FrostNova => {
-                    // The staff struck into the ground, and ice shattering out across it: the
-                    // snap of cold, glass breaking, crystals ringing.
-                    self.sample("groundhit", now, 0.35 * g, 0.8 * p, 0.1, 0.25);
-                    self.sample("coldsnap", now, 0.48 * g, p, 0.1, 0.15);
-                    let shatter = self.pick(&["shatter_1", "shatter_2"]);
-                    self.sample(shatter, now + 0.02, 0.7 * g, p, 0.4, 0.5);
-                    self.sample("impactGlass_medium_000", now + 0.04, 0.4 * g, 0.9 * p, 0.2, 0.3);
-                    self.sample("ice", now + 0.1, 0.4 * g, p, 0.4, 0.4);
+                    // Ice cracking out across the ground all round: one recording, from its
+                    // first crack (the nova is instant), faded out soon after its burst.
+                    self.sample("frost_nova", now, 0.48 * g, 1.0, 1.0, 0.2);
                 }
                 Sfx::FireNova => {
                     // The ground igniting all round: fire going up at once, the thump of it,
@@ -1222,29 +1484,8 @@ mod web {
                     }
                 }
                 Sfx::Shatter => {
-                    // A frostbolt breaking apart: a big crack with a deep crack and a thump of
-                    // weight under it, the ice going to pieces and dying away, the crack back
-                    // off the walls, splinters ringing down one after another, and frost
-                    // settling softly for a long while after.
-                    let v = 0.92 + 0.16 * self.r();
-                    let knock = 0.9 + 0.1 * self.r();
-                    self.sample("ice_thump", now, 0.36 * g, knock * p, 0.06, 0.15);
-                    let crack = self.pick(&ICE_CRACKS);
-                    self.sample(crack, now + 0.018, 0.61 * g, 0.95 * v * p, 0.03, 0.12);
-                    let deep = self.pick(&ICE_DEEP);
-                    self.sample(deep, now + 0.02, 0.4 * g, 0.95 * v * p, 0.06, 0.18);
-                    let breaking = self.pick(&["ice_break_1", "ice_break_2", "shatter_1", "shatter_2"]);
-                    if let Some(e) = self.held(now + 0.045, 0.29 * g, 0.06, 0.35) {
-                        self.clip(breaking, now + 0.045, 0.0, Some(0.6), v * p, &e);
-                    }
-                    self.echo(crack, now + 0.018, 0.95 * v * p, 0.61 * g);
-                    let splinters = self.pick(&ICE_TINKLES);
-                    let last = if splinters == ICE_TINKLES[0] { ICE_TINKLES[1] } else { ICE_TINKLES[0] };
-                    self.sample(splinters, now + 0.16, 0.12 * g, 1.1 * v * p, 0.12, 0.25);
-                    self.sample(last, now + 0.4, 0.065 * g, 1.3 * v * p, 0.1, 0.3);
-                    if let Some(e) = self.env(now + 0.2, 0.08, 0.07 * g, 1.1) {
-                        self.clip("ice", now + 0.2, 0.05, Some(0.8), 0.8 * v * p, &e);
-                    }
+                    // A frostbolt breaking apart: a punch of ice, as the recording has it.
+                    self.sample("frost_impact", now, 0.65 * g, p, 0.5, 0.3);
                 }
                 Sfx::Wallop => {
                     // A body driven into stone: plate and flesh meeting a wall at once, and grit

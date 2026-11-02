@@ -9,7 +9,7 @@
     move_speed: 4.25,
     attack: (
         damage: 11,
-        attack_ticks: 26,
+        attack_ticks: 36,
         windup: 0.32,
         // No range: a frostbolt flies on until it meets something.
         kind: Projectile(speed: 17.0, radius: 0.28),
