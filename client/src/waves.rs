@@ -32,7 +32,7 @@ impl Plugin for WavesPlugin {
             Update,
             (
                 (show_banner, show_boss, show_over, ready_up, leave_when_over).chain(),
-                (show_satchel, open_shop, show_shop, trade).chain(),
+                (show_satchel, open_shop.before(ready_up), show_shop, trade).chain(),
                 circle_wisps,
                 (name_in_world, place_names).chain(),
             ),
@@ -45,7 +45,7 @@ const GAP: f32 = 8.0;
 /// An item's tile in our satchel, and in the shop.
 const SLOT: f32 = 44.0;
 /// The shop's width.
-const SHOP_WIDTH: f32 = 470.0;
+const SHOP_WIDTH: f32 = 520.0;
 const TIP_WIDTH: f32 = 300.0;
 
 /// The banner at the top: its lines (rebuilt as the run changes).
@@ -71,7 +71,7 @@ struct ReadyButton;
 #[derive(Component)]
 struct SatchelBar;
 
-/// The merchant's shop, at the right.
+/// The merchant's shop, in the middle of the screen.
 #[derive(Component)]
 struct ShopPanel;
 
@@ -91,18 +91,12 @@ struct HasteButton(f32);
 #[derive(Resource, Default, PartialEq)]
 struct ShopOpen(bool);
 
-/// Whether the merchant is at hand: close by, and aimed at. Then F opens the shop (not the
-/// ready-up: `ready_up`), and the hint under the crosshair says so.
-#[derive(Resource, Default, PartialEq)]
-struct MerchantAtHand(bool);
-
 /// The hint under the crosshair: press F to open the shop.
 #[derive(Component)]
 struct InteractHint;
 
 fn spawn_hud(mut commands: Commands) {
     commands.init_resource::<ShopOpen>();
-    commands.init_resource::<MerchantAtHand>();
     let top_center = |top: Val| Node { position_type: PositionType::Absolute, width: percent(100.0), top, justify_content: JustifyContent::Center, ..default() };
     commands.spawn((GameUi, top_center(px(8.0)))).with_child((
         Banner,
@@ -154,26 +148,36 @@ fn spawn_hud(mut commands: Commands) {
         Node { position_type: PositionType::Absolute, width: percent(100.0), bottom: px(100.0), justify_content: JustifyContent::Center, ..default() },
     ))
     .with_child((SatchelBar, HudButton, Node { display: Display::None, column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::all(px(5.0)), ..default() }, BackgroundColor(palette::ui::PANEL.with_alpha(0.8))));
-    commands.spawn((
-        GameUi,
-        ShopPanel,
-        HudButton,
-        Node {
-            display: Display::None,
-            position_type: PositionType::Absolute,
-            right: px(12.0),
-            top: px(64.0),
-            width: px(SHOP_WIDTH),
-            flex_direction: FlexDirection::Column,
-            row_gap: px(4.0),
-            padding: UiRect::all(px(12.0)),
-            border: UiRect::all(px(1.0)),
-            ..default()
-        },
-        BackgroundColor(palette::ui::PANEL.with_alpha(0.95)),
-        BorderColor::all(ACCENT.with_alpha(0.6)),
-        Interaction::default(),
-    ));
+    // The shop, in the middle of the screen, over the rest of the HUD.
+    commands
+        .spawn((
+            GameUi,
+            Node {
+                position_type: PositionType::Absolute,
+                width: percent(100.0),
+                height: percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            GlobalZIndex(7),
+        ))
+        .with_child((
+            ShopPanel,
+            HudButton,
+            Node {
+                display: Display::None,
+                width: px(SHOP_WIDTH),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(5.0),
+                padding: UiRect::all(px(16.0)),
+                border: UiRect::all(px(1.0)),
+                ..default()
+            },
+            BackgroundColor(palette::ui::BACKDROP.with_alpha(0.93)),
+            BorderColor::all(palette::GOLD.with_alpha(0.5)),
+            Interaction::default(),
+        ));
     // The interact hint, under the crosshair.
     commands.spawn((GameUi, top_center(percent(57.0)))).with_child((
         InteractHint,
@@ -330,19 +334,18 @@ fn show_over(mut commands: Commands, room: Res<CurrentRoom>, banner: Single<(Ent
     }
 }
 
-/// F, or the banner's button, says we're ready for the next wave (or not, again) — unless the
-/// merchant is at hand, where F is theirs (`open_shop`).
+/// F, or the banner's button, says we're ready for the next wave (or not, again). By the
+/// merchant, F is theirs first (`open_shop`, ordered before this, spends it).
 fn ready_up(
     keys: Res<ButtonInput<KeyCode>>,
     room: Res<CurrentRoom>,
     me: Option<Res<crate::rooms::Me>>,
     typing: Option<Res<crate::browser::Typing>>,
-    at_hand: Res<MerchantAtHand>,
     buttons: Query<Ref<Interaction>, With<ReadyButton>>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
     let Some(run) = room.run().filter(|run| matches!(run.phase, Phase::Shop { .. })) else { return };
-    let pressed = keys.just_pressed(KeyCode::KeyF) && !typing.is_some_and(|t| t.0) && !at_hand.0;
+    let pressed = keys.just_pressed(KeyCode::KeyF) && !typing.is_some_and(|t| t.0);
     if pressed || buttons.iter().any(clicked) {
         let ready = me.is_some_and(|me| run.ready.contains(&me.guest_id));
         request(&mut sender, RoomRequest::Ready(!ready));
@@ -485,26 +488,28 @@ const INTERACT_AIM: f32 = 0.9;
 
 /// The merchant is at hand while we're by them and aiming their way; then the hint under the
 /// crosshair shows, and F opens the shop (or shuts it), letting the cursor go to trade with.
-/// Walking off shuts it. The cursor isn't taken back for us: a click on the field does that.
+/// The press is spent, or it would also ready us up (`ready_up`, ordered after this). Walking
+/// off shuts the shop. The cursor isn't taken back for us: a click on the field does that.
 #[allow(clippy::too_many_arguments)]
 fn open_shop(
     room: Res<CurrentRoom>,
-    keys: Res<ButtonInput<KeyCode>>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
     typing: Option<Res<crate::browser::Typing>>,
     mut mode: ResMut<crate::camera::CameraMode>,
     mut cursor: Single<&mut bevy::window::CursorOptions>,
-    mut at_hand: ResMut<MerchantAtHand>,
     mut open: ResMut<ShopOpen>,
     hint: Single<&mut Node, With<InteractHint>>,
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     merchant: Query<&Pos, With<Shopkeeper>>,
 ) {
-    let both = me.single().ok().zip(merchant.iter().next()).filter(|_| room.shopping());
-    let near = both.is_some_and(|(me, merchant)| me.distance(merchant.0) <= SHOP_RADIUS);
-    let hand = near && both.is_some_and(|(me, merchant)| (merchant.0 - me.0).normalize_or_zero().dot(mode.forward()) >= INTERACT_AIM);
-    at_hand.set_if_neq(MerchantAtHand(hand));
+    let both = if room.shopping() { me.single().ok().zip(merchant.iter().next()) } else { None };
+    let (near, facing) = both.map_or((false, false), |(me, merchant)| {
+        (me.distance(merchant.0) <= SHOP_RADIUS, (merchant.0 - me.0).normalize_or_zero().dot(mode.forward()) >= INTERACT_AIM)
+    });
+    let hand = near && facing;
     let mut now = open.0 && near;
     if hand && keys.just_pressed(KeyCode::KeyF) && !typing.is_some_and(|t| t.0) {
+        keys.clear_just_pressed(KeyCode::KeyF);
         now = !now;
         if now {
             mode.unlock(&mut cursor);
@@ -546,10 +551,22 @@ fn show_shop(
     }
     commands.entity(panel).despawn_children();
     commands.entity(panel).with_children(|panel| {
-        panel.spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, ..default() }).with_children(|head| {
-            head.spawn(ui_text("THE MERCHANT", 18.0, palette::ui::TEXT));
-            head.spawn(ui_text(format!("{} gold", satchel.gold), 14.0, palette::GOLD));
-        });
+        // The header: who, and our gold, over a gold rule.
+        panel
+            .spawn((
+                Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::FlexEnd, padding: UiRect::bottom(px(8.0)), border: UiRect::bottom(px(1.0)), margin: UiRect::bottom(px(3.0)), ..default() },
+                BorderColor::all(palette::GOLD.with_alpha(0.4)),
+            ))
+            .with_children(|head| {
+                head.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|name| {
+                    name.spawn(ui_text("WARES & TRADE", 9.0, palette::ui::MUTED));
+                    name.spawn(ui_text("THE MERCHANT", 22.0, palette::GOLD));
+                });
+                head.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::FlexEnd, ..default() }).with_children(|gold| {
+                    gold.spawn(ui_text(satchel.gold.to_string(), 20.0, palette::GOLD));
+                    gold.spawn(ui_text("GOLD", 9.0, palette::ui::MUTED));
+                });
+            });
         let free = room.practice();
         let note = if free { "Practice: everything's free. Items do things, never stats." } else { "Items do things, never stats. Buy one again to raise it." };
         panel.spawn(ui_text(note, 10.0, palette::ui::MUTED));
@@ -601,7 +618,11 @@ fn show_shop(
                 }
             });
         }
-        panel.spawn(ui_text("Hover an item to see what it does. F or walking away closes.", 9.0, palette::ui::MUTED));
+        panel.spawn(Node { justify_content: JustifyContent::Center, align_items: AlignItems::Center, column_gap: px(6.0), margin: UiRect::top(px(6.0)), ..default() }).with_children(|foot| {
+            foot.spawn(ui_text("Hover an item to see what it does", 9.0, palette::ui::MUTED));
+            foot.spawn(key_chip("F", 9.0, palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.5)));
+            foot.spawn(ui_text("or walking away closes", 9.0, palette::ui::MUTED));
+        });
     });
 }
 
