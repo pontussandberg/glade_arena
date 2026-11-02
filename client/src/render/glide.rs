@@ -117,13 +117,13 @@ pub(super) fn predict_me(
     (sends, draws, attacks, jumps): (Res<crate::SentWalks>, Res<crate::SentDraws>, Res<crate::SentAttacks>, Res<crate::SentJumps>),
     mut schedule: ResMut<crate::WalkSchedule>,
     link: Query<&Link, With<Client>>,
-    mut me: Query<(Entity, &mut Pos, (&Motion, Option<&AttackState>), &ClassId, Option<&Dashing>, Option<&Chilled>, Option<&Hasted>, (Option<&Frenzy>, Option<&Fury>), Option<&Walking>, Option<&mut PredictedWalk>, Option<&Health>), With<Me>>,
+    mut me: Query<(Entity, &mut Pos, (&Motion, Option<&AttackState>), &ClassId, Option<&Dashing>, Option<&Chilled>, Option<&Hasted>, (Option<&Frenzy>, Option<&Fury>, Option<&PracticeHaste>), Option<&Walking>, Option<&mut PredictedWalk>, Option<&Health>), With<Me>>,
 ) {
     let Some(latest) = clock.latest_tick() else { return };
     let rtt = link.single().map_or(0.0, |link| link.stats.rtt.as_secs_f32());
     let guessed_lead = rtt * TICK_HZ as f32 + PREDICT_SLACK_TICKS;
     let (map, draws, attacks, jumps) = (map.map(), &*draws, &*attacks, &*jumps);
-    for (entity, mut pos, (motion, attack), class, dashing, chilled, hasted, (frenzy, fury), walking, predicted, health) in &mut me {
+    for (entity, mut pos, (motion, attack), class, dashing, chilled, hasted, (frenzy, fury, practice), walking, predicted, health) in &mut me {
         let Some(mut predicted) = predicted else {
             commands.entity(entity).insert(PredictedWalk { drawn: pos.0, motion_seen: *motion, height: motion.height, server_walk: walking.map_or(Vec2::ZERO, |w| w.0), ..default() });
             schedule.0 = 0;
@@ -185,7 +185,7 @@ pub(super) fn predict_me(
                 } else {
                     let clicked = PlayerInput { aim: Vec2::X, fire: attacks.clicked_at(tick), draw: draws.held_at(tick), ..default() };
                     let (next, _) = sim::release_attack(tick, PeerId::Server, *class, to, clicked.draw, *attack);
-                    let haste = frenzy.at(tick as f32) + fury.map_or(0.0, |fury| fury.0.at(tick as f32));
+                    let haste = attack_haste(tick as f32, (Some(&frenzy), fury.as_ref(), practice));
                     sim::start_attack_hasted(tick, *class, &clicked, next, haste)
                 };
                 (to, motion)

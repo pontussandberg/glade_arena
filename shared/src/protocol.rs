@@ -358,6 +358,25 @@ pub struct Frenzy {
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct Fury(pub Frenzy);
 
+/// Practice only: attacking this much faster (0.25 = 25% more attack speed; below 0, slower), as
+/// its player sets it in the shop (`RoomRequest::AttackSpeed`), in steps of `STEP` within
+/// `RANGE`: kept through dying, till it's set again or they leave the room. Server-authoritative
+/// and replicated: an attack's speed is fixed as it starts (`Swing::haste`, `attack_haste`).
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
+pub struct PracticeHaste(pub f32);
+
+impl PracticeHaste {
+    pub const STEP: f32 = 0.25;
+    pub const RANGE: (f32, f32) = (-0.75, 3.0);
+}
+
+/// How much faster an attack started at `tick` goes (`sim::start_attack_hasted`): its fighter's
+/// frenzy, a fury stone's rush and practice's set speed, added up. The server, our prediction and
+/// the live stats all work it out here, so they agree.
+pub fn attack_haste(tick: f32, (frenzy, fury, practice): (Option<&Frenzy>, Option<&Fury>, Option<&PracticeHaste>)) -> f32 {
+    frenzy.map_or(0.0, |f| f.at(tick)) + fury.map_or(0.0, |f| f.0.at(tick)) + practice.map_or(0.0, |p| p.0)
+}
+
 impl Frenzy {
     /// The frenzy from a zombie kill at `now`, after `kills` others this match, for a fighter
     /// that fights in `melee` or not (a melee fighter's lasts longer).
@@ -839,11 +858,13 @@ pub enum RoomRequest {
     /// Practice only: a target dummy at this point, the next class in turn: standing there, or
     /// (`walks`) walking back and forth along a line through it.
     PlaceDummy { at: Vec2, walks: bool },
-    /// Practice only: three slow zombies side by side at this point, coming for us.
-    PlaceZombies { at: Vec2 },
+    /// Practice only: this many slow zombies at this point, side by side in rows, coming for us.
+    PlaceZombies { at: Vec2, count: u8 },
     /// Practice only: our abilities with no cooldowns of their own (ready again the moment
     /// they're used), or back to normal.
     NoCooldowns(bool),
+    /// Practice only: our attacks this much faster (`PracticeHaste`), or slower below 0.
+    AttackSpeed(f32),
     /// Practice only, while dead: back on our feet now instead of when `Respawning` says.
     RespawnNow,
     /// Waves only, near the shopkeeper: buy this item, or raise it a level.
@@ -906,6 +927,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<Hasted>().replicate();
         app.component::<Frenzy>().replicate();
         app.component::<Fury>().replicate();
+        app.component::<PracticeHaste>().replicate();
         app.component::<Pickup>().replicate();
         app.component::<MaxHealth>().replicate();
         app.component::<crate::items::Satchel>().replicate();

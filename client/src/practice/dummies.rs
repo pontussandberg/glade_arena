@@ -4,7 +4,7 @@
 //! hint says so meanwhile. "Moving dummy" places one the same way that walks back and forth
 //! along a line through the spot (the server picks the line), to practice hitting something
 //! that moves. "3 slow zombies" places three zombies side by side the same way, walking at half
-//! speed, coming for us. Placing reads its own clicks (and ESC), before the fight's controls and
+//! speed, coming for us; "50 slow zombies" a horde of them, in rows. Placing reads its own clicks (and ESC), before the fight's controls and
 //! the menu, and takes them: a placing click never also attacks or walks.
 
 use arena_shared::config::PLAYER_RADIUS;
@@ -41,29 +41,29 @@ impl Plugin for DummiesPlugin {
 #[derive(Resource, Default, PartialEq)]
 pub(super) struct Placing(Option<Kind>);
 
-/// What's placed: a standing dummy, one that walks back and forth, or three slow zombies.
+/// What's placed: a standing dummy, one that walks back and forth, or this many slow zombies.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Kind {
     Dummy,
     Moving,
-    Zombies,
+    Zombies(u8),
 }
 
 impl Kind {
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Kind::Dummy => "Target dummy",
-            Kind::Moving => "Moving dummy",
-            Kind::Zombies => "3 slow zombies",
+            Kind::Dummy => "Target dummy".into(),
+            Kind::Moving => "Moving dummy".into(),
+            Kind::Zombies(count) => format!("{count} slow zombies"),
         }
     }
 
     /// What the hint says is being placed.
-    fn placing(self) -> &'static str {
+    fn placing(self) -> String {
         match self {
-            Kind::Dummy => "a target dummy",
-            Kind::Moving => "a moving dummy (it walks back and forth)",
-            Kind::Zombies => "three slow zombies (they come for you)",
+            Kind::Dummy => "a target dummy".into(),
+            Kind::Moving => "a moving dummy (it walks back and forth)".into(),
+            Kind::Zombies(count) => format!("{count} slow zombies (they come for you)"),
         }
     }
 }
@@ -74,7 +74,7 @@ struct DummyButton(Kind);
 
 /// The placing buttons, in the practice panel.
 pub(super) fn spawn_buttons(tools: &mut ChildSpawnerCommands) {
-    for kind in [Kind::Dummy, Kind::Moving, Kind::Zombies] {
+    for kind in [Kind::Dummy, Kind::Moving, Kind::Zombies(3), Kind::Zombies(50)] {
         let look = button(kind.label(), 13.0, palette::ui::PANEL, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5));
         tools.spawn((DummyButton(kind), HudButton, look));
     }
@@ -112,7 +112,7 @@ fn place_dummy(
     if mouse.just_pressed(MouseButton::Left) && !on_control {
         if let Some(at) = cursor_ground(&window, *camera).filter(|at| map.map().walkable_at(*at)) {
             let ask = match kind {
-                Kind::Zombies => RoomRequest::PlaceZombies { at },
+                Kind::Zombies(count) => RoomRequest::PlaceZombies { at, count },
                 _ => RoomRequest::PlaceDummy { at, walks: kind == Kind::Moving },
             };
             request(&mut sender, ask);
