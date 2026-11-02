@@ -1,8 +1,8 @@
 //! The waves mode, on screen: the run's banner at the top (the wave, the shop's countdown and the
 //! way to say we're ready, the monsters left, who's down), a boss's health under it, the
 //! end of a lost run across the middle; our gold and items over the action bar; the merchant's
-//! shop, open while we stand by them; and what items and monsters do (`Fx`), and wisps circling
-//! whoever carries a Wisp Lantern.
+//! shop, open while we stand by them (in practice, where we set our attack speed too); and what
+//! items and monsters do (`Fx`), and wisps circling whoever carries a Wisp Lantern.
 
 use arena_shared::items::{self, Item, MAX_LEVEL, SLOTS, Satchel};
 use arena_shared::protocol::*;
@@ -81,6 +81,10 @@ struct BuyButton(Item);
 
 #[derive(Component)]
 struct SellButton(u8);
+
+/// A button in the practice shop: our attacks this much faster from now on (`PracticeHaste`).
+#[derive(Component)]
+struct HasteButton(f32);
 
 /// Whether the shop is open: we're by the merchant in a run.
 #[derive(Resource, Default, PartialEq)]
@@ -470,7 +474,7 @@ fn show_shop(
     room: Res<CurrentRoom>,
     open: Res<ShopOpen>,
     icons: Res<ItemIcons>,
-    me: Query<(Ref<Satchel>, &ClassId), With<Me>>,
+    me: Query<(Ref<Satchel>, &ClassId, Option<Ref<PracticeHaste>>), With<Me>>,
     panel: Single<(Entity, &mut Node), With<ShopPanel>>,
 ) {
     let (panel, mut node) = panel.into_inner();
@@ -485,8 +489,8 @@ fn show_shop(
         }
         return;
     }
-    let Ok((satchel, class)) = me.single() else { return };
-    if !(open.is_changed() || satchel.is_changed()) {
+    let Ok((satchel, class, haste)) = me.single() else { return };
+    if !(open.is_changed() || satchel.is_changed() || haste.as_ref().is_some_and(Ref::is_changed)) {
         return;
     }
     commands.entity(panel).despawn_children();
@@ -498,6 +502,9 @@ fn show_shop(
         let free = room.practice();
         let note = if free { "Practice: everything's free. Items do things, never stats." } else { "Items do things, never stats. Buy one again to raise it." };
         panel.spawn(ui_text(note, 10.0, palette::ui::MUTED));
+        if free {
+            haste_row(panel, haste.map_or(0.0, |haste| haste.0));
+        }
         // Our class's own items first, set apart, then those for every class; each in two columns,
         // so the whole stock fits on a short screen.
         let (own, shared): (Vec<Item>, Vec<Item>) = Item::ALL.into_iter().filter(|item| item.fits(*class)).partition(|item| item.class().is_some());
@@ -547,12 +554,39 @@ fn show_shop(
     });
 }
 
+/// Practice's attack speed, `haste` more than the normal now: slower and faster a step
+/// (`PracticeHaste`), as far as it goes either way.
+fn haste_row(panel: &mut ChildSpawnerCommands, haste: f32) {
+    let row = Node { column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::all(px(3.0)), margin: UiRect::top(px(4.0)), ..default() };
+    panel.spawn((row, BackgroundColor(palette::ui::BACKDROP.with_alpha(0.5)))).with_children(|row| {
+        row.spawn((Node { flex_grow: 1.0, ..default() }, ui_text("ATTACK SPEED", 10.0, palette::ui::TEXT)));
+        let (least, most) = PracticeHaste::RANGE;
+        let step = |row: &mut ChildSpawnerCommands, label: &str, to: f32, can: bool| {
+            let (fill, text) = if can { (palette::ui::SELECTED, palette::GOLD) } else { (palette::ui::BACKDROP, palette::ui::MUTED) };
+            let mut button = row.spawn((HudButton, button(label, 12.0, fill, text, palette::GOLD.with_alpha(0.5))));
+            if can {
+                button.insert(HasteButton(to));
+            }
+        };
+        step(row, "-", haste - PracticeHaste::STEP, haste - PracticeHaste::STEP >= least - 1e-3);
+        let color = if haste.abs() < 1e-3 { palette::ui::TEXT } else { ACCENT };
+        row.spawn((Node { width: px(48.0), justify_content: JustifyContent::Center, ..default() }, children![ui_text(format!("{:+.0}%", haste * 100.0), 11.0, color)]));
+        step(row, "+", haste + PracticeHaste::STEP, haste + PracticeHaste::STEP <= most + 1e-3);
+    });
+}
+
 /// The shop's buttons and our items' sell buttons ask the server.
 fn trade(
     buys: Query<(Ref<Interaction>, &BuyButton)>,
     sells: Query<(Ref<Interaction>, &SellButton)>,
+    hastes: Query<(Ref<Interaction>, &HasteButton)>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
+    for (interaction, haste) in &hastes {
+        if clicked(interaction) {
+            request(&mut sender, RoomRequest::AttackSpeed(haste.0));
+        }
+    }
     for (interaction, buy) in &buys {
         if clicked(interaction) {
             request(&mut sender, RoomRequest::Buy(buy.0));

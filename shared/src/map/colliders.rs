@@ -399,6 +399,14 @@ impl Map {
     /// meets level ground or another ramp at its side. The scene lays them in treads `TREAD`
     /// deep, each as high as the slope's top under it (`Map::tread_top`).
     pub fn stairs_up(&self, t: IVec2) -> Option<Vec2> {
+        match self.index(t).and_then(|i| self.stairs.get(i)) {
+            Some(&up) => up,
+            None => self.find_stairs_up(t),
+        }
+    }
+
+    /// `stairs_up`, worked out from the lie of the land (`finished` keeps it for every tile).
+    pub(super) fn find_stairs_up(&self, t: IVec2) -> Option<Vec2> {
         if !matches!(self.get(t), Tile::Path | Tile::Bridge) {
             return None;
         }

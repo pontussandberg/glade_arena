@@ -4,13 +4,13 @@
 
 use super::*;
 
-use std::f32::consts::TAU;
-
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
+use bevy::mesh::MeshTag;
+use bevy::asset::RenderAssetUsages;
+use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 
-use crate::arena::{FlatMesh, to_world};
-use crate::plain::PlainMaterial;
+use crate::arena::to_world;
 
 /// A strike's impact: how long the rift lasts and when it starts fading (seconds), how long the
 /// dust takes to burst out, how far out (meters) past the blade, and how see-through the rift's
@@ -21,6 +21,8 @@ const RIFT_LIFE: (f32, f32) = (2.2, 3.4);
 const RIFT_CLOSES: f32 = 0.65;
 const DUST_LIFE: f32 = 0.45;
 const DUST_OUT: f32 = 0.9;
+/// How see-through the mist is at most.
+const DUST_ALPHA: f32 = 0.15;
 pub(crate) const RIFT_ALPHA: f32 = 0.9;
 pub(crate) const RIM_ALPHA: f32 = 1.0;
 /// The spectral light in the cracks: how thick its core is (a fraction of the cracks' ink), how
@@ -32,11 +34,11 @@ pub(crate) const INK_THICKNESS: f32 = 1.35;
 pub(super) const CORE_GLOW: f32 = 3.5;
 /// How bright (opaque) the light in the cracks is at most.
 pub(super) const CORE_ALPHA: f32 = 0.85;
-/// How many steps the cracks close in, each line narrowing onto its own spine as the tear fades.
-const CLOSE_STEPS: usize = 8;
 /// Through a tear's going (from when it starts closing to when it's gone, 0..1): when its cracks
-/// have closed, and when the mark starts fading out.
+/// have closed, and when the mark starts fading out. How thick the cracks are once closed (of how
+/// thick they were): a hairline left till the tear's faded.
 const CLOSED_BY: f32 = 0.8;
+const CLOSED_THICKNESS: f32 = 0.125;
 const FADES_FROM: f32 = 0.75;
 const FLARE_SECONDS: f32 = 0.18;
 const BREATH: (f32, f32) = (0.18, 5.5);
@@ -48,164 +50,50 @@ const CHUNK_THROW: (f32, f32) = (3.2, 1.6);
 const CHUNK_LIFE: f32 = 0.9;
 pub(super) const GRAVITY: f32 = 14.0;
 
-/// Cracks through ground broken over a rectangle `length` by `width`, flat, along +X from the
-/// origin (centered across it): a jagged rift down its middle, widest along its middle and
-/// narrowing to its ends, and cracks running off it out to its sides, some forking; each solid
-/// along its spine and clear at its edges, `thickness` times as thick (the same cracks: their
-/// ink, or the light in them). Broken by `seed`.
-pub(crate) fn rift_shape(length: f32, width: f32, seed: u32, thickness: f32) -> FlatMesh {
-    let mut b = FlatMesh::default();
-    let mut n = 0;
-    let mut next = || {
-        n += 1;
-        noise(seed, n)
-    };
-    // A crack along `points`, as wide as each says.
-    let crack = |b: &mut FlatMesh, points: &[(Vec3, f32)]| {
-        for pair in points.windows(2) {
-            let ((p0, w0), (p1, w1)) = (pair[0], pair[1]);
-            let (w0, w1) = (w0 * thickness, w1 * thickness);
-            let along = (p1 - p0).normalize_or(Vec3::X);
-            let side = Vec3::new(along.z, 0.0, -along.x);
-            for sign in [1.0, -1.0] {
-                b.tri_faded([p0, p0 + side * w0 * sign, p1], [1.0, 0.0, 1.0]);
-                b.tri_faded([p1, p0 + side * w0 * sign, p1 + side * w1 * sign], [1.0, 0.0, 0.0]);
-            }
-        }
-    };
-    // The rift: in short jagged steps, wobbling either side of the middle.
-    let steps = (length / 0.12).ceil().max(4.0) as usize;
-    let rift: Vec<(Vec3, f32)> = (0..=steps)
-        .map(|i| {
-            let t = i as f32 / steps as f32;
-            let wobble = if i == 0 || i == steps { 0.0 } else { (next() - 0.5) * width * 0.25 };
-            let wide = 0.09 * (t * (1.0 - t) * 4.0).sqrt().max(0.2) * (0.7 + 0.5 * next());
-            (Vec3::new(t * length, 0.0, wobble), wide)
-        })
-        .collect();
-    crack(&mut b, &rift);
-    // Cracks off it out toward the sides (a little past them), by turns, in jagged steps.
-    let forks = (length * 4.5).round().max(4.0) as usize;
-    for k in 0..forks {
-        let at = rift[((k as f32 + 0.2 + 0.6 * next()) / forks as f32 * steps as f32) as usize % (steps + 1)].0;
-        let side = if k % 2 == 0 { 1.0 } else { -1.0 };
-        let out = width / 2.0 * (0.8 + 0.5 * next()) - at.z * side;
-        let slant = (next() - 0.5) * 0.9;
-        let to = at + Vec3::new(slant * out, 0.0, -side * out);
-        let mut bend = |t: f32| at.lerp(to, t) + Vec3::new((next() - 0.5) * 0.12, 0.0, 0.0);
-        let (a, c) = (bend(0.35), bend(0.7));
-        crack(&mut b, &[(at, 0.04), (a, 0.03), (c, 0.018), (to, 0.0)]);
-        if next() < 0.5 {
-            let twig = a + Vec3::new((next() - 0.5) * 0.5, 0.0, -side * out * 0.3);
-            crack(&mut b, &[(a, 0.018), (twig, 0.0)]);
-        }
-    }
-    b
-}
-
-/// The ground broken over a rectangle `length` by `width` (as `rift_shape`): solid over it, its
-/// edges ragged and fading out a little past it. Broken by `seed`.
-pub(crate) fn rubble_shape(length: f32, width: f32, seed: u32) -> FlatMesh {
-    let mut b = FlatMesh::default();
-    // Its outline, all round, each point a little in or out: inner (solid) and outer (clear).
-    let edge = |i: usize, out: f32| ragged_edge(length, width, seed, i, out);
-    let around = RAGGED_POINTS;
-    let middle = Vec3::X * length / 2.0;
-    for i in 0..around {
-        let j = (i + 1) % around;
-        let (a, z, a_out, z_out) = (edge(i, 0.0), edge(j, 0.0), edge(i, RAGGED_SOFT), edge(j, RAGGED_SOFT));
-        b.tri_faded([middle, z, a], [1.0, 1.0, 1.0]);
-        b.tri_faded([a, z, z_out], [1.0, 1.0, 0.0]);
-        b.tri_faded([a, z_out, a_out], [1.0, 0.0, 0.0]);
-    }
-    b
-}
-
-/// How many points the ragged outline of broken ground has, and how far past it (meters) it
-/// fades out: a crisp edge.
-const RAGGED_POINTS: usize = 48;
-const RAGGED_SOFT: f32 = 0.012;
-/// The ink bleeding out round it: how far (meters, shortest and longest) and how wide at the edge.
-const BLEED_REACH: (f32, f32) = (0.04, 0.32);
-const BLEED_WIDTH: f32 = 0.035;
-
-/// The `i`th point round the ragged outline of ground broken over a rectangle `length` by
-/// `width` (as `rubble_shape`), `out` further out. Broken by `seed`.
-fn ragged_edge(length: f32, width: f32, seed: u32, i: usize, out: f32) -> Vec3 {
-    let t = (i % RAGGED_POINTS) as f32 / RAGGED_POINTS as f32 * std::f32::consts::TAU;
-    // A rounded rectangle's outline, by angle from its middle.
-    let (c, s) = (t.cos(), t.sin());
-    let r = |half: f32, v: f32| half * v.signum() * v.abs().powf(0.35);
-    // Broken, not worn: every other point a shard sticking out, the rest bitten in.
-    let shard = if i % 2 == 0 { 0.12 + 0.18 * noise(seed, 900 + (i % RAGGED_POINTS) as u32) } else { 0.0 };
-    let ragged = 0.8 + 0.22 * noise(seed, 500 + (i % RAGGED_POINTS) as u32) + shard;
-    Vec3::new(length / 2.0 + r(length / 2.0 * ragged + out, c), 0.0, r(width / 2.0 * ragged + out, s))
-}
-
-/// Ink bleeding out round the ragged outline of broken ground (`rubble_shape`'s, the same
-/// `length`, `width` and `seed`): from each shard and notch a dark tendril seeping out into the
-/// ground, of its own length, solid at the edge and thinning to nothing, some splitting in two.
-pub(crate) fn bleed_shape(length: f32, width: f32, seed: u32) -> FlatMesh {
-    let mut b = FlatMesh::default();
-    let middle = Vec3::X * length / 2.0;
-    for i in 0..RAGGED_POINTS {
-        let r = |k: u32| noise(seed, 3000 + i as u32 * 8 + k);
-        let from = ragged_edge(length, width, seed, i, -0.01);
-        let out = (from - middle).with_y(0.0).normalize_or(Vec3::X);
-        let reach = BLEED_REACH.0 + (BLEED_REACH.1 - BLEED_REACH.0) * r(0) * r(0);
-        let bend = Vec3::new(out.z, 0.0, -out.x) * (r(1) - 0.5) * reach * 0.6;
-        let tendrils = 1 + (r(2) < 0.3) as usize;
-        for t in 0..tendrils {
-            let fork = Vec3::new(out.z, 0.0, -out.x) * (t as f32 - 0.5) * 0.04 * (tendrils - 1) as f32;
-            let to = from + out * reach + bend + fork * 4.0;
-            let side = Vec3::new(out.z, 0.0, -out.x) * BLEED_WIDTH * (0.6 + 0.8 * r(3 + t as u32));
-            let mid = from.lerp(to, 0.5) + bend * 0.3 + fork;
-            b.tri_faded([from - side, mid, from + side], [1.0, 0.75, 1.0]);
-            b.tri_faded([from - side, mid - side * 0.5, mid], [1.0, 0.75, 0.75]);
-            b.tri_faded([from + side, mid, mid + side * 0.5], [1.0, 0.75, 0.75]);
-            b.tri_faded([mid - side * 0.5, to, mid + side * 0.5], [0.75, 0.0, 0.75]);
-        }
-    }
-    b
-}
-
-/// The dust the blow throws up: a flat ring 1 across, soft inside, clear at its edge.
-pub(crate) fn dust_shape() -> FlatMesh {
-    let mut b = FlatMesh::default();
-    let at = |angle: f32, r: f32| Vec3::new(angle.cos() * r, 0.0, -angle.sin() * r);
-    let steps = 32;
-    let (inner, middle, outer) = (0.3, 0.42, 0.5);
-    for i in 0..steps {
-        let (a, z) = (i as f32 / steps as f32 * TAU, (i + 1) as f32 / steps as f32 * TAU);
-        b.tri_faded([at(a, inner), at(a, middle), at(z, middle)], [0.0, 1.0, 1.0]);
-        b.tri_faded([at(a, inner), at(z, middle), at(z, inner)], [0.0, 1.0, 0.0]);
-        b.tri_faded([at(a, middle), at(a, outer), at(z, outer)], [1.0, 0.0, 0.0]);
-        b.tri_faded([at(a, middle), at(z, outer), at(z, middle)], [1.0, 0.0, 1.0]);
-    }
-    b
-}
-
 /// An impact on the ground, from `started` (seconds): the strike's break over its lane, its
-/// hitbox (`near` to `near + length` out along it, `width` across), the plain strike's grown
-/// this many times along and across to it (an empowered strike's), lying on the surfaces under it
-/// (`under`) in layers, each drawn by an entity of its own: the void under the cracks, the ink
-/// bleeding out round it, the cracks' ink and the light in them (each by how far they've
-/// closed, thinner by a step down to nothing: `CLOSE_STEPS`), and the mist bursting out.
+/// hitbox (`length` along it, `width` across), lying on the surfaces under it in layers (`lying`), each
+/// drawn by an entity of its own from the lane's frame (`frame`): the void under the cracks, the
+/// ink bleeding out round it, the cracks' ink and the light in them (each closing onto its
+/// spine), and the mist bursting out.
 #[derive(Component)]
 pub(super) struct Impact {
     pub(super) started: f32,
     /// When (seconds after it opens) it starts closing, and when it's gone.
     pub(super) life: (f32, f32),
-    under: Underfoot,
-    near: f32,
+    frame: Transform,
     length: f32,
     width: f32,
-    grown: Vec2,
-    rim: (Entity, Laid),
-    bleed: (Entity, Laid),
-    ink: (Entity, Laid),
-    core: (Entity, Laid),
-    dust: (Entity, Laid),
+    /// Which way it breaks (`BREAKS`), and whether it's drawn mirrored across its lane
+    /// (`lying_tag`).
+    breaks: u32,
+    mirrored: bool,
+    rim: Entity,
+    bleed: Entity,
+    ink: Entity,
+    core: Entity,
+    dust: Entity,
+}
+
+impl Impact {
+    fn parts(&self) -> [Entity; 5] {
+        [self.rim, self.bleed, self.ink, self.core, self.dust]
+    }
+}
+
+/// How a tear's layers are stretched `open` (0 to 1) of the way split open (from the middle out),
+/// over a lane `length` by `width`, and `across` as wide again.
+fn opened(open: f32, across: f32, (length, width): (f32, f32)) -> Vec3 {
+    Vec3::new((0.6 + 0.4 * open) * length, 1.0, open * across * width)
+}
+
+/// How much wider again (across the lane) the light in the cracks flares as the ground breaks,
+/// and how far in from where it holds the ink bleeding round it starts seeping out.
+pub(super) const FLARE_WIDE: f32 = 1.2;
+const SEEP_FROM: f32 = 0.92;
+
+/// How the mist is stretched `burst` (0 to 1) of the way burst out over a tear `length` by `width`.
+fn dusted(length: f32, width: f32, burst: f32) -> Vec3 {
+    Vec3::new(length + DUST_OUT, 1.0, width + DUST_OUT) * (0.6 + 0.6 * burst)
 }
 
 /// How high over what it lies on (meters) each layer of a tear lies, from the void up: the void,
@@ -217,10 +105,26 @@ const INK_LIFT: f32 = 0.03;
 const CORE_LIFT: f32 = 0.034;
 const DUST_LIFT: f32 = 0.04;
 const DUST_RISE: f32 = 0.25;
-/// How long (meters) the sides of the triangles a tear's layers are cut into are at most, to
-/// follow what they lie on: the cracks and the broken ground, and the soft mist.
-const TEAR_EDGE: f32 = 0.05;
-const DUST_EDGE: f32 = 0.1;
+/// How many cells (along, across) the grids a tear's layers are drawn on have (`lying_grid`), to
+/// follow what they lie on under the biggest lane: the cracks (flaring wide) and the broken
+/// ground, and the soft mist.
+pub(super) const TEAR_CELLS: UVec2 = UVec2::new(120, 90);
+const DUST_CELLS: UVec2 = UVec2::new(48, 24);
+
+/// How many ways a tear breaks (each drawn mirrored across its lane as well), each a tile of its
+/// texture (`tear_look`): how many tiles there are (along it, down it), and what of its lane each
+/// covers (from the lane's near end, along it and across it, in its length and width).
+pub(super) const BREAKS: u32 = 8;
+pub(super) const TEAR_TILES: UVec2 = UVec2::new(2, 4);
+pub(super) const TEAR_BOX: (Vec2, Vec2) = (Vec2::new(-0.3, -0.95), Vec2::new(1.3, 0.95));
+
+/// The texture each way a tear breaks is drawn from (`bake.rs`), a tile each: how opaque the
+/// broken ground is (red), and the ink bleeding round it (green); how far from the nearest
+/// crack's spine each point is, in that crack's widths there (blue, as far as `CLOSING_REACH`).
+pub(super) fn tear_look() -> Image {
+    let png = include_bytes!("tears.png");
+    Image::from_buffer(png, ImageType::Extension("png"), CompressedImageFormats::NONE, false, ImageSampler::linear(), RenderAssetUsages::RENDER_WORLD).expect("tears.png is a png")
+}
 
 /// A chunk of earth thrown up by an impact: flying (m/s), tumbling (rad/s), from `started`, till
 /// it comes down on whatever's under it.
@@ -241,7 +145,6 @@ pub(super) fn strike_ground(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<SwishAssets>,
-    mut meshes: ResMut<Assets<Mesh>>,
     mut fighters: Query<(Entity, &mut Blade, &LastSwing, &Pos, &ClassId, (&PlayerId, Option<&Team>), Option<&mut TornRifts>)>,
 ) {
     let now = time.elapsed_secs();
@@ -272,35 +175,30 @@ pub(super) fn strike_ground(
             }
         }
         // The plain strike's break, and an empowered one's: the same, grown to its lane.
-        let (Some((from, range, width)), Some((near, far, wide))) = (class.def().attack.lane(false), class.def().attack.lane_grown(swing.empowered, swing.grown)) else { continue };
+        let (Some((from, range, _)), Some((near, far, wide))) = (class.def().attack.lane(false), class.def().attack.lane_grown(swing.empowered, swing.grown)) else { continue };
         let Some(mut under) = blade.struck.take() else { continue };
         let dir = swing.dir.normalize_or(Vec2::X);
-        let length = range - from;
-        let grown = Vec2::new((far - near) / length, wide / width);
+        let big = (far - near) / (range - from);
         // Drawn as long as its rift is open, if it tears one.
         let life = class.def().attack.rift.map_or(RIFT_LIFE, |rift| {
             let open = rift.ticks as f32 / arena_shared::config::TICK_HZ as f32;
             (open * RIFT_CLOSES, open)
         });
         let seed = swing.tick;
-        // Its layers, from the void up, each laid on what's under it as it opens, flares and
-        // closes (`drive_impacts`).
-        let mut layer = |shapes: Vec<FlatMesh>, lift: f32, edge: f32, material: &Handle<PlainMaterial>| {
-            let laid = Laid::new(&mut meshes, shapes, lift, edge);
-            let drawn = commands.spawn((Mesh3d(laid.mesh.clone()), MeshMaterial3d(material.clone()), Transform::IDENTITY, NoFrustumCulling, NotShadowCaster, NotShadowReceiver));
-            (drawn.id(), laid)
+        let frame = under.frame();
+        let looks = &assets.tear;
+        let mut part = |mesh: &Handle<Mesh>, material: &Handle<LyingMaterial>| {
+            // Not shown till it's laid (`lay_impacts`) and driven (`drive_impacts`).
+            commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), frame, MeshTag(0), Visibility::Hidden, NoFrustumCulling, NotShadowCaster, NotShadowReceiver)).id()
         };
-        let closing = |thickness: f32| (0..CLOSE_STEPS).map(|i| rift_shape(length, width, seed, thickness * (1.0 - i as f32 / CLOSE_STEPS as f32))).collect::<Vec<_>>();
-        let rim = layer(vec![rubble_shape(length, width, seed)], RIM_LIFT, TEAR_EDGE, &assets.rim_fades[0]);
-        let bleed = layer(vec![bleed_shape(length, width, seed)], BLEED_LIFT, TEAR_EDGE, &assets.rim_fades[0]);
-        let ink = layer(closing(INK_THICKNESS), INK_LIFT, TEAR_EDGE, &assets.rift_fades[0]);
-        let core = layer(closing(CORE_THICKNESS), CORE_LIFT, TEAR_EDGE, &assets.core_fades[0]);
-        let dust = layer(vec![dust_shape()], DUST_LIFT, DUST_EDGE, &assets.dust_fades[0]);
+        // Each drawn over those below it in the same place: the void and the ink bleeding round
+        // it, the cracks' ink, their light, the mist.
+        let (rim, bleed, ink, core) = (part(&looks.grid, &looks.rim), part(&looks.grid, &looks.bleed), part(&looks.grid, &looks.ink), part(&looks.grid, &looks.core));
+        let dust = part(&looks.mist, &looks.dust);
         // Earth thrown up all over it, out to either side, off whatever it lies on: its
         // chunks as big as the whole lane's.
         let (along, side) = (to_world(dir, 0.0), to_world(Vec2::new(dir.y, -dir.x), 0.0));
-        let big = grown.x;
-        for i in 0..(length * CHUNKS_PER_METER).round() as u32 {
+        for i in 0..((range - from) * CHUNKS_PER_METER).round() as u32 {
             let r = |k: u32| noise(seed, 1000 + i * 8 + k);
             let across = (r(1) - 0.5) * wide;
             let local = Vec2::new(near + (far - near) * r(0), across);
@@ -319,81 +217,132 @@ pub(super) fn strike_ground(
                 NotShadowReceiver,
             ));
         }
-        commands.spawn(Impact { started: now, life, under, near, length: far - near, width: wide, grown, rim, bleed, ink, core, dust });
+        let (lane, middle, reach) = ((far - near, wide), (near + far) / 2.0, tear_reach(near, far, wide));
+        // One of the ways it breaks, mirrored every other round of them.
+        let (breaks, mirrored) = (seed % BREAKS, seed / BREAKS % 2 == 1);
+        let impact = Impact { started: now, life, frame, length: lane.0, width: lane.1, breaks, mirrored, rim, bleed, ink, core, dust };
+        commands.spawn((impact, Unlaid { under, reach, near, middle }));
     }
 }
 
-/// Shows `part` in the step of `fades` for `t` (0 to 1) of the way faded out.
-fn fade_part(parts: &mut Query<(&mut Transform, &mut MeshMaterial3d<PlainMaterial>)>, part: Entity, fades: &[Handle<PlainMaterial>], t: f32) {
-    if let Ok((_, mut material)) = parts.get_mut(part) {
-        let to = faded(fades, t);
-        if material.0 != *to {
-            material.0 = to.clone();
+/// All the ground a tear over the lane from `near` to `far`, `wide`, can come over (in the lane's
+/// plane, a box): its layers split open, flaring and mirrored (its box is the same either side of
+/// the lane), and the mist burst out.
+pub(super) fn tear_reach(near: f32, far: f32, wide: f32) -> (Vec2, Vec2) {
+    let (lane, middle) = ((far - near, wide), (near + far) / 2.0);
+    let (start, most) = (Vec2::X * near, opened(1.0, 1.0 + FLARE_WIDE, lane).xz());
+    let mist = dusted(lane.0, lane.1, 1.0).xz() / 2.0;
+    ((start + TEAR_BOX.0 * most).min(Vec2::X * middle - mist), (start + TEAR_BOX.1 * most).max(Vec2::X * middle + mist))
+}
+
+/// A tear struck, yet to be laid on what's under its lane (`under`): all the ground it can come
+/// over (`reach`), and where it's stretched from (along the lane: its near end, and its middle
+/// for the mist).
+#[derive(Component)]
+pub(super) struct Unlaid {
+    under: Underfoot,
+    reach: (Vec2, Vec2),
+    near: f32,
+    middle: f32,
+}
+
+/// Lays each tear struck on what's under it the frame after (so the strike's frame isn't held
+/// up by it), into a slot of the heights (`LyingHeights`), and shows it: none if there's no room.
+pub(super) fn lay_impacts(mut commands: Commands, mut heights: ResMut<LyingHeights>, mut impacts: Query<(Entity, &Impact, &mut Unlaid)>) {
+    for (entity, impact, mut unlaid) in &mut impacts {
+        let (lo, hi) = unlaid.reach;
+        let under = unlaid.under.heights(lo, hi);
+        let Some(slot) = heights.keep(&under, unlaid.near, unlaid.middle) else {
+            for part in impact.parts().into_iter().chain([entity]) {
+                commands.entity(part).despawn();
+            }
+            continue;
+        };
+        commands.entity(entity).remove::<Unlaid>().insert(slot);
+    }
+}
+
+/// How each of a tear's layers is drawn, whatever it lies on, each over those below it in the
+/// same place (`LyingMaterial`): the void and the ink bleeding round it, the cracks' ink, the
+/// light in them (all on one grid over its texture's box), the mist (on its own).
+pub(super) struct TearLooks {
+    grid: Handle<Mesh>,
+    mist: Handle<Mesh>,
+    rim: Handle<LyingMaterial>,
+    bleed: Handle<LyingMaterial>,
+    ink: Handle<LyingMaterial>,
+    core: Handle<LyingMaterial>,
+    dust: Handle<LyingMaterial>,
+}
+
+impl TearLooks {
+    pub(super) fn new(meshes: &mut Assets<Mesh>, images: &mut Assets<Image>, materials: &mut Assets<LyingMaterial>, heights: &LyingHeights) -> Self {
+        let tear = images.add(tear_look());
+        let mut look = |color: Color, lift: f32, from_middle: bool, drawn: LyingShape, depth_bias: f32| {
+            materials.add(LyingMaterial::new(color, lift, from_middle, heights, (&tear, TEAR_TILES, drawn), depth_bias))
+        };
+        TearLooks {
+            grid: meshes.add(lying_grid(TEAR_BOX.0, TEAR_BOX.1, TEAR_CELLS, false)),
+            mist: meshes.add(lying_grid(Vec2::splat(-0.5), Vec2::splat(0.5), DUST_CELLS, false)),
+            rim: look(palette::TATTERS.with_alpha(RIM_ALPHA), RIM_LIFT, false, LyingShape::Channel(0), 0.0),
+            bleed: look(palette::TATTERS.with_alpha(RIM_ALPHA), BLEED_LIFT, false, LyingShape::Channel(1), 0.0),
+            ink: look(palette::INK.with_alpha(RIFT_ALPHA), INK_LIFT, false, LyingShape::Closing(2), 2.0),
+            core: look(palette::WISP.with_alpha(CORE_ALPHA), CORE_LIFT, false, LyingShape::Closing(2), 3.0),
+            dust: look(palette::WISP.with_alpha(DUST_ALPHA), DUST_LIFT, true, LyingShape::Ring, 4.0),
         }
     }
 }
 
+/// Shows `part` (`lying_at` its lane's `frame`) stretched by `stretch`, its cracks `thickness`
+/// thick, `opaque` (0 to 1): not drawn at all while it's clear.
+fn show_part(parts: &mut Query<(&mut Transform, &mut MeshTag, &mut Visibility)>, part: Entity, lies: (&HeightsSlot, u32, bool), frame: Transform, stretch: Vec3, thickness: f32, opaque: f32) {
+    let Ok((mut transform, mut tag, mut visibility)) = parts.get_mut(part) else { return };
+    visibility.set_if_neq(if opaque <= 0.0 { Visibility::Hidden } else { Visibility::Inherited });
+    transform.set_if_neq(lying_at(frame, stretch));
+    tag.set_if_neq(lying_tag(lies, thickness, opaque));
+}
+
 /// Tears split open at once, light flaring in their cracks, linger glowing and breathing, then
-/// close and fade; their mist bursts out and is gone. Each layer is laid again on what's under
-/// it as it changes (`Laid`).
-pub(super) fn drive_impacts(
-    mut commands: Commands,
-    time: Res<Time>,
-    assets: Res<SwishAssets>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut impacts: Query<(Entity, &mut Impact)>,
-    mut parts: Query<(&mut Transform, &mut MeshMaterial3d<PlainMaterial>)>,
-) {
+/// close and fade; their mist bursts out and is gone. Each layer lies on what's under it however
+/// it's stretched (`lying.wgsl`): only its transform and its tag change.
+pub(super) fn drive_impacts(mut commands: Commands, time: Res<Time>, impacts: Query<(Entity, &Impact, Option<&HeightsSlot>)>, mut parts: Query<(&mut Transform, &mut MeshTag, &mut Visibility)>) {
     let now = time.elapsed_secs();
-    for (entity, impact) in &mut impacts {
-        let impact = impact.into_inner();
+    for (entity, impact, slot) in &impacts {
         let age = now - impact.started;
         if age >= impact.life.1 {
-            for part in [impact.rim.0, impact.bleed.0, impact.ink.0, impact.core.0, impact.dust.0, entity] {
+            for part in impact.parts().into_iter().chain([entity]) {
                 commands.entity(part).despawn();
             }
             continue;
         }
-        let (under, grown, from) = (&mut impact.under, impact.grown, Vec3::X * impact.near);
-        // Splitting open fast, from the middle out, then still: grown to its lane, and `across`
-        // as wide again.
+        // Not laid yet (`lay_impacts`).
+        let Some(slot) = slot else { continue };
+        let lies = (slot, impact.breaks, impact.mirrored);
+        let (frame, lane) = (impact.frame, (impact.length, impact.width));
+        // Splitting open fast, from the middle out, then still.
         let open = crate::ease::ease_out(0.0, 0.07, age);
-        let opened = |across: f32| Vec3::new((0.6 + 0.4 * open) * grown.x, 1.0, open * across * grown.y);
         // As it goes: the cracks closing in first, done a little before the end; the mark
         // fading out later, slow at first and quicker and quicker, gone at the end.
         let going = ((age - impact.life.0) / (impact.life.1 - impact.life.0)).max(0.0);
-        let closed = (going / CLOSED_BY).min(1.0);
+        let narrowed = 1.0 - (1.0 - CLOSED_THICKNESS) * (going / CLOSED_BY).min(1.0);
         let faded_out = ((going - FADES_FROM) / (1.0 - FADES_FROM)).clamp(0.0, 1.0).powi(2);
         // Closing in as it fades: each crack narrowing onto its own spine.
-        let step = ((closed * CLOSE_STEPS as f32) as usize).min(CLOSE_STEPS - 1);
-        impact.ink.1.lay(&mut meshes, under, step, from, opened(1.0));
-        fade_part(&mut parts, impact.ink.0, &assets.rift_fades, faded_out);
+        show_part(&mut parts, impact.ink, lies, frame, opened(open, 1.0, lane), INK_THICKNESS * narrowed, 1.0 - faded_out);
         // The light in the cracks: flaring wide and full as the ground breaks, then glowing lower,
         // breathing, and closing with the tear as it fades.
         let flare = 1.0 - (age / FLARE_SECONDS).min(1.0);
         let breath = 1.0 - BREATH.0 * (0.5 + 0.5 * (age * BREATH.1).sin());
         let bright = (1.0 - faded_out) * (0.7 * breath + 0.3 * flare).max(flare);
-        impact.core.1.lay(&mut meshes, under, step, from, opened(1.0 + 1.2 * flare));
-        fade_part(&mut parts, impact.core.0, &assets.core_fades, 1.0 - bright);
+        show_part(&mut parts, impact.core, lies, frame, opened(open, 1.0 + FLARE_WIDE * flare, lane), CORE_THICKNESS * narrowed, bright);
         // The ink seeps out a little after the ground breaks, then holds and fades with it.
         let seep = 1.0 - (1.0 - (age / 0.35).min(1.0)).powi(2);
-        impact.bleed.1.lay(&mut meshes, under, 0, from, opened(1.0) * (0.92 + 0.08 * seep));
-        fade_part(&mut parts, impact.bleed.0, &assets.rim_fades, faded_out.max(1.0 - seep));
-        impact.rim.1.lay(&mut meshes, under, 0, from, opened(1.0));
-        fade_part(&mut parts, impact.rim.0, &assets.rim_fades, faded_out);
+        let seeped = SEEP_FROM + (1.0 - SEEP_FROM) * seep;
+        show_part(&mut parts, impact.bleed, lies, frame, opened(open, 1.0, lane) * Vec3::new(seeped, 1.0, seeped), 1.0, (1.0 - faded_out).min(seep));
+        show_part(&mut parts, impact.rim, lies, frame, opened(open, 1.0, lane), 1.0, 1.0 - faded_out);
         // The mist bursting out over it, rising off it, and gone.
-        let t = (age / DUST_LIFE).min(1.0);
-        if let Ok((mut dust, _)) = parts.get_mut(impact.dust.0) {
-            if t < 1.0 {
-                let burst = crate::ease::ease_out(0.0, DUST_LIFE, age);
-                let middle = from + Vec3::X * impact.length / 2.0;
-                impact.dust.1.lay(&mut meshes, under, 0, middle, Vec3::new(impact.length + DUST_OUT, 1.0, impact.width + DUST_OUT) * (0.6 + 0.6 * burst));
-                dust.translation.y = DUST_RISE * burst;
-            } else {
-                dust.scale = Vec3::ZERO;
-            }
-        }
-        fade_part(&mut parts, impact.dust.0, &assets.dust_fades, t);
+        let burst = crate::ease::ease_out(0.0, DUST_LIFE, age);
+        let risen = frame.with_translation(frame.translation + Vec3::Y * DUST_RISE * burst);
+        show_part(&mut parts, impact.dust, lies, risen, dusted(impact.length, impact.width, burst), 1.0, 1.0 - (age / DUST_LIFE).min(1.0));
     }
 }
 

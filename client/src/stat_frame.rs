@@ -239,15 +239,15 @@ fn spawn_my_frame(
 fn update_live_stats(
     clock: crate::feedback::AttackClock,
     map: Res<crate::rooms::CurrentMap>,
-    me: Query<(&ClassId, &AttackState, (Option<&Frenzy>, Option<&Fury>), (&Pos, Option<&Chilled>, Option<&Hasted>, Option<&crate::swish::TornRifts>), (Option<&Motion>, Option<&crate::render::PredictedWalk>)), (With<Me>, With<PlayerId>)>,
+    me: Query<(&ClassId, &AttackState, (Option<&Frenzy>, Option<&Fury>, Option<&PracticeHaste>), (&Pos, Option<&Chilled>, Option<&Hasted>, Option<&crate::swish::TornRifts>), (Option<&Motion>, Option<&crate::render::PredictedWalk>)), (With<Me>, With<PlayerId>)>,
     frame: Option<Single<&MyFrame>>,
     mut texts: Query<(&mut Text, &mut TextColor)>,
 ) {
-    let (Some(frame), Ok((class, attack, (frenzy, fury), (pos, chilled, hasted, rifts), (motion, predicted)))) = (frame, me.single()) else { return };
+    let (Some(frame), Ok((class, attack, (frenzy, fury, practice), (pos, chilled, hasted, rifts), (motion, predicted)))) = (frame, me.single()) else { return };
     let def = class.def();
     let now = clock.now(true);
     let empowered = attack.armed_at(now) && def.attack.follow_up.is_some();
-    let haste = attack.primed.map_or(0.0, |(_, speed)| speed) + frenzy.map_or(0.0, |frenzy| frenzy.at(now)) + fury.map_or(0.0, |fury| fury.0.at(now));
+    let haste = attack.primed.map_or(0.0, |(_, speed)| speed) + attack_haste(now, (frenzy, fury, practice));
     let shown = [
         (frame.0.crit, crit_text(def, empowered, attack.primed.is_some()), crit_text(def, false, false)),
         (frame.0.speed, speed_text(def, empowered, haste), speed_text(def, false, 0.0)),
