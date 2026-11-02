@@ -45,7 +45,7 @@ const GAP: f32 = 8.0;
 /// An item's tile in our satchel, and in the shop.
 const SLOT: f32 = 44.0;
 /// The shop's width.
-const SHOP_WIDTH: f32 = 520.0;
+const SHOP_WIDTH: f32 = 620.0;
 const TIP_WIDTH: f32 = 300.0;
 
 /// The banner at the top: its lines (rebuilt as the run changes).
@@ -169,8 +169,8 @@ fn spawn_hud(mut commands: Commands) {
                 display: Display::None,
                 width: px(SHOP_WIDTH),
                 flex_direction: FlexDirection::Column,
-                row_gap: px(5.0),
-                padding: UiRect::all(px(16.0)),
+                row_gap: px(7.0),
+                padding: UiRect::all(px(22.0)),
                 border: UiRect::all(px(1.0)),
                 ..default()
             },
@@ -559,17 +559,17 @@ fn show_shop(
             ))
             .with_children(|head| {
                 head.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|name| {
-                    name.spawn(ui_text("WARES & TRADE", 9.0, palette::ui::MUTED));
-                    name.spawn(ui_text("THE MERCHANT", 22.0, palette::GOLD));
+                    name.spawn(ui_text("WARES & TRADE", 11.0, palette::ui::MUTED));
+                    name.spawn(ui_text("THE MERCHANT", 27.0, palette::GOLD));
                 });
                 head.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::FlexEnd, ..default() }).with_children(|gold| {
-                    gold.spawn(ui_text(satchel.gold.to_string(), 20.0, palette::GOLD));
-                    gold.spawn(ui_text("GOLD", 9.0, palette::ui::MUTED));
+                    gold.spawn(ui_text(satchel.gold.to_string(), 24.0, palette::GOLD));
+                    gold.spawn(ui_text("GOLD", 11.0, palette::ui::MUTED));
                 });
             });
         let free = room.practice();
         let note = if free { "Practice: everything's free. Items do things, never stats." } else { "Items do things, never stats. Buy one again to raise it." };
-        panel.spawn(ui_text(note, 10.0, palette::ui::MUTED));
+        panel.spawn(ui_text(note, 12.0, palette::ui::MUTED));
         if free {
             haste_row(panel, haste.map_or(0.0, |haste| haste.0));
         }
@@ -581,47 +581,47 @@ fn show_shop(
             if stock.is_empty() {
                 continue;
             }
-            panel.spawn((Node { margin: UiRect::top(px(4.0)), ..default() }, ui_text(title, 10.0, color)));
-            let grid = Node { display: Display::Grid, grid_template_columns: RepeatedGridTrack::flex(2, 1.0), column_gap: px(GAP), row_gap: px(3.0), ..default() };
+            panel.spawn((Node { margin: UiRect::top(px(5.0)), ..default() }, ui_text(title, 12.0, color)));
+            let grid = Node { display: Display::Grid, grid_template_columns: RepeatedGridTrack::flex(2, 1.0), column_gap: px(GAP), row_gap: px(5.0), ..default() };
             panel.spawn(grid).with_children(|grid| {
                 for item in stock {
                     let level = satchel.level(item);
                     let price = satchel.price_of(item, *class, free);
                     let own = item.class().is_some();
                     grid.spawn((
-                        Node { column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::all(px(3.0)), border: UiRect::left(px(if own { 2.0 } else { 0.0 })), ..default() },
+                        Node { column_gap: px(8.0), align_items: AlignItems::Center, padding: UiRect::all(px(5.0)), border: UiRect::left(px(if own { 2.0 } else { 0.0 })), ..default() },
                         BackgroundColor(if own { palette::GOLD.with_alpha(0.12) } else { palette::ui::BACKDROP.with_alpha(0.5) }),
                         BorderColor::all(palette::GOLD),
                     ))
                     .with_children(|row| {
-                        let tile = item_tile(row, &icons, item, level, 32.0);
+                        let tile = item_tile(row, &icons, item, level, 40.0);
                         let mut commands = row.commands();
                         item_tip(&mut commands.entity(tile), item, level, true);
                         row.spawn(Node { flex_direction: FlexDirection::Column, flex_grow: 1.0, flex_basis: px(0.0), ..default() }).with_children(|words| {
                             let name = if level > 0 { format!("{} {level}/{MAX_LEVEL}", item.name()) } else { item.name().to_string() };
-                            words.spawn(ui_text(name, 11.0, palette::ui::TEXT));
-                            words.spawn(ui_text(item.trigger().label(), 8.0, trigger_color(item)));
+                            words.spawn(ui_text(name, 13.0, palette::ui::TEXT));
+                            words.spawn(ui_text(item.trigger().label(), 10.0, trigger_color(item)));
                         });
                         match price {
                             Ok(cost) => {
                                 let affordable = satchel.gold >= cost;
                                 let (fill, text) = if affordable { (palette::ui::SELECTED, palette::GOLD) } else { (palette::ui::BACKDROP, palette::ui::MUTED) };
                                 let label = if free { "FREE".to_string() } else { cost.to_string() };
-                                row.spawn((BuyButton(item), HudButton, button(label, 10.0, fill, text, palette::GOLD.with_alpha(0.5))));
+                                row.spawn((BuyButton(item), HudButton, button(label, 12.0, fill, text, palette::GOLD.with_alpha(0.5))));
                             }
                             Err(why) => {
                                 let why = if level >= MAX_LEVEL { "MAX" } else if why.starts_with("No room") { "FULL" } else { "-" };
-                                row.spawn(ui_text(why, 10.0, palette::ui::MUTED));
+                                row.spawn(ui_text(why, 12.0, palette::ui::MUTED));
                             }
                         }
                     });
                 }
             });
         }
-        panel.spawn(Node { justify_content: JustifyContent::Center, align_items: AlignItems::Center, column_gap: px(6.0), margin: UiRect::top(px(6.0)), ..default() }).with_children(|foot| {
-            foot.spawn(ui_text("Hover an item to see what it does", 9.0, palette::ui::MUTED));
-            foot.spawn(key_chip("F", 9.0, palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.5)));
-            foot.spawn(ui_text("or walking away closes", 9.0, palette::ui::MUTED));
+        panel.spawn(Node { justify_content: JustifyContent::Center, align_items: AlignItems::Center, column_gap: px(6.0), margin: UiRect::top(px(8.0)), ..default() }).with_children(|foot| {
+            foot.spawn(ui_text("Hover an item to see what it does", 11.0, palette::ui::MUTED));
+            foot.spawn(key_chip("F", 11.0, palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.5)));
+            foot.spawn(ui_text("or walking away closes", 11.0, palette::ui::MUTED));
         });
     });
 }
@@ -629,9 +629,9 @@ fn show_shop(
 /// Practice's attack speed, `haste` more than the normal now: slower and faster a step
 /// (`PracticeHaste`), as far as it goes either way.
 fn haste_row(panel: &mut ChildSpawnerCommands, haste: f32) {
-    let row = Node { column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::all(px(3.0)), margin: UiRect::top(px(4.0)), ..default() };
+    let row = Node { column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::all(px(5.0)), margin: UiRect::top(px(4.0)), ..default() };
     panel.spawn((row, BackgroundColor(palette::ui::BACKDROP.with_alpha(0.5)))).with_children(|row| {
-        row.spawn((Node { flex_grow: 1.0, ..default() }, ui_text("ATTACK SPEED", 10.0, palette::ui::TEXT)));
+        row.spawn((Node { flex_grow: 1.0, ..default() }, ui_text("ATTACK SPEED", 12.0, palette::ui::TEXT)));
         let (least, most) = PracticeHaste::RANGE;
         let step = |row: &mut ChildSpawnerCommands, label: &str, to: f32, can: bool| {
             let (fill, text) = if can { (palette::ui::SELECTED, palette::GOLD) } else { (palette::ui::BACKDROP, palette::ui::MUTED) };
@@ -642,7 +642,7 @@ fn haste_row(panel: &mut ChildSpawnerCommands, haste: f32) {
         };
         step(row, "-", haste - PracticeHaste::STEP, haste - PracticeHaste::STEP >= least - 1e-3);
         let color = if haste.abs() < 1e-3 { palette::ui::TEXT } else { ACCENT };
-        row.spawn((Node { width: px(48.0), justify_content: JustifyContent::Center, ..default() }, children![ui_text(format!("{:+.0}%", haste * 100.0), 11.0, color)]));
+        row.spawn((Node { width: px(52.0), justify_content: JustifyContent::Center, ..default() }, children![ui_text(format!("{:+.0}%", haste * 100.0), 13.0, color)]));
         step(row, "+", haste + PracticeHaste::STEP, haste + PracticeHaste::STEP <= most + 1e-3);
     });
 }
