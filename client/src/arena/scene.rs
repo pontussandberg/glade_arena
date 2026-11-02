@@ -298,15 +298,16 @@ fn build_arena(
     let flame = meshes.add(faceted(Cone::new(0.16, 0.42).mesh().resolution(5).build()));
     let flame_mat = materials.add(glow(TORCH_FLAME, 8.0));
     for (i, &p) in m.torches.iter().enumerate() {
-        // A standing torch is a brazier post, taller than anyone; one on a wall is a short stake.
+        // A standing torch is a brazier taller than anyone; one on a wall is a short stake. The
+        // flame and its light go where the ground and the post put them.
         let (base, post_height) = m.torch_post(p);
-        props.block(Vec3::new(0.14, post_height, 0.14), theme.bark, Transform::from_translation(to_world(p, base + post_height / 2.0)));
+        let lit = props.light_post(&mut rng, p, base, post_height);
         commands
             .spawn((
                 ArenaScene,
                 Torch { phase: i as f32 * 1.7 },
                 PointLight { color: TORCH_LIGHT, intensity: TORCH_INTENSITY, range: 12.0, shadow_maps_enabled: false, ..default() },
-                Transform::from_translation(to_world(p, base + post_height + 0.5)),
+                Transform::from_translation(to_world(p, lit + 0.5)),
             ))
             .with_child((Mesh3d(flame.clone()), MeshMaterial3d(flame_mat.clone()), Transform::from_xyz(0.0, -0.3, 0.0)));
     }
@@ -704,6 +705,45 @@ impl Props {
                 self.block(Vec3::new(size.x, PARAPET_HEIGHT, size.y), color.darker(0.05), top);
             }
         }
+    }
+
+    /// A standing light (`Map::torches`): on the ground a brazier — a plinth of stone, a squared
+    /// post bound in iron, braces up under an iron basket the fire burns in; on a ruin's top just
+    /// a short iron-collared stake. Returns the height the fire sits at, ground and all.
+    fn light_post(&mut self, rng: &mut Lcg, p: Vec2, base: f32, height: f32) -> f32 {
+        use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, TAU};
+        // Turned a little its own way, as anything planted by hand is.
+        let yaw = Quat::from_rotation_y(rng.range(0.0, TAU));
+        let at = |h: f32| Transform::from_translation(to_world(p, h)).with_rotation(yaw);
+        let top = base + height;
+        let fire = (self.ground)(p) + top;
+        if base > 0.0 {
+            self.block(Vec3::new(0.12, height, 0.12), self.theme.bark, at(base + height / 2.0));
+            self.block(Vec3::new(0.16, 0.05, 0.16), IRON, at(top - 0.14));
+            return fire;
+        }
+        // The plinth, in two steps of stone.
+        self.block(Vec3::new(0.46, 0.2, 0.46), self.theme.stone, at(0.1));
+        self.block(Vec3::new(0.3, 0.16, 0.3), self.theme.wall, at(0.26));
+        // The post, bound in iron.
+        self.block(Vec3::new(0.13, top - 0.2, 0.13), self.theme.bark, at((top - 0.2) / 2.0 + 0.06));
+        for band in [0.6, 1.4] {
+            self.block(Vec3::new(0.16, 0.05, 0.16), IRON, at(band));
+        }
+        // Braces from the post up under the basket's corners.
+        for k in 0..4 {
+            let out = yaw * Quat::from_rotation_y(FRAC_PI_4 + k as f32 * FRAC_PI_2);
+            let t = Transform::from_translation(to_world(p, top - 0.32) + out * Vec3::X * 0.1).with_rotation(out * Quat::from_rotation_z(-0.5));
+            self.block(Vec3::new(0.04, 0.34, 0.04), IRON, t);
+        }
+        // The basket: an iron floor in four walls, the fire in it.
+        self.block(Vec3::new(0.26, 0.05, 0.26), IRON, at(top - 0.12));
+        for k in 0..4 {
+            let out = yaw * Quat::from_rotation_y(k as f32 * FRAC_PI_2);
+            let t = Transform::from_translation(to_world(p, top - 0.03) + out * Vec3::X * 0.155).with_rotation(out);
+            self.block(Vec3::new(0.05, 0.16, 0.36), IRON, t);
+        }
+        fire
     }
 
     /// Fences (`Map::fences`): posts a meter apart with two rails between.
