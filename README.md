@@ -1,18 +1,18 @@
 # Arena
 
-Browser PvP arena brawler: top-down 3D presentation on 2D gameplay rules, with one authoritative
-server and League-style netcode: clients send commands, nothing is predicted, and other players
-are interpolated.
+Browser PvP arena brawler: a third-person 3D presentation on 2D gameplay rules, with one
+authoritative server and League-style netcode: clients send commands, only your own walking is
+predicted, and other players are interpolated.
 
 The fight happens on one of three maps on a 1 m tile grid, picked by the room's leader (or
 switched in practice): River Crossing, a forest clearing with a river through the middle crossed
 by a stone bridge and two fords; Riven Gorge, a chasm that shots fly over and the bold leap (fall
 short and you fall in), with rope bridges and waygates that jump you to the far side; and
-Ravenhold, a fortress over a village by a river. Ruined walls, boulders and trees give cover. Movement is
-point-and-click like LoL or OSRS: **right click** walks to a tile (pathfinding around obstacles),
-**left click** auto-attacks toward the cursor (a skillshot), **Q** uses your class's ability
-toward the cursor, **S** stops, **A** rings how far your shots fly (until the next key or
-click). Your ability's cooldown shows on an icon at the bottom of your screen, and a minimap in
+Ravenhold, a fortress over a village by a river. Ruined walls, boulders and trees give cover. The
+camera is third person, Smite-style, over your fighter's right shoulder, and you aim where it
+looks: the mouse turns it, **WASD** walks relative to it, **holding left click** auto-attacks
+onto the crosshair's line (a skillshot, up or down too), and your abilities' keys use them the
+same way. Your abilities' cooldowns show on icons at the bottom of your screen, and a minimap in
 the corner shows everyone.
 
 Before joining you pick a **class** in the lobby, where it stands on a stage to look at (drag
@@ -38,10 +38,10 @@ again), and the next may start once its attack timer (`attack_ticks`) has run ou
 has gone off, the cast bar under your health bar fills until then. A click before then is dropped,
 not queued. The attack goes
 off part way through that time, after a windup (`windup`, a part of the attack per class): the
-spear leaving the hand, the blade reaching its target. You stand still with your aim locked
-during the windup, and an order to move (a right click, S, walking keys) cancels it: no attack,
-and you may attack again at once. After it has gone off, the rest is backswing: move whenever you
-like, cutting the animation short, while the timer runs on. Nothing on screen shows when the
+spear leaving the hand, the blade reaching its target. You keep walking through the windup (a
+shot drawn slows you), and the attack follows your aim until it goes off. After it has gone
+off, the rest is backswing: move whenever you like, cutting the animation short, while the timer
+runs on. Nothing on screen shows when the
 attack has gone off but your fighter itself, so learning each class's release point is the skill
 check (attack, then step, then attack again). Attack speed (only the Revenant's follow-up for now)
 shortens the timer and the windup alike, and plays the animation faster. Everyone sees the windup in
@@ -207,8 +207,9 @@ scripts/  build-web.sh, serve.mjs
 ### How a tick works
 
 - After connecting, a client sends `ChooseClass` once; the server spawns its player then.
-- Clients send only **commands** (`PlayerCommand`: walk to the point they right-clicked, stop,
-  walk with the keys, attack held toward an aim, cast Q), League style, never positions. They're
+- Clients send only **commands** (`PlayerCommand`: walk with the keys, attack held toward an aim,
+  the aim as the camera turns, cast an ability, jump; a bot also walks to a point, or stops),
+  League style, never positions. They're
   sent when something changes (a click goes out right away; the aim while attacking at most once
   a tick) on a reliable channel, and the server applies each one the moment it arrives, to the
   player's intent (`PlayerInput`), which the sim runs on every tick. The server drops a
@@ -221,9 +222,10 @@ scripts/  build-web.sh, serve.mjs
   clear. The map uses no platform math functions (sin, atan2), so native and WASM agree to the
   bit (the client picks the clicked point, `walk_target`, that the server walks to).
 - Walls, rocks, trees and the forest edge block movement and shots; water blocks movement only.
-- **Nothing is predicted.** Your own fighter is shown as the server last said it was (not
-  interpolated, for the least delay), so a click shows about a round trip later: ~75-100 ms on a
-  60 ms link, not noticeable below ~40 ms ping. The destination marker shows at once.
+- **Only your own walking is predicted.** Your fighter is drawn where your keys will have taken
+  it by the time the server has them, by the same sim the server walks it with
+  (`render::glide`); where the server turns out to disagree, the difference is eased away.
+  Everything else (an attack going off, an ability) shows about a round trip later.
 - Other players are **interpolated** between server updates, a little in the past. Their
   `AttackState`, `Cooldowns` and `Dashing` are shown on that same timeline, so a cast bar and a dash line
   up with where you see them; except that a throw shows the moment its spear appears
@@ -272,8 +274,7 @@ cargo never removes outdated ones itself.
 #                 who it leaves behind; frost nova freezing a revenant (no walk, no dash),
 #                 then letting it go; frostbolts slowing
 #   inputs.rs     4 fps client firing once per click; a frozen client's fighter finishing its
-#                 walk; attacking cancels the walk, moving cancels the windup but not the
-#                 backswing
+#                 walk; attacking cancels the walk, and walking off keeps the windup
 cargo test
 
 # server (run from the repo root; writes client/web/digest.txt for the browser; see Logs below)
@@ -290,7 +291,7 @@ cargo run -p arena-client
 # a sparring partner: a native client played by a simple bot
 ARENA_BOT=1 cargo run -p arena-client -- 99 revenant
 
-# to watch two bots fight, start a second one, then in your client press V and Tab to them
+# to watch two bots fight, start a second one, then in your client press F1 to move the camera on to them
 ARENA_BOT=1 cargo run -p arena-client -- 98 javelinist
 ```
 
@@ -299,17 +300,13 @@ its hash from `digest.txt`, so after restarting the server, reload the page. Chr
 support WebTransport with certificate hashes.
 
 Controls: in the lobby, pick a class with a click or its number key and enter with the button or
-Enter; in the arena, right click to move, S to stop, left
-click to attack toward the cursor, Q for your ability toward the cursor. The camera stays locked on
-you; the mouse wheel zooms.
-
-In practice, the "Free camera" switch in the practice tools turns on a free, WoW-style camera
-for looking at fighters up close. It follows behind you: WASD walks relative to it, holding
-the right mouse button and dragging (or the arrow keys) turns it, the wheel (or + / -) zooms,
-down to arm's length. There the right button only turns the camera: click to move is off. Tab
-moves it on to the next fighter, to watch them play (and after the last, back to
-you). Switching it off goes back; leaving practice does too. The keys for the current camera
-are listed top left, under the ping (with the free camera also jitter).
+Enter. In the arena the camera is third person, behind you over your right shoulder: a click
+captures the mouse, which then turns it (Esc frees it again; until then, dragging with the right
+button or the arrow keys turn it). WASD walks relative to it, holding left click attacks onto the
+crosshair, the number keys use your abilities, Space jumps, the wheel (or + / -) zooms, down to
+arm's length, holding Tab shows the scoreboard, and F1 moves the camera on to the next fighter,
+to watch them play (and after the last, back to you). V puts it in first person, at your
+fighter's eyes, and back (not finished yet). The keys are listed top left, under the ping.
 
 Two tabs work: a hidden tab keeps simulating and networking without rendering (see
 `client/src/hidden_tab.rs`, which works around Bevy 0.19 ignoring Lightyear's keepalive). If a

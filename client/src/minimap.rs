@@ -2,8 +2,7 @@
 //! (so it's exactly what blocks movement), every fighter as a dot in its ring color, every
 //! pickup as its icon while it's lying there or the seconds until it's back, every waygate end
 //! as a ring (dim while it's closed), where we're walking to as a small ring in our color, and
-//! which way we look: over the shoulder, a cone out from our dot; from above, a frame round what
-//! the camera sees. Drawn again when the map changes.
+//! which way we look, as a cone out from our dot. Drawn again when the map changes.
 //!
 //! In the corner it shows the ground round us, zoomed in, following us (`MinimapView`); M opens
 //! the whole map big in the middle of the screen, and closes it again.
@@ -14,11 +13,10 @@ use arena_shared::protocol::*;
 use bevy::prelude::*;
 
 use crate::Me;
-use crate::camera::{CameraMode, CameraPlaced};
+use crate::camera::CameraPlaced;
 use crate::feedback::AttackClock;
 use crate::arena::{self, palette};
-use crate::render::{HudButton, Relation, button_fill, clicked, crisp_image, ground_at, key_chip, pixel_art, ui_text};
-use crate::tooltip::{Side, hover_shows, tip, tip_text, tip_title};
+use crate::render::{HudButton, Relation, button_fill, clicked, crisp_image, pixel_art, ui_text};
 use crate::rooms::CurrentMap;
 
 pub struct MinimapPlugin;
@@ -31,10 +29,9 @@ impl Plugin for MinimapPlugin {
             Update,
             (
                 draw_map.run_if(resource_changed::<CurrentMap>),
-                (frame_minimap, (draw_dots, frame_view, point_cone)).chain().in_set(CameraPlaced),
+                (frame_minimap, (draw_dots, point_cone)).chain().in_set(CameraPlaced),
                 (spawn_markers, update_markers).chain().after(frame_minimap),
                 (spawn_gate_marks, update_gate_marks).chain().after(frame_minimap),
-                (click_lock, show_lock).chain(),
                 (left_fullscreen, click_fullscreen, show_fullscreen).chain(),
             ),
         );
@@ -93,16 +90,12 @@ const MARKER: f32 = 22.0;
 const MARKER_TEXT: f32 = 14.0;
 const GATE_MARK: f32 = 14.0;
 
-/// The minimap's picture; dots and the view frame are its children. A right click on it walks
-/// there (`render::read_local_input`).
+/// The minimap's picture; dots and marks are its children. A click on it is the HUD's, not the
+/// field's (`render::read_local_input`).
 #[derive(Component)]
 pub(crate) struct Minimap;
 
-/// What the camera sees.
-#[derive(Component)]
-struct ViewFrame;
-
-/// Which way we look, over the shoulder: a cone out from our dot.
+/// Which way we look: a cone out from our dot.
 #[derive(Component)]
 struct LookCone;
 
@@ -114,25 +107,14 @@ pub(crate) struct DestinationDot;
 /// The destination's ring's size.
 const DESTINATION: f32 = 9.0;
 
-/// The camera's lock, just left of the minimap's bottom-left corner: clicking it (or Y) locks the
-/// camera on your fighter or unlocks it (`CameraMode::unlocked`). Its padlock is drawn in `art`.
-#[derive(Component)]
-struct CameraLock {
-    art: Entity,
-}
+/// The full screen button's size (as big as the passive's icon), its gap from the minimap, and
+/// how big a pixel of its picture is.
+const BUTTON: f32 = 46.0;
+const BUTTON_GAP: f32 = 8.0;
+const ART_PIXEL: f32 = 3.0;
 
-/// The lock's size (as big as the passive's icon) and its gap from the minimap.
-const LOCK: f32 = 46.0;
-const LOCK_GAP: f32 = 8.0;
-/// The padlock, old-school pixel art: shut, and open (its shackle swung up off the right).
-const PADLOCK: [&[&str]; 2] = [
-    &["..###..", ".#...#.", ".#...#.", "#######", "###.###", "###.###", "#######"],
-    &["..###..", ".#...#.", ".#.....", "#######", "###.###", "###.###", "#######"],
-];
-const PADLOCK_PIXEL: f32 = 3.0;
-
-/// The full screen button, just left of the camera's lock: clicking it fills the screen with the
-/// game, or gives it back. Its picture is drawn in `art`.
+/// The full screen button, just left of the minimap's bottom-left corner: clicking it fills the
+/// screen with the game, or gives it back. Its picture is drawn in `art`.
 #[derive(Component)]
 struct FullscreenButton {
     art: Entity,
@@ -218,11 +200,6 @@ fn spawn_minimap(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
             ImageNode::default(),
         ))
         .with_child((
-            ViewFrame,
-            Node { position_type: PositionType::Absolute, border: UiRect::all(px(1.0)), ..default() },
-            BorderColor::all(palette::ui::TEXT),
-        ))
-        .with_child((
             LookCone,
             Node { position_type: PositionType::Absolute, width: px(CONE), height: px(CONE), ..default() },
             ImageNode { image: cone, color: palette::YOU.with_alpha(0.9), ..default() },
@@ -244,14 +221,6 @@ fn spawn_minimap(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
             Visibility::Hidden,
         ))
         .with_children(|minimap| {
-            let tip = minimap
-                .spawn(tip(Side::Above, 0.0, 220.0))
-                .with_children(|tip| {
-                    tip.spawn(tip_title("Camera"));
-                    tip.spawn(tip_text("Locked, it follows you. Unlocked, it stays put: move the cursor to the screen's edges to look around."));
-                })
-                .id();
-            let art = minimap.spawn(Node { width: percent(100.0), height: percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }).id();
             let full_art = minimap.spawn(Node { width: percent(100.0), height: percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }).id();
             minimap
                 .spawn((
@@ -260,38 +229,16 @@ fn spawn_minimap(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                     button_fill(palette::ui::PANEL),
                     Node {
                         position_type: PositionType::Absolute,
-                        left: px(-2.0 * (LOCK + LOCK_GAP)),
+                        left: px(-(BUTTON + BUTTON_GAP)),
                         bottom: px(0.0),
-                        width: px(LOCK),
-                        height: px(LOCK),
+                        width: px(BUTTON),
+                        height: px(BUTTON),
                         border: UiRect::all(px(2.0)),
                         ..default()
                     },
                     BorderColor::all(palette::ui::MUTED),
                 ))
                 .add_child(full_art);
-            minimap
-                .spawn((
-                    CameraLock { art },
-                    HudButton,
-                    button_fill(palette::ui::PANEL),
-                    hover_shows(tip),
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(-(LOCK + LOCK_GAP)),
-                        bottom: px(0.0),
-                        width: px(LOCK),
-                        height: px(LOCK),
-                        border: UiRect::all(px(2.0)),
-                        ..default()
-                    },
-                    BorderColor::all(palette::ui::MUTED),
-                ))
-                .add_children(&[art, tip])
-                .with_child((
-                    Node { position_type: PositionType::Absolute, left: px(2.0), top: px(1.0), ..default() },
-                    children![key_chip("Y", 9.0, palette::ui::TEXT, Color::NONE)],
-                ));
         });
 }
 
@@ -337,28 +284,7 @@ fn show_fullscreen(
         return;
     }
     *shown = Some(full);
-    commands.entity(button.art).despawn_children().with_children(|art| pixel_art(art, FULLSCREEN_ART[full as usize], PADLOCK_PIXEL, palette::ui::TEXT));
-}
-
-/// A click on the lock locks or unlocks the camera.
-fn click_lock(lock: Single<Ref<Interaction>, With<CameraLock>>, mut mode: ResMut<CameraMode>) {
-    if clicked(lock.into_inner()) {
-        mode.unlocked = !mode.unlocked;
-    }
-}
-
-/// The lock shows the camera's: shut and plain while it follows you, open and lit while it's
-/// unlocked. Drawn anew only when that changes (the camera's mode is changed for much else,
-/// every frame).
-fn show_lock(mut commands: Commands, mode: Res<CameraMode>, lock: Single<(Ref<CameraLock>, &mut BorderColor)>, mut shown: Local<Option<bool>>) {
-    let (lock, mut border) = lock.into_inner();
-    if *shown == Some(mode.unlocked) && !lock.is_added() {
-        return;
-    }
-    *shown = Some(mode.unlocked);
-    let color = if mode.unlocked { palette::ui::ACCENT } else { palette::ui::TEXT };
-    border.set_if_neq(BorderColor::all(if mode.unlocked { palette::ui::ACCENT } else { palette::ui::MUTED }));
-    commands.entity(lock.art).despawn_children().with_children(|art| pixel_art(art, PADLOCK[mode.unlocked as usize], PADLOCK_PIXEL, color));
+    commands.entity(button.art).despawn_children().with_children(|art| pixel_art(art, FULLSCREEN_ART[full as usize], ART_PIXEL, palette::ui::TEXT));
 }
 
 /// Puts the destination's ring on `at`, on `map`'s minimap showing `view`.
@@ -420,18 +346,17 @@ fn frame_minimap(
     }
 }
 
-/// Which way we look, over the shoulder (`CameraMode::free`): the cone out from our dot, turned
-/// the way the camera faces. Hidden looking down from above, or off what the minimap shows.
+/// Which way we look: the cone out from our dot, turned the way the camera faces. Hidden while
+/// we have no fighter, or off what the minimap shows.
 fn point_cone(
     current: Res<CurrentMap>,
     view: Res<MinimapView>,
-    mode: Res<CameraMode>,
     camera: Single<&GlobalTransform, With<crate::camera::CameraRig>>,
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     cone: Single<(&mut Node, &mut UiTransform, &mut Visibility), With<LookCone>>,
 ) {
     let (mut node, mut turn, mut visibility) = cone.into_inner();
-    let Some(pos) = me.single().ok().filter(|_| mode.free) else {
+    let Ok(pos) = me.single() else {
         visibility.set_if_neq(Visibility::Hidden);
         return;
     };
@@ -629,38 +554,5 @@ fn update_gate_marks(
         let open = gate.closed_for(now) == 0.0;
         let color = if open { palette::SPIRIT } else { palette::SPIRIT.with_alpha(0.3) };
         border.set_if_neq(BorderColor::all(color));
-    }
-}
-
-/// Frame the ground the camera sees: where the screen's corners hit the ground, boxed. Not for
-/// the action camera (`CameraMode::free`): it looks out to the horizon, over the ground's end.
-fn frame_view(
-    current: Res<CurrentMap>,
-    view: Res<MinimapView>,
-    mode: Res<CameraMode>,
-    camera: Single<(&Camera, &GlobalTransform), (With<crate::camera::CameraRig>, Changed<GlobalTransform>)>,
-    mut frame: Single<&mut Node, With<ViewFrame>>,
-) {
-    let display = if mode.free { Display::None } else { Display::Flex };
-    if frame.display != display {
-        frame.display = display;
-    }
-    if mode.free {
-        return;
-    }
-    let map = current.map();
-    let (camera, transform) = *camera;
-    let Some(size) = camera.logical_viewport_size() else { return };
-    let corners = [Vec2::ZERO, Vec2::new(size.x, 0.0), size, Vec2::new(0.0, size.y)];
-    let (mut min, mut max) = (Vec2::MAX, Vec2::MIN);
-    for corner in corners {
-        let Some(ground) = ground_at(camera, transform, corner) else { return };
-        let at = view.on_minimap(map, ground);
-        (min, max) = (min.min(at), max.max(at));
-    }
-    let (min, max) = (min.clamp(Vec2::ZERO, view.size), max.clamp(Vec2::ZERO, view.size));
-    let wanted = [px(min.x), px(min.y), px(max.x - min.x), px(max.y - min.y)];
-    if [frame.left, frame.top, frame.width, frame.height] != wanted {
-        [frame.left, frame.top, frame.width, frame.height] = wanted;
     }
 }

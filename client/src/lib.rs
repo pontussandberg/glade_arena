@@ -134,7 +134,8 @@ pub struct ChosenClass(pub Option<ClassId>);
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct DesiredInput(pub PlayerInput);
 
-/// Set to stop walking (S): sent as `PlayerCommand::Stop`, then cleared.
+/// Set to stop walking (a headless client, as the server's tests drive one): sent as
+/// `PlayerCommand::Stop`, then cleared.
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct StopWalking(pub bool);
 
@@ -195,7 +196,7 @@ impl SentAttacks {
 }
 
 /// The server tick the next walk we send is for: the newest tick our fighter's prediction steps
-/// (`render::glide` sets it each frame); 0 without the action camera, for at once.
+/// (`render::glide` sets it each frame); 0 without the camera (a headless bot), for at once.
 #[derive(Resource, Default)]
 pub struct WalkSchedule(pub u32);
 
@@ -359,21 +360,21 @@ fn send_commands(
             sent_walks.0.pop_front();
         }
     }
-    // In action mode the aim is the camera's: its direction, its pitch (`climb`) and how far to
-    // our right its line passes (`aside`, where a shot comes onto it). It's sent as the camera
-    // turns while our attack winds up (the only time the server has a use for it), so the attack
+    // With the camera the aim is its: its direction, its pitch (`climb`) and how far to our
+    // right its line passes (`aside`, where a shot comes onto it). It's sent as the camera turns
+    // while our attack winds up (the only time the server has a use for it), so the attack
     // follows it until it goes off (`PlayerCommand::Aim`); the click that starts one carries the
-    // direction itself, and the pitch goes ahead of it if it changed. Out of action mode the
-    // pitch is sent level once, so no shot keeps the last one.
+    // direction itself, and the pitch goes ahead of it if it changed. A client without one (a
+    // headless bot) sends a changed pitch at once.
     #[cfg(feature = "render")]
-    let action = mode.as_ref().is_some_and(|mode| mode.free);
+    let camera = mode.is_some();
     #[cfg(not(feature = "render"))]
-    let action = false;
+    let camera = false;
     let winding_up = attack.is_some_and(|attack| attack.winding_up().is_some());
     let pitched = input.climb != sent.climb || input.aside != sent.aside;
     let turned = input.aim != sent.aim || pitched;
     let firing = input.fire && due(sent.attack_at);
-    if (action && winding_up && turned && due(sent.aim_at)) || (pitched && (firing || !action)) {
+    if (camera && winding_up && turned && due(sent.aim_at)) || (pitched && (firing || !camera)) {
         send(PlayerCommand::Aim(input.aim, input.climb, input.aside));
         (sent.aim, sent.climb, sent.aside, sent.aim_at) = (input.aim, input.climb, input.aside, now);
     }
@@ -422,7 +423,7 @@ struct WalkWhenOrdered(Option<Vec2>);
 
 /// Starting an attack or a dash drops the destination (the server drops it by itself): hide its
 /// marker. Once per attack or dash (by its start tick), as the server's state shows it, and only
-/// the destination we had when we ordered it: one clicked since (to cancel a windup, say) has
+/// the destination we had when we ordered it: one clicked since has
 /// gone to the server after the order, so it stands, and still needs sending if it hasn't been.
 fn forget_walk_on_attack(
     mut desired: ResMut<DesiredInput>,

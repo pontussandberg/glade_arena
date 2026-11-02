@@ -1,5 +1,6 @@
-//! Auto-attacks: started, winding up, going off (a swing or a shot) or cancelled, and whether
-//! a swing reaches a target.
+//! Auto-attacks: started, winding up, going off (a swing or a shot) or lost to a knock-up, and
+//! whether a swing reaches a target. Nothing a player does cancels one: once started, it goes
+//! off.
 
 use super::*;
 
@@ -24,7 +25,7 @@ pub enum Attack {
 /// player stands then (winding up roots it, but a dash mid-windup still moves it), or a shot
 /// with its button still held (`input.draw`) once that's let go; after that it may walk away
 /// while the attack timer runs out. An attack started while `quick_until` is armed is quick
-/// (`follow_up`), and uses it up as it goes off: cancelled first, the next is.
+/// (`follow_up`), and uses it up as it goes off: lost to a knock-up first, the next is.
 pub fn step_attack(
     tick: u32,
     owner: PeerId,
@@ -54,7 +55,7 @@ pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, held:
     }
     if let Some(Swing { dir, quick, aside, .. }) = state.winding_up().filter(|swing| tick >= swing.releases_at(&class.def().attack)) {
         state.released_at = Some(tick);
-        // An attack going off uses up the `follow_up` (one cancelled first doesn't), and a
+        // An attack going off uses up the `follow_up` (one lost to a knock-up first doesn't), and a
         // primed one the prime.
         state.quick_until = None;
         if state.swing.is_some_and(|swing| swing.primed) {
@@ -108,9 +109,9 @@ pub fn winding_speed(class: ClassId, attack: &AttackState) -> f32 {
     if shoots(class) && attack.winding_up().is_some() { crate::config::DRAW_SPEED } else { 1.0 }
 }
 
-/// An order to move cancels an attack still winding up: it never goes off, and the next may
-/// start at once. One that has gone off is left be (its timer runs on).
-pub fn cancel_attack(mut state: AttackState) -> AttackState {
+/// Knocked up, an attack still winding up is lost: it never goes off, and the next may start at
+/// once. One that has gone off is left be (its timer runs on). Nothing else interrupts one.
+pub fn interrupt_attack(mut state: AttackState) -> AttackState {
     if state.winding_up().is_some() {
         state.swing = None;
     }

@@ -7,8 +7,6 @@
 //! `shapes.rs`, colored by their `Ink`; they're all drawn together, laid out anew every frame
 //! (`draw_parts`) into buffers kept on the GPU (`draw.rs`), so hundreds of them cost one draw.
 
-use std::f32::consts::{FRAC_PI_2, TAU};
-
 use arena_shared::config::TICK_HZ;
 use arena_shared::protocol::*;
 use bevy::asset::AssetEventSystems;
@@ -37,7 +35,7 @@ impl Plugin for FxPlugin {
         app.init_resource::<Parts>();
         draw::plugin(app);
         app.add_systems(Startup, load_art);
-        app.add_systems(Update, (recipes::play_new, strike_fx, burning_flames, downed::mark_downed, death::burst_deaths, death::spark_hits));
+        app.add_systems(Update, (recipes::play_new, downed::mark_downed, death::burst_deaths, death::spark_hits));
         // Sorted from the camera once it has moved for the frame, and culled by its view as it is
         // then: after its frustum's worked out, and before Bevy hands out the frame's mesh asset
         // news (it reads the meshes, and that news), so it runs alongside the UI's layout instead
@@ -49,91 +47,6 @@ impl Plugin for FxPlugin {
 /// Where the parts are laid out to be drawn for the frame (`draw_parts`).
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct DrawParts;
-
-/// How often (seconds) a burning fighter sheds a new round of flames.
-const FLAME_EVERY: f32 = 0.08;
-
-/// Fire on the burning (`Burning`): tongues of flame licking up off them, more the more stacks,
-/// and embers rising, for as long as the fire lasts, on the timeline each fighter is drawn on.
-fn burning_flames(
-    mut commands: Commands,
-    time: Res<Time>,
-    clock: AttackClock,
-    art: Res<FxArt>,
-    fighters: Query<(&Pos, &Burning, Has<crate::Me>)>,
-    mut next: Local<f32>,
-) {
-    let now = time.elapsed_secs();
-    if now < *next {
-        return;
-    }
-    *next = now + FLAME_EVERY;
-    for (pos, burning, is_me) in &fighters {
-        let stacks = burning.at(clock.now(is_me));
-        if stacks == 0 {
-            continue;
-        }
-        let at = arena::to_world(pos.0, 0.0);
-        let seed = (now * 997.0) as u32 ^ pos.0.x.to_bits().rotate_left(7) ^ pos.0.y.to_bits();
-        for i in 0..2 + 2 * stacks {
-            let r = |n: u32| crate::swish::noise(seed, i * 8 + n);
-            let angle = r(1) * TAU;
-            let out = 0.12 + 0.25 * r(2);
-            let from = at + Vec3::new(angle.cos() * out, 0.1 + 1.0 * r(3), -angle.sin() * out);
-            // The tongue lies along +X: stood up, leaning a little, turned any way.
-            let lick = Quat::from_rotation_y(r(4) * TAU) * Quat::from_rotation_z(FRAC_PI_2 - 0.4 * r(5));
-            let length = 0.35 + 0.35 * r(6);
-            let rise = Motion::Thrown { velocity: Vec3::Y * (1.0 + 0.7 * r(7)), gravity: -0.6, tumble: Vec3::ZERO };
-            let tongue = Part::new(now, [0.05, 0.18, 0.45], Ink::Flame, from).sized(Vec3::new(length, 1.0, length * 0.6));
-            put(&mut commands, &art.tongue, tongue.turn(lick).grow(0.3).shrink(0.2).flicker(0.3).motion(rise));
-            if r(0) < 0.4 {
-                let ember = Motion::Thrown { velocity: Vec3::new(r(1) - 0.5, 1.5 + r(2), r(3) - 0.5), gravity: -0.3, tumble: Vec3::ZERO };
-                put(&mut commands, &art.mote, Part::new(now, [0.02, 0.3, 0.7], Ink::Spark, from + Vec3::Y * 0.3).size(0.03 + 0.02 * r(4)).motion(ember).flicker(0.5).shrink(0.2));
-            }
-        }
-    }
-}
-
-/// Each hero's auto-attack lands with a contact effect of its own, where its swing went
-/// (`LastSwing`): the warden's shield shoving the air ahead of it, the breaker's maul breaking
-/// the ground. Once per swing, by the swing's own tick, never by the component's change flag
-/// (replication marks it changed every update).
-fn strike_fx(
-    mut commands: Commands,
-    time: Res<Time>,
-    art: Res<FxArt>,
-    map: Res<crate::rooms::CurrentMap>,
-    swings: Query<(Entity, &Pos, &ClassId, &LastSwing, (Option<&arena_shared::protocol::Motion>, Option<&crate::render::PredictedWalk>)), (Changed<LastSwing>, With<PlayerId>)>,
-    mut seen: Local<bevy::platform::collections::HashMap<Entity, u32>>,
-) {
-    let now = time.elapsed_secs();
-    for (entity, pos, class, swing, (motion, predicted)) in &swings {
-        // The first sighting only notes the swing: it may be long past.
-        match seen.insert(entity, swing.tick) {
-            Some(before) if before != swing.tick => {}
-            _ => continue,
-        }
-        let dir = swing.dir.normalize_or(Vec2::X);
-        let at = (pos.0, crate::render::ground_under(map.map(), motion, predicted, pos.0));
-        match class.def().figure() {
-            "warden" => recipes::shield_push(&mut commands, &art, now, at, dir, swing.tick),
-            "breaker" => recipes::tremor(&mut commands, &art, now, at, dir, swing.tick),
-            _ => {}
-        }
-    }
-}
-
-/// A nova going off at `at` (on the plane, and how high what it's on is; `radius` round) now, cast by a figure of `figure`, drawn as its own
-/// burst, if it has one: the pyre witch's ring of cinders, the breaker's and the warden's quake.
-/// Whether it did (the frost mage's, and anyone else's, is a burst of ice: `render::show_novas`).
-pub(crate) fn cast_nova(commands: &mut Commands, art: &FxArt, now: f32, figure: &str, at: (Vec2, f32), radius: f32, seed: u32) -> bool {
-    match figure {
-        "pyre_witch" => recipes::cinder_ring(commands, art, now, at, radius, seed),
-        "breaker" | "warden" => recipes::quake(commands, art, now, at, radius, seed),
-        _ => return false,
-    }
-    true
-}
 
 /// How many steps a fading material goes through, from its full opacity to clear.
 const FADE_STEPS: usize = 12;

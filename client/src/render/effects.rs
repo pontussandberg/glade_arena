@@ -45,10 +45,9 @@ pub(super) struct Frost {
     pub(super) shown: (bool, bool),
 }
 
-/// Each new nova's burst: the caster's own (fire, or the ground heaving: `fx::cast_nova`), or
-/// else a burst of ice: a bright shockwave races out from the caster to the nova's edge, a spray
-/// of ice erupts where the staff struck, frost spreads over the ground, and shards burst up in
-/// two rings as the wave passes them. `Cooldowns` comes from the server (others' on the same
+/// Each new nova's burst of ice: a bright shockwave races out from the caster to the nova's
+/// edge, a spray of ice erupts where the staff struck, frost spreads over the ground, and shards
+/// burst up in two rings as the wave passes them. `Cooldowns` comes from the server (others' on the same
 /// delayed timeline as their positions); each nova is drawn once, and one cast before we saw its
 /// caster isn't (`SeenCasts`).
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -57,7 +56,6 @@ pub(super) fn show_novas(
     time: Res<Time>,
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<PlainMaterial>>,
-    art: Res<crate::fx::FxArt>,
     mut casters: Query<(&ClassId, &Pos, &Cooldowns, &mut SeenCasts, (Option<&Motion>, Option<&PredictedWalk>)), (With<PlayerId>, Changed<Cooldowns>)>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
     map: Res<crate::rooms::CurrentMap>,
@@ -69,16 +67,11 @@ pub(super) fn show_novas(
             // A nova sounds like what the caster brings up out of the ground.
             let sfx = match class.def().figure() {
                 "frost_mage" => crate::audio::Sfx::FrostNova,
-                "pyre_witch" => crate::audio::Sfx::FireNova,
                 _ => crate::audio::Sfx::Slam,
             };
             sounds.add(sfx, 0.8).from(pos.0, crate::audio::Reach::Big);
-            let seed = cooldowns.used_at(slot).unwrap_or(0).wrapping_mul(2_654_435_761) ^ pos.0.x.to_bits();
             // On what the caster stands on.
             let at = (pos.0, ground_under(map.map(), motion, predicted, pos.0));
-            if crate::fx::cast_nova(&mut commands, &art, time.elapsed_secs(), class.def().figure(), at, def.radius, seed) {
-                continue;
-            }
             burst_nova(&mut commands, &time, &mut visuals, &mut materials, (map.map(), at), def.radius, nova);
         }
     }

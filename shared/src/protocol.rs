@@ -115,11 +115,11 @@ pub struct AttackState {
     /// The tick the last attack went off (`None`: never).
     pub released_at: Option<u32>,
     /// An attack started by this tick is quick (`FollowUp`; `None`: not armed). Used up when an
-    /// attack goes off, not when one is cancelled.
+    /// attack goes off, not when one is lost (`sim::interrupt_attack`).
     pub quick_until: Option<u32>,
     /// The next attack is primed (`abilities::prime`) by the ability in this slot: sure to crit,
     /// and this much more attack speed. Used up when a primed attack goes off, not when one is
-    /// cancelled.
+    /// lost (`sim::interrupt_attack`).
     pub primed: Option<(AbilitySlot, f32)>,
 }
 
@@ -171,7 +171,7 @@ pub struct Swing {
     /// Ticks its shot has been held drawn past its windup (`PlayerInput::draw`): it goes off that
     /// much later, and its backswing runs on from then.
     pub held: u32,
-    /// How far to the attacker's right its lane runs (meters): on the action camera's line of
+    /// How far to the attacker's right its lane runs (meters): on the camera's line of
     /// sight (`PlayerInput::aside`), so a blow comes down straight along the crosshair's line.
     pub aside: f32,
 }
@@ -266,8 +266,6 @@ pub struct Chilled {
     pub rooted: Span,
     /// Knocked up: off its feet, no walking, dashing or attacking (an attack winding up is lost).
     pub lifted: Span,
-    /// Unstoppable (`AttackDef::unstoppable`, winding up): nothing applied meanwhile takes.
-    pub steady: Span,
 }
 
 /// Ticks `from` (inclusive) to `until` (exclusive). The default covers none.
@@ -293,11 +291,8 @@ impl Span {
 
 impl Chilled {
     /// A hit at `now` applies `chill`, from the next tick. A new slow replaces a running one if
-    /// it's at least as strong; a root extends a running one. Nothing takes while `steady`.
+    /// it's at least as strong; a root extends a running one.
     pub fn apply(&mut self, chill: Chill, now: u32) {
-        if self.steady.covers(now as f32) {
-            return;
-        }
         if chill.slow > 0.0 && chill.slow_ticks > 0 {
             let running = self.slowed.covers(now as f32 + 1.0);
             if !running || chill.slow >= self.slow {
@@ -325,27 +320,6 @@ impl Chilled {
 
     pub fn rooted_at(&self, tick: u32) -> bool {
         self.rooted.covers(tick as f32)
-    }
-
-    /// Unstoppable at `tick` (a fractional one for drawing in between).
-    pub fn steady_at(&self, tick: f32) -> bool {
-        self.steady.covers(tick)
-    }
-}
-
-/// Ablaze (`BurnDef`): how many stacks of fire are on a fighter, and until when (a tick; none
-/// once it's past). Server-authoritative like `Chilled`, and in ticks for the same reason;
-/// clients draw the flames.
-#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
-pub struct Burning {
-    pub stacks: u32,
-    pub until: u32,
-}
-
-impl Burning {
-    /// How many stacks burn at `tick` (a fractional one for drawing in between).
-    pub fn at(&self, tick: f32) -> u32 {
-        if tick < self.until as f32 { self.stacks } else { 0 }
     }
 }
 
@@ -526,10 +500,6 @@ pub enum FxKind {
     Blink,
     /// A Doom Bell's mark on its victim, where it was struck, until the bell tolls at `until`.
     Doom,
-    /// Someone shoved into a wall at `at` (`ShoveDef`): the slam, dust and grit off it.
-    Wallop,
-    /// A burning fighter at `at` igniting (`BurnDef`): fire bursting out to `radius`.
-    Ignite,
 }
 
 /// A passing effect of an item or a monster, for the client to draw: what, where, and from when
@@ -654,7 +624,7 @@ pub struct Projectile {
     /// where it starts, and nothing an auto-attack's throw sets off goes off again for it.
     pub extra: bool,
     /// How much it rises per meter flown (the tangent of its pitch) as it leaves, aimed up or
-    /// down with the action camera; 0 leaves level, as the MOBA's do. It falls into the ground or
+    /// down with the camera; 0 leaves level, as a monster's does. It falls into the ground or
     /// flies over bodies accordingly, and a thrown one drops from that line as it flies
     /// (`sim::projectile_height`).
     pub climb: f32,
@@ -704,11 +674,11 @@ pub struct PlayerInput {
     pub walk: Vec2,
     /// Aim direction on the gameplay plane; the sim normalizes it.
     pub aim: Vec2,
-    /// How much the aim rises per meter ahead (the tangent of its pitch), with the action camera
-    /// (`PlayerCommand::Aim`): what a shot's `climb` is. 0 is level, the MOBA's.
+    /// How much the aim rises per meter ahead (the tangent of its pitch), with the camera
+    /// (`PlayerCommand::Aim`): what a shot's `climb` is. 0 is level, a monster's.
     pub climb: f32,
-    /// How far to the fighter's right the action camera's line of sight passes (`ACTION_SHOULDER`,
-    /// less by a wall beside them; 0 in first person, and in the MOBA): the line a shot starts on
+    /// How far to the fighter's right the camera's line of sight passes (`ACTION_SHOULDER`, less
+    /// by a wall beside them; 0 in first person, and for a monster): the line a shot starts on
     /// (`sim::onto_sight`).
     pub aside: f32,
     /// Left click: auto-attack toward `aim`, if the last attack is done (else the click is
@@ -758,11 +728,11 @@ impl PlayerInput {
 /// predicted: the client sees the result once the server's next update comes back.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub enum PlayerCommand {
-    /// Right click: walk to this point (`Map::walk_target` of the click).
+    /// Walk to this point (a bot's order: players walk with `Walk`).
     MoveTo(Vec2),
-    /// Stop walking (S).
+    /// Stop walking.
     Stop,
-    /// Keys held to walk (WASD, action mode), this way; zero when none are. Stepped from the
+    /// Keys held to walk (WASD), this way; zero when none are. Stepped from the
     /// tick given, the one the client's prediction steps it from (`render::glide`), so the two
     /// agree; a tick already past (or 0) means at once.
     Walk(Vec2, u32),
@@ -773,7 +743,7 @@ pub enum PlayerCommand {
     Attack(Vec2, u32),
     /// An ability's key (1, 2, 3, 4): use the ability in this slot toward this aim.
     Cast(AbilitySlot, Vec2),
-    /// Action mode only: the aim as the camera turns (at most once a tick), its direction, its
+    /// The aim as the camera turns (at most once a tick), its direction, its
     /// pitch (`PlayerInput::climb`) and how far right of the fighter its line passes
     /// (`PlayerInput::aside`), so an attack winding up goes off the way the player looks then,
     /// not the way they looked when it started.
@@ -789,18 +759,6 @@ pub enum PlayerCommand {
 }
 
 impl PlayerCommand {
-    /// Is it an order to move (or stop)? One cancels an attack still winding up, as in League
-    /// (`sim::cancel_attack`); a click (`MoveTo`, `Stop`) drops a click no tick has seen yet
-    /// too: the last order wins. The walking keys don't: they're the action camera's, which
-    /// walks through an attack, and they change with every turn of the camera.
-    pub fn moves(&self) -> bool {
-        match *self {
-            PlayerCommand::MoveTo(_) | PlayerCommand::Stop => true,
-            PlayerCommand::Walk(dir, _) => dir != Vec2::ZERO,
-            PlayerCommand::Attack(..) | PlayerCommand::Cast(..) | PlayerCommand::Aim(..) | PlayerCommand::Jump(..) | PlayerCommand::Draw(..) => false,
-        }
-    }
-
     /// What the command does to a player's intent.
     pub fn apply(self, input: &mut PlayerInput) {
         match self {
@@ -944,7 +902,6 @@ impl Plugin for ProtocolPlugin {
         app.component::<Team>().replicate();
         app.component::<Health>().replicate();
         app.component::<Chilled>().replicate();
-        app.component::<Burning>().replicate();
         app.component::<RecentHits>().replicate();
         app.component::<Hasted>().replicate();
         app.component::<Frenzy>().replicate();
@@ -977,14 +934,13 @@ mod tests {
     use super::*;
     use crate::config::{FRENZY_MELEE_TICKS, FRENZY_RANGED_TICKS};
 
-    /// The attack button's hold sets whether it's held, and is no order to move: it cancels no
-    /// windup and drops no click.
+    /// The attack button's hold sets whether it's held, and drops no click.
     #[test]
     fn the_attack_button_held_or_let_go_is_held_or_not() {
         let mut input = PlayerInput { move_to: Some(Vec2::X), ..default() };
         PlayerCommand::Attack(Vec2::Y, 0).apply(&mut input);
         PlayerCommand::Draw(true, 7).apply(&mut input);
-        assert!(input.draw && input.fire && input.move_to.is_some() && !PlayerCommand::Draw(true, 7).moves());
+        assert!(input.draw && input.fire && input.move_to.is_some());
         PlayerCommand::Draw(false, 9).apply(&mut input);
         assert!(!input.draw && input.fire, "let go, still held");
     }
@@ -1016,16 +972,6 @@ mod tests {
         assert!((first.at(half) - 0.05).abs() < 1e-6, "fades linearly");
         assert_eq!(first.at(99.0), 0.0);
         assert_eq!(first.at(first.until as f32), 0.0);
-    }
-
-    #[test]
-    fn nothing_takes_while_steady() {
-        let chill = Chill { slow: 0.5, slow_ticks: 20, root_ticks: 10, lift_ticks: 5 };
-        let mut chilled = Chilled { steady: Span { from: 10, until: 20 }, ..Chilled::default() };
-        chilled.apply(chill, 15);
-        assert_eq!(chilled, Chilled { steady: Span { from: 10, until: 20 }, ..Chilled::default() }, "unstoppable mid-windup");
-        chilled.apply(chill, 20);
-        assert!(chilled.rooted_at(21) && chilled.lifted_at(21) && chilled.speed_factor(21) < 1.0, "takes once the blow is off");
     }
 
     #[test]

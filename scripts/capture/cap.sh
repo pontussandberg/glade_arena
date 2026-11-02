@@ -9,8 +9,7 @@ cls=$1; tag=$2; shift 2
 what=${*:-attack idle walk}
 py=670
 case $cls in
-  revenant) x=100;; javelinist) x=307;; frost_mage) x=489;; warden) x=671;;
-  pyre_witch) x=852; py=710;; shade) x=1035;; breaker) x=1217;; stormweaver) x=1399;;
+  revenant) x=100;; javelinist) x=307;; frost_mage) x=489;;
   *) echo "unknown class $cls"; exit 1;;
 esac
 mkdir -p "$S/$tag/attack" "$S/$tag/idle" "$S/$tag/walk"

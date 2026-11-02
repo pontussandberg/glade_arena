@@ -48,14 +48,6 @@ pub enum DashVoice {
     Air,
     /// The revenant slipping between worlds: air, and the hum of the other side.
     Spectral,
-    /// The warden's charge: plate and mail on the move, and the landing.
-    Plate,
-    /// The shade's step: cloth, and two quick breaths of air.
-    Cloth,
-    /// The breaker barrelling: a heavy rush, wood creaking, and the earth taking him.
-    Heavy,
-    /// The stormweaver's gale: a long gust.
-    Gale,
 }
 
 /// The sounds there are.
@@ -72,7 +64,7 @@ pub enum Sfx {
     /// blade and foot into the ground, and on its heels the rift opening where it struck: the
     /// earth groaning open like a heavy gate, briefly.
     GlaiveSwing,
-    /// The revenant's glaive coming over and down, just before it lands (`strike_whoosh`): a
+    /// The revenant's glaive coming over and down, just before it lands (`AttackVoice::late`): a
     /// long, heavy haft pushing through the air, the coat flapping with it.
     GlaiveWhoosh,
     /// The javelinist gathering: a soft swish as it goes into stance, just before the throw.
@@ -84,22 +76,6 @@ pub enum Sfx {
     FrostReady,
     /// The frost mage's bolt going: a spell's climax and icy tail.
     FrostCast,
-    /// The warden's thrust: the shield's face driven in first, the sword's steel a beat behind.
-    ShieldThrust,
-    /// The warden gathering: the shield coming up, the sword drawn back behind its rim.
-    ShieldReady,
-    /// Someone slammed into a wall.
-    Wallop,
-    /// The breaker's maul coming round: a long, deep haul of air, then the head landing in the
-    /// earth, the haft groaning with it.
-    MaulSwing,
-    /// The breaker winding up: the haft creaking as the whole body loads behind it.
-    MaulReady,
-    /// The shade's knives: one snick, then the other hand's a beat behind, with a touch of
-    /// steel on the second.
-    KnifeSwing,
-    /// The shade gathering: next to nothing, a catch of breath and the knives turning in the hands.
-    KnifeReady,
     /// A zombie's claws: a ragged, breathy swipe, nothing clean about it.
     ClawSwing,
     /// The faint gather of air before any attack goes off.
@@ -111,22 +87,16 @@ pub enum Sfx {
     SpearTing,
     /// A gout of fire tossed: it catches with a snap, whoomps away, and crackles after.
     FireLoose,
-    /// The pyre witch gathering: fire catching in the hand, a fuse of a hiss.
-    KindleReady,
-    /// A burning fighter going up all at once.
-    Ignite,
     /// A frostbolt leaving the hand: a hard close snap of ice with a deep crack and a thump of
     /// weight under it, crackling trailing after, the snap coming back off the walls.
     FrostLoose,
     /// A storm bolt let go: one hard crack, a buzz of charge under it, a fizz of static after.
     StormLoose,
-    /// The stormweaver gathering: static crackling up the staff, quicker and quicker.
-    StormReady,
     /// Lightning arcing from one to the next.
     Arc,
     /// A blow landing on someone else.
     Hit,
-    /// A crit landing.
+    /// A crit of ours landing.
     Crit,
     /// A blow we take.
     Hurt,
@@ -146,8 +116,6 @@ pub enum Sfx {
     Slam,
     /// A frost nova: ice shattering out across the ground.
     FrostNova,
-    /// A ring of cinders: fire going up all round.
-    FireNova,
     /// A frostbolt shattering where it hit or ended: a punch of ice breaking.
     Shatter,
     /// A wave starting.
@@ -291,73 +259,71 @@ fn weapon_pitch(class: arena_shared::protocol::ClassId) -> f32 {
     (40.0 / class.def().attack.attack_ticks as f32).clamp(0.65, 1.35)
 }
 
-/// What a class's auto-attack sounds like: as it gathers (the windup; silent for some, whose
-/// windup is only `strike_whoosh`) and as it goes off, and the pitch both play at. Each hero's
-/// is engineered for its weapon and the fantasy behind it; a figure without its own gets the
-/// plain gather and swish, pitched by its weapon's weight.
-fn attack_voice(class: arena_shared::protocol::ClassId) -> (Option<Sfx>, Sfx, f32) {
+/// A class's auto-attack as it's heard. Every class's plays the same way, each part by the
+/// attack clock so they line up however late the news of the attack came: `gather` as the
+/// windup starts (`windup_sounds`), `late` towards its end, and `release` on the tick it goes
+/// off (`release_sound`).
+struct AttackVoice {
+    /// As the windup starts. One that lingers (the frost mage's) lasts until the attack goes
+    /// off, however long a shot is held drawn.
+    gather: Option<Sfx>,
+    /// Late in the windup: what, and how long (seconds) before the attack goes off it starts.
+    late: Option<(Sfx, f32)>,
+    /// As the attack goes off.
+    release: Sfx,
+    /// The pitch all of it plays at.
+    pitch: f32,
+}
+
+/// What a class's auto-attack sounds like. Each hero's is engineered for its weapon and the
+/// fantasy behind it; a figure without its own gets the plain gather and swing, pitched by its
+/// weapon's weight.
+fn attack_voice(class: arena_shared::protocol::ClassId) -> AttackVoice {
+    let voice = |gather, late, release| AttackVoice { gather, late, release, pitch: 1.0 };
     match class.def().figure() {
-        "revenant" => (None, Sfx::GlaiveSwing, 1.0),
-        "javelinist" => (None, Sfx::SpearThrow, 1.0),
-        "frost_mage" => (Some(Sfx::FrostReady), Sfx::FrostCast, 1.0),
-        "warden" => (Some(Sfx::ShieldReady), Sfx::ShieldThrust, 1.0),
-        "breaker" => (Some(Sfx::MaulReady), Sfx::MaulSwing, 1.0),
-        // Casters' shots sound as they leave the hand (`loose_sounds`): only the gather is theirs here.
-        "pyre_witch" => (Some(Sfx::KindleReady), Sfx::Swing, 1.0),
-        "stormweaver" => (Some(Sfx::StormReady), Sfx::Swing, 1.0),
-        "shade" => (Some(Sfx::KnifeReady), Sfx::KnifeSwing, 1.0),
-        "zombie" => (Some(Sfx::Windup), Sfx::ClawSwing, 1.0),
-        _ => (Some(Sfx::Windup), Sfx::Swing, weapon_pitch(class)),
+        // Silent until the glaive comes over and down, its whoosh loudest as the blow lands
+        // (too late for the air the blade pushes on the way down, the blow's own sound).
+        "revenant" => voice(None, Some((Sfx::GlaiveWhoosh, 0.3)), Sfx::GlaiveSwing),
+        // Silent until it goes into stance, as far before the throw as `jav_draw` is before
+        // `jav_whoosh` in the recording they're cut from.
+        "javelinist" => voice(None, Some((Sfx::JavReady, 0.27)), Sfx::SpearThrow),
+        // Frost channelled for as long as the windup lasts, then the spell's climax.
+        "frost_mage" => voice(Some(Sfx::FrostReady), None, Sfx::FrostCast),
+        "zombie" => voice(Some(Sfx::Windup), None, Sfx::ClawSwing),
+        _ => AttackVoice { pitch: weapon_pitch(class), ..voice(Some(Sfx::Windup), None, Sfx::Swing) },
     }
 }
 
-/// What sounds late in a class's windup, for one that has it: what it is, and how long
-/// (seconds) before the attack goes off it starts. A heavy blow's whoosh, its loudest just as
-/// the blow lands (the swing's own sound plays as it goes off, too late for the air the blade
-/// pushes on the way down); the javelinist going into stance, as far before the throw as
-/// `jav_draw` and `jav_whoosh` are in the recording they're cut from.
-fn strike_whoosh(class: arena_shared::protocol::ClassId) -> Option<(Sfx, f32)> {
-    match class.def().figure() {
-        "revenant" => Some((Sfx::GlaiveWhoosh, 0.3)),
-        "javelinist" => Some((Sfx::JavReady, 0.27)),
-        _ => None,
-    }
+/// `class`'s attack going off at `tick` (`owner`'s, at `at`): its release, by the attack clock,
+/// from partway in if the news of it came late.
+fn release_sound(queue: &mut SoundQueue, clock: Option<&crate::feedback::AttackClock>, class: arena_shared::protocol::ClassId, at: Vec2, tick: u32, owner: lightyear::prelude::PeerId, is_me: bool) {
+    let voice = attack_voice(class);
+    let due = clock.map_or(0.0, |clock| (tick as f32 - clock.now(is_me)) / arena_shared::config::TICK_HZ as f32);
+    queue.add(voice.release, 0.42).from(at, Reach::Combat).pitched(voice.pitch).due(due).by(owner);
 }
 
-/// Every shot loosed nearby sounds as it leaves the hand, as what it is: wind over a spear, a
-/// whoof of fire, a shiver of frost, a crackle of storm.
+/// Every shot loosed nearby sounds as it leaves the hand: a hero's as its attack's release
+/// (`release_sound`; a shot has no swing for `swing_sounds` to hear), a monster's as its bolts
+/// look: a whoof of fire, a shiver of frost, a crackle of storm.
 fn loose_sounds(
     clock: Option<crate::feedback::AttackClock>,
     me: Query<&arena_shared::protocol::PlayerId, With<crate::Me>>,
     shots: Query<(&arena_shared::protocol::Pos, &arena_shared::protocol::Projectile), Added<arena_shared::protocol::Projectile>>,
     mut queue: ResMut<SoundQueue>,
 ) {
-    let my_id = me.single().ok().map(|id| id.0);
     use arena_shared::protocol::FxColor;
+    let my_id = me.single().ok().map(|id| id.0);
     for (pos, projectile) in &shots {
         let def = projectile.class.def();
-        // Each hero's own shot; a monster's as its bolts look.
-        let sfx = match def.figure() {
-            // The throw or cast that lets it go (its attack's release, `attack_voice`): a shot
-            // has no swing for `swing_sounds` to hear, so it sounds here, as the shot leaves the
-            // hand. The javelin and the frostbolt then fly silent.
-            "javelinist" | "frost_mage" => {
-                // On the tick it was let go, by the same clock its gather ended on
-                // (`windup_sounds`): from partway in if the news came late.
-                let (_, release, pitch) = attack_voice(projectile.class);
-                let is_me = my_id == Some(projectile.owner);
-                let due = clock.as_ref().map_or(0.0, |clock| (projectile.spawn_tick as f32 - clock.now(is_me)) / arena_shared::config::TICK_HZ as f32);
-                queue.add(release, 0.42).from(pos.0, Reach::Combat).pitched(pitch).due(due).by(projectile.owner);
-                continue;
-            }
-            "pyre_witch" => Sfx::FireLoose,
-            "stormweaver" => Sfx::StormLoose,
-            _ => match def.look.as_ref().and_then(|look| look.bolts) {
-                Some(FxColor::Fire) => Sfx::FireLoose,
-                Some(FxColor::Frost | FxColor::Spirit) => Sfx::FrostLoose,
-                Some(FxColor::Storm) => Sfx::StormLoose,
-                _ => Sfx::Loose,
-            },
+        if def.playable {
+            release_sound(&mut queue, clock.as_ref(), projectile.class, pos.0, projectile.spawn_tick, projectile.owner, my_id == Some(projectile.owner));
+            continue;
+        }
+        let sfx = match def.look.as_ref().and_then(|look| look.bolts) {
+            Some(FxColor::Fire) => Sfx::FireLoose,
+            Some(FxColor::Frost | FxColor::Spirit) => Sfx::FrostLoose,
+            Some(FxColor::Storm) => Sfx::StormLoose,
+            _ => Sfx::Loose,
         };
         queue.add(sfx, 0.36).from(pos.0, Reach::Combat);
     }
@@ -399,7 +365,7 @@ fn windup_sounds(
     const RELEASE_GRACE: f32 = 0.5;
     let now = time.elapsed_secs();
     for (attacker, id, pos, class, attack, is_me) in &attackers {
-        // A windup that ended before it went off (a stop, a stun, a walk) hushes what still
+        // A windup lost before it went off (knocked up, or the fighter gone) hushes what still
         // sounds of it; one that went off leaves it to its release, as a lingering sound lasts
         // until then however long the shot is held drawn.
         if let Some(&(started, release, _)) = winding.get(&attacker)
@@ -416,17 +382,17 @@ fn windup_sounds(
         lapsed.remove(&attacker);
         winding.insert(attacker, (swing.started_at, swing.releases_at(&class.def().attack), id.0));
         if unheard(&mut heard, attacker, swing.started_at, clock.as_ref().map(|clock| clock.now(is_me))) {
-            let (gather, _, pitch) = attack_voice(*class);
-            if let Some(gather) = gather {
-                queue.add(gather, 0.4).from(pos.0, Reach::Small).pitched(pitch).by(id.0);
+            let voice = attack_voice(*class);
+            if let Some(gather) = voice.gather {
+                queue.add(gather, 0.4).from(pos.0, Reach::Small).pitched(voice.pitch).by(id.0);
             }
-            if let Some((whoosh, lead)) = strike_whoosh(*class) {
-                // Timed by the clock to the tick the attack goes off, however late the news of
-                // it came, as its release is (`loose_sounds`).
+            if let Some((late, lead)) = voice.late {
+                // By the clock, the tick the attack goes off less its lead, however late the
+                // news of it came.
                 let windup_ticks = swing.windup_ticks(&class.def().attack);
                 let windup = windup_ticks as f32 / arena_shared::config::TICK_HZ as f32;
                 let left = clock.as_ref().map_or(windup, |clock| (((swing.started_at + windup_ticks) as f32 - clock.now(is_me)) / arena_shared::config::TICK_HZ as f32).clamp(0.0, windup));
-                queue.add(whoosh, 0.42).from(pos.0, Reach::Combat).after((left - lead).max(0.0)).pitched(pitch);
+                queue.add(late, 0.42).from(pos.0, Reach::Combat).after((left - lead).max(0.0)).pitched(voice.pitch).by(id.0);
             }
         }
     }
@@ -460,10 +426,6 @@ fn dash_sounds(
         }
         let voice = match class.def().figure() {
             "revenant" => DashVoice::Spectral,
-            "warden" => DashVoice::Plate,
-            "shade" => DashVoice::Cloth,
-            "breaker" => DashVoice::Heavy,
-            "stormweaver" => DashVoice::Gale,
             _ => DashVoice::Air,
         };
         queue.add(Sfx::Dash(voice), 0.6).from(pos.0, Reach::Combat);
@@ -513,22 +475,21 @@ fn heartbeat(
     queue.push(Sfx::Heart, 0.45 + (0.25 - fraction));
 }
 
-/// Every melee swing nearby strikes, once per swing: by the swing's own tick, never by the
+/// Every melee swing nearby strikes (`release_sound`), once per swing: by the swing's own tick, never by the
 /// component's change flag — replication marks that changed every update, which played a roar
 /// of swishes from anyone standing near (the merchant at every camp).
 fn swing_sounds(
     clock: Option<crate::feedback::AttackClock>,
     swings: Query<
-        (Entity, &arena_shared::protocol::Pos, &arena_shared::protocol::ClassId, &arena_shared::protocol::LastSwing, Has<crate::Me>),
-        (Changed<arena_shared::protocol::LastSwing>, With<arena_shared::protocol::PlayerId>),
+        (Entity, &arena_shared::protocol::PlayerId, &arena_shared::protocol::Pos, &arena_shared::protocol::ClassId, &arena_shared::protocol::LastSwing, Has<crate::Me>),
+        Changed<arena_shared::protocol::LastSwing>,
     >,
     mut queue: ResMut<SoundQueue>,
     mut heard: Local<bevy::platform::collections::HashMap<Entity, u32>>,
 ) {
-    for (swinger, pos, class, swing, is_me) in &swings {
+    for (swinger, id, pos, class, swing, is_me) in &swings {
         if unheard(&mut heard, swinger, swing.tick, clock.as_ref().map(|clock| clock.now(is_me))) {
-            let (_, strike, pitch) = attack_voice(*class);
-            queue.add(strike, 0.42).from(pos.0, Reach::Combat).pitched(pitch);
+            release_sound(&mut queue, clock.as_ref(), *class, pos.0, swing.tick, id.0, is_me);
         }
     }
 }
@@ -549,36 +510,28 @@ mod web {
     /// each is from; CC0 but the author's own and the CC BY ones, which must stay credited
     /// there). A sound names one by its stem.
     const SAMPLES: &[&str] = &[
-        // Air: swishes and swings (artisticdude), a rush of air (rubberduck).
+        // Air: swishes and swings (artisticdude).
         "swish_light_1.wav", "swish_light_2.wav", "swish_light_3.wav", "swish_heavy_1.wav", "swish_heavy_2.wav", "swish_heavy_3.wav",
-        "swing_1.wav", "swing_2.wav", "air_01.ogg",
-        // Weapons in the air (Still North Media): spear swings, a long blade's slice slowed to a
-        // glaive.
-        "spear_swing_1.wav", "spear_swing_2.wav", "spear_swing_3.wav", "blade_swing_1.wav", "blade_swing_2.wav", "blade_swing_3.wav",
+        "swing_2.wav",
+        // Spear swings (Still North Media).
+        "spear_swing_1.wav", "spear_swing_2.wav", "spear_swing_3.wav",
         // A javelin drawn back and thrown (saturdaysoundguy, Freesound).
         "jav_draw.wav", "jav_whoosh.wav",
-        // Breath and the other side (qubodup; made from the above): a slowed breath, a tear
-        // between worlds.
-        "ghost_breath.wav", "rift_tear.wav",
-        // Steel: swords drawn, knives, clashes, rings (artisticdude, StarNinjas, Kenney, rubberduck).
-        "unsheathe_1.wav", "unsheathe_2.wav", "ring.wav", "drawKnife1.ogg", "drawKnife2.ogg", "knifeSlice.ogg", "knifeSlice2.ogg",
-        "sword_1.ogg", "sword_2.ogg", "sword_3.ogg", "clash_1.ogg", "clash_2.ogg", "clash_3.ogg", "metalClick.ogg", "chop.ogg",
-        "metal_hit_01.ogg", "metal_hit_02.ogg",
-        // Impacts (Kenney, rubberduck): flesh, plate, metal, wood, glass, stone.
+        // Steel: clashes, a ring (artisticdude, StarNinjas).
+        "ring.wav", "clash_1.ogg", "clash_2.ogg", "clash_3.ogg",
+        // Impacts (Kenney, rubberduck, faxcorp): flesh, metal, wood, glass, stone.
         "impactSoft_heavy_000.ogg", "impactSoft_heavy_001.ogg", "impactSoft_medium_000.ogg", "impactSoft_medium_001.ogg",
         "impactPunch_medium_000.ogg", "impactPunch_medium_001.ogg", "impactPunch_medium_002.ogg", "impactPunch_heavy_000.ogg", "impactPunch_heavy_001.ogg",
-        "impactMetal_heavy_000.ogg", "impactMetal_heavy_001.ogg", "impactMetal_medium_000.ogg", "impactMetal_medium_001.ogg",
-        "impactPlate_heavy_000.ogg", "impactPlate_heavy_001.ogg", "impactPlate_medium_000.ogg",
-        "impactWood_heavy_000.ogg", "impactWood_heavy_001.ogg", "impactGlass_light_000.ogg", "impactGlass_light_001.ogg",
-        "impactMining_000.ogg", "impactMining_001.ogg", "impactGeneric_light_000.ogg", "impactBell_heavy_000.ogg",
-        "hit_01.ogg", "hit_02.ogg", "stones_01.ogg", "stones_02.ogg", "glass_01.ogg", "groundhit.wav",
-        // Leather, cloth, coin (Kenney, artisticdude).
-        "cloth1.ogg", "cloth2.ogg", "clothBelt.ogg", "cloth_heavy.wav", "creak1.ogg", "creak2.ogg", "handleSmallLeather.ogg", "chainmail.wav",
-        "handleCoins.ogg", "coins.wav",
-        // Fire (USC / Sunset Editorial via the Internet Archive, themightyglider).
-        "fire_whoosh.wav", "fire_pop.wav", "fire_bed.wav", "flame.ogg",
+        "impactMetal_heavy_000.ogg", "impactMetal_heavy_001.ogg",
+        "impactWood_heavy_000.ogg", "impactWood_heavy_001.ogg", "impactGlass_light_000.ogg",
+        "impactMining_000.ogg", "impactMining_001.ogg", "impactBell_heavy_000.ogg",
+        "stones_01.ogg", "stones_02.ogg", "glass_01.ogg", "groundhit.wav",
+        // Cloth and coin (Kenney, artisticdude).
+        "cloth1.ogg", "cloth2.ogg", "cloth_heavy.wav", "handleCoins.ogg", "coins.wav",
+        // Fire (USC / Sunset Editorial via the Internet Archive).
+        "fire_whoosh.wav", "fire_pop.wav", "fire_bed.wav",
         // Storm (faxcorp, rubberduck).
-        "zap_hit.wav", "zap_bloom.wav", "crackle.wav", "charge.wav", "boom.wav", "thunder_01.ogg",
+        "zap_hit.wav", "zap_bloom.wav", "crackle.wav", "boom.wav", "thunder_01.ogg",
         // Frost (bart, IgnasD, artisticdude, rubberduck): ice crackling, snapping, cracking and
         // breaking.
         "ice.wav", "magic.wav", "ice_crack_1.wav", "ice_crack_2.wav", "ice_crack_3.wav",
@@ -691,7 +644,7 @@ mod web {
         mut queue: ResMut<SoundQueue>,
         mut audio: NonSendMut<AudioLazy>,
         me: Query<(&arena_shared::protocol::Pos, &arena_shared::protocol::PlayerId), With<crate::Me>>,
-        camera: Query<&GlobalTransform, With<crate::camera::CameraRig>>,
+        camera: Res<crate::camera::CameraMode>,
     ) {
         if queue.sounds.is_empty() && queue.hushes.is_empty() {
             return;
@@ -715,7 +668,8 @@ mod web {
         // Each placed round us: as loud as it is from here, off to its side. One that happens
         // somewhere is heard only with us somewhere to hear it from.
         let (ear, mine) = me.single().ok().map_or((None, None), |(pos, id)| (Some(pos.0), Some(id.0)));
-        let right = camera.single().ok().map_or(Vec2::X, |camera| crate::arena::to_gameplay(*camera.right()).normalize_or(Vec2::X));
+        // The camera's right along the ground, unshaken.
+        let right = camera.ground_axes().1;
         let mut placed: Vec<(&Sound, f32, Place)> = sounds
             .iter()
             .filter_map(|sound| {
@@ -1084,9 +1038,7 @@ mod web {
             const FLESH_HEAVY: [&str; 4] = ["impactPunch_heavy_000", "impactPunch_heavy_001", "impactSoft_heavy_000", "impactSoft_heavy_001"];
             const METAL_HEAVY: [&str; 2] = ["impactMetal_heavy_000", "impactMetal_heavy_001"];
             const WOOD_HEAVY: [&str; 2] = ["impactWood_heavy_000", "impactWood_heavy_001"];
-            const PLATE_HEAVY: [&str; 2] = ["impactPlate_heavy_000", "impactPlate_heavy_001"];
             const STONES: [&str; 2] = ["stones_01", "stones_02"];
-            const SWORDS: [&str; 3] = ["sword_1", "sword_2", "sword_3"];
             const CLASHES: [&str; 3] = ["clash_1", "clash_2", "clash_3"];
             const ICE_CRACKS: [&str; 3] = ["ice_crack_1", "ice_crack_2", "ice_crack_3"];
             const ICE_DEEP: [&str; 3] = ["ice_deep_1", "ice_deep_2", "ice_deep_3"];
@@ -1124,40 +1076,6 @@ mod web {
                                 self.osc(Sine, f * p, f * p, now, 0.4, &e);
                             }
                         }
-                    }
-                    DashVoice::Plate => {
-                        // The charge: plate and mail on the move, the rush, and the landing.
-                        self.sample("chainmail", now, 0.42 * g, p, 0.25, 0.15);
-                        let rush = self.pick(&SWISH_HEAVY);
-                        self.sample(rush, now + 0.02, 0.4 * g, 0.7 * p, 0.15, 0.15);
-                        self.sample("impactPlate_medium_000", now + 0.22, 0.28 * g, 0.8 * p, 0.1, 0.25);
-                    }
-                    DashVoice::Cloth => {
-                        // A step through the fight: cloth, and two quick breaths of air.
-                        let cloth = self.pick(&["cloth1", "cloth2"]);
-                        self.sample(cloth, now, 0.25 * g, 1.1 * p, 0.15, 0.1);
-                        for (at, rate) in [(0.0, 0.95), (0.09, 1.1)] {
-                            let rush = self.pick(&SWISH_LIGHT);
-                            self.sample(rush, now + at, 0.36 * g, rate * p, 0.12, 0.1);
-                        }
-                    }
-                    DashVoice::Heavy => {
-                        // Barrelling: a heavy rush, the haft creaking, and the earth taking him
-                        // at the end.
-                        let rush = self.pick(&SWISH_HEAVY);
-                        self.sample(rush, now, 0.5 * g, 0.5 * p, 0.2, 0.2);
-                        if let Some(e) = self.held(now, 0.2 * g, 0.3, 0.1) {
-                            self.clip("creak1", now, 0.15, None, 0.75 * p, &e);
-                        }
-                        self.sample("groundhit", now + 0.26, 0.42 * g, 0.7 * p, 0.15, 0.3);
-                    }
-                    DashVoice::Gale => {
-                        // A long gust carrying her off.
-                        if let Some(e) = self.held(now, 0.4 * g, 0.4, 0.3) {
-                            self.clip("air_01", now, 0.0, Some(0.8), 1.1 * p, &e);
-                        }
-                        let rush = self.pick(&SWISH_LIGHT);
-                        self.sample(rush, now + 0.02, 0.3 * g, 0.85 * p, 0.12, 0.1);
                     }
                 },
                 Sfx::Windup => {
@@ -1201,67 +1119,6 @@ mod web {
                         self.clip_through("thunder_01", tear, 0.75, Some(0.7), 0.55 * p, Lowpass, 400.0, &e);
                     }
                 }
-                Sfx::ShieldReady => {
-                    // The shield coming up and the sword cocked back: leather and strap, and a
-                    // short rasp of steel clearing the rim.
-                    self.sample("handleSmallLeather", now, 0.2 * g, p, 0.15, 0.1);
-                    if let Some(e) = self.held(now + 0.04, 0.2 * g, 0.12, 0.08) {
-                        self.clip("unsheathe_2", now + 0.04, 0.0, Some(0.2), 1.1 * p, &e);
-                    }
-                }
-                Sfx::ShieldThrust => {
-                    // In the order the body does it: the shield's face driven in, a flat clap of
-                    // plate, then the sword a beat behind, a short whisk of steel with its ring.
-                    self.sample("impactPlate_medium_000", now, 0.55 * g, 0.9 * p, 0.15, 0.25);
-                    // The sword recordings start with a breath before the cut: in from the cut.
-                    let thrust = self.pick(&SWORDS);
-                    if let Some(e) = self.held(now + 0.035, 0.5 * g, 0.25, 0.15) {
-                        self.clip(thrust, now + 0.035, 0.15, None, 1.05 * p, &e);
-                    }
-                    self.sample("ring", now + 0.05, 0.1 * g, 1.2 * p, 0.2, 0.25);
-                }
-                Sfx::MaulReady => {
-                    // The whole body loading behind the haft: wood creaking under the strain,
-                    // and the air beginning to move.
-                    // The creak's recording starts with a silence: in from past it.
-                    if let Some(e) = self.held(now, 0.3 * g, 0.35, 0.2) {
-                        self.clip("creak1", now, 0.15, None, 0.8 * p, &e);
-                    }
-                    let haul = self.pick(&SWISH_HEAVY);
-                    self.sample(haul, now + 0.1, 0.2 * g, 0.45 * p, 0.25, 0.15);
-                }
-                Sfx::MaulSwing => {
-                    // The maul comes round: a long low haul of air, then the head lands, a deep
-                    // wooden-iron thud with stone breaking under it and grit rattling down, and
-                    // a sub thump that the ear feels more than hears.
-                    let haul = self.pick(&SWISH_HEAVY);
-                    self.sample(haul, now, 0.45 * g, 0.62 * p, 0.14, 0.12);
-                    let land = self.pick(&WOOD_HEAVY);
-                    self.sample(land, now + 0.06, 0.65 * g, 0.7 * p, 0.2, 0.35);
-                    let rock = self.pick(&["impactMining_000", "impactMining_001"]);
-                    self.sample(rock, now + 0.07, 0.3 * g, 0.8 * p, 0.15, 0.3);
-                    let grit = self.pick(&STONES);
-                    self.sample(grit, now + 0.1, 0.3 * g, 0.85 * p, 0.2, 0.4);
-                    if let Some(e) = self.env(now + 0.06, 0.004, 0.4 * g, 0.22) {
-                        self.osc(Sine, 78.0 * p, 36.0, now + 0.06, 0.22, &e);
-                    }
-                }
-                Sfx::KnifeReady => {
-                    // Next to nothing: cloth, and the knives turning in the hands.
-                    self.sample("cloth1", now, 0.12 * g, 1.1 * p, 0.1, 0.08);
-                }
-                Sfx::KnifeSwing => {
-                    // Two cuts as they really come: one knife, then the other hand's a beat
-                    // behind (the second cut's own moment).
-                    let beat = 5.0 / arena_shared::config::TICK_HZ as f64;
-                    // Each recording's slice comes a way in: in from just before it.
-                    if let Some(e) = self.held(now, 0.45 * g, 0.15, 0.12) {
-                        self.clip("knifeSlice", now, 0.15, None, p, &e);
-                    }
-                    if let Some(e) = self.held(now + beat, 0.4 * g, 0.15, 0.12) {
-                        self.clip("knifeSlice2", now + beat, 0.2, None, 1.04 * p, &e);
-                    }
-                }
                 Sfx::ClawSwing => {
                     // A ragged swipe: a swish with rags dragging through it.
                     let swish = self.pick(&SWISH_LIGHT);
@@ -1269,7 +1126,7 @@ mod web {
                     self.sample("cloth_heavy", now + 0.02, 0.28 * g, 0.9 * p, 0.15, 0.1);
                 }
                 Sfx::JavReady => {
-                    // Going into stance: a soft swish late in the windup (`strike_whoosh` times
+                    // Going into stance: a soft swish late in the windup (`AttackVoice::late` times
                     // it). Never slowed. Only a faint confirmation that the attack is coming:
                     // well under the throw, though the recording's own balance already has it
                     // quieter.
@@ -1323,15 +1180,6 @@ mod web {
                     }
                     self.echo(crack, now + 0.018, 1.15 * v * p, 0.65 * g);
                 }
-                Sfx::KindleReady => {
-                    // Fire catching in the hand: a lick of burning (one of the recording's two
-                    // bursts of pops), and a pop as it takes.
-                    let from = if self.r() < 0.5 { 0.0 } else { 0.5 };
-                    if let Some(e) = self.held(now, 0.26 * g, 0.3, 0.12) {
-                        self.clip("fire_bed", now, from, Some(0.45), 1.1 * p, &e);
-                    }
-                    self.sample("flame", now + 0.05, 0.22 * g, 1.1 * p, 0.2, 0.1);
-                }
                 Sfx::FireLoose => {
                     // A gout of fire tossed: it catches with a pop, whooshes away, and
                     // crackles trailing off behind it.
@@ -1340,28 +1188,6 @@ mod web {
                     let from = if self.r() < 0.5 { 0.0 } else { 0.5 };
                     if let Some(e) = self.held(now + 0.15, 0.22 * g, 0.3, 0.3) {
                         self.clip("fire_bed", now + 0.15, from, Some(0.6), p, &e);
-                    }
-                }
-                Sfx::Ignite => {
-                    // A burning body going up all at once: a hard whoomp of flame, the boom of
-                    // it under, and a roar of burning dying back to crackles.
-                    self.sample("fire_whoosh", now, 0.9 * g, 0.72 * p, 0.7, 0.4);
-                    if let Some(e) = self.held(now, 0.5 * g, 0.3, 0.6) {
-                        self.clip_through("boom", now, 0.0, Some(0.9), 1.1 * p, Lowpass, 500.0, &e);
-                    }
-                    let flesh = self.pick(&FLESH_HEAVY);
-                    self.sample(flesh, now + 0.01, 0.3 * g, 0.8 * p, 0.15, 0.3);
-                    if let Some(e) = self.held(now + 0.15, 0.4 * g, 0.6, 0.6) {
-                        self.clip("fire_bed", now + 0.15, 0.0, Some(1.3), 0.95 * p, &e);
-                    }
-                }
-                Sfx::StormReady => {
-                    // Static gathering up the staff: a charge building, crackling.
-                    if let Some(e) = self.held(now, 0.3 * g, 0.4, 0.15) {
-                        self.clip("charge", now, 0.0, Some(0.55), 1.1 * p, &e);
-                    }
-                    if let Some(e) = self.held(now + 0.1, 0.18 * g, 0.3, 0.1) {
-                        self.clip("crackle", now + 0.1, 0.0, Some(0.4), 1.3 * p, &e);
                     }
                 }
                 Sfx::StormLoose => {
@@ -1470,32 +1296,9 @@ mod web {
                     // first crack (the nova is instant), faded out soon after its burst.
                     self.sample("frost_nova", now, 0.48 * g, 1.0, 1.0, 0.2);
                 }
-                Sfx::FireNova => {
-                    // The ground igniting all round: fire going up at once, the thump of it,
-                    // and burning dying back.
-                    self.sample("fire_whoosh", now, 0.9 * g, 0.8 * p, 0.6, 0.4);
-                    if let Some(e) = self.held(now, 0.5 * g, 0.3, 0.6) {
-                        self.clip_through("boom", now, 0.0, Some(0.8), p, Lowpass, 400.0, &e);
-                    }
-                    let grit = self.pick(&STONES);
-                    self.sample(grit, now + 0.05, 0.3 * g, 0.9 * p, 0.3, 0.4);
-                    if let Some(e) = self.held(now + 0.2, 0.4 * g, 0.8, 0.6) {
-                        self.clip("fire_bed", now + 0.2, 0.0, Some(1.5), p, &e);
-                    }
-                }
                 Sfx::Shatter => {
                     // A frostbolt breaking apart: a punch of ice, as the recording has it.
                     self.sample("frost_impact", now, 0.65 * g, p, 0.5, 0.3);
-                }
-                Sfx::Wallop => {
-                    // A body driven into stone: plate and flesh meeting a wall at once, and grit
-                    // knocked off it sifting down.
-                    let plate = self.pick(&PLATE_HEAVY);
-                    self.sample(plate, now, 0.6 * g, 0.8 * p, 0.2, 0.3);
-                    let flesh = self.pick(&FLESH_HEAVY);
-                    self.sample(flesh, now, 0.5 * g, 0.85 * p, 0.15, 0.3);
-                    let grit = self.pick(&STONES);
-                    self.sample(grit, now + 0.08, 0.35 * g, 0.9 * p, 0.3, 0.5);
                 }
                 Sfx::Horn => {
                     // A war horn's call: a short low note, then the long one a fourth up, held

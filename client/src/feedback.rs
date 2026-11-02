@@ -215,7 +215,7 @@ fn over_bar(camera: &Camera, camera_transform: &GlobalTransform, body: &Transfor
 
 /// How far behind the latest state from the server our own fighter is drawn, in ticks: enough
 /// that the next update is (almost) always in by the time it's needed, so it moves smoothly
-/// between updates however unevenly they arrive (`render::glide_me`).
+/// between updates however unevenly they arrive (`render::predict_me`).
 pub(crate) const ME_BEHIND_TICKS: f32 = 1.0;
 
 /// The server tick our latest news from it is from, advancing smoothly with real time between
@@ -557,7 +557,10 @@ fn spawn_damage_numbers(
             if crit {
                 commands.entity(player).insert(CritAt(time.elapsed_secs()));
                 let near = me.single().map_or(1.0, |(me, _)| crate::audio::heard(pos.0.distance(me.0), Reach::Combat));
-                sounds.push(Sfx::Crit, 0.4 + 0.5 * near);
+                // Only a crit of ours rings: someone else's is no news of ours.
+                if hit.by.is_some() && hit.by == my_id {
+                    sounds.push(Sfx::Crit, 0.4 + 0.5 * near);
+                }
                 // A nudge of shake for a crit landing on someone else (ours, nearly always,
                 // when it's this close); a crit on us already shakes through react_to_hits.
                 if !is_me {

@@ -3,9 +3,7 @@
 use super::*;
 
 use arena_shared::abilities::{self, AbilityDef, AbilityKind, Cast, CastOrder, dash};
-use arena_shared::classes::Shell;
 
-use crate::items::{By, Delayed, Pending, arm};
 use crate::rooms::{InRoom, Lobby};
 
 /// Server-only: who the current dash (started at `.0`) has already cut, so each target is cut
@@ -23,18 +21,17 @@ pub(super) fn use_abilities(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut users: Query<
-        (&PlayerId, &ClassId, (&Pos, &arena_shared::protocol::Motion), &mut PlayerInput, (&mut Cooldowns, &mut Dashing), &mut DashHits, (&InRoom, &Team), &mut AttackState, Option<&Might>, Has<crate::ActionMode>),
+        (&PlayerId, &ClassId, (&Pos, &arena_shared::protocol::Motion), &mut PlayerInput, (&mut Cooldowns, &mut Dashing), &mut DashHits, (&InRoom, &Team), &mut AttackState, Option<&Might>, Has<ControlledBy>),
         InPlay,
     >,
     mut targets: Targets,
     mut log: ResMut<HitLog>,
-    mut pending: ResMut<Pending>,
 ) {
     let now = timeline.tick();
     // Read up front: `targets` holds every player's `Chilled` mutably. A root or slow landing
     // during this loop starts next tick anyway.
     let chills: Vec<(PeerId, Chilled)> = targets.iter().map(|(_, id, .., chilled, _, _, _)| (id.0, *chilled)).collect();
-    for (id, class, (pos, motion), mut input, (mut cooldowns, mut dashing), mut hits, (room, team), mut attack, might, action) in &mut users {
+    for (id, class, (pos, motion), mut input, (mut cooldowns, mut dashing), mut hits, (room, team), mut attack, might, player) in &mut users {
         let side = (*room, *team);
         let might = might_of(might);
         let map = lobby.map(room);
@@ -87,10 +84,10 @@ pub(super) fn use_abilities(
         for cast in casts {
             match cast {
                 Cast::Throw(projectile) => {
-                    // From as high as the caster's feet are; in action mode let go from the raised
-                    // hand onto the crosshair's line, as an attack's throw is.
+                    // From as high as the caster's feet are; a player's let go from the raised hand
+                    // onto the crosshair's line, as an attack's throw is.
                     let projectile = Projectile { lift: motion.height, ..projectile };
-                    let projectile = if action { arena_shared::sim::onto_sight(map, projectile, pos.0, input.aside, motion.height) } else { projectile };
+                    let projectile = if player { arena_shared::sim::onto_sight(map, projectile, pos.0, input.aside, motion.height) } else { projectile };
                     spawn_projectile(&mut commands, projectile, side, might);
                 }
                 Cast::Dash => input.move_to = None,
@@ -106,21 +103,6 @@ pub(super) fn use_abilities(
                 Cast::Nova { slot, ability, nova } => {
                     let (blow, with) = blow(ability);
                     hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Ability(slot)), blow, |_, at, feet| nova.hits(map, (pos.0, motion.height), (at, feet)));
-                }
-                Cast::Strike { slot, strike, at } => {
-                    // The same shells monsters' mortars bring down (`Deed::Mortar`): a warning
-                    // where it will land, then the blast.
-                    let (warning, look) = match strike.shell {
-                        Shell::Bomb => {
-                            spawn_fx(&mut commands, side.0, Fx::between(FxKind::Lob(FxColor::Poison), pos.0, at, strike.radius, now.0, strike.fuse_ticks).by(id.0));
-                            (FxKind::Warn(FxColor::Poison), FxKind::Blast(FxColor::Poison))
-                        }
-                        Shell::Lightning => (FxKind::Warn(FxColor::Storm), FxKind::Blast(FxColor::Storm)),
-                        Shell::Meteor => (FxKind::Meteor, FxKind::Blast(FxColor::Fire)),
-                    };
-                    let by = By { id: id.0, class: *class, side, source: Source::Ability(slot) };
-                    let shell = Delayed { by, at, radius: strike.radius, damage: mighty(strike.damage, might), chill: strike.chill, fire_at: now.0 + strike.fuse_ticks, look };
-                    arm(&mut commands, &mut pending, now.0, shell, warning);
                 }
             }
         }

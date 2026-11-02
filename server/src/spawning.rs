@@ -61,7 +61,7 @@ pub(super) fn fighter(id: PeerId, class: ClassId, room: InRoom, team: Team, at: 
         (class, team, room, room.rooms()),
         Pos(at),
         (Health(class.def().max_hp), MaxHealth(class.def().max_hp)),
-        (Chilled::default(), Burning::default(), Hasted::default(), Frenzy::default(), Fury::default(), RecentHits::default()),
+        (Chilled::default(), Hasted::default(), Frenzy::default(), Fury::default(), RecentHits::default()),
         (AttackState::default(), Cooldowns::default(), Dashing::default(), arena_shared::protocol::Motion::default(), LastSwing::default(), Walking::default(), WalkOrders::default()),
     )
 }
@@ -78,7 +78,6 @@ pub(super) fn spawn_player(commands: &mut Commands, link: Entity, id: PeerId, cl
             OnGate::default(),
             PlayerInput::default(),
             (Satchel::default(), ItemState::default()),
-            crate::ActionMode,
             // Replication starts in `place_players`, once it has a real position.
             ControlledBy { owner: link, lifetime: default() },
         ))

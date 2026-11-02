@@ -4,7 +4,6 @@
 
 use super::*;
 
-use arena_shared::config::TICK_HZ;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 
@@ -51,13 +50,12 @@ pub(super) fn mark_shape() -> FlatMesh {
 /// most, to follow what it lies on.
 const MARK_EDGE: f32 = 0.05;
 
-/// Where a strike's mark lies along its lane: over the surfaces `under` it, `near` to `far` out
-/// along it, `beside` its middle (to its right).
+/// Where a strike's mark lies along its lane's middle: over the surfaces `under` it, `near` to
+/// `far` out along it.
 pub(crate) struct LaneMark {
     pub(super) under: Underfoot,
     pub(super) near: f32,
     pub(super) far: f32,
-    pub(super) beside: f32,
 }
 
 /// Where a strike's mark is drawn.
@@ -87,7 +85,7 @@ impl Mark {
                 // Thinning a step at a time, with its fade (`faded`), so it's laid again only that
                 // often, not every frame: a crowd strikes all the time.
                 let thin = 1.0 - 0.6 * (t * MARK_FADES as f32).floor() / MARK_FADES as f32;
-                let from = Vec3::new(lane.near, 0.0, lane.beside);
+                let from = Vec3::X * lane.near;
                 laid.lay(meshes, &mut lane.under, 0, from, Vec3::new((lane.far - lane.near) * drawn, thin, thin));
                 Transform::IDENTITY
             }
@@ -103,9 +101,7 @@ impl Mark {
 /// longer empowered) on what the blade comes down on there (`Underfoot`), wherever the blade
 /// itself happens to be as the hit arrives: in pieces where the lane runs over steps and edges,
 /// fallen on down onto whatever's below a drop. Without a lane, along the blade where it
-/// is (after it's posed and placed). `LastSwing` comes from the server; each is drawn once. An
-/// attack that cuts twice (`AttackDef::twice`) marks its second cut too, beside the first along
-/// the same lane (or along the other hand's blade, `OffBlade`) as the server lands it.
+/// is (after it's posed and placed). `LastSwing` comes from the server; each is drawn once.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show_marks(
     mut commands: Commands,
@@ -113,8 +109,7 @@ pub(super) fn show_marks(
     assets: Res<SwishAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     map: Res<crate::rooms::CurrentMap>,
-    mut swings: Query<(Entity, &LastSwing, &mut Blade, &Pos, &ClassId, (Option<&Motion>, Option<&crate::render::PredictedWalk>)), Changed<LastSwing>>,
-    mut offhands: Query<&mut OffBlade>,
+    mut swings: Query<(&LastSwing, &mut Blade, &Pos, &ClassId, (Option<&Motion>, Option<&crate::render::PredictedWalk>)), Changed<LastSwing>>,
     blades: Query<&GlobalTransform>,
 ) {
     let now = time.elapsed_secs();
@@ -128,7 +123,7 @@ pub(super) fn show_marks(
         commands.spawn((Mesh3d(mesh), MeshMaterial3d(assets.fades[0].clone()), transform, GlobalTransform::from(transform), mark, NoFrustumCulling, NotShadowCaster, NotShadowReceiver));
     };
     let laid = |meshes: &mut Assets<Mesh>, lane: LaneMark| Lies::Laid(lane, Laid::new(meshes, vec![mark_shape()], MARK_HEIGHT, MARK_EDGE));
-    for (entity, swing, mut blade, pos, class, (motion, predicted)) in &mut swings {
+    for (swing, mut blade, pos, class, (motion, predicted)) in &mut swings {
         if swing.tick <= blade.shown {
             continue;
         }
@@ -142,40 +137,15 @@ pub(super) fn show_marks(
         // what's under it there.
         (blade.striking, blade.struck) = (true, lane.map(|_| under.clone()));
         let lies = match lane {
-            Some((near, far, _)) => laid(&mut meshes, LaneMark { under: under.clone(), near, far, beside: 0.0 }),
+            Some((near, far, _)) => laid(&mut meshes, LaneMark { under, near, far }),
             None => {
                 let Ok(held) = blades.get(blade.held) else { continue };
                 Lies::Air(blade.at(held, blade.from), blade.at(held, 1.0))
             }
         };
-        // The second cut's mark, a beat later, beside the first's along the same lane (the
-        // other hand cuts the other way across it), or along that blade where it is then.
-        if let Some(gap) = class.def().attack.twice
-            && let Ok(mut off) = offhands.get_mut(entity)
-        {
-            let at = now + gap as f32 / TICK_HZ as f32;
-            off.cut = Some((at, lane.map(|(near, far, width)| LaneMark { under, near, far, beside: -width * SECOND_CUT_BESIDE })));
-        }
         draw(lies, &mut meshes);
     }
-    for mut off in &mut offhands {
-        if off.cut.as_ref().is_some_and(|(at, _)| now >= *at)
-            && let Some((_, lane)) = off.cut.take()
-        {
-            let lies = match lane {
-                Some(lane) => laid(&mut meshes, lane),
-                None => {
-                    let Ok(held) = blades.get(off.held) else { continue };
-                    Lies::Air(off.at(held, 0.0), off.at(held, 1.0))
-                }
-            };
-            draw(lies, &mut meshes);
-        }
-    }
 }
-
-/// How far to the side of the lane's middle (a share of its width) a second cut's mark lies.
-const SECOND_CUT_BESIDE: f32 = 0.3;
 
 /// Marks draw on, linger, thin and fade, and are gone.
 pub(super) fn drive_marks(

@@ -295,17 +295,17 @@ mod tests {
     }
 
     #[test]
-    fn the_follow_up_lasts_until_an_attack_goes_off_not_a_cancelled_one() {
+    fn the_follow_up_lasts_until_an_attack_goes_off_not_a_lost_one() {
         let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some()) else { return };
         let fire = aim(Vec2::X, true);
         let armed = AttackState { quick_until: Some(100), ..default() };
         let winding = step_attack(10, PeerId::Netcode(1), class, Vec2::ZERO, &fire, armed).0;
         assert!(winding.swing.is_some_and(|s| s.quick), "not empowered while armed");
-        // Cancelled: still armed, and the next attack is empowered.
-        let cancelled = cancel_attack(winding);
-        assert_eq!(cancelled.quick_until, Some(100), "cancelling used the follow_up up");
-        let again = step_attack(12, PeerId::Netcode(1), class, Vec2::ZERO, &fire, cancelled).0;
-        assert!(again.swing.is_some_and(|s| s.quick), "the attack after a cancelled one wasn't empowered");
+        // Lost to a knock-up: still armed, and the next attack is empowered.
+        let lost = interrupt_attack(winding);
+        assert_eq!(lost.quick_until, Some(100), "losing the attack used the follow_up up");
+        let again = step_attack(12, PeerId::Netcode(1), class, Vec2::ZERO, &fire, lost).0;
+        assert!(again.swing.is_some_and(|s| s.quick), "the attack after a lost one wasn't empowered");
         // Gone off: used up.
         let windup = again.swing.unwrap().windup_ticks(&class.def().attack);
         let (gone, released) = step_attack(12 + windup, PeerId::Netcode(1), class, Vec2::ZERO, &PlayerInput::default(), again);
@@ -353,20 +353,20 @@ mod tests {
     }
 
     #[test]
-    fn moving_cancels_the_windup_but_not_the_backswing() {
+    fn a_knock_up_loses_the_windup_but_not_the_backswing() {
         for class in ClassId::all() {
             let (period, windup) = timers(class);
             // Mid-windup: it never goes off, and the next attack may start at once.
             let (_, winding) = attack_ticks(class, &[10], 10, 9 + windup);
-            let cancelled = cancel_attack(winding);
-            assert_eq!(cancelled.swing, None, "{}", class.def().id);
-            let (_, released) = step_attack(10 + windup, PeerId::Netcode(1), class, Vec2::ZERO, &PlayerInput::default(), cancelled);
-            assert!(released.is_none(), "{}: a cancelled attack went off", class.def().id);
-            let restarted = start_attack(10 + windup, class, &aim(Vec2::X, true), cancelled);
-            assert_eq!(restarted.swing.map(|s| s.started_at), Some(10 + windup), "{}: no attack after cancelling", class.def().id);
+            let lost = interrupt_attack(winding);
+            assert_eq!(lost.swing, None, "{}", class.def().id);
+            let (_, released) = step_attack(10 + windup, PeerId::Netcode(1), class, Vec2::ZERO, &PlayerInput::default(), lost);
+            assert!(released.is_none(), "{}: a lost attack went off", class.def().id);
+            let restarted = start_attack(10 + windup, class, &aim(Vec2::X, true), lost);
+            assert_eq!(restarted.swing.map(|s| s.started_at), Some(10 + windup), "{}: no attack after losing one", class.def().id);
             // After it went off: the timer runs on.
             let (_, backswing) = attack_ticks(class, &[10], 10, 10 + windup);
-            assert_eq!(cancel_attack(backswing), backswing, "{}: moving cut the attack timer short", class.def().id);
+            assert_eq!(interrupt_attack(backswing), backswing, "{}: a knock-up cut the attack timer short", class.def().id);
             let early = start_attack(9 + period, class, &aim(Vec2::X, true), backswing);
             assert_eq!(early.swing, backswing.swing, "{}: attacked again before the timer was up", class.def().id);
         }
@@ -451,7 +451,7 @@ mod tests {
     }
 
     /// How `class` is walked by its keys the way `way` from `from`, `ticks` ticks, as the server
-    /// steps a fighter in action mode (its windup never roots it; a shot winding up slows it:
+    /// steps a player's fighter (its windup never roots it; a shot winding up slows it:
     /// `winding_speed`), clicking to attack on the tick `click` (if any) with its button held on
     /// the ticks in `held`, and jumping on the tick `jump` (if any): where it is, how it moves and
     /// its attack, tick by tick (from tick 1).
@@ -850,7 +850,7 @@ mod tests {
     }
 
     #[test]
-    fn a_shot_in_action_mode_starts_on_the_crosshairs_line_and_a_throw_falls_away_past_its_range() {
+    fn a_players_shot_starts_on_the_crosshairs_line_and_a_throw_falls_away_past_its_range() {
         let (dir, climb, feet) = (Vec2::new(0.6, 0.8), -0.05, 0.0);
         let right = Vec2::new(dir.y, -dir.x);
         // Somewhere with room over the right shoulder.
@@ -1022,8 +1022,8 @@ mod tests {
         let state = start_attack(20, class, &fire, primed);
         let swing = state.swing.unwrap();
         assert!(swing.primed && swing.windup_ticks(attack) < plain.windup_ticks(attack), "not quicker");
-        // Cancelled, it stays ready; gone off, it's used up.
-        assert_eq!(cancel_attack(state).primed, primed.primed);
+        // Lost to a knock-up, it stays ready; gone off, it's used up.
+        assert_eq!(interrupt_attack(state).primed, primed.primed);
         let (gone, released) = release_attack(swing.releases_at(attack), PeerId::Netcode(1), class, Vec2::ZERO, false, state);
         assert!(released.is_some() && gone.primed.is_none(), "still primed after it went off");
     }
