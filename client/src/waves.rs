@@ -1,7 +1,8 @@
 //! The waves mode, on screen: the run's banner at the top (the wave, the shop's countdown and the
 //! way to say we're ready, the monsters left, who's down), a boss's health under it, the
 //! end of a lost run across the middle; our gold and items over the action bar; the merchant's
-//! shop, open while we stand by them (in practice, where we set our attack speed too); and what
+//! shop, opened with F while we stand by them aiming their way — a hint under the crosshair
+//! says so — and shut walking off (in practice too, where we set our attack speed); and what
 //! items and monsters do (`Fx`), and wisps circling whoever carries a Wisp Lantern.
 
 use arena_shared::items::{self, Item, MAX_LEVEL, SLOTS, Satchel};
@@ -18,7 +19,7 @@ use crate::arena::{self, palette, to_world};
 use crate::feedback::AttackClock;
 use crate::item_icons::{ICON_PIXELS, ItemIcons, load_item_icons};
 use crate::plain::PlainMaterial;
-use crate::render::{GameUi, HudButton, button, clicked, set_fill, shown, ui_text};
+use crate::render::{GameUi, HudButton, button, clicked, key_chip, set_fill, shown, ui_text};
 use crate::rooms::{CurrentRoom, request};
 use crate::tooltip::{Side, hover_shows, tip, tip_note, tip_text, tip_title};
 
@@ -86,12 +87,22 @@ struct SellButton(u8);
 #[derive(Component)]
 struct HasteButton(f32);
 
-/// Whether the shop is open: we're by the merchant in a run.
+/// Whether the shop is open: opened with F by the merchant, shut walking off.
 #[derive(Resource, Default, PartialEq)]
 struct ShopOpen(bool);
 
+/// Whether the merchant is at hand: close by, and aimed at. Then F opens the shop (not the
+/// ready-up: `ready_up`), and the hint under the crosshair says so.
+#[derive(Resource, Default, PartialEq)]
+struct MerchantAtHand(bool);
+
+/// The hint under the crosshair: press F to open the shop.
+#[derive(Component)]
+struct InteractHint;
+
 fn spawn_hud(mut commands: Commands) {
     commands.init_resource::<ShopOpen>();
+    commands.init_resource::<MerchantAtHand>();
     let top_center = |top: Val| Node { position_type: PositionType::Absolute, width: percent(100.0), top, justify_content: JustifyContent::Center, ..default() };
     commands.spawn((GameUi, top_center(px(8.0)))).with_child((
         Banner,
@@ -162,6 +173,17 @@ fn spawn_hud(mut commands: Commands) {
         BackgroundColor(palette::ui::PANEL.with_alpha(0.95)),
         BorderColor::all(ACCENT.with_alpha(0.6)),
         Interaction::default(),
+    ));
+    // The interact hint, under the crosshair.
+    commands.spawn((GameUi, top_center(percent(57.0)))).with_child((
+        InteractHint,
+        Node { display: Display::None, column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::axes(px(10.0), px(5.0)), ..default() },
+        BackgroundColor(palette::ui::PANEL.with_alpha(0.85)),
+        children![
+            ui_text("Press", 12.0, palette::ui::TEXT),
+            key_chip("F", 11.0, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5)),
+            ui_text("to open the shop", 12.0, palette::ui::TEXT),
+        ],
     ));
 }
 
@@ -308,17 +330,19 @@ fn show_over(mut commands: Commands, room: Res<CurrentRoom>, banner: Single<(Ent
     }
 }
 
-/// F, or the banner's button, says we're ready for the next wave (or not, again).
+/// F, or the banner's button, says we're ready for the next wave (or not, again) — unless the
+/// merchant is at hand, where F is theirs (`open_shop`).
 fn ready_up(
     keys: Res<ButtonInput<KeyCode>>,
     room: Res<CurrentRoom>,
     me: Option<Res<crate::rooms::Me>>,
     typing: Option<Res<crate::browser::Typing>>,
+    at_hand: Res<MerchantAtHand>,
     buttons: Query<Ref<Interaction>, With<ReadyButton>>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
     let Some(run) = room.run().filter(|run| matches!(run.phase, Phase::Shop { .. })) else { return };
-    let pressed = keys.just_pressed(KeyCode::KeyF) && !typing.is_some_and(|t| t.0);
+    let pressed = keys.just_pressed(KeyCode::KeyF) && !typing.is_some_and(|t| t.0) && !at_hand.0;
     if pressed || buttons.iter().any(clicked) {
         let ready = me.is_some_and(|me| run.ready.contains(&me.guest_id));
         request(&mut sender, RoomRequest::Ready(!ready));
@@ -455,16 +479,43 @@ fn show_satchel(
     });
 }
 
-/// The shop opens as we come up to the merchant, in a run, and shuts as we walk off.
+/// How close to straight at the merchant the aim must be for them to be at hand (the cosine of
+/// the angle between the camera's forward and the way to them, along the ground).
+const INTERACT_AIM: f32 = 0.9;
+
+/// The merchant is at hand while we're by them and aiming their way; then the hint under the
+/// crosshair shows, and F opens the shop (or shuts it), letting the cursor go to trade with.
+/// Walking off shuts it. The cursor isn't taken back for us: a click on the field does that.
+#[allow(clippy::too_many_arguments)]
 fn open_shop(
     room: Res<CurrentRoom>,
+    keys: Res<ButtonInput<KeyCode>>,
+    typing: Option<Res<crate::browser::Typing>>,
+    mut mode: ResMut<crate::camera::CameraMode>,
+    mut cursor: Single<&mut bevy::window::CursorOptions>,
+    mut at_hand: ResMut<MerchantAtHand>,
     mut open: ResMut<ShopOpen>,
+    hint: Single<&mut Node, With<InteractHint>>,
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     merchant: Query<&Pos, With<Shopkeeper>>,
 ) {
-    let near = room.shopping()
-        && me.single().ok().zip(merchant.iter().next()).is_some_and(|(me, merchant)| me.distance(merchant.0) <= SHOP_RADIUS);
-    open.set_if_neq(ShopOpen(near));
+    let both = me.single().ok().zip(merchant.iter().next()).filter(|_| room.shopping());
+    let near = both.is_some_and(|(me, merchant)| me.distance(merchant.0) <= SHOP_RADIUS);
+    let hand = near && both.is_some_and(|(me, merchant)| (merchant.0 - me.0).normalize_or_zero().dot(mode.forward()) >= INTERACT_AIM);
+    at_hand.set_if_neq(MerchantAtHand(hand));
+    let mut now = open.0 && near;
+    if hand && keys.just_pressed(KeyCode::KeyF) && !typing.is_some_and(|t| t.0) {
+        now = !now;
+        if now {
+            mode.unlock(&mut cursor);
+        }
+    }
+    open.set_if_neq(ShopOpen(now));
+    let display = if hand && !now { Display::Flex } else { Display::None };
+    let mut hint = hint.into_inner();
+    if hint.display != display {
+        hint.display = display;
+    }
 }
 
 /// The shop: every item our fighter can carry, what it costs us now and a way to buy it; rebuilt
@@ -550,7 +601,7 @@ fn show_shop(
                 }
             });
         }
-        panel.spawn(ui_text("Hover an item to see what it does. Walk away to close.", 9.0, palette::ui::MUTED));
+        panel.spawn(ui_text("Hover an item to see what it does. F or walking away closes.", 9.0, palette::ui::MUTED));
     });
 }
 

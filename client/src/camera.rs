@@ -1,6 +1,6 @@
 //! The third-person camera (Smite-style): behind your fighter, over their right shoulder, turned
-//! by the mouse once a click has captured the cursor (ESC frees it again; until then, a right
-//! drag or the arrow keys turn it). You aim where the camera looks: attacks and abilities go
+//! by the mouse once a click has captured the cursor (ESC frees it into the menu; a right click
+//! while Tab is held frees it to point with; until then, a right drag or the arrow keys turn it). You aim where the camera looks: attacks and abilities go
 //! straight ahead, up or down, onto the crosshair's line in the middle of the screen (`aim_of`,
 //! `render::show_crosshair`). WASD walks relative to it (`render::read_local_input`), and walking
 //! doesn't stop an attack (nothing cancels one); holding the left button keeps attacking. Wheel (or + / -)
@@ -100,13 +100,15 @@ impl Orbit {
 pub struct CameraMode {
     /// The camera is in first person, at your fighter's eyes (V), not over its shoulder.
     pub(crate) first_person: bool,
-    /// The camera has the cursor (hidden, locked in place): the mouse turns it. A click
-    /// on the field takes it, ESC lets it go.
+    /// The camera has the cursor (hidden, locked in place): the mouse turns it. A click on the
+    /// field takes it; an interface over the fight (the menu, the shop) or a right click while
+    /// Tab is held lets it go (`unlock`).
     pub(crate) locked: bool,
     /// A click took the cursor this frame (so it's no attack: `render::read_local_input`).
     pub(crate) just_locked: bool,
-    /// ESC let the cursor go this frame (so it doesn't open the menu too: `esc_menu`).
-    pub(crate) just_unlocked: bool,
+    /// The browser's own ESC let the pointer go this frame (the page never sees the key): the
+    /// menu opens on it (`esc_menu`).
+    pub(crate) escaped: bool,
     orbit: Orbit,
     /// How far back the camera is this frame: its orbit's distance, or less while a wall
     /// holds it in (`follow_camera`).
@@ -133,7 +135,7 @@ pub struct CameraMode {
 
 impl Default for CameraMode {
     fn default() -> Self {
-        CameraMode { first_person: false, locked: false, just_locked: false, just_unlocked: false, orbit: Orbit { yaw: 0.0, pitch: START_PITCH, distance: START_DISTANCE }, held_at: START_DISTANCE, held_aside: ACTION_SHOULDER, aim: Vec2::Y, climb: 0.0, watching: None, dragged: 0.0, grabbed_at: None, lock_seen: false }
+        CameraMode { first_person: false, locked: false, just_locked: false, escaped: false, orbit: Orbit { yaw: 0.0, pitch: START_PITCH, distance: START_DISTANCE }, held_at: START_DISTANCE, held_aside: ACTION_SHOULDER, aim: Vec2::Y, climb: 0.0, watching: None, dragged: 0.0, grabbed_at: None, lock_seen: false }
     }
 }
 
@@ -170,6 +172,13 @@ impl CameraMode {
     /// Whether you see through your own fighter's eyes: the camera in first person, on you.
     pub fn through_my_eyes(&self) -> bool {
         self.first_person && self.watching.is_none()
+    }
+
+    /// Lets the cursor go (shown, free to point with): an interface opening over the fight (the
+    /// menu, the shop) does this. A click on the field takes it back (`follow_camera`).
+    pub(crate) fn unlock(&mut self, cursor: &mut CursorOptions) {
+        self.locked = false;
+        release_cursor(cursor);
     }
 }
 
@@ -348,8 +357,9 @@ fn first_person(keys: Res<ButtonInput<KeyCode>>, typing: Option<Res<crate::brows
 
 /// The third-person camera: behind your fighter (or whom it's watching), over their right shoulder.
 /// In first person (`CameraMode::first_person`), at your fighter's eyes.
-/// With the cursor captured (`locked`: any click on the field takes it, not one on a
-/// HUD control; ESC frees it) the mouse turns it; without it, dragging with the right button
+/// With the cursor captured (`locked`: any click on the field takes it, not one on a HUD
+/// control; the menu or the shop opening frees it, as does a right click while Tab is held)
+/// the mouse turns it; without it, dragging with the right button
 /// does (the cursor hides and stays put meanwhile). The wheel zooms. Something solid hiding the
 /// fighter brings it in, just short of it, so it never looks from inside one; nothing else does.
 #[allow(clippy::too_many_arguments)]
@@ -375,41 +385,32 @@ fn follow_camera(
     let (mut window, mut cursor) = window.into_inner();
     let on_hud = window.physical_cursor_position().is_some_and(|at| hud.iter().any(|(node, place, visible)| visible.get() && node.contains_point(*place, at)));
     mode.just_locked = false;
-    mode.just_unlocked = false;
-    // The browser lets the pointer go on its own (the window left for another, its own ESC):
-    // then the mouse is free, seen, and the next click takes it again. Only once it has been
-    // seen holding it: it takes a moment to, and a headless browser never does. And not while
-    // Tab holds it let go (below): that was asked for, and the key coming up takes it back.
+    mode.escaped = false;
+    // The browser lets the pointer go on its own: its own ESC (the page never sees the key), or
+    // the window left for another. The mouse is free either way; freed with the page still
+    // focused, it was ESC, and the menu opens on it (`esc_menu`). Judged only once the browser
+    // has been seen holding the pointer: it takes a moment to, and a headless browser never does.
     #[cfg(target_family = "wasm")]
-    if mode.locked && !keys.pressed(KeyCode::Tab) && !keys.just_released(KeyCode::Tab) {
-        let held = web_sys::window().and_then(|w| w.document()).is_some_and(|document| document.pointer_lock_element().is_some());
-        if held {
+    if mode.locked {
+        let document = web_sys::window().and_then(|w| w.document());
+        if document.as_ref().is_some_and(|document| document.pointer_lock_element().is_some()) {
             mode.lock_seen = true;
         } else if mode.lock_seen {
             mode.locked = false;
-            mode.just_unlocked = true;
+            mode.escaped = document.is_some_and(|document| document.has_focus().unwrap_or(false));
             release_cursor(&mut cursor);
         }
     }
-    if mode.locked && keys.just_pressed(KeyCode::Escape) {
+    // While Tab holds the scoreboard up, a right click lets the cursor go, and it stays free past
+    // the key: pointing, not aiming. A click takes it back — off the HUD, and only once Tab is up.
+    if mode.locked && keys.pressed(KeyCode::Tab) && mouse.just_pressed(MouseButton::Right) {
         mode.locked = false;
-        mode.just_unlocked = true;
         release_cursor(&mut cursor);
-    } else if !mode.locked && mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]) && !mode.turning() && !on_hud {
+    }
+    if !mode.locked && mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]) && !mode.turning() && !on_hud && !keys.pressed(KeyCode::Tab) {
         mode.locked = true;
         mode.just_locked = true;
         mode.dragged = 0.0;
-        mode.lock_seen = false;
-        cursor.visible = false;
-        cursor.grab_mode = CursorGrabMode::Locked;
-    }
-    // While the scoreboard is held up (Tab) the mouse is let go, to point at it, and the camera
-    // holds still; let go, the cursor is taken again, unseen anew (`lock_seen`): the browser
-    // grants it a moment later, and the gap mustn't read as it letting go.
-    if mode.locked && keys.just_pressed(KeyCode::Tab) {
-        release_cursor(&mut cursor);
-    }
-    if mode.locked && keys.just_released(KeyCode::Tab) {
         mode.lock_seen = false;
         cursor.visible = false;
         cursor.grab_mode = CursorGrabMode::Locked;
@@ -418,7 +419,7 @@ fn follow_camera(
     let pitch_range = if mode.first_person { FIRST_PERSON_PITCH } else { PITCH_RANGE };
     let delta = if motion.delta.length() > MOUSE_GLITCH_PX { Vec2::ZERO } else { motion.delta };
     if mode.locked {
-        if delta != Vec2::ZERO && !keys.pressed(KeyCode::Tab) {
+        if delta != Vec2::ZERO {
             mode.orbit.turn(delta * turn, pitch_range);
         }
     } else if mouse.just_pressed(MouseButton::Right) {

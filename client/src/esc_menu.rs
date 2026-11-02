@@ -5,6 +5,7 @@
 
 use arena_shared::protocol::RoomRequest;
 use bevy::prelude::*;
+use bevy::window::CursorOptions;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
@@ -60,7 +61,10 @@ fn menu_open(menu: Query<(), With<EscMenu>>) -> bool {
     !menu.is_empty()
 }
 
-/// ESC opens the menu, or closes it; the Home button opens it.
+/// ESC opens the menu straight away (in the browser, where the camera's lock swallows the key,
+/// by way of its own ESC freeing the pointer: `CameraMode::escaped`), or closes it; the Home
+/// button opens it. Opening it lets the cursor go, to click it with.
+#[allow(clippy::too_many_arguments)]
 fn toggle_menu(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
@@ -69,14 +73,10 @@ fn toggle_menu(
     room: Res<CurrentRoom>,
     mut desired: ResMut<crate::DesiredInput>,
     mut aiming: ResMut<crate::casting::Aiming>,
-    mode: Res<crate::camera::CameraMode>,
+    mut mode: ResMut<crate::camera::CameraMode>,
+    mut cursor: Single<&mut CursorOptions>,
 ) {
-    let esc = keys.just_pressed(KeyCode::Escape);
-    // While the camera has the cursor, ESC only lets it go (`camera::follow_camera`, before or
-    // after this); the next one opens the menu.
-    if esc && (mode.locked || mode.just_unlocked) {
-        return;
-    }
+    let esc = keys.just_pressed(KeyCode::Escape) || mode.escaped;
     // ESC first drops a normal cast's aim; the next one opens the menu.
     if esc && aiming.0.is_some() {
         aiming.0 = None;
@@ -90,7 +90,9 @@ fn toggle_menu(
         Err(_) if esc || home.iter().any(clicked) => {}
         _ => return,
     }
-    // Stand still and stop attacking while away from the controls.
+    // The cursor is let go for the menu; stand still and stop attacking while away from the
+    // controls.
+    mode.unlock(&mut cursor);
     desired.0 = default();
     let practice = room.0.as_ref().is_none_or(|r| r.practice);
     let title = match &room.0 {

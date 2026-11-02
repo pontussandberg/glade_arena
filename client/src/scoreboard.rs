@@ -1,7 +1,8 @@
 //! The match's score in the arena, for a match that's won by kills (`RoomView::goal`): at the top
 //! of the screen, the race to the goal (the leaders and us in free-for-all, the two teams'
 //! kills in teams); once it's won, who won, across the middle, until each leaves the arena. And
-//! everyone's standing, in the middle while Tab is held (`show_board`).
+//! everyone's standing, over the crosshair a bit above the middle, while Tab is held
+//! (`show_board`).
 
 use arena_shared::rooms::{Mode, NO_TEAM, RoomView, TEAMS, first_name};
 use bevy::prelude::*;
@@ -28,7 +29,7 @@ struct ScorePanel;
 #[derive(Component)]
 struct WinnerBanner;
 
-/// Everyone's standing, in the middle, while Tab is held.
+/// Everyone's standing, over the crosshair, while Tab is held.
 #[derive(Component)]
 struct Board;
 
@@ -36,11 +37,13 @@ struct Board;
 const LEADERS: usize = 3;
 
 fn spawn_scoreboard(mut commands: Commands) {
-    // The board: a panel in the middle of the screen, nothing dimmed behind it.
+    // The board: a panel a bit above the middle of the screen, over the crosshair (its
+    // `GlobalZIndex` is just under this), nothing dimmed behind it.
     commands
         .spawn((
             GameUi,
-            Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, display: Display::None, ..default() },
+            Node { position_type: PositionType::Absolute, width: percent(100.0), top: percent(28.0), justify_content: JustifyContent::Center, display: Display::None, ..default() },
+            GlobalZIndex(6),
         ))
         .with_children(|screen| {
             screen.spawn((
