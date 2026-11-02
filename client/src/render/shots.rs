@@ -130,7 +130,7 @@ pub(super) fn fly_shots(
     for (projectile, mut transform, mut visibility, thrown, spin) in &mut shots {
         let speed = projectile.class.def().shot(projectile.ability).map_or(0.0, |s| s.speed);
         let at_tick = tick.max(projectile.spawn_tick as f32 - 1.0);
-        // Just where the sim has it: aimed up or down (the action camera's), it rises or falls
+        // Just where the sim has it: aimed up or down (the camera's), it rises or falls
         // as it flies (and a thrown one drops from the hand on), its nose along its flight. A
         // thrown one is let go a little higher than that and comes onto its path (`Thrown`).
         let path_at = |tick: f32| {

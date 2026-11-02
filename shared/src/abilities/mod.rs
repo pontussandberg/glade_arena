@@ -6,7 +6,6 @@
 pub mod dash;
 pub mod nova;
 pub mod prime;
-pub mod strike;
 pub mod throw;
 
 use bevy::prelude::*;
@@ -18,7 +17,6 @@ use crate::protocol::{Chilled, PlayerInput, Projectile};
 use dash::{DashDef, Dashing};
 use nova::NovaDef;
 use prime::PrimeDef;
-use strike::StrikeDef;
 use throw::Throw;
 
 /// The most abilities a class can have: one per key (1, 2, 3, 4; the client binds them). Checked
@@ -70,8 +68,6 @@ pub enum AbilityKind {
     Nova(NovaDef),
     /// The user's next auto-attack readied: sure to crit, and quicker (`prime`).
     Prime(PrimeDef),
-    /// A shell called down onto the aimed spot, landing a moment later (`strike`).
-    Strike(StrikeDef),
 }
 
 /// What an ability's hit does to whoever it hits. Abilities never crit (a prime makes an
@@ -90,7 +86,6 @@ impl AbilityKind {
             AbilityKind::Dash(dash) => Effect { damage: dash.damage, chill: Chill::default() },
             AbilityKind::Nova(nova) => Effect { damage: nova.damage, chill: nova.chill },
             AbilityKind::Prime(_) => Effect::default(),
-            AbilityKind::Strike(strike) => Effect { damage: strike.damage, chill: strike.chill },
         }
     }
 
@@ -106,7 +101,6 @@ impl AbilityKind {
             AbilityKind::Dash(dash) => dash.distance,
             AbilityKind::Nova(nova) => nova.radius,
             AbilityKind::Prime(_) => 0.0,
-            AbilityKind::Strike(strike) => strike.range,
         }
     }
 
@@ -132,10 +126,6 @@ impl AbilityKind {
         }
         if let AbilityKind::Prime(prime) = self {
             all.push(("ability_attack_speed", format!("{:.0}%", prime.attack_speed * 100.0)));
-        }
-        if let AbilityKind::Strike(strike) = self {
-            all.push(("ability_radius", format!("{} m", strike.radius)));
-            all.push(("ability_fuse", seconds(strike.fuse_ticks)));
         }
         all
     }
@@ -221,9 +211,6 @@ pub enum Cast {
     Nova { slot: AbilitySlot, ability: &'static AbilityDef, nova: NovaDef },
     /// The next auto-attack readied (`AttackState::primed`) by the ability in `slot`.
     Prime { slot: AbilitySlot, prime: PrimeDef },
-    /// `ability`, a strike, called down onto `at`; the server arms the shell and resolves who
-    /// it hits when it lands.
-    Strike { slot: AbilitySlot, strike: StrikeDef, at: Vec2 },
 }
 
 /// One tick of a fighter's abilities. A dash that has gone its distance ends, and a root stops
@@ -259,7 +246,7 @@ pub fn step(
         casts.push(match (ability.kind, dir) {
             (AbilityKind::Prime(prime), _) => Cast::Prime { slot, prime },
             (_, None) => continue,
-            // Pitched as the aim is now (action mode's): the cast order's is its direction only.
+            // Pitched as the aim is now (the camera's): the cast order's is its direction only.
             (AbilityKind::Projectile(throw), Some(dir)) => Cast::Throw(Projectile { climb: input.climb, ..throw.projectile(owner, class, slot, pos, dir, tick) }),
             // Mid-windup too: the windup goes on, and the attack still goes off when it's over,
             // from wherever the dash took you (still aimed where it was locked).
@@ -269,8 +256,6 @@ pub fn step(
             }
             (AbilityKind::Dash(_), _) => continue,
             (AbilityKind::Nova(nova), _) => Cast::Nova { slot, ability, nova },
-            // Onto the aimed spot, no farther out than its range.
-            (AbilityKind::Strike(strike), Some(_)) => Cast::Strike { slot, strike, at: pos + aim.clamp_length_max(strike.range) },
         });
         // A prime's own cooldown waits for the attack it readies (`Cooldowns::start_own`).
         if matches!(ability.kind, AbilityKind::Prime(_)) {

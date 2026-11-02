@@ -10,16 +10,6 @@ mod frost_mage;
 use frost_mage::*;
 mod zombie;
 use zombie::*;
-mod warden;
-use warden::*;
-mod breaker;
-use breaker::*;
-mod pyre_witch;
-use pyre_witch::*;
-mod stormweaver;
-use stormweaver::*;
-mod shade;
-use shade::*;
 
 /// How a rigged class moves. Keyframes are (carrying, fully drawn back, released, dashing),
 /// radians. Limbs: positive swings forward. Twist: negative turns the weapon (right, +Z)
@@ -49,7 +39,7 @@ pub(crate) struct Moves {
     pub(super) lead_arm: [f32; 4],
     /// The lead arm's elbow (how far it bends, and the plane it bends in, turned about the upper
     /// arm: positive in across the body) and its swing turned in across the body, like the
-    /// weapon arm's. For a figure that cuts twice, these strike with the off hand's cut.
+    /// weapon arm's.
     pub(super) lead_elbow: [f32; 4],
     pub(super) lead_elbow_turn: [f32; 4],
     pub(super) lead_yaw: [f32; 4],
@@ -165,9 +155,8 @@ pub(super) const EVEN: Gait = Gait { cadence: 1.0, bob: 1.0, sway: 1.0, arms: 1.
 /// like a statue, and each stands like itself. All the while its weight shifts slowly from foot
 /// to foot: each knee gives in turn by `shift` (radians: small, or the foot visibly lifts) as the
 /// body settles over the other foot (`SHIFT_SWAY`). And every `every` seconds (each figure on
-/// its own beat) it makes `gesture` of itself, the angles added to its carry (a hitch of the maul
-/// up on the shoulder, a glance over the shoulder, a tap of the staff), held `hold` seconds
-/// before it's let go of.
+/// its own beat) it makes `gesture` of itself, the angles added to its carry (a glance over the
+/// shoulder, a tap of the staff), held `hold` seconds before it's let go of.
 #[derive(Clone)]
 pub(crate) struct Idle {
     pub(crate) shift: f32,
@@ -218,13 +207,6 @@ pub(crate) enum Held {
     /// Kept standing up, whatever the arm and body do, tipped this far (radians, keyframes like
     /// the joints') toward the facing: a staff.
     Upright([f32; 4]),
-    /// Kept level and swung round the fighter: pointing `yaw` round from the facing (radians,
-    /// keyframes like the joints'; positive toward the weapon side, a half turn straight
-    /// behind), tipped up by `tilt`, whatever the arm and body do: a maul swept round at hip
-    /// height, its hands carrying it wherever the arm goes. The yaw goes the way the keyframes
-    /// say, however far round (through the front from behind one side to ahead of the other),
-    /// and settles back to the carry the nearest way round from where the strike left it.
-    Swept { yaw: [f32; 4], tilt: [f32; 4] },
     /// Gripped in the fist, the blade coming out of its thumb side, square to the forearm, so it
     /// goes wherever the arm takes it: bent at the wrist (`wrist`, keyframes like the joints':
     /// positive bends the blade toward the forearm's line, negative cocks it back toward the
@@ -271,11 +253,6 @@ pub(crate) fn moves(class_key: &str) -> &'static Moves {
         "revenant" => &REVENANT,
         "frost_mage" => &FROST_MAGE,
         "zombie" => &ZOMBIE,
-        "warden" => &WARDEN,
-        "breaker" => &BREAKER,
-        "pyre_witch" => &PYRE_WITCH,
-        "stormweaver" => &STORMWEAVER,
-        "shade" => &SHADE,
         // The merchant stands like a mage with a staff (it never fights).
         "merchant" => &FROST_MAGE,
         _ => unreachable!("no moves for class {class_key:?}"),

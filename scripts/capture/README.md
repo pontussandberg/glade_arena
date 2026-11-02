@@ -8,7 +8,7 @@ sheet),
 `cap.sh CLASS TAG` (attack + idle + walk bursts of a hero from the game camera),
 `abil.sh CLASS TAG KEY [aimed]` (an ability burst), `action.sh CLASS OUTDIR [TAG]` (the action
 camera: at rest, turned, looking down, against a wall, out in the open, and bursts walking while
-attacking, backing away and strafing), `aim.sh OUTDIR [TAG]` (the action camera's aim: the shot's
+attacking, backing away and strafing), `aim.sh OUTDIR [TAG]` (the third-person camera's aim: the shot's
 line and end mark at rest, pitched, on a dummy ahead and against a wall, a throw
 along it, and a walk at a faked ping) and `audio.sh CLASS` (tap the audio output with an
 AnalyserNode and print the loud spans while the hero attacks a practice dummy).

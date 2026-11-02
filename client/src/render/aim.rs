@@ -1,4 +1,4 @@
-//! The action camera's crosshair: in the middle of the screen, where the camera looks, shown
+//! The camera's crosshair: in the middle of the screen, where the camera looks, shown
 //! while it has the cursor. The aim is the camera's angle (`camera::aim_of`): a shot starts on
 //! the camera's line of sight and flies along it (`sim::onto_sight`), a thrown one rising a
 //! little over it and falling back through it, so the camera aims up and down as well as
@@ -39,9 +39,9 @@ pub(super) fn spawn_crosshair(commands: &mut Commands) {
     commands.spawn(ring(7.0, palette::ui::TEXT, palette::ui::BACKDROP.with_alpha(0.7)));
 }
 
-/// Shown while the action camera has the cursor.
+/// Shown while the camera has the cursor.
 pub(super) fn show_crosshair(mode: Res<CameraMode>, mut crosshair: Query<&mut Visibility, With<Crosshair>>) {
     for mut part in &mut crosshair {
-        part.set_if_neq(shown(mode.free && mode.locked));
+        part.set_if_neq(shown(mode.locked));
     }
 }

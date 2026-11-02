@@ -15,7 +15,7 @@ pub(crate) fn shot_spawn(pos: Vec2, dir: Vec2, radius: f32) -> Vec2 {
 }
 
 /// How far to the right (`right`, along the ground) of a fighter at `pos`, feet `feet` high, the
-/// action camera looks over their shoulder: `ACTION_SHOULDER`, or less with something solid
+/// third-person camera looks over their shoulder: `ACTION_SHOULDER`, or less with something solid
 /// beside their head (a wall, a roof, a rock: `Map::sight_meets`; not a tree, nor the open
 /// edge of the map), just short of it, so it never looks from inside one.
 pub fn shoulder_room(map: &Map, pos: Vec2, right: Vec2, feet: f32) -> f32 {
@@ -36,7 +36,7 @@ fn right_of(dir: Vec2) -> Vec2 {
     Vec2::new(dir.y, -dir.x)
 }
 
-/// A shot fired in action mode (by a fighter at `pos`, feet `feet` high), to fly where the
+/// A player's shot (fired by a fighter at `pos`, feet `feet` high), to fly where the
 /// crosshair is: it starts on the camera's line of sight and flies along it, so on screen it
 /// leaves from the middle and stays in the crosshair however far it flies. The line passes
 /// `aside` to the fighter's right (as far as the room there allows, `shoulder_room`; 0 in first

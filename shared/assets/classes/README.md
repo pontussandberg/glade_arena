@@ -30,9 +30,9 @@ Units: meters, meters per second, ticks (32 per second).
     gone off, the cast bar fills until then. A click before then is dropped (no holding fire, no
     queueing: click again once it's ready).
   - `windup`: how much of the attack (0 to 1) comes before it goes off: the spear leaving the
-    hand, the blade reaching the target. You stand still with your aim locked meanwhile; moving
-    cancels the attack (no hit, and you may attack again at once). The rest is the backswing:
-    move whenever you like. Not shown anywhere: read it off the animation.
+    hand, the blade reaching the target. Nothing a player does cancels it: you walk on through
+    it, and only a knock-up loses it (no hit, and you may attack again at once). The rest is the
+    backswing. Not shown anywhere: read it off the animation.
   - `kind`:
     - `Melee(range, width, from)`: a blow: hits everyone whose body a straight lane `width` wide
       reaches, from `from` (optional, 0 by default) out to `range` from your center: where the
@@ -50,9 +50,8 @@ Units: meters, meters per second, ticks (32 per second).
     faster while its body is in it.
   - `follow_up` (optional, melee only): landing a hit empowers the next attack, if started within
     `within_ticks` (and speeds up what's left of the attack that landed it, so the next comes
-    sooner): `attack_speed` more attack speed, and (optional) its lane's far end and width `reach`
-    times as far, its start (optional) `near` times as far (`reach` unless given). Used up as an
-    attack goes off (cancelling one first leaves it armed): a miss loses it, an empowered one that
+    sooner): `attack_speed` more attack speed, and (optional) its whole lane `reach` times as far
+    out, as long and as wide. Used up as an attack goes off (one lost to a knock-up first leaves it armed): a miss loses it, an empowered one that
     lands arms the next.
 - `abilities`: one to four (none is fine for an unplayable class), on Q, W, E and R in this order, each aimed at the cursor: `name`,
   `description`, `cooldown_ticks`, and
@@ -66,7 +65,7 @@ Units: meters, meters per second, ticks (32 per second).
       not behind a wall) takes `damage` and `chill`.
     - `Prime(attack_speed)`: at once, no aim: your next auto-attack is sure to crit and has
       `attack_speed` more attack speed (0.5 = 50%). It stays ready until that attack goes off
-      (cancelling it first keeps it). `{ability_attack_speed}` names it in the description.
+      (losing it to a knock-up first keeps it). `{ability_attack_speed}` names it in the description.
   - `global_cooldown` (optional, true by default): using it starts the global cooldown
     (`common.ron`), and it waits for it, like every other ability on it; false opts out.
 - `passive` (optional): shown to players, nothing more: `Some(name: ..., description: ...)`. Its effect

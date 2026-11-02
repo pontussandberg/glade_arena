@@ -5,7 +5,6 @@
 mod dash;
 mod nova;
 mod prime;
-mod strike;
 mod throw;
 
 use arena_shared::abilities::{AbilityKind, MAX_ABILITIES};
@@ -27,7 +26,6 @@ pub(crate) fn indicator(kind: &AbilityKind) -> Indicator {
         AbilityKind::Dash(dash) => dash::indicator(dash),
         AbilityKind::Nova(nova) => nova::indicator(nova),
         AbilityKind::Prime(_) => prime::indicator(),
-        AbilityKind::Strike(strike) => strike::indicator(strike),
     }
 }
 
@@ -36,7 +34,7 @@ pub(crate) fn indicator(kind: &AbilityKind) -> Indicator {
 pub(crate) fn indicator_length(kind: &AbilityKind, aim: Vec2) -> f32 {
     match kind {
         AbilityKind::Dash(dash) => dash::length(dash, aim),
-        AbilityKind::Projectile(_) | AbilityKind::Nova(_) | AbilityKind::Prime(_) | AbilityKind::Strike(_) => 1.0,
+        AbilityKind::Projectile(_) | AbilityKind::Nova(_) | AbilityKind::Prime(_) => 1.0,
     }
 }
 
@@ -47,7 +45,6 @@ pub(crate) fn icon(commands: &mut Commands, kind: &AbilityKind) -> Entity {
         AbilityKind::Dash(_) => dash::icon(commands),
         AbilityKind::Nova(_) => nova::icon(commands),
         AbilityKind::Prime(_) => prime::icon(commands),
-        AbilityKind::Strike(_) => strike::icon(commands),
     }
 }
 

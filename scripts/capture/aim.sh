@@ -1,5 +1,5 @@
 #!/bin/bash
-# aim.sh OUTDIR [TAG]: the action camera's aim, as the javelinist in practice with a target dummy
+# aim.sh OUTDIR [TAG]: the third-person camera's aim, as the javelinist in practice with a target dummy
 # ahead and the cursor captured (headless Chrome on :9222, driven by shoot.mjs), into OUTDIR:
 # TAG_idle.png (the crosshair over your fighter's head), TAG_down.png and TAG_up.png (pitched:
 # the aim goes to the ground or into the sky), TAG_body.png (a dummy placed right under the
@@ -17,7 +17,7 @@ sheet() { # NAME COUNT COLUMNS
   for i in $(seq -w 1 "$2"); do imgs="$imgs $out/${tag}_$1/b$i.jpg"; done
   node "$here/sheet.mjs" "$out/${tag}_$1.png" "$3" 0.4 $imgs 2>&1 | tail -n 1 | cut -c 1-60
 }
-# In: the javelinist, practice, a dummy up ahead, action mode on, the cursor captured.
+# In: the javelinist, practice, a dummy up ahead, the cursor captured.
 shoot "$out/${tag}_idle.png" size:1600,900 nav:http://localhost:8080 wait:15 click:307,820 wait:1.5 click:1535,820 wait:7 \
   click:1492,333 wait:0.3 click:900,350 wait:0.8 click:1492,213 wait:0.5 move:800,450 wait:0.1 click:800,450 wait:1.5
 shoot "$out/${tag}_down.png" size:1600,900 move:800,560 wait:0.8

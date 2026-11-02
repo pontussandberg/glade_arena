@@ -159,9 +159,9 @@ fn a_shot_held_drawn_goes_off_once_when_let_go() {
 }
 
 /// Attacking cancels the walk: once the attack is off you stand still until you click again. An
-/// order to move during the windup walks at once, the attack going off on the way (every player
-/// is in action mode: `ActionMode`); one after it went off walks too, while the attack timer runs
-/// on.
+/// order to move during the windup walks at once, the attack going off on the way (a player's
+/// windup never roots it: `orders::move_players`); one after it went off walks too, while the
+/// attack timer runs on.
 #[test]
 fn attacking_cancels_the_walk_and_walking_off_keeps_the_windup() {
     let mut p = Pair::new(5893);

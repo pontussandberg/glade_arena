@@ -55,7 +55,7 @@ pub(crate) struct Blade {
     pub(crate) held: Entity,
     pub(crate) length: f32,
     /// Where along it the blade starts (a fraction of its length): a glaive's is its outer half,
-    /// past the shaft; a knife's is nearly all of it.
+    /// past the shaft.
     pub(crate) from: f32,
     pub(crate) shown: u32,
     pub(crate) quickened: bool,
@@ -73,31 +73,6 @@ pub(crate) struct Blade {
     /// While it's quickened: when (seconds) it sheds its next ember, and how many it has shed
     /// (`shed_embers`).
     pub(crate) embers: (f32, u32),
-    /// How bright its trail is and how long it lingers, as shares of the usual (1): a knife's
-    /// cut is all trail, so its trail is the brightest and lasts longest.
-    pub(crate) vivid: f32,
-    pub(crate) linger: f32,
-}
-
-/// A blade in a fighter's other hand, part of its lead forearm (the shade's reversed knife):
-/// where it runs along the forearm's own axis (meters from the elbow, its base to its point),
-/// for a trail of its own (as vivid and lingering as the main blade's), and the mark of the
-/// attack's second cut (`AttackDef::twice`): when (seconds) the next one lands, and where along
-/// its lane its mark goes (beside the first cut's), while one is coming.
-#[derive(Component)]
-pub(crate) struct OffBlade {
-    pub(crate) held: Entity,
-    pub(crate) span: (f32, f32),
-    pub(crate) vivid: f32,
-    pub(crate) linger: f32,
-    pub(crate) cut: Option<(f32, Option<LaneMark>)>,
-}
-
-impl OffBlade {
-    /// The point `up` (0 at its base, 1 at its point) along it, in the world.
-    fn at(&self, held: &GlobalTransform, up: f32) -> Vec3 {
-        held.transform_point(Vec3::Y * (self.span.0 + (self.span.1 - self.span.0) * up))
-    }
 }
 
 pub(crate) use arena_shared::sim::{REACH_DOWN, REACH_UP, struck_surface};

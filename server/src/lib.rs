@@ -120,14 +120,14 @@ impl Plugin for ServerGamePlugin {
         app.add_observer(on_new_link);
         app.init_resource::<Rifts>();
         app.init_resource::<HitLog>().init_resource::<Barrages>().init_resource::<Pending>().init_resource::<Zones>();
-        app.init_resource::<Fields>().init_resource::<Deeds>().init_resource::<Ambushes>();
+        app.init_resource::<Fields>().init_resource::<Deeds>();
         // As soon as they're received, before this frame's ticks run.
         app.add_systems(PreUpdate, apply_commands.after(MessageSystems::Receive));
         app.add_systems(
             FixedUpdate,
             (
                 (chase, think, do_deeds, take_due_orders, move_players, fall_into_chasms, shove, spread_out, walk_dummies, stand_unwalked, take_pickups, use_gates).chain(),
-                (attack, second_cuts, use_abilities, move_projectiles, resolve_projectile_hits, burn_rifts, burn_kindled, tick_items, react).chain(),
+                (attack, use_abilities, move_projectiles, resolve_projectile_hits, burn_rifts, tick_items, react).chain(),
                 (rooms::count_kills, feed_frenzy, fall, revive, pay_bounties, restore_dummies, respawn, count_down_respawns, bury_zombies, raise_zombies).chain(),
                 (run_waves, shelter, sync_satchels, place_players, use_up_clicks, close_rifts, end_fx).chain(),
             )

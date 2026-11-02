@@ -176,8 +176,8 @@ struct RigHandles {
     head: Handle<Mesh>,
     arm: Handle<Mesh>,
     forearm: Handle<Mesh>,
-    /// The left arm's own upper arm and forearm (if it has one), if it isn't the right one again.
-    lead_arm: Option<(Handle<Mesh>, Option<Handle<Mesh>>)>,
+    /// The left upper arm, if it isn't the right one again: an empty sleeve, with no forearm.
+    lead_arm: Option<Handle<Mesh>>,
     leg: Handle<Mesh>,
     shin: Handle<Mesh>,
     held: Handle<Mesh>,
@@ -262,10 +262,7 @@ fn load_rigs(
                 head: add(rig.head),
                 arm: add(rig.arm),
                 forearm: add(rig.forearm),
-                lead_arm: rig.lead_arm.map(|(arm, forearm)| {
-                    let arm = add(arm);
-                    (arm, forearm.map(&mut add))
-                }),
+                lead_arm: rig.lead_arm.map(&mut add),
                 leg: add(rig.leg),
                 shin: add(rig.shin),
                 held: add(rig.held),
@@ -308,7 +305,7 @@ fn add_rigs(
         let own = &body.0;
         let rig = Rig {
             head: part(&handles.head, own, RIG_NECK),
-            arms: [part(&handles.arm, own, RIG_SHOULDER), part(handles.lead_arm.as_ref().map_or(&handles.arm, |(arm, _)| arm), own, mirrored(RIG_SHOULDER))],
+            arms: [part(&handles.arm, own, RIG_SHOULDER), part(handles.lead_arm.as_ref().unwrap_or(&handles.arm), own, mirrored(RIG_SHOULDER))],
             elbows,
             legs: [part(&handles.leg, own, RIG_HIP), part(&handles.leg, own, mirrored(RIG_HIP))],
             knees,
@@ -332,7 +329,7 @@ fn add_rigs(
         let held_glow = handles.held_glow.as_ref().map(|mesh| part(mesh, &handles.glow, Vec3::ZERO));
         let body_glow = handles.body_glow.as_ref().map(|mesh| part(mesh, &handles.glow, Vec3::ZERO));
         // A forearm on each arm, unless the lead arm is an empty sleeve.
-        let forearms = [Some(&handles.forearm), handles.lead_arm.as_ref().map_or(Some(&handles.forearm), |(_, forearm)| forearm.as_ref())];
+        let forearms = [Some(&handles.forearm), Some(&handles.forearm).filter(|_| handles.lead_arm.is_none())];
         let forearms = forearms.map(|mesh| mesh.map(|mesh| part(mesh, own, Vec3::ZERO)));
         let shins = [(); 2].map(|_| part(&handles.shin, own, Vec3::ZERO));
         // What glows is set in the figure, inside its shadow: each would cost the sun's shadows a
@@ -371,18 +368,12 @@ fn add_rigs(
             crate::cloth::dress(&mut commands, player, (rig.legs, rig.knees, rig.arms[0]), own, wardrobe);
         }
         let figure = class.def().figure();
-        let (vivid, linger) = arena::blade_flash(figure);
-        if matches!(rig.moves.held, Held::Gripped { .. } | Held::Swept { .. }) {
-            let (from, length) = arena::blade_span(figure);
+        if matches!(rig.moves.held, Held::Gripped { .. }) {
+            let length = arena::BLADE_LENGTH;
             // A glaive's broad edge reaches the ground at its corner before its point; a plain
             // blade's lowest point is its point.
             let corner = if figure == "revenant" { arena::glaive_edge(1.0) } else { Vec3::Y * length };
-            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length, from: from / length, shown: 0, quickened: false, striking: false, struck: None, dragged: None, corner, rasp: 0, embers: (0.0, 0), vivid, linger });
-        }
-        // A blade on the other hand too (the shade's), on its lead forearm, which hangs from
-        // its lead elbow.
-        if let Some(span) = arena::off_blade_span(figure) {
-            commands.entity(player).insert(crate::swish::OffBlade { held: rig.elbows[1], span, vivid, linger, cut: None });
+            commands.entity(player).insert(crate::swish::Blade { held: rig.held, length, from: arena::BLADE_START / length, shown: 0, quickened: false, striking: false, struck: None, dragged: None, corner, rasp: 0, embers: (0.0, 0) });
         }
         commands.entity(player).insert((
             rig,
@@ -432,7 +423,7 @@ fn turn_fighters(time: Res<Time>, mode: Res<crate::camera::CameraMode>, mut figh
         }
         let wants = match (attack.winding_up(), dashing.0) {
             (Some(windup), _) => windup.dir,
-            _ if me && mode.free && mode.watching().is_none() => mode.forward(),
+            _ if me && mode.watching().is_none() => mode.forward(),
             _ if steady.is_some() => facing.look,
             (None, Some(dash)) => dash.dir,
             (None, None) if moved.length() > 0.01 => moved.normalize(),
@@ -554,7 +545,7 @@ fn pose_rigs(
         let empowered = if grows && attack.quick_at(now) { 1.0 } else { 0.0 };
         rig.empowered += (empowered - rig.empowered) * rate(&time, EMPOWER_RATE);
         let (posed_windup, posed_released, ahead) = ahead_of_springs(*class, moves, windup, released, now);
-        let (mut draw, mut throw, mut smear, mut second) = strike_phase(*class, moves, attack, posed_windup, posed_released, ahead);
+        let (mut draw, mut throw, mut smear) = strike_phase(*class, moves, attack, posed_windup, posed_released, ahead);
         // Dashing off once the attack has gone off cuts its backswing short, for good: the
         // follow-through blends out quickly into the dash. Walking doesn't: the swing or throw
         // plays out over the walk.
@@ -574,7 +565,6 @@ fn pose_rigs(
         draw *= 1.0 - cut;
         throw *= 1.0 - cut;
         smear *= 1.0 - cut;
-        second *= 1.0 - cut;
         // A dash has no pose of its own; a nova's slam is the ability pose. A thrower's flick
         // goes only so far through the throw (`FLICK_REACH`), short of its spent follow-through.
         let mut dashing = 0.0;
@@ -583,14 +573,13 @@ fn pose_rigs(
         for (slot, ability) in def.abilities() {
             let thrown = seen.and_then(|seen| seen.abilities.get(slot.0 as usize).copied().flatten());
             match (&ability.kind, since_throw(cooldowns.used_at(slot), thrown)) {
-                // A strike is called down with the same flick of the arm as a throw.
-                (AbilityKind::Projectile(_) | AbilityKind::Strike(_), Some(since)) => flick = flick.max(reach * (1.0 - ease(FLICK.0, FLICK.1, since))),
+                (AbilityKind::Projectile(_), Some(since)) => flick = flick.max(reach * (1.0 - ease(FLICK.0, FLICK.1, since))),
                 (AbilityKind::Nova(_), Some(since)) => dashing = f32::max(dashing, 1.0 - ease(SLAM.0, SLAM.1, since)),
                 _ => {}
             }
         }
         let throw = throw.max(flick);
-        let phase = Phase { draw, throw, dashing, second };
+        let phase = Phase { draw, throw, dashing };
         // And it grows as it's drawn, held grown through the strike, smearing out further to
         // its lane's far end, and shrinking back as it settles.
         let grown = if grows { rig.empowered.max(draw).max(throw) } else { 0.0 };
@@ -692,7 +681,7 @@ fn pose_rigs(
             let flying = match (ahead_of_news, let_go, def.attack.kind.shot()) {
                 (Some(from), Some(at), Some(shot)) => {
                     let flown = (now - (at as f32 + drive)).max(0.0) / TICK_HZ as f32 * shot.speed;
-                    let climb = if mode.free { mode.climb } else { 0.0 };
+                    let climb = mode.climb;
                     let flying = Transform { translation: from.translation + arena::to_world(facing.look * flown, climb * flown), ..from };
                     let ground = map.as_ref().map_or(f32::NEG_INFINITY, |map| map.map().height_at(arena::to_gameplay(flying.translation)));
                     if flying.translation.y < ground {
@@ -815,8 +804,8 @@ mod tests {
                 }
                 let released = attack.released_at.map(|at| now - at as f32);
                 let (shown, shown_released, ahead) = ahead_of_springs(class, moves, attack.winding_up(), released, now);
-                let (draw, throw, _, second) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
-                joints.follow(&targets(moves, Phase { draw, throw, dashing: 0.0, second }, Vec2::ZERO, 0.0), dt, moves);
+                let (draw, throw, _) = strike_phase(class, moves, &attack, shown, shown_released, ahead);
+                joints.follow(&targets(moves, Phase { draw, throw, dashing: 0.0 }, Vec2::ZERO, 0.0), dt, moves);
             };
             let placed = Transform { translation: Vec3::new(3.0, leave.body.translation.y, -2.0), ..leave.body };
             // The held spear as its parts (fighter, arm, elbow, spear) draw it.

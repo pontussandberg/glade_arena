@@ -5,8 +5,7 @@
 N=/c/Users/PONTUS~1/AppData/Local/Temp/arena-sfx
 cls=$1; py=670
 case $cls in
-  revenant) x=100;; javelinist) x=307;; frost_mage) x=489;; warden) x=671;;
-  pyre_witch) x=852; py=710;; shade) x=1035;; breaker) x=1217;; stormweaver) x=1399;;
+  revenant) x=100;; javelinist) x=307;; frost_mage) x=489;;
   *) echo "unknown class $cls"; exit 1;;
 esac
 TAP='(() => { const orig = AudioNode.prototype.connect; window.__peaks = []; AudioNode.prototype.connect = function(dest, ...a) { if (dest instanceof AudioDestinationNode && !window.__an) { const an = dest.context.createAnalyser(); an.fftSize = 1024; window.__an = an; orig.call(an, dest); const buf = new Float32Array(1024); setInterval(() => { an.getFloatTimeDomainData(buf); let p = 0; for (const x of buf) p = Math.max(p, Math.abs(x)); window.__peaks.push([performance.now(), p]); }, 10); return orig.call(this, an, ...a); } return orig.call(this, dest, ...a); }; })();'

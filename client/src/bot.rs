@@ -3,7 +3,7 @@
 //! about to land on it (a bomb's circle, a monster's swing winding up in reach), and picks up an
 //! ally who's down when no foe is near. It clicks to attack
 //! whenever it's in range (the server drops clicks until its last attack is done), and stands
-//! still while one winds up, since moving would cancel it. Turn it on with
+//! still while one winds up. Turn it on with
 //! `ARENA_BOT=1` (native client) to have someone to fight when testing alone. Against the waves,
 //! between them it walks up to the merchant, buys what it can afford (its class's own items
 //! first, then the cheapest), and says it's ready.
@@ -181,9 +181,6 @@ fn think(
                     AbilityKind::Projectile(throw) => distance < throw.range * 0.9,
                     AbilityKind::Nova(nova) => distance < nova.radius * 0.8,
                     AbilityKind::Prime(_) => distance < attack_within && attack.primed.is_none(),
-                    // A strike takes its fuse to land: worth it on someone close enough to still
-                    // be under it, not on someone at its edge.
-                    AbilityKind::Strike(strike) => distance < strike.range * 0.7,
                 }
         })
         .map(|(slot, _)| slot);

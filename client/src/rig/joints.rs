@@ -40,8 +40,6 @@ pub(crate) struct Joints {
     held_tip: Spring,
     /// The forearm's roll (`Held::Gripped`): the nearest way to its target, like the tip.
     pub(super) roll: Spring,
-    /// A swept weapon's yaw (`Held::Swept`): the nearest way to its target, like the tip.
-    held_yaw: Spring,
     pub(super) sway: Spring,
     pub(super) back_leg_turn: Spring,
     pub(super) lead_leg_turn: Spring,
@@ -54,7 +52,6 @@ impl Joints {
     pub(crate) fn follow(&mut self, to: &Angles, dt: f32, moves: &Moves) -> Angles {
         let spring = |joint: &mut Spring, target: f32| joint.follow(target, dt, moves.stiffness, moves.damping, PI);
         self.held_tip.at += TAU * ((to.tip - self.held_tip.at) / TAU).round();
-        self.held_yaw.at += TAU * ((to.yaw - self.held_yaw.at) / TAU).round();
         self.roll.at += TAU * ((to.roll - self.roll.at) / TAU).round();
         if moves.windmill {
             self.weapon_arm.at += TAU * ((to.weapon_arm - self.weapon_arm.at) / TAU).round();
@@ -81,7 +78,6 @@ impl Joints {
             hold: spring(&mut self.hold, to.hold),
             tip: spring(&mut self.held_tip, to.tip),
             roll: spring(&mut self.roll, to.roll),
-            yaw: spring(&mut self.held_yaw, to.yaw),
             sway: spring(&mut self.sway, to.sway),
             back_leg_turn: spring(&mut self.back_leg_turn, to.back_leg_turn),
             lead_leg_turn: spring(&mut self.lead_leg_turn, to.lead_leg_turn),

@@ -249,8 +249,7 @@ pub(super) fn strike_ground(
         if !std::mem::take(&mut blade.striking) {
             continue;
         }
-        // Only a blade that tears the ground open (the revenant's) breaks it: every other
-        // weapon lands with an effect of its own (`fx::strike_fx`).
+        // Only a blade that tears the ground open (the revenant's) breaks it.
         if class.def().attack.rift.is_none() {
             continue;
         }

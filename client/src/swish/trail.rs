@@ -28,10 +28,6 @@ pub(crate) struct Trail {
     pub(super) samples: VecDeque<(f32, [Vec3; 3])>,
 }
 
-/// The other hand's blade's trail (`OffBlade`), beside the main one.
-#[derive(Component)]
-pub(crate) struct OffTrail(Trail);
-
 /// Its trail, on the entity that draws it: gone with the fighter.
 #[derive(Component)]
 pub(super) struct TrailOf(pub(super) Entity);
@@ -41,7 +37,6 @@ pub(super) fn add_trails(
     assets: Res<SwishAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     fighters: Query<Entity, (With<Blade>, Without<Trail>)>,
-    offhands: Query<Entity, (With<OffBlade>, Without<OffTrail>)>,
     trails: Query<(Entity, &TrailOf)>,
     owners: Query<(), With<Trail>>,
 ) {
@@ -64,10 +59,6 @@ pub(super) fn add_trails(
     for fighter in &fighters {
         let trail = trail(&mut commands, fighter);
         commands.entity(fighter).insert(trail);
-    }
-    for fighter in &offhands {
-        let trail = trail(&mut commands, fighter);
-        commands.entity(fighter).insert(OffTrail(trail));
     }
     for (entity, of) in &trails {
         if owners.get(of.0).is_err() {
@@ -99,7 +90,6 @@ pub(super) fn trail_blades(
     time: Res<Time>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut fighters: Query<(&Blade, &mut Trail, &InheritedVisibility)>,
-    mut offhands: Query<(&OffBlade, &mut OffTrail, &InheritedVisibility)>,
     blades: Query<&GlobalTransform>,
     mut drawn: Query<&mut Visibility, With<TrailOf>>,
 ) {
@@ -108,13 +98,8 @@ pub(super) fn trail_blades(
         let Ok(held) = blades.get(blade.held) else { continue };
         // From where the blade starts, through its middle, to its tip.
         let place = [blade.from, (blade.from + 1.0) / 2.0, 1.0].map(|up| blade.at(held, up));
-        let brightness = if blade.quickened { 1.0 } else { TRAIL_DIM * blade.vivid };
-        follow(&mut trail, now, place, brightness, TRAIL_LIFE * blade.linger, visible.get(), &mut meshes, &mut drawn);
-    }
-    for (off, mut trail, visible) in &mut offhands {
-        let Ok(held) = blades.get(off.held) else { continue };
-        let place = [0.0, 0.5, 1.0].map(|up| off.at(held, up));
-        follow(&mut trail.0, now, place, TRAIL_DIM * off.vivid, TRAIL_LIFE * off.linger, visible.get(), &mut meshes, &mut drawn);
+        let brightness = if blade.quickened { 1.0 } else { TRAIL_DIM };
+        follow(&mut trail, now, place, brightness, TRAIL_LIFE, visible.get(), &mut meshes, &mut drawn);
     }
 }
 
