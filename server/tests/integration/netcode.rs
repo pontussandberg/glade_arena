@@ -2,7 +2,7 @@
 //! localhost, all stepped in this process. Client A receives with simulated latency, jitter and
 //! 2% packet loss.
 //!
-//! Checks (League-style netcode: commands, nothing predicted):
+//! Checks (commands only; these clients are headless, so nothing is predicted):
 //! - both clients connect and see each other (own player as the server says, other interpolated)
 //! - a command's result shows up on A about a round trip later
 //! - after moving, A's own view and B's interpolated view both match the server

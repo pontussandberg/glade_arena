@@ -1,8 +1,9 @@
 # Arena
 
 Browser PvP arena brawler: a third-person 3D presentation on 2D gameplay rules, with one
-authoritative server and League-style netcode: clients send commands, only your own walking is
-predicted, and other players are interpolated.
+authoritative server: clients send commands, never positions. Your own movement is predicted,
+attacks and abilities show once the server confirms them (about a round trip), and other players
+are interpolated.
 
 The fight happens on one of three maps on a 1 m tile grid, picked by the room's leader (or
 switched in practice): River Crossing, a forest clearing with a river through the middle crossed
@@ -17,42 +18,47 @@ the corner shows everyone.
 
 Before joining you pick a **class** in the lobby, where it stands on a stage to look at (drag
 to turn it) next to its numbers and abilities; then enter the arena. Each class has its own HP, speed, auto-attack (melee or
-projectile) and abilities (up to four, on Q, W, E and R; each class has one on Q so far); all of
+projectile) and abilities (up to four, on the number keys 1 to 4; each class has one so far); all of
 it lives in its own file in `shared/assets/classes/`, next to `common.ron` for what every class
 shares (field reference in the README there):
 
-| Class | Role | Auto-attack | Q |
+| Class | Role | Auto-attack | Ability |
 |---|---|---|---|
-| Jav | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`) | **Deadeye**: at once, your next auto-attack will critically strike, with 50% more attack speed; press again to call it off (15s cooldown, from the throw; off the global cooldown) |
-| Revenant | Duelist | A heavy overhead blow of its dark glaive, the blade coming down flat on the ground from 1.6 m to 3.08 m ahead, tearing it open for 3s (inside the tear the revenant moves 30% faster, and enemies standing in it burn for 4 every 0.5s, the revenant healing a third of it); each hit empowers the glaive for the next swing if it follows within 10s (time to kite): a lane 50% further and wider, from 2 m to 4.62 m, 0.75 m wide, 50% more attack speed and a 50% crit chance (it never crits otherwise; an empowered hit renews it), and it knocks enemies up for 0.3s (shorter than its own quickened attack, so it can't chain alone), lost on a miss (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash toward the cursor, 1 m to 6 m, damaging each enemy you pass through |
-| Frost Mage | Controller | Frostbolts (mid range) that shatter where they hit, the burst of ice hitting everyone round the one struck for most of the damage; every hit slows (40% for 2s) | **Frost Nova**: slam the staff down and freeze everyone within 3.5 m in place for 1.5s (no walking, no dashing) |
+| Jav | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`), pierce monsters, and crit now and then | **Deadeye**: at once, your next auto-attack will critically strike, with 50% more attack speed; press again to call it off (15s cooldown, from the throw; off the global cooldown) |
+| Revenant | Duelist | A heavy overhead blow of its dark glaive, the blade coming down flat on the ground from 2 m to 4.62 m ahead, 0.75 m wide, tearing it open for 3s (inside the tear the revenant moves 30% faster, and enemies standing in it burn for 4 every 0.5s, the revenant healing a third of it); each hit arms the next blow, if it follows within 10s (time to kite): it knocks enemies up for 0.3s (shorter than the attack itself, so it can't chain alone), lost on a miss, and an armed hit arms the next (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash toward the cursor, 1 m to 12 m, damaging each enemy you pass through |
+| Frost Mage | Controller | Frostbolts that fly until they meet something and shatter there, the burst of ice hitting everyone round the mark for most of the damage; every hit slows (40% for 2s), and it always crits a frozen enemy | **Frost Nova**: slam the staff down and freeze everyone within 8.75 m in place for 2.5s (no walking, no dashing) |
 
 Hits can carry **crowd control** (`chill` in the class files): a slow takes a share off walking
 and dashing speed (a dash still goes its full distance, just slower; a haste speeds it up the
 same way), a root freezes a fighter in place (it can't walk or dash, and a dash in
-progress stops) but it can still attack. Slowed fighters take on a cold blue cast and frost turns
+progress stops) but it can still attack, and a knock-up tosses it: no walking, dashing, attacking
+or casting while in the air, and a windup in progress is lost (the only thing that cancels one).
+Slowed fighters take on a cold blue cast and frost turns
 under their feet; frozen ones stand in ice.
 
-Auto-attacks work as in League. Each click is one attack (holding the button doesn't attack
-again), and the next may start once its attack timer (`attack_ticks`) has run out; once the attack
-has gone off, the cast bar under your health bar fills until then. A click before then is dropped,
-not queued. The attack goes
+Each auto-attack starts on a click, and the next may start once its attack timer
+(`attack_ticks`) has run out; holding the button attacks again the moment each is ready. Once the
+attack has gone off, the cast bar under your health bar fills until then. A click before then is
+dropped, not queued. The attack goes
 off part way through that time, after a windup (`windup`, a part of the attack per class): the
 spear leaving the hand, the blade reaching its target. You keep walking through the windup (a
-shot drawn slows you), and the attack follows your aim until it goes off. After it has gone
-off, the rest is backswing: move whenever you like, cutting the animation short, while the timer
-runs on. Nothing on screen shows when the
+shot winding up slows you), and the attack follows your aim until it goes off. A blow goes off
+the tick its windup is over; a shot drawn past its windup with the button still held stays drawn,
+and flies the moment you let go. After it has gone
+off, the rest is backswing: move whenever you like while the timer runs on (the animation plays
+out over the walk; only a dash cuts it short). Nothing on screen shows when the
 attack has gone off but your fighter itself, so learning each class's release point is the skill
-check (attack, then step, then attack again). Attack speed (only the Revenant's follow-up for now)
+check (attack, then step, then attack again). Attack speed (Deadeye, the frenzy of zombie kills
+and the Berserker Totem's, a fury stone's, the practice shop's)
 shortens the timer and the windup alike, and plays the animation faster. Everyone sees the windup in
-the fighter's body, so attacks can be read and dodged. Starting an attack cancels your walk: afterwards you stand
-still until you order a move again; so does a dash. A dash may be used mid-windup: it moves you,
+the fighter's body, so attacks can be read and dodged. Starting an attack or a dash drops a walk
+toward a point (a bot's order); your own WASD walking carries on through both. A dash may be used mid-windup: it moves you,
 and the attack still goes off when the windup's over, from wherever the dash took you (stab, then
 dash into place for it to land).
 Abilities have their own cooldown (shown in the HUD). Like everything else they happen on the
-server: your spear flies and your dash moves once the server has your Q, about a round trip
+server: your dash moves once the server has your cast, about a round trip
 after you press it.
-Killed players sit out 3 seconds, then respawn at full health.
+Killed players sit out 10 seconds, then respawn at full health.
 
 Stack: **Bevy 0.19 + Lightyear 0.30** (pinned together), Rust everywhere. The browser client is
 the same Rust code compiled to WASM, talking WebTransport to the server.
@@ -60,7 +66,8 @@ the same Rust code compiled to WASM, talking WebTransport to the server.
 ## Waves (PvE)
 
 Besides fighting each other (PvP: free-for-all or teams), a lobby can fight **Waves**: up to five
-players together, against endless waves of monsters, on a map of their own, **Hollow Wilds**.
+players together, against endless waves of monsters, on **Ravenhold** (where solo runs go) or on
+a map of the waves' own, **Hollow Wilds**.
 It's far bigger than the PvP maps, with a walled camp in the middle and places all around it: a
 graveyard and ruined chapel, a hedge maze, a lake with an island, a quarry with a burned
 watchtower, a rotting marsh with a witch's hut, a circle of standing stones, a chasm with a stone
@@ -76,11 +83,14 @@ Butcher, The Pale Lich, The Grave Lord, The Ember Archmage, The Plague Mother, t
 tougher each time), and from wave 6 a few
 **elites** come along, bigger, tougher, worth more, and with a twist: Swift, Vampiric, Volatile
 (blows up where it dies), Frostbound or Splitting. Everyone has **one life**: a fallen player is
-**down** where they fell (marked by a ring of spirit light) until an ally stands over them for 3
-seconds to pick them up, the wave is cleared, or a boss falls; if everyone is down, the run is
-over (alone, the first fall ends it). Fury stones (pale yellow crossed blades) make you attack faster for a while; the blue winged boots make you walk faster.
+**down** where they fell (marked by a pool of healing light, a cross filling in as the rescue
+goes) until an ally stands over them for 3
+seconds to pick them up (they come back at 40% health), the wave is cleared, or a boss falls; if
+everyone is down, the run is
+over (alone, the first fall ends it). Fury stones (pale yellow crossed blades) make you attack faster for a while; the blue winged boots make you walk faster; a glowing green cross heals you.
 
-Every wave is the same every run: which monsters come, in what order, which are elites, and its
+Every wave is the same every run for a party of the same size (a bigger party gets more): which
+monsters come, in what order, which are elites, and its
 omen are all the wave's own (only where they come out of, and where chests turn up, changes).
 From wave 4 the second and fourth wave after each boss (4, 7, 9, 12, 14, 17, 19, ...) come with
 an **omen**, in turn, shown while you shop for it: Gilded (double bounties), a Horde (half as many
@@ -167,20 +177,22 @@ entry goes by (all runs are kept, on the board or not). There's
 no database yet: the server appends each run to a CSV file (`ARENA_HIGHSCORES`, default
 `highscores.csv` where it runs; on the server, `/var/lib/arena/highscores.csv`) and reads it back
 when it starts (`server/src/highscores.rs`). Each line: the date (UTC), the game's version (the
-workspace's, `GAME_VERSION`, now 0.0.1), the wave, the map, and the party (names and heroes).
+workspace's, `GAME_VERSION`, now 0.0.1), the wave, the map, how many played, and the party (names
+and heroes).
 
 **Measuring performance** (native): `ARENA_PERF=perf.txt` turns vsync off, notes every frame's
 time and counts what's in the world each second (entities, meshes drawn, effect parts, lights, UI
 nodes, assets), then writes a summary (average, median, 99th percentile, worst frame) and quits
-after `ARENA_PERF_SECS` (60 by default). `ARENA_PERF_OFF=lights,shadows,fog,ui,fx` switches parts
-of the scene off, to see what each costs. Building the client with `--features profile` also
+after `ARENA_PERF_SECS` (60 by default). `ARENA_PERF_OFF=lights,shadows,fog,ui,fx,blend` switches
+parts of the scene off, to see what each costs (in the browser, the same words as `?off=` on the
+URL). Building the client with `--features profile` also
 writes a Chrome trace (`trace-*.json`) of every system's time, every frame (it gets big: a few GB a
 minute). On a fast machine the frame rate hides costs that show on a slow one or in the browser,
 so compare frame times, not frame rates. `scripts/trace_sum.py` sums a trace per system; what
 we've measured so far, and how to run a perf loop, is in [docs/PERF.md](docs/PERF.md).
 
 To try a later wave natively: `ARENA_ROOM="Waves 10" cargo run -p arena-client -- 11 revenant`
-starts a run at wave 10 with the gold you'd have by then (`ARENA_BOT=1` to let the bot play it,
+starts a run at wave 10, on Ravenhold, with the gold you'd have by then (`ARENA_BOT=1` to let the bot play it,
 `ARENA_SHOTS=<dir>` to save a screenshot every few seconds). `cargo test -p arena-server --test
 integration long_run -- --ignored --nocapture` plays a run with a bot that shops, printing how
 each wave goes (`ARENA_CLASS` picks its class).
@@ -189,30 +201,42 @@ each wave goes (`ARENA_CLASS` picks its class).
 
 ```
 shared/   protocol (replicated components, PlayerInput, messages), sim (pure gameplay rules),
-          map (the tile map, A* pathfinding, line-of-movement checks), classes (+ assets/classes/),
-          abilities (one module per kind: throw, dash, nova),
-          config
-server/   headless authoritative server (commands, spawning, hit decisions, respawns);
+          map (the tile map, one file per map, A* pathfinding, line-of-movement checks),
+          classes (+ assets/classes/), abilities (one module per kind: throw, dash, nova, prime),
+          items (what each item is), rooms (modes, maps, omens), config
+server/   headless authoritative server (commands, spawning, hit decisions, respawns), the waves
+          (waves.rs: all the tuning; brain.rs: the monsters), items.rs (what items do),
+          highscores, rooms, certs;
           tests/integration/ has the end-to-end tests (one test binary: each links all of Bevy)
 client/   ClientNetPlugin (networking + commands, headless-capable), bot (sparring AI);
-          render (fighters, shots, novas, frost, HUD, input), swish (a blade's wind), camera,
+          render (fighters, shots, effects, HUD, input, aim; glide is your own prediction),
+          swish (a blade's wind), camera, fx (the little scenes items and monsters make),
+          audio (every sound, layered at play time), cloth (moving cloth), sculpt (lofted
+          meshes),
           action_bar (your passive and ability icons, cooldown, hover tooltips), stat_frame (a
           class's stats: in the lobby and bottom left in the arena), minimap,
           arena (the 3D scene and all meshes), rig (animated fighters: facing, walk cycle,
-          windup and throw), lobby (character select), feedback (health and cast bars, hit flash)
-client/web/  index.html for the browser build (pkg/ and digest.txt are generated)
-docs/     art-direction.md: the look (palette, light, shape rules, props, fighters)
-scripts/  build-web.sh, serve.mjs
+          windup and throw), lobby (character select), feedback (health and cast bars),
+          waves (the shop and banners), practice (the practice tools), item_icons, browser and
+          rooms (the lobby list), esc_menu, scoreboard, pickups, waygates
+client/web/  index.html for the browser build (pkg/, digest.txt and the wasm size are
+          generated), sfx/ (the sound samples and CREDITS.txt)
+docs/     art-direction.md (the look), sound-direction.md (the sound), PERF.md (perf work)
+scripts/  dev.sh, build-web.sh, serve.mjs, trace_sum.py, capture/ (headless-Chrome eyes and
+          ears), sfx/ (sound cutting)
 ```
 
 ### How a tick works
 
-- After connecting, a client sends `ChooseClass` once; the server spawns its player then.
-- Clients send only **commands** (`PlayerCommand`: walk with the keys, attack held toward an aim,
-  the aim as the camera turns, cast an ability, jump; a bot also walks to a point, or stops),
-  League style, never positions. They're
+- After connecting, a client says hello and sends `ChooseClass` whenever a class is picked; the
+  server spawns its fighter once it's in a started room (in practice, a new pick respawns you on
+  the spot).
+- Clients send only **commands** (`PlayerCommand`: walk with the keys, attack toward an aim, the
+  button held or let go, the aim as the camera turns, cast an ability, jump; a bot also walks to
+  a point, or stops), never positions. They're
   sent when something changes (a click goes out right away; the aim while attacking at most once
-  a tick) on a reliable channel, and the server applies each one the moment it arrives, to the
+  a tick) on a reliable channel, each stamped with its tick; the server holds one for a coming
+  tick until that tick comes (at most a second ahead) and applies it to the
   player's intent (`PlayerInput`), which the sim runs on every tick. The server drops a
   destination by itself when you arrive, attack or dash, and a fighter carries on with its last
   order if its client goes quiet.
@@ -221,11 +245,16 @@ scripts/  build-web.sh, serve.mjs
   damage, and replicates state every tick.
 - Pathfinding is A* over the shared tile map, smoothed into straight lines where the way is
   clear. The map uses no platform math functions (sin, atan2), so native and WASM agree to the
-  bit (the client picks the clicked point, `walk_target`, that the server walks to).
-- Walls, rocks, trees and the forest edge block movement and shots; water blocks movement only.
-- **Only your own walking is predicted.** Your fighter is drawn where your keys will have taken
-  it by the time the server has them, by the same sim the server walks it with
-  (`render::glide`); where the server turns out to disagree, the difference is eased away.
+  bit. Players steer with WASD; the paths are walked by bots (which pick the point,
+  `walk_target`) and monsters.
+- Walls, rocks and trees block movement, and block shots up to their height (a thrown shot
+  clears what its arc tops); the forest edge blocks everything; water is waded, slowly; a chasm
+  stops walkers (shots fly over it, and on Riven Gorge you can leap it).
+- **Your own movement is predicted.** Your fighter is drawn where your keys and jumps will have
+  taken it by the time the server has them, by the same sim the server walks it with
+  (`render::glide`), your own winding shot's slow included; a dash isn't started early, but once
+  the server's word arrives the prediction runs it on ahead under your steering. Where the
+  server turns out to disagree, the difference is eased away.
   Everything else (an attack going off, an ability) shows about a round trip later.
 - Other players are **interpolated** between server updates, a little in the past. Their
   `AttackState`, `Cooldowns` and `Dashing` are shown on that same timeline, so a cast bar and a dash line
@@ -235,8 +264,8 @@ scripts/  build-web.sh, serve.mjs
   (`sim::projectile_pos`, from its origin, direction and spawn tick), so clients draw them from
   that alone, on your own fighter's clock: a shot coming at you is drawn where it is relative to
   you.
-- **Every hit is judged where everyone is on the server** at that tick (no lag compensation, as
-  in League): melee, dashes, novas and projectiles alike. What you dodge on the server, you
+- **Every hit is judged where everyone is on the server** at that tick (no lag
+  compensation): melee, dashes, novas and projectiles alike. What you dodge on the server, you
   dodged; an attacker at high ping may see a swing that looked in reach miss.
 - The class files (`shared/assets/classes/`) are compiled into both sides, and their hash is
   part of the protocol id: a client built with different class numbers can't connect.
@@ -257,36 +286,45 @@ cargo never removes outdated ones itself.
 
 ```sh
 # all at once: rebuild the browser client, replace any running server, serve on :8080
-./scripts/dev.sh
+# (the argument is the wasm profile: `dev` compiles much faster; none builds wasm-release)
+./scripts/dev.sh dev
 
 # tests (~10s to run, plus the build): sim unit tests, plus real server + headless bot clients
 # over WebTransport (server/tests/integration/):
-#   map/sim       map symmetry, pathfinding, every spawn point reaching every other; attack
-#                 timers, windups, cancels, dropped clicks, cooldowns, far_scale, Q throws, dashes (full distance, never into a wall,
-#                 not mid-swing), slows, roots (stopping walks and dashes), novas
+#   map/sim       map symmetry, pathfinding, every spawn point reaching every other, water
+#                 waded; attack timers, windups, knock-ups, dropped clicks, cooldowns,
+#                 far_scale, dashes (full distance, never into a wall, moving a mid-windup
+#                 attack with them), slows, roots (stopping walks and dashes), novas
 #   classes       the class file parses and every class has sane numbers
 #   netcode.rs    a command showing about a round trip later, own view and interpolation
 #                 matching the server, unreachable clicks, server corrections, windup and
-#                 shot, server-decided hit (one bot at 60ms + 2% loss)
+#                 shot, server-decided hit (one bot at 60ms + 2% loss), fake latency
 #   combat.rs     melee judged where the target is on the server (standing in and out of
-#                 reach, running past), death and respawn
-#   abilities.rs  Deadeye priming the next attack; rift step cutting
-#                 through a target once and readying the blade, cutting where it ends but not
+#                 reach, running past), the rift burning and healing, death and respawn
+#   abilities.rs  Deadeye priming the next attack (with the very click too) and called off;
+#                 rift step cutting
+#                 through a target once, cutting where it ends but not
 #                 who it leaves behind; frost nova freezing a revenant (no walk, no dash),
 #                 then letting it go; frostbolts slowing
 #   inputs.rs     4 fps client firing once per click; a frozen client's fighter finishing its
-#                 walk; attacking cancels the walk, and walking off keeps the windup
+#                 walk; key walks moving and stopping; a drawn shot slowing the walk and
+#                 going off once when let go
+#   pickups.rs, rooms.rs, waves.rs
+#                 pickups, lobbies and whole runs end to end (long_run, ignored by default,
+#                 plays one through)
 cargo test
 
-# server (run from the repo root; writes client/web/digest.txt for the browser; see Logs below)
+# server (run from the repo root; writes client/web/digest.txt for the browser; see Logs below;
+# ARENA_PORT picks another port than 5888)
 cargo run -p arena-server
 
 # browser client
 ./scripts/build-web.sh          # -> client/web/pkg
-node scripts/serve.mjs          # -> http://localhost:8080 (open twice to play; you are blue)
-
+node scripts/serve.mjs          # -> http://localhost:8080 (PORT picks another; open twice to
+                                #    play; you are blue). On localhost the page also takes
+                                #    ?server=ip:port, ?room=, ?class= and ?bot
 # native client (optional, handy for debugging): [client id] [class], e.g. `11 javelinist`;
-# without a class it opens the lobby. ARENA_SERVER=ip:port picks another server.
+# without a class it opens the home screen. ARENA_SERVER=ip:port picks another server.
 cargo run -p arena-client
 
 # a sparring partner: a native client played by a simple bot
@@ -300,14 +338,17 @@ The server makes a new self-signed certificate (valid 14 days) on every start. T
 its hash from `digest.txt`, so after restarting the server, reload the page. Chrome and Firefox
 support WebTransport with certificate hashes.
 
-Controls: in the lobby, pick a class with a click or its number key and enter with the button or
-Enter. In the arena the camera is third person, behind you over your right shoulder: a click
-captures the mouse, which then turns it (Esc frees it again; until then, dragging with the right
+Controls: in the lobby, pick a class with a click or its number key and enter with the button.
+In the arena the camera is third person, behind you over your right shoulder: a click
+captures the mouse, which then turns it (Esc frees it again, and pressed again opens the menu;
+until then, dragging with the right
 button or the arrow keys turn it). WASD walks relative to it, holding left click attacks onto the
 crosshair, the number keys use your abilities, Space jumps, the wheel (or + / -) zooms, down to
-arm's length, holding Tab shows the scoreboard, and F1 moves the camera on to the next fighter,
+arm's length, holding Tab shows the scoreboard, M opens the full map, F readies up between
+waves, and F1 moves the camera on to the next fighter,
 to watch them play (and after the last, back to you). V puts it in first person, at your
-fighter's eyes, and back (not finished yet). The keys are listed top left, under the ping.
+fighter's eyes, and back (not finished yet). The keys are in the Controls fold-out top left,
+under the ping.
 
 Two tabs work: a hidden tab keeps simulating and networking without rendering (see
 `client/src/hidden_tab.rs`, which works around Bevy 0.19 ignoring Lightyear's keepalive). If a
@@ -351,10 +392,10 @@ deploy restarts the server, which disconnects everyone playing.
 
 ## Not done yet (see the plan)
 
-- More classes, and more abilities (W/E/R); a balance pass (in bot duels the Revenant's
+- More classes, and more abilities (each class fills one of its four slots); a balance pass (in
+  bot duels the Revenant's
   dash-and-swing tends to beat the Jav; the Frost Mage is new and untuned)
-- Network debug overlay (lag sliders, server ghost), room codes, switching class without rejoining
-- Visual smoothing: your own fighter moves in 32 Hz steps (it's shown as last received);
-  interpolate it between ticks
+- Network debug overlay (lag sliders, server ghost; practice has a fake-ping tool, and the ping
+  line shows the prediction's lead), room codes
 - Accounts service issuing netcode connect tokens (currently a shared zero dev key)
-- WASM size: 44 MB raw / ~10 MB gzipped; add wasm-opt and brotli, and a loading bar
+- WASM size: add wasm-opt and brotli (Caddy already serves zstd and gzip)

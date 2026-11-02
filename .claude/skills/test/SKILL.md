@@ -2,7 +2,7 @@
 name: test
 description: Run the full test suite (slow). Only when the user asks for it.
 disable-model-invocation: true
-argument-hint: "[test filter, e.g. -p arena-server --test abilities]"
+argument-hint: "[test filter, e.g. -p arena-server --test integration abilities]"
 ---
 
 Run the arena test suite.
@@ -14,7 +14,7 @@ Run the arena test suite.
    `test result|FAILED|panicked|^error`.
 3. Report: how many passed and failed per test binary, and for each failure its message and
    where it panicked. Don't fix anything unless the user asks.
-4. If the dev server was running before, start it again with `./scripts/dev.sh` (in the
+4. If the dev server was running before, start it again with `./scripts/dev.sh dev` (in the
    background).
 5. Delete stray build folders as `CLAUDE.md` says (keep only `target/debug`, `target/tmp`,
    `target/wasm32-unknown-unknown`, `target/wasm-release`).

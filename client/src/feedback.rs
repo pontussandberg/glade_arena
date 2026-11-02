@@ -1,5 +1,5 @@
-//! Combat feedback: a health bar over every fighter with a cast bar under it while it winds up
-//! an attack, the health lost lingering on the bar a moment before it drains (gold, longer, and
+//! Combat feedback: a health bar over every fighter with a cast bar under it from when an attack
+//! goes off until the next is ready, the health lost lingering on the bar a moment before it drains (gold, longer, and
 //! with the bar popping on a crit), a damage number when one takes damage (as big as the blow,
 //! thrown up and falling; a crit's bigger and golden), a green number when one is healed, and
 //! dead fighters disappearing until they respawn.
@@ -213,9 +213,10 @@ fn over_bar(camera: &Camera, camera_transform: &GlobalTransform, body: &Transfor
     camera.world_to_viewport(camera_transform, bar_point(body, size)).ok()
 }
 
-/// How far behind the latest state from the server our own fighter is drawn, in ticks: enough
-/// that the next update is (almost) always in by the time it's needed, so it moves smoothly
-/// between updates however unevenly they arrive (`render::predict_me`).
+/// How far behind the latest state from the server our own fighter's timeline runs, in ticks:
+/// enough that the next update is (almost) always in by the time it's needed, however unevenly
+/// they arrive. The prediction steps on ahead from it (`render::predict_me`); the attack clock
+/// stays on it.
 pub(crate) const ME_BEHIND_TICKS: f32 = 1.0;
 
 /// The server tick our latest news from it is from, advancing smoothly with real time between

@@ -152,7 +152,7 @@ pub(crate) struct Visuals {
     /// The ice around a frozen (rooted) fighter's feet, and the frost under a slowed one's.
     ice_prison: Handle<Mesh>,
     frost_rune: Handle<Mesh>,
-    /// Per class and shot (auto-attack: false, Q: true).
+    /// Per class and shot (`None`: the auto-attack's; `Some`: that ability's).
     projectiles: HashMap<(ClassId, Option<AbilitySlot>), arena::ShotLook<Handle<Mesh>>>,
     shot_tip: Handle<Mesh>,
     /// A piece of a thrown spear's wake.
@@ -245,8 +245,8 @@ impl Visuals {
 }
 
 /// A child that keeps this orientation and size in the world, this high above the ground,
-/// whatever its parent does (fighters turn, lean, crouch and are drawn bigger, see `rig/`): the range circle and the frost
-/// stay flat on the ground.
+/// whatever its parent does (fighters turn, lean, crouch and are drawn bigger, see `rig/`): the
+/// frost stays flat on the ground.
 #[derive(Component)]
 pub(crate) struct WorldAligned(pub Quat, pub f32);
 

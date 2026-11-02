@@ -44,8 +44,9 @@ his ear. Never declare a sound good; say what it is made of and let him listen.
    calls at the moments the body makes them; gains are the mix (every clip arrives at -1 dBFS).
    Update the `Sfx` doc comment to describe the new sound, not the old.
 6. **Build and check.** `./scripts/dev.sh dev` in the background; wait for `server starting
-   port=5888`. Load the game in the headless Chrome and grep the console for `didn't load`: a
-   misspelled key is a silent missing layer. If you need to prove a layer fires, insert an
+   port=5888`. Load the game in the headless Chrome and grep the console for `didn't load` (it
+   catches a missing or undecodable file in `SAMPLES`; a recipe key misspelled against `SAMPLES`
+   plays nothing and logs nothing, so proofread those by hand). If you need to prove a layer fires, insert an
    AnalyserNode before the destination and poll peaks (see `docs/sound-direction.md`).
 7. **Hand over.** Tell him it's up (hard-reload), and for each sound what it's now made of, in
    his kind of words. Ask which direction each one needs to move, not whether it's good.

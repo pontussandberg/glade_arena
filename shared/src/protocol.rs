@@ -742,9 +742,10 @@ impl PlayerInput {
     }
 }
 
-/// What a client tells the server its player should do, League style: sent when it happens, and
-/// applied by the server the moment it arrives (not scheduled for a future tick). Nothing is
-/// predicted: the client sees the result once the server's next update comes back.
+/// What a client tells the server its player should do: sent when it happens. Walks, attacks,
+/// jumps and draws carry the tick the client's prediction steps them from, and the server holds
+/// each until that tick (`orders`), so the two agree; everything else is applied the moment it
+/// arrives, and shows once the server's next update comes back.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub enum PlayerCommand {
     /// Walk to this point (a bot's order: players walk with `Walk`).
@@ -937,8 +938,9 @@ impl Plugin for ProtocolPlugin {
         app.component::<Respawning>().replicate();
         app.component::<Fx>().replicate();
         app.component::<Waygate>().replicate();
-        // Others' fighters are interpolated (smooth, a little in the past); our own isn't: it's
-        // shown as the server last said it was, for the least delay after a command.
+        // Others' fighters are interpolated (smooth, a little in the past); our own isn't: the
+        // render client predicts it ahead (`render::glide`), and a headless one shows it as the
+        // server last said it was.
         app.component::<Pos>().replicate().add_interpolation_with(lerp_or_jump);
         app.component::<Walking>().replicate();
         app.component::<AttackState>().replicate().add_interpolation_with(hold);

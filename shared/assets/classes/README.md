@@ -1,15 +1,20 @@
 # Classes
 
-One file per class (`revenant.ron`, `javelinist.ron`, `frost_mage.ron`, and `zombie.ron`, which
-no one picks: the server fields zombies in lobby matches), and
-`common.ron` for the values every class shares. Edit freely: everything gameplay-related about a
-class lives in its file. Server and client both compile these files in, and their hash is part of
+One file per class, playable or not: the heroes (`revenant.ron`, `javelinist.ron`,
+`frost_mage.ron`), the monsters of the waves (`zombie.ron`, `gnawer.ron`, `ghoul.ron`,
+`grave_hunter.ron`, `bloater.ron`, `grave_ogre.ron`, `frost_wraith.ron`, `bonecaller.ron`,
+`rot_priest.ron`, `death_knight.ron`, `bombardier.ron`, `void_acolyte.ron`, `ember_imp.ron`,
+`storm_caller.ron`), their bosses (`butcher.ron`, `pale_lich.ron`, `grave_lord.ron`,
+`ember_archmage.ron`, `plague_mother.ron`), and the camp's `merchant.ron`, who never fights;
+plus `common.ron` for the values every class shares (the global cooldown and the crit
+multiplier). Edit freely: everything gameplay-related about a class lives in its file. Server and
+client both compile these files in, and their hash is part of
 the protocol id, so a client built from different numbers is refused at connect instead of
 mispredicting.
 
 The order of the classes is `CLASS_FILES` in `shared/src/classes.rs`: the class picker and its
-number keys, the default pick, and the order target dummies come in. A new class also needs its
-look in the client (`arena/` figure and parts, `rig/` moves).
+number keys, the default pick, and the order target dummies come in. A new class needs a look in
+the client (its own `arena/` figure and parts and `rig/` moves, or a `look` wearing another's).
 
 Every class file starts with `#![enable(unwrap_variant_newtypes)]`, so a kind is written
 `Dash(distance: 6.0, ...)` rather than `Dash((distance: 6.0, ...))`, and an optional value
@@ -19,16 +24,28 @@ Every class file starts with `#![enable(unwrap_variant_newtypes)]`, so a kind is
 
 Units: meters, meters per second, ticks (32 per second).
 
-- `id`: stable key (also picks the class's look in the client)
+- `id`: stable key (also picks the class's look in the client, unless `look` wears another's)
+- `name`, `role`, `blurb`: what players read: the class's name, its role, one line on it
 - `playable` (optional, true by default): false keeps it out of the class picker, for what only
-  the server fields (zombies). Such a class may have no abilities, and goes after the playable ones
+  the server fields (monsters, bosses, the merchant). Such a class may have no abilities, and
+  goes after the playable ones
+- `look` (optional): how it's drawn: `figure` (another class's id, to wear its figure), `size`
+  (a multiple of that figure), `tint` (an RGB wash over it), `cloth` (false leaves the moving
+  cloth off), `bolts` (the color its shots fly in)
+- `mob` (optional): how the waves field it:
+  - `brain`: `Chase`, or `Kite(keep: ...)` to fight from a distance
+  - `tricks`: its moves beyond walking and attacking: `Lunge`, `Slam`, `Burst`, `Summon`,
+    `Mend`, `Ring`, `Fan`, `Mortar`, `Blink`, `Enrage` (see `MobTrick` in `shared/src/classes.rs`
+    for each one's fields)
+  - `bounty` (the gold a kill pays), `cost` (its price against a wave's budget), `from_wave`
+    (when it first comes), `pack` (how many come out together), `boss`
 - `max_hp`: health at spawn and respawn
 - `move_speed`: walking speed
 - `attack`: the left-click auto-attack, aimed at the cursor (skillshot)
   - `damage`
   - `attack_ticks`: the whole attack: from the click to when the next may start. Once it has
-    gone off, the cast bar fills until then. A click before then is dropped (no holding fire, no
-    queueing: click again once it's ready).
+    gone off, the cast bar fills until then. A click before then is dropped (no queueing), but
+    the button held attacks again the moment it's ready.
   - `windup`: how much of the attack (0 to 1) comes before it goes off: the spear leaving the
     hand, the blade reaching the target. Nothing a player does cancels it: you walk on through
     it, and only a knock-up loses it (no hit, and you may attack again at once). The rest is the
@@ -39,21 +56,31 @@ Units: meters, meters per second, ticks (32 per second).
       blade comes down, its hitbox (see the practice tools).
     - `Projectile(speed, radius, range)`: flies straight, stops at walls, rocks and trees, and is
       spent at its `range`; with no `range`, it flies on until it meets something. With
-      `falls: true` it's thrown: straight out to its `range`, then dropping under gravity until
-      it hits something or the ground. Optional `far_scale`: damage after flying the full range, as a multiple of `damage` (point
-      blank), scaling linearly by how far the shot flew.
+      `falls: true` it's thrown: straight out to its `range` (required then), then dropping under
+      gravity until it hits something or the ground. Optional `far_scale`: damage after flying
+      the full range, as a multiple of `damage` (point blank), scaling linearly by how far the
+      shot flew.
+  - `pierces` (optional, shots): a hit doesn't spend the shot: it flies on through monsters
+    (never through players)
+  - `burst` (optional, shots): the hit shatters: everyone around the one struck (within
+    `radius`) takes `share` of the damage, and the hit's `chill`, in `color`; an unspent shot
+    ending at a wall or the ground bursts there too
   - `chill` (optional): crowd control each hit applies on top of its damage: `slow` (fraction of
     speed taken away), `slow_ticks` (for how long), `root_ticks` (frozen in place this long: no
-    walking, no dashing, and a dash in progress stops).
-  - `rift` (optional, melee only): `Some(ticks: ..., haste: ...)`: each strike tears the ground open over its
-    lane (as wide and far as it hit, empowered or not) for `ticks`; its striker walks `haste`
-    faster while its body is in it.
+    walking, no dashing, and a dash in progress stops), `lift_ticks` (knocked up this long: no
+    walking, dashing, attacking or casting, and a windup in progress is lost).
+  - `rift` (optional, melee only): `Some(ticks: ..., haste: ..., burn: ..., leech: ...)`: each
+    strike tears the ground open over its lane (as wide and far as it hit) for `ticks`; its
+    striker walks `haste` faster while its body is in it, enemies standing in it take `burn`
+    every half second, and the striker heals `leech` of what the burn deals.
   - `follow_up` (optional, melee only): landing a hit empowers the next attack, if started within
-    `within_ticks` (and speeds up what's left of the attack that landed it, so the next comes
-    sooner): `attack_speed` more attack speed, and (optional) its whole lane `reach` times as far
-    out, as long and as wide. Used up as an attack goes off (one lost to a knock-up first leaves it armed): a miss loses it, an empowered one that
-    lands arms the next.
-- `abilities`: one to four (none is fine for an unplayable class), on Q, W, E and R in this order, each aimed at the cursor: `name`,
+    `within_ticks`: `attack_speed` more attack speed (when it's above zero it also speeds up
+    what's left of the attack that landed it, so the next comes sooner), (optional) its whole
+    lane `reach` times as far out, as long and as wide, and `lift_ticks` of knock-up on the
+    empowered hit. Used up as an attack goes off (one lost to a knock-up first leaves it armed):
+    a miss loses it, an empowered one that lands arms the next.
+- `abilities`: one to four (none is fine for an unplayable class), on the number keys 1 to 4
+  (`AbilitySlot` is the place in this list) in this order, each aimed at the cursor: `name`,
   `description`, `cooldown_ticks`, and
   - `kind`:
     - `Projectile(speed, radius, range, damage)`: thrown instantly: no windup, no root.
@@ -79,14 +106,20 @@ Units: meters, meters per second, ticks (32 per second).
 ## Placeholders
 
 Descriptions can name the class's numbers in braces, filled in when shown, so the words follow a
-retune:
+retune. Each is filled only where the class has the section it reads from (the sanity test
+refuses a placeholder it can't fill):
 
-- Anywhere: `{far_scale}` (the auto-attack's damage after its full range, as a percent of point
-  blank), `{attack_slow}` / `{attack_slow_time}` (the auto-attack's slow, as a percent / in
-  seconds), `{rift_time}` / `{rift_haste}` (how long a strike's rift lasts / how much faster its
-  striker walks in it), `{follow_up_time}` / `{follow_up_speed}` / `{follow_up_reach}` (the
-  follow-up's window, in seconds / its attack speed / how much further its lane reaches, as
-  percents), `{crit}`, `{crit_vs_frozen}`, `{crit_empowered}`, `{crit_multiplier}` (as percents).
+- About the auto-attack: `{far_scale}` (the damage after its full range, as a percent of point
+  blank), `{attack_slow}` / `{attack_slow_time}` (its slow, as a percent / in seconds),
+  `{attack_lift}` (its knock-up, in seconds), `{burst_radius}` / `{burst_share}` (how far the
+  shatter reaches / its share of the damage), `{rift_time}` / `{rift_haste}` / `{rift_burn}` /
+  `{rift_leech}` (how long a strike's rift lasts / how much faster its striker walks in it / the
+  burn inside it / the share healed), `{follow_up_time}` / `{follow_up_speed}` /
+  `{follow_up_reach}` / `{follow_up_lift}` (the follow-up's window, in seconds / its attack
+  speed / how much further its lane reaches, as percents / its knock-up, in seconds),
+  `{crit}`, `{crit_vs_frozen}`, `{crit_empowered}`, `{crit_multiplier}` (as percents).
 - In an ability's description, about that ability: `{ability_damage}`, `{ability_reach}` (a
-  thrown ability's range, a dash's distance, a nova's radius, in meters), `{ability_root}` (a
-  nova's root, in seconds). An ability that deals damage must name `{ability_damage}`.
+  thrown ability's range, a dash's distance, a nova's radius, in meters), `{ability_root}` /
+  `{ability_slow}` / `{ability_slow_time}` / `{ability_lift}` (its crowd control, where it has
+  any), `{ability_attack_speed}` (a Prime's). An ability that deals damage must name
+  `{ability_damage}`.

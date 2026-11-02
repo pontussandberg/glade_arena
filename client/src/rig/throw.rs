@@ -9,7 +9,7 @@ use arena_shared::abilities::MAX_ABILITIES;
 use crate::Me;
 use crate::render::shown;
 
-/// The spawn ticks of another fighter's latest auto-attack and Q throws, noted as their spears
+/// The spawn ticks of another fighter's latest auto-attack and ability throws, noted as their spears
 /// appear. Spears fly on our own clock (where they really are), but the thrower is drawn a round
 /// trip or so in the past: its body only gets to a throw after the spear is already flying. What
 /// shows a throw (the arm, the hand going empty, the cast bar) goes by this
@@ -95,7 +95,7 @@ pub(crate) fn empty_hands(rigs: Query<(&Rig, &HeldAt)>, mut parts: Query<&mut Vi
 
 /// How a thrower is posed `dt` (seconds) on from its `joints`, just as its hand lets go of the
 /// attack that went off at `at` (a fractional tick; a shot held drawn its `held_drive` later),
-/// mid-`flick` of a Q (0 if none, as `pose_rigs` layers it on), facing, stepping, walking and
+/// mid-`flick` of a thrown ability (0 if none, as `pose_rigs` layers it on), facing, stepping, walking and
 /// striding as `walk` says: where its hand lets go, wherever between frames that falls.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn pose_releasing(class: ClassId, moves: &Moves, attack: &AttackState, joints: &Joints, dt: f32, at: f32, flick: f32, walk: (Vec2, Vec2, f32, f32)) -> Posed {

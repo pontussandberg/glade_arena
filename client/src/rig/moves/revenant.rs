@@ -13,8 +13,8 @@ pub(super) const REVENANT: Moves = Moves {
     weapon_arm: [-0.35, -3.35, -6.03, 1.45],
     // The arm's swing turning partly with the body's twist: coiled round to draw up, the glaive
     // goes up and back over the head toward the lead side, and as the body drives round into the
-    // blow it comes over diagonally, in over the body's side and down ahead (in action mode
-    // beside the crosshair, not across it).
+    // blow it comes over diagonally, in over the body's side and down ahead (beside the
+    // crosshair, not across it).
     weapon_arm_untwist: 0.4,
     elbow_at: RIG_ELBOW,
     hand_at: RIG_HAND,
@@ -84,7 +84,7 @@ pub(super) const REVENANT: Moves = Moves {
     // Dragged: the thumb (and blade) back, the blade trailing low behind. Drawn: the shaft across
     // the fist at the top of the straight arm, the wrist only a little cocked, the blade back
     // over the head; the grip turning over on the way up so the heaved blade swings out over the
-    // body's side, not the weapon side (in action mode the crosshair's). Struck: in one plane
+    // body's side, not the weapon side (the crosshair's). Struck: in one plane
     // over the top, the wrist coming through, the blade's edge biting into the ground ahead.
     // Unwinding: the grip turning on over as the arm comes round to the drag, the blade coming
     // back down the weapon side.
@@ -106,7 +106,7 @@ pub(super) const REVENANT: Moves = Moves {
     // Head and shoulders go into the blow together.
     head_follow: 0.75,
     // The blow comes down along its lane's middle line, the arm's swing rolled out onto it
-    // wherever that runs (in action mode the crosshair's), not turned in across it.
+    // wherever that runs (the crosshair's line), not turned in across it.
     swing_yaw: 0.0,
     lands_on_lane: true,
     // The stomp and the hips' turn drive the blow: well under way while the glaive is still up,

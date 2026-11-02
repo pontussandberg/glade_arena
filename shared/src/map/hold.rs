@@ -1,4 +1,5 @@
-//! Ravenhold: the waves mode's third map, a fortress on its crag over a village, built in levels.
+//! Ravenhold: the waves mode's first map, and a PvP one too (`Mode::maps`): a fortress on its
+//! crag over a village, built in levels.
 //! Not mirrored: there are no sides here.
 //!
 //! - South, the village on the low ground: a square with the well and the merchant, where the

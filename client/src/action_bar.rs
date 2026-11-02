@@ -62,7 +62,7 @@ const PRIMED_PULSE_HZ: f32 = 1.2;
 const TIP_WIDTH: f32 = 280.0;
 
 /// An ability's icon (this entity) and the parts that change: the wipe and the seconds.
-/// Clicking it aims the ability, a normal cast whatever quick cast is set to
+/// Clicking it aims the ability, a normal cast
 /// (`render::read_local_input`).
 #[derive(Component)]
 pub(crate) struct AbilityIcon {

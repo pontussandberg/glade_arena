@@ -41,7 +41,7 @@ const BIG_BLADE_LIFT: f32 = 0.09;
 const CHAIN_HOLD: f32 = 0.15;
 
 /// How far into each of its poses a rig is (0 to 1 each, layered in this order): drawn back,
-/// struck (released), and its Q pose.
+/// struck (released), and its ability pose.
 #[derive(Clone, Copy, Default, Debug)]
 pub(crate) struct Phase {
     pub(crate) draw: f32,
@@ -54,7 +54,7 @@ pub(crate) struct Phase {
 const COIL: f32 = 0.84;
 
 impl Phase {
-    /// A joint's angle from its keyframes (carrying, drawn back, released, Q).
+    /// A joint's angle from its keyframes (carrying, drawn back, released, ability).
     pub(super) fn pose(&self, [carry, drawn, released, dash]: [f32; 4]) -> f32 {
         carry.lerp(drawn, self.draw).lerp(released, self.throw).lerp(dash, self.dashing)
     }

@@ -90,7 +90,7 @@ pub fn lossy() -> LinkConditionerConfig {
 
 /// How long a command may take to show on the `lossy` client that sent it: a round trip (60 ms
 /// receive latency, ±10 ms jitter, sometimes a lost packet resent) plus a tick on the server and
-/// the next update out. Nothing is predicted, so nothing shows sooner.
+/// the next update out. A headless client predicts nothing, so nothing shows sooner.
 pub const COMMAND_SHOWS_WITHIN: Duration = Duration::from_millis(250);
 
 /// Teleport a player on the server (tests set up positions this way).
@@ -197,7 +197,7 @@ pub fn edit_input(client: &mut App, edit: impl FnOnce(&mut PlayerInput)) {
     edit(&mut client.world_mut().resource_mut::<DesiredInput>().0);
 }
 
-/// Stops walking (S): the only way to stop that's sent; forgetting a destination isn't.
+/// Stops walking (`PlayerCommand::Stop`, a bot's): the only way to stop that's sent; forgetting a destination isn't.
 pub fn stop_walking(client: &mut App) {
     edit_input(client, |i| i.move_to = None);
     client.world_mut().resource_mut::<StopWalking>().0 = true;

@@ -1,4 +1,4 @@
-//! Abilities: up to `MAX_ABILITIES` per class, on Q, W, E and R (`AbilitySlot`), each of one of
+//! Abilities: up to `MAX_ABILITIES` per class, on keys 1 to 4 (`AbilitySlot`), each of one of
 //! a few kinds. Each kind is a module of its own, holding its numbers and everything it does:
 //! `throw` (a projectile), `dash`, `nova` and `prime`. What's the same for every kind is here: the
 //! definition (`AbilityDef`), cooldowns (`Cooldowns`), and using one (`step`).

@@ -1,7 +1,7 @@
 //! The match's score in the arena, for a match that's won by kills (`RoomView::goal`): at the top
 //! of the screen, the race to the goal (the leaders and us in free-for-all, the two teams'
-//! kills in teams); once it's won, who won, across the middle, until everyone's taken back to
-//! the lobby. And everyone's standing, in the middle while Tab is held (`show_board`).
+//! kills in teams); once it's won, who won, across the middle, until each leaves the arena. And
+//! everyone's standing, in the middle while Tab is held (`show_board`).
 
 use arena_shared::rooms::{Mode, NO_TEAM, RoomView, TEAMS, first_name};
 use bevy::prelude::*;

@@ -7,7 +7,8 @@ use arena_shared::items::Satchel;
 
 use crate::rooms::{InRoom, Lobby};
 
-/// Replicated to everyone; interpolated by all but the owner, who shows it as last received.
+/// Replicated to everyone; interpolated by all but the owner, who predicts it
+/// (`render::glide`; a headless client shows it as last received).
 fn replicated_player(owner: PeerId) -> impl Bundle {
     (
         Replicate::to_clients(NetworkTarget::All),

@@ -5,7 +5,8 @@ https://creativecommons.org/licenses/by/4.0/) must be credited as they are here.
 sample rate. The game layers and pitches them at play time (client/src/audio.rs).
 
 Kenney (https://kenney.nl), "Impact Sounds" and "RPG Audio" packs:
-  impact*.ogg, cloth1/2.ogg, handleCoins.ogg
+  impact*.ogg, cloth1/2.ogg, handleCoins.ogg, step_grass/wood/concrete_0-4.ogg (the packs'
+  footstep_*.ogg takes)
 
 artisticdude (OpenGameArt), "Swishes Sound Pack" and "RPG Sound Pack":
   swish_light_*.wav, swish_heavy_*.wav, swing_2.wav, ring.wav, coins.wav, cloth_heavy.wav,
@@ -19,11 +20,6 @@ rubberduck (OpenGameArt), "100 CC0 SFX #2":
 
 faxcorp (OpenGameArt), "Electricity Game Sound Pack":
   zap_hit.wav (hit), zap_bloom.wav (shieldhit), crackle.wav (snaploop), boom.wav (deathboom), groundhit.wav
-
-bart (OpenGameArt), "Ice spells" (from a pdsounds recording by Stephan): ice.wav
-IgnasD (OpenGameArt), "Ice breaking/shattering": ice_crack_1-3.wav (single cracks cut from
-  LedasLuzta4 and LedasLuzta5, sped up a little), ice_deep_1-3.wav (single cracks from
-  LedasLuzta33 and LedasLuzta5 slowed to about 0.65x under a lowpass)
 
 "SSE Library: FIRE" (USC Cinema / Sunset Editorial collection, via the Internet Archive,
 https://archive.org/details/SSE_Library_FIRE):
@@ -41,5 +37,5 @@ EminYILDIRIM (Freesound), CC BY 4.0, cut and changed for the game:
   frost_impact.wav: "Magic Ice Spell Impact & Punch", its lead-in silence trimmed
     (https://freesound.org/people/EminYILDIRIM/sounds/541479/)
 
-Made from the above: ice_thump.wav (boom.wav's first knock, under a low
-lowpass)
+Generated for the game by Pontus Sandberg with ElevenLabs (no third-party recordings in them):
+  frost_channel.wav, frost_cast.wav, frost_nova.wav

@@ -1,6 +1,6 @@
 // Static file server over the sound sources, the rendered clips and the game's sfx folder, so
 // headless Chrome can fetch and decode recordings: node serve.mjs [port] (default 8099).
-// Sources default to %LOCALAPPDATA%\Temprena-sfx\{src,out}; SFX_SRC / SFX_OUT override.
+// Sources default to %LOCALAPPDATA%/Temp/arena-sfx/{src,out}; SFX_SRC / SFX_OUT override.
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { join, extname } from "node:path";
