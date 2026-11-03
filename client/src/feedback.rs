@@ -329,10 +329,11 @@ fn draw_bars(
         let size = bar_size(*class, elite);
         let (start, hold) = if trail.crit { (palette::TORCH_FLAME, CRIT_TRAIL_HOLD) } else { (Color::WHITE, TRAIL_HOLD) };
         let pale = ((now - trail.hit_at) / hold).min(1.0);
-        // The attack timer, once the attack has gone off (the windup only shows in the fighter,
-        // and a cancelled one shows nothing): full as it goes off, draining from the right until
-        // the next attack may start.
-        let cast = attack.swing.filter(|_| attack.released()).map(|swing| 1.0 - swing.cooldown_progress(clock.now(is_me), &class.def().attack));
+        // The equipped weapon style's attack timer, once its attack has gone off (the windup
+        // only shows in the fighter, and a cancelled one shows nothing): full as it goes off,
+        // draining from the right until that style's next attack may start. Swapping styles (Q)
+        // swaps the bar to the style now in hand, wherever its own cooldown stands.
+        let cast = attack.cooldown_left(*class, attack.style, clock.now(is_me));
         let bar = Bar {
             middle,
             size,

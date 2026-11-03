@@ -26,7 +26,7 @@ pub struct ActionBarPlugin;
 
 impl Plugin for ActionBarPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (spawn_icons, update_icons, update_passive, update_frenzy).chain());
+        app.add_systems(Update, (spawn_icons, update_icons, update_passive, update_frenzy, update_styles).chain());
     }
 }
 
@@ -37,6 +37,11 @@ const BOTTOM: f32 = 18.0;
 /// The passive's icon size, and its gap from the first ability's.
 const PASSIVE: f32 = 46.0;
 const PASSIVE_GAP: f32 = 10.0;
+/// The weapon style icons' size, the gap between the two, and their gap from the last
+/// ability's: set a little apart on the right, mirroring the passive on the left.
+const STYLE: f32 = 46.0;
+const STYLE_PAIR_GAP: f32 = 6.0;
+const STYLE_GAP: f32 = 28.0;
 /// The frenzy's icon size, and its gap from the passive's: set apart, not part of the class's
 /// kit.
 const FRENZY: f32 = 26.0;
@@ -114,6 +119,176 @@ fn spawn_icons(mut commands: Commands, me: Query<&ClassId, Added<Me>>, parts: Qu
         spawn_passive(&mut commands, blurb, left_edge);
     }
     spawn_frenzy(&mut commands, class.def(), left_edge - FRENZY_GAP - FRENZY);
+    if class.def().has_secondary() {
+        let right_edge = -first;
+        spawn_style(&mut commands, class.def(), WeaponStyle::Primary, right_edge + STYLE_GAP);
+        spawn_style(&mut commands, class.def(), WeaponStyle::Secondary, right_edge + STYLE_GAP + STYLE + STYLE_PAIR_GAP);
+    }
+}
+
+/// A weapon style's icon (this entity): which style, and the parts that change (the wipe and
+/// the seconds). The pair sits right of the abilities, always shown: the equipped one's frame
+/// is lit, and each shows its own cooldown, however long ago it was swapped away (Q swaps).
+#[derive(Component)]
+struct StyleIcon {
+    style: WeaponStyle,
+    wipe: Entity,
+    seconds: Entity,
+}
+
+/// Simple marks for the style icons, old-school pixel art like the frenzy's skull: a thrown
+/// spear (a shot), a slash (a swing), a shove's push, a spin's circle, a slam's drop.
+const MARK_SHOT: &[&str] = &[
+    ".........",
+    ".....##..",
+    "......##.",
+    "#######..",
+    "......##.",
+    ".....##..",
+    ".........",
+    ".........",
+    ".........",
+];
+const MARK_SLASH: &[&str] = &[
+    "#........",
+    "##.......",
+    ".##......",
+    "..##.....",
+    "...##....",
+    "....##...",
+    ".....##..",
+    "......##.",
+    ".......##",
+];
+const MARK_SHOVE: &[&str] = &[
+    ".........",
+    ".........",
+    "....#....",
+    ".....#...",
+    "#######..",
+    ".....#...",
+    "....#....",
+    ".........",
+    ".........",
+];
+const MARK_SPIN: &[&str] = &[
+    "..#####..",
+    ".#.....#.",
+    "#.......#",
+    "#.......#",
+    "#...#...#",
+    "#.......#",
+    "#.......#",
+    ".#.....#.",
+    "..#####..",
+];
+const MARK_SLAM: &[&str] = &[
+    "....#....",
+    "....#....",
+    "....#....",
+    "....#....",
+    "..#.#.#..",
+    "...###...",
+    "....#....",
+    ".........",
+    "#########",
+];
+const MARK_PIXEL: f32 = 2.0;
+
+/// A weapon style's icon, its left edge `from_center` pixels from the middle of the screen: a
+/// mark for how it attacks, the Q key, the wipe and the seconds while its own cooldown runs,
+/// and its name under it. Hovering it says what the style does.
+fn spawn_style(commands: &mut Commands, class: &ClassDef, style: WeaponStyle, from_center: f32) {
+    let secondary = class.secondary.as_ref();
+    let attack = class.attack_of(style);
+    let mark = match (style, &attack.kind) {
+        (WeaponStyle::Primary, AttackKind::Projectile { .. }) => MARK_SHOT,
+        (WeaponStyle::Primary, _) => MARK_SLASH,
+        (_, AttackKind::Spin { .. }) => MARK_SPIN,
+        (_, AttackKind::Slam { .. }) => MARK_SLAM,
+        (_, _) => MARK_SHOVE,
+    };
+    let (name, what) = match (style, secondary) {
+        (WeaponStyle::Secondary, Some(secondary)) => (secondary.name.clone(), class.describe(&secondary.description)),
+        _ => ("Auto".to_string(), "Your auto-attack.".to_string()),
+    };
+    let note = format!("Weapon style, Q swaps — {} timer", seconds(attack.attack_ticks));
+    let tip = commands
+        .spawn((tip(Side::Above, (STYLE - TIP_WIDTH) / 2.0, TIP_WIDTH), children![tip_title(name.clone()), tip_note(note), tip_text(what)]))
+        .id();
+    let picture = commands.spawn(centered()).with_children(|art| pixel_art(art, mark, MARK_PIXEL, palette::ui::TEXT)).id();
+    let wipe = commands.spawn((fill(), BackgroundGradient::default(), Visibility::Hidden)).id();
+    let seconds_text = commands.spawn(ui_text("", 18.0, palette::ui::TEXT)).id();
+    let seconds_box = commands.spawn(centered()).add_child(seconds_text).id();
+    let key = commands
+        .spawn(Node { position_type: PositionType::Absolute, left: px(4.0), top: px(1.0), ..default() })
+        .with_child(ui_text("Q", 13.0, palette::ui::TEXT))
+        .id();
+    let label = commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            top: px(STYLE + 2.0),
+            width: px(STYLE + STYLE_PAIR_GAP),
+            left: px(-STYLE_PAIR_GAP / 2.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        })
+        .with_child((ui_text(name, 11.0, palette::ui::TEXT), TextLayout::justify(Justify::Center)))
+        .id();
+    commands
+        .spawn((StyleIcon { style, wipe, seconds: seconds_text }, IconShown::default(), ActionBarPart, GameUi, icon_frame(tip, STYLE, from_center, palette::ui::MUTED)))
+        .add_children(&[picture, wipe, seconds_box, key, label, tip]);
+}
+
+/// The style icons, every frame: the equipped one's frame lit (Q swaps at once, so it follows
+/// what we asked for, not the round trip), and on each its own cooldown's wipe and seconds,
+/// always visible, swapped away or not.
+fn update_styles(
+    clock: AttackClock,
+    desired: Res<crate::DesiredInput>,
+    me: Query<(&ClassId, &AttackState), With<Me>>,
+    mut icons: Query<(&StyleIcon, &mut IconShown, &mut BorderColor, &mut BackgroundColor)>,
+    mut wipes: Query<(&mut BackgroundGradient, &mut Visibility)>,
+    mut texts: Query<&mut Text>,
+) {
+    let Ok((class, attack)) = me.single() else { return };
+    let now = clock.now(true);
+    let equipped = if class.def().has_secondary() { desired.0.style } else { WeaponStyle::Primary };
+    for (icon, mut shown_now, mut border, mut fill) in &mut icons {
+        let held = icon.style == equipped;
+        border.set_if_neq(BorderColor::all(if held { palette::SPIRIT } else { palette::ui::MUTED }));
+        fill.set_if_neq(BackgroundColor(if held { palette::SPIRIT.with_alpha(0.12) } else { palette::ui::PANEL }));
+        // Its own cooldown: from the click to when its next attack may start, whichever swing
+        // of it is newest (in hand, or stowed by a swap).
+        let def = |swing: &Swing| class.def().attack_of(swing.style);
+        let (left, total) = attack
+            .swing_of(icon.style)
+            .map(|swing| ((swing.ready_at(def(&swing)) as f32 - now).max(0.0), (swing.ready_at(def(&swing)) - swing.started_at).max(1) as f32))
+            .unwrap_or((0.0, 1.0));
+        let step = (left > 0.0).then(|| step_of(left, total));
+        let seconds_left = left / TICK_HZ as f32;
+        let tenths = (seconds_left * 10.0).ceil() as u32;
+        let label = match step {
+            None => String::new(),
+            Some(_) if tenths >= 10 => (seconds_left.ceil() as u32).to_string(),
+            Some(_) => format!("0.{tenths}"),
+        };
+        if shown_now.own != step
+            && let Ok((mut wipe, mut visibility)) = wipes.get_mut(icon.wipe)
+        {
+            shown_now.own = step;
+            visibility.set_if_neq(shown(step.is_some()));
+            if let Some(step) = step {
+                *wipe = wipe_gradient(step, palette::ui::BACKDROP.with_alpha(0.8));
+            }
+        }
+        if shown_now.seconds != label
+            && let Ok(mut text) = texts.get_mut(icon.seconds)
+        {
+            text.0.clone_from(&label);
+            shown_now.seconds = label;
+        }
+    }
 }
 
 /// The frenzy's icon (this entity), shown in a match with zombies, and its parts that change: the

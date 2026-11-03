@@ -44,6 +44,7 @@ pub(super) const ZOMBIE: Moves = Moves {
     gait: Gait { cadence: 1.3, bob: 0.5, sway: 1.9, arms: 0.2, knees: 0.5 },
     // Swaying heavily from foot to foot, and every few seconds a lurch: the body pitching
     // forward and twisting, the head rolling over, the arms sagging and crooking further.
+    secondary_carry: None,
     idle: Idle {
         shift: 0.2,
         every: 4.0,

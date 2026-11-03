@@ -133,6 +133,11 @@ const FLICK: (f32, f32) = (0.5, 5.0);
 const FLICK_REACH: f32 = 0.55;
 /// A nova's slam: ticks after the cast until it starts and finishes rising out of it.
 const SLAM: (f32, f32) = (4.0, 12.0);
+/// A secondary attack (Q's style), posed as the ability pose: ticks after it goes off until it
+/// starts and finishes easing back out (the rest of its long timer is just its cooldown).
+const SECONDARY_SETTLE: (f32, f32) = (3.0, 12.0);
+/// How quickly the carry eases between weapon styles as Q swaps them (per second, exponential).
+const STYLE_RATE: f32 = 9.0;
 /// How quickly a fighter turns toward where it wants to face, and eases in and out of its walk
 /// (per second, exponential).
 const TURN_RATE: f32 = 40.0;
@@ -233,6 +238,12 @@ pub(crate) struct Rig {
     /// The last attack's backswing speed, and when it went off: kept once the server clears its
     /// swing, so its follow-through and the hand's rearming don't jump back to normal speed.
     backswing: Option<(Option<u32>, f32)>,
+    /// The last release seen with its swing still in the state: when, and which style's it was,
+    /// so a stale `released_at` (its swing long cleared) still reads as the right style's and a
+    /// shove or spin never plays the primary's follow-through.
+    released_style: Option<(u32, WeaponStyle)>,
+    /// How far the secondary style is in hand (0..1, eased): blends `Moves::secondary_carry`.
+    style_blend: f32,
     /// While its next attack is primed: when (seconds) it drips its next drop of light, and how
     /// many it has dripped (`shed_drips`).
     drips: (f32, u32),
@@ -319,6 +330,8 @@ fn add_rigs(
             walking: 0.0,
             cut: None,
             backswing: None,
+            released_style: None,
+            style_blend: 0.0,
             drips: (0.0, 0),
             empowered: 0.0,
             glide: 0.0,
@@ -453,6 +466,7 @@ fn pose_rigs(
     clock: Option<AttackClock>,
     map: Option<Res<crate::rooms::CurrentMap>>,
     draws: Option<Res<crate::SentDraws>>,
+    desired: Option<Res<crate::DesiredInput>>,
     mode: Res<crate::camera::CameraMode>,
     mut rigs: Query<(
         &mut Rig,
@@ -517,10 +531,23 @@ fn pose_rigs(
             Some(seen) => Some((present - seen as f32).max(0.0)),
             None => tick.map(|t| (now - t as f32).max(0.0)),
         };
+        // Which style the last release was: remembered while its swing is still in the state,
+        // so once that swing is cleared a stale `released_at` still reads as that style's.
+        if let (Some(swing), Some(at)) = (attack.swing, attack.released_at)
+            && at > swing.started_at
+        {
+            rig.released_style = Some((at, swing.style));
+        }
+        // The primary's last release: what the strike, the follow-through and a thrower's
+        // empty hand go by. A secondary's release only eases the ability pose back out (below).
+        let primary_released_at = attack.released_at.filter(|&at| !rig.released_style.is_some_and(|(r, style)| r == at && style != WeaponStyle::Primary));
         // Ours: news of the attack going off arrives a moment (`ME_BEHIND_TICKS`) before our clock
         // gets there; until it does, it's still winding up, so the strike plays out in full.
         let windup = SeenThrows::windup(seen, attack)
             .or_else(|| attack.swing.filter(|swing| is_me && attack.released_at.is_some_and(|at| at >= swing.started_at && now < at as f32)));
+        // Only the primary's swings play the class's strike: a secondary's drives the ability
+        // pose instead.
+        let windup = windup.filter(|swing| swing.style == WeaponStyle::Primary);
         // Ours, a shot the server will hold drawn (the attack button held for the tick its
         // windup's over, as sent: `sim::release_attack`) is held from the first, before its word
         // that it is, so it doesn't start its strike only to draw back.
@@ -530,15 +557,15 @@ fn pose_rigs(
         });
         // The last attack's speed scales its backswing like its windup, and a hit that armed its
         // `follow_up` speeds it up (normal once it's done).
-        let speed = match attack.swing {
-            Some(swing) => swing.backswing_speed(&class.def().attack),
-            None => rig.backswing.filter(|(at, _)| *at == attack.released_at).map_or(1.0, |(_, speed)| speed),
+        let speed = match attack.swing.filter(|swing| swing.style == WeaponStyle::Primary) {
+            Some(swing) => swing.backswing_speed(&def.attack),
+            None => rig.backswing.filter(|(at, _)| *at == primary_released_at).map_or(1.0, |(_, speed)| speed),
         };
-        if attack.swing.is_some() {
-            rig.backswing = Some((attack.released_at, speed));
+        if attack.swing.is_some_and(|swing| swing.style == WeaponStyle::Primary) {
+            rig.backswing = Some((primary_released_at, speed));
         }
-        // Ticks since the last attack went off, at normal attack speed.
-        let released = since_throw(attack.released_at, seen.and_then(|seen| seen.attack)).map(|since| since * speed);
+        // Ticks since the last primary attack went off, at normal attack speed.
+        let released = since_throw(primary_released_at, seen.and_then(|seen| seen.attack)).map(|since| since * speed);
         let moves = rig.moves;
         // Its `follow_up` armed, a weapon that grows to strike stays grown.
         let grows = def.attack.follow_up.is_some();
@@ -549,7 +576,7 @@ fn pose_rigs(
         // Dashing off once the attack has gone off cuts its backswing short, for good: the
         // follow-through blends out quickly into the dash. Walking doesn't: the swing or throw
         // plays out over the walk.
-        let cut = match (windup, attack.released_at) {
+        let cut = match (windup, primary_released_at) {
             (None, Some(at)) if released.is_some() => {
                 let cut = rig.cut.filter(|(of, _)| *of == at).map_or(0.0, |(_, cut)| cut);
                 let dashed_off = dashing.0.is_some_and(|dash| dash.started_at > at);
@@ -578,6 +605,26 @@ fn pose_rigs(
                 _ => {}
             }
         }
+        // A secondary attack (Q's style) takes the ability pose: in over its windup, held as it
+        // goes off, and eased back out over the start of its long timer (the rest is just its
+        // cooldown). A spin also turns the whole figure full circle (`spin`, layered onto the
+        // body below); the camera never turns with it.
+        let slammed = attack.swing.filter(|swing| swing.style == WeaponStyle::Secondary).map_or(0.0, |swing| {
+            let its = class.def().attack_of(swing.style);
+            match attack.released_at.filter(|_| attack.released()) {
+                None => smooth(swing.windup_progress(now, its)),
+                Some(at) => 1.0 - ease(SECONDARY_SETTLE.0, SECONDARY_SETTLE.1, (now - at as f32).max(0.0)),
+            }
+        });
+        let dashing = dashing.max(slammed);
+        let spin = attack
+            .swing
+            .filter(|swing| matches!(class.def().attack_of(swing.style).kind, AttackKind::Spin { .. }))
+            .map_or(0.0, |swing| {
+                let its = class.def().attack_of(swing.style);
+                let (from, to) = (swing.started_at as f32, swing.releases_at(its) as f32 + WHIP_TICKS);
+                smooth(((now - from) / (to - from).max(1.0)).clamp(0.0, 1.0))
+            });
         let throw = throw.max(flick);
         let phase = Phase { draw, throw, dashing };
         // And it grows as it's drawn, held grown through the strike, smearing out further to
@@ -594,9 +641,9 @@ fn pose_rigs(
         // throw, `held_drive`), another's as soon as its spear is seen (it's released then).
         let seen_throw = seen.and_then(|seen| seen.attack).filter(|_| !is_me);
         let drive = held_drive(*class, moves, attack);
-        let let_go = attack.released_at.filter(|&at| now >= at as f32 + drive).max(seen_throw);
+        let let_go = primary_released_at.filter(|&at| now >= at as f32 + drive).max(seen_throw);
         // Empty once the flying spear has left the hand (or it's late: `empty_hands`).
-        let thrown = attack.released_at.max(seen_throw);
+        let thrown = primary_released_at.max(seen_throw);
         let rearming = thrown.filter(|_| moves.throws && matches!(def.attack.kind, AttackKind::Projectile { .. }) && released.is_some_and(|s| s < rearm));
         let mut late = thrown.is_some_and(|at| present > at as f32 + drive + MAX_HOLD_TICKS);
         // Our own hand letting go this frame: just how it was posed as it did, between frames.
@@ -629,6 +676,14 @@ fn pose_rigs(
         let breath = (wall_clock * BREATH_RATE + (rig.gleaming.seed as f32 * 0.37).fract() * TAU).sin() * breathing;
         let fidget = moves.idle.at(wall_clock, rig.gleaming.seed, breathing);
         target.add(&fidget, 1.0);
+        // The secondary style carried its own way (`Moves::secondary_carry`), eased in and out
+        // as Q swaps: ours as we asked (`DesiredInput`), not a round trip later; fading as it
+        // braces to attack, when the attack's own pose takes over.
+        let secondary_held = (if is_me { desired.as_ref().map_or(attack.style, |desired| desired.0.style) } else { attack.style }) == WeaponStyle::Secondary;
+        rig.style_blend += (f32::from(secondary_held) - rig.style_blend) * rate(&time, STYLE_RATE);
+        if let Some(carry) = moves.secondary_carry.filter(|_| rig.style_blend > 1e-3) {
+            target.add(&carry, rig.style_blend * free);
+        }
         let lunge = rig.glide * free;
         let stagger = chilled.map_or(0.0, |chilled| {
             let span = chilled.lifted;
@@ -646,6 +701,9 @@ fn pose_rigs(
         let mut aimed = targets(moves, phase, Vec2::ZERO, rig.walking);
         aimed.arm_tilt = tilt;
         aimed.add(&fidget, 1.0);
+        if let Some(carry) = moves.secondary_carry.filter(|_| rig.style_blend > 1e-3) {
+            aimed.add(&carry, rig.style_blend * free);
+        }
         let walk = rig.walking * free;
         // As high as it is: on the ground where it stands, or up in a jump or a fall
         // (`render::shown_height`).
@@ -661,11 +719,16 @@ fn pose_rigs(
         // `SQUASH_SECONDS`, so a blow visibly lands in the body and not just on the health bar.
         let flinch = squash.map_or(0.0, |s| (1.0 - (wall_clock - s.at) / SQUASH_SECONDS).clamp(0.0, 1.0).powi(2));
         let squashed = Vec3::new(1.0 + 0.12 * flinch, 1.0 - 0.16 * flinch, 1.0 + 0.12 * flinch);
-        let placed = Transform {
+        let mut placed = Transform {
             translation: body.translation.with_y((posed.body.translation.y + BREATH_RISE * (0.5 + 0.5 * breath) * breathing) * rig.size + height),
             scale: posed.body.scale * rig.size * squashed,
             ..posed.body
         };
+        // The spin turns the whole figure about the upright, one full circle, square back on
+        // its facing as it ends (the camera is its own and never turns with it).
+        if spin > 0.0 && spin < 1.0 {
+            placed.rotation = Quat::from_rotation_y(-TAU * spin) * placed.rotation;
+        }
         body.set_if_neq(placed);
         // For a fighter that throws its weapon: where it is in the hand this frame (child
         // transforms aren't propagated until after this frame's shots are placed).
@@ -781,7 +844,7 @@ mod tests {
         assert_eq!(held_mesh.len(), shot_mesh.len(), "the flying spear is the held one");
         let mut heights = Vec::new();
         for (fps, held, phase) in [30.0, 60.0, 144.0].into_iter().flat_map(|fps| [0, 6].into_iter().flat_map(move |held| (0..8).map(move |phase| (fps, held, phase)))) {
-            let swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held, aside: 0.0 };
+            let swing = Swing { started_at: 10, dir: Vec2::X, style: WeaponStyle::Primary, quick: false, hastened: false, haste: 0.0, primed: false, held, aside: 0.0 };
             let release = 10 + swing.windup_ticks(&def.attack) + held;
             let drive = held_drive(class, moves, &AttackState { swing: Some(swing), released_at: Some(release), ..default() });
             assert_eq!(drive > 0.0, held > 0, "only a shot held drawn is let go a drive after it goes off");

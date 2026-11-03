@@ -184,6 +184,19 @@ impl SentJumps {
     }
 }
 
+/// Which tick each `PlayerCommand::Style` we sent was for, and the weapon style swapped to,
+/// oldest first: which style our own fighter's prediction starts a clicked attack with
+/// (`render::glide`).
+#[derive(Resource, Default)]
+pub struct SentStyles(pub VecDeque<(u32, WeaponStyle)>);
+
+impl SentStyles {
+    /// The weapon style in hand at `tick`, as sent (the primary until a swap is).
+    pub fn style_at(&self, tick: u32) -> WeaponStyle {
+        self.0.iter().rev().find(|(t, _)| *t <= tick).map_or(WeaponStyle::Primary, |(_, style)| *style)
+    }
+}
+
 /// Which tick each `PlayerCommand::Attack` we sent was for, oldest first: what our own fighter's
 /// prediction steps its attack by (`render::glide`), a shot winding up slowing its walk.
 #[derive(Resource, Default)]
@@ -241,6 +254,7 @@ impl Plugin for ClientNetPlugin {
         app.init_resource::<SentDraws>();
         app.init_resource::<SentAttacks>();
         app.init_resource::<SentJumps>();
+        app.init_resource::<SentStyles>();
         app.init_resource::<WalkSchedule>();
         app.add_systems(Update, (forget_walk_on_attack, send_commands).chain().in_set(SendCommands));
         app.add_systems(Update, fake_latency.run_if(resource_changed::<FakeLatency>));
@@ -303,6 +317,8 @@ struct Sent {
     /// Whether Space was held, and the attack button, as last sent.
     jump: bool,
     draw: bool,
+    /// The weapon style in hand, as last sent.
+    style: WeaponStyle,
     /// When the attack, walk or aim was last sent (`Time<Real>`), to send changes at most once a
     /// tick.
     attack_at: Duration,
@@ -323,7 +339,7 @@ fn send_commands(
     mut client: Query<&mut MessageSender<PlayerCommand>, (With<Client>, With<Connected>)>,
     mut sent: Local<Sent>,
     #[cfg(feature = "render")] mode: Option<Res<crate::camera::CameraMode>>,
-    (mut sent_walks, mut sent_draws, mut sent_attacks, mut sent_jumps): (ResMut<SentWalks>, ResMut<SentDraws>, ResMut<SentAttacks>, ResMut<SentJumps>),
+    (mut sent_walks, mut sent_draws, mut sent_attacks, mut sent_jumps, mut sent_styles): (ResMut<SentWalks>, ResMut<SentDraws>, ResMut<SentAttacks>, ResMut<SentJumps>, ResMut<SentStyles>),
     schedule: Res<WalkSchedule>,
 ) {
     let (Ok(mut sender), Ok(attack)) = (client.single_mut(), me.single()) else {
@@ -332,6 +348,7 @@ fn send_commands(
         sent_draws.0.clear();
         sent_attacks.0.clear();
         sent_jumps.0.clear();
+        sent_styles.0.clear();
         // Nothing carries over to our next fighter: not a destination, not a click.
         desired.0 = PlayerInput { aim: desired.0.aim, ..default() };
         stop.0 = false;
@@ -413,6 +430,16 @@ fn send_commands(
         sent_draws.0.push_back((schedule.0, input.draw));
         while sent_draws.0.len() > SENT_WALKS_KEPT {
             sent_draws.0.pop_front();
+        }
+    }
+    // Q's swap, for the tick a walk would be (`PlayerCommand::Style`), so a click sent after it
+    // starts the style the player saw in hand.
+    if input.style != sent.style {
+        send(PlayerCommand::Style(input.style, schedule.0));
+        sent.style = input.style;
+        sent_styles.0.push_back((schedule.0, input.style));
+        while sent_styles.0.len() > SENT_WALKS_KEPT {
+            sent_styles.0.pop_front();
         }
     }
 }
