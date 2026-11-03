@@ -248,12 +248,13 @@ const TING_SLACK: f32 = 0.4;
 const STUCK_SCALE: f32 = 0.9;
 const BODY_BURY: f32 = (arena::SPEAR_BLADE_LENGTH + 0.35) * STUCK_SCALE;
 const TERRAIN_BURY: f32 = 0.03;
-/// How long a spear stuck in terrain stands, how long one stuck in a body does (it rides a
-/// fighter about to shed it anyway), and how many may stand at once before the oldest sinks
-/// early; sinking takes `STUCK_SINK` seconds.
+/// How long a spear stuck in terrain stands, how long one stuck in a body does, and how many may
+/// stand at once before the oldest sinks early -- roomy enough (measured free to render) that
+/// the backstop stays out of sight even spamming throws at practice attack speeds; sinking takes
+/// `STUCK_SINK` seconds.
 const STUCK_SECONDS: f32 = 10.0;
-const BODY_STUCK_SECONDS: f32 = 1.5;
-const STUCK_AT_MOST: usize = 50;
+const BODY_STUCK_SECONDS: f32 = 10.0;
+const STUCK_AT_MOST: usize = 120;
 const STUCK_SINK: f32 = 0.25;
 /// A bolt bursting as it's spent (`strike_home`): how long its flash lasts and how big it gets
 /// (seconds, meters); how many sparks fly out of it every way, how fast (m/s) and for how long.
