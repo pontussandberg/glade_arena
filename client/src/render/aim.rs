@@ -74,11 +74,10 @@ pub(super) fn show_click_hint(
     time: Res<Time>,
     screen: Res<State<crate::rooms::Screen>>,
     cursor: Single<&CursorOptions>,
-    menu: Query<(), With<crate::esc_menu::EscMenu>>,
-    shop: Res<crate::waves::ShopOpen>,
+    frame: Res<crate::frames::OpenFrame>,
     hint: Single<(&mut Visibility, &mut UiTransform), With<ClickBackHint>>,
 ) {
-    let show = *screen.get() == crate::rooms::Screen::InGame && cursor.visible && menu.is_empty() && !shop.0;
+    let show = *screen.get() == crate::rooms::Screen::InGame && cursor.visible && !frame.any();
     let (mut visibility, mut swelling) = hint.into_inner();
     visibility.set_if_neq(shown(show));
     if !show {

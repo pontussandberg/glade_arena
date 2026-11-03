@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use crate::Me;
 use crate::camera::CameraPlaced;
 use crate::feedback::AttackClock;
+use crate::frames::{Frame, OpenFrame};
 use crate::arena::{self, palette};
 use crate::render::{HudButton, Relation, button_fill, clicked, crisp_image, pixel_art, ui_text};
 use crate::rooms::CurrentMap;
@@ -303,8 +304,7 @@ fn draw_map(current: Res<CurrentMap>, mut images: ResMut<Assets<Image>>, mut ima
 /// view's size, as dots, marks and clicks count on; the picture shows just the tiles in view.
 #[allow(clippy::too_many_arguments)]
 fn frame_minimap(
-    keys: Res<ButtonInput<KeyCode>>,
-    typing: Option<Res<crate::browser::Typing>>,
+    frame: Res<OpenFrame>,
     current: Res<CurrentMap>,
     window: Single<&Window, With<bevy::window::PrimaryWindow>>,
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
@@ -313,7 +313,8 @@ fn frame_minimap(
 ) {
     let map = current.map();
     let tiles = map.size.as_vec2();
-    let full = view.full != (keys.just_pressed(KeyCode::KeyM) && !typing.is_some_and(|t| t.0));
+    // M opens and shuts it through the frames (`frames::route_keys`).
+    let full = frame.is(Frame::Map);
     let screen = Vec2::new(window.width(), window.height());
     let wanted = if full {
         let scale = (screen * FULL_ROOM / tiles).min_element();

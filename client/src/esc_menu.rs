@@ -2,6 +2,8 @@
 //! the fight; in a lobby, back to it (to pick another fighter, still in the room) or out of it
 //! altogether; in practice, home; and the settings (`settings`), in a pane under the buttons.
 //! The room goes on without us. While it's open, the fight's controls and the camera's are off.
+//! The menu is a frame (`frames::Frame::Menu`): ESC closes whichever frame is open first, and
+//! only when none is does it open the menu.
 
 use arena_shared::protocol::RoomRequest;
 use bevy::prelude::*;
@@ -12,6 +14,7 @@ use lightyear::prelude::*;
 use crate::PlayerControls;
 use crate::camera::CameraControl;
 use crate::arena::palette;
+use crate::frames::{Frame, OpenFrame, route_keys};
 use crate::render::{button, clicked, ui_text};
 use crate::rooms::{CurrentRoom, Leaving, Screen, leave_room, request};
 use crate::arena::palette::ui::ACCENT;
@@ -22,9 +25,10 @@ impl Plugin for EscMenuPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(Update, (PlayerControls, CameraControl).run_if(not(menu_open)));
         // After the camera's controls: in the browser, the lock's watchdog presses the ESC the
-        // browser swallowed (`camera::follow_camera`), and the menu takes it this same frame.
+        // browser swallowed (`camera::follow_camera`), and the frames take it this same frame.
         app.configure_sets(Update, MenuKey.after(CameraControl));
-        app.add_systems(Update, (toggle_menu.in_set(MenuKey), menu_buttons).chain().run_if(in_state(Screen::InGame)));
+        app.init_resource::<OpenFrame>();
+        app.add_systems(Update, (route_keys, toggle_menu, menu_buttons).chain().in_set(MenuKey).run_if(in_state(Screen::InGame)));
         app.add_systems(OnExit(Screen::InGame), close_menu);
     }
 }
@@ -64,10 +68,10 @@ fn menu_open(menu: Query<(), With<EscMenu>>) -> bool {
     !menu.is_empty()
 }
 
-/// ESC opens the menu straight away (in the browser, where the camera's lock swallows the key,
-/// the watchdog presses it as the lock goes: `camera::follow_camera`), or closes it; the Home
-/// button opens it. Opening it lets the cursor go, to click it with; closing it, however it's
-/// closed, takes the cursor straight back for the fight.
+/// The menu's own ESC and the Home button, for the menu frame: ESC opens it (once no other frame
+/// is open: `route_keys` shuts those first) or closes it; the Home button opens it. Opening it
+/// lets the cursor go, to click it with; closing it, however it's closed, takes the cursor
+/// straight back for the fight.
 #[allow(clippy::too_many_arguments)]
 fn toggle_menu(
     mut commands: Commands,
@@ -77,6 +81,7 @@ fn toggle_menu(
     room: Res<CurrentRoom>,
     mut desired: ResMut<crate::DesiredInput>,
     mut aiming: ResMut<crate::casting::Aiming>,
+    mut open: ResMut<OpenFrame>,
     mut mode: ResMut<crate::camera::CameraMode>,
     mut cursor: Single<&mut CursorOptions>,
 ) {
@@ -89,12 +94,16 @@ fn toggle_menu(
     match menu.single() {
         Ok(menu) if esc => {
             commands.entity(menu).despawn();
+            open.close(Frame::Menu);
             mode.lock(&mut cursor);
             return;
         }
         Err(_) if esc || home.iter().any(clicked) => {}
         _ => return,
     }
+    // One frame at a time: the Home button can be clicked with the shop or map open, and the
+    // menu takes the screen from them.
+    open.open(Frame::Menu);
     // The cursor is let go for the menu; stand still and stop attacking while away from the
     // controls.
     mode.unlock(&mut cursor);
@@ -148,6 +157,7 @@ fn menu_buttons(
     settings: Res<crate::settings::Settings>,
     mut leaving: ResMut<Leaving>,
     menu: Query<Entity, With<EscMenu>>,
+    mut open: ResMut<OpenFrame>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     mut mode: ResMut<crate::camera::CameraMode>,
     mut cursor: Single<&mut CursorOptions>,
@@ -170,6 +180,7 @@ fn menu_buttons(
         for menu in &menu {
             commands.entity(menu).despawn();
         }
+        open.close(Frame::Menu);
         mode.lock(&mut cursor);
     }
     if lobby.iter().any(clicked) {
@@ -180,8 +191,9 @@ fn menu_buttons(
     }
 }
 
-fn close_menu(mut commands: Commands, menu: Query<Entity, With<EscMenu>>) {
+fn close_menu(mut commands: Commands, menu: Query<Entity, With<EscMenu>>, mut open: ResMut<OpenFrame>) {
     for menu in &menu {
         commands.entity(menu).despawn();
     }
+    open.close(Frame::Menu);
 }
