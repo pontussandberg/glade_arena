@@ -67,7 +67,7 @@ pub(super) fn spawn_click_hint(commands: &mut Commands) {
             GlobalZIndex(5),
         ))
         .with_child((
-            ui_text("Left click anywhere", 15.0, palette::ui::MUTED),
+            ui_text("Left click anywhere", 15.0, palette::GOLD),
             TextShadow { offset: Vec2::splat(1.0), color: palette::ui::BACKDROP },
             UiTransform::default(),
         ));
@@ -77,10 +77,10 @@ pub(super) fn spawn_click_hint(commands: &mut Commands) {
 const HINT_SWELL: f32 = 0.05;
 const HINT_BREATH: f32 = 4.0;
 
-/// Shown in the arena while the cursor is free with nothing open for it — no menu, no shop, no
-/// right drag turning the camera — however it came free (Tab and a right click, the window left
-/// and come back to): a left click takes the camera back (`camera::follow_camera`). It breathes
-/// a little, to be seen.
+/// Shown in the arena, in gold, while the cursor is free with nothing open for it — no menu, no
+/// shop, no right drag turning the camera — however it came free (Tab and a right click, the
+/// window left and come back to): a left click takes the camera back (`camera::follow_camera`).
+/// It breathes a little, to be seen.
 pub(super) fn show_click_hint(
     time: Res<Time>,
     screen: Res<State<crate::rooms::Screen>>,
