@@ -35,7 +35,7 @@ impl Plugin for FeedbackPlugin {
                 draw_bars.in_set(CameraPlaced).run_if(in_state(Screen::InGame)),
                 react_to_hits,
                 hide_the_dead,
-                spawn_damage_numbers,
+                spawn_damage_numbers.in_set(NotingHits),
                 float_damage_numbers.in_set(CameraPlaced).run_if(in_state(Screen::InGame)),
             ),
         );
@@ -153,8 +153,14 @@ struct CritAt(f32);
 struct ShownHealth(i32);
 
 /// The running number (`RecentHits::seq`) of the last hit on this fighter we showed a number for.
+/// A hit past it hasn't been shown yet: it just arrived (`render::pin_stuck_spears` reads them).
 #[derive(Component)]
-struct ShownHits(u32);
+pub(crate) struct ShownHits(pub(crate) u32);
+
+/// Where new hits are noted as shown (`ShownHits`): whatever reads them as "just arrived" runs
+/// before this.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct NotingHits;
 
 /// A damage number thrown up from over `player`'s health bar, from `born` for `lasts` seconds.
 #[derive(Component)]
