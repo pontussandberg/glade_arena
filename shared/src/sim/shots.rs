@@ -116,19 +116,20 @@ pub fn projectile_end(map: &Map, projectile: &Projectile, tick: u32) -> ShotEnd 
 }
 
 /// Whether a projectile hits a body at `player_pos` whose feet are `feet` over the gameplay
-/// plane (the ground there, and a jump), judged along everything it flew from tick `from` to
+/// plane (the ground there, and a jump), `size` big (`ClassDef::hit_size`), judged along
+/// everything it flew from tick `from` to
 /// `to` (fractional): at its closest pass by the body on that stretch, touching it across the
 /// ground, and between its feet and its top (`BODY_HEIGHT` over them) at the height it flies
 /// there; aimed up it flies over, and under one that has jumped or stands below. Swept, not
 /// spot-checked, so nothing fits between one tick's spot and the next however fast it flies.
 /// The tick of the pass, so several bodies on one stretch are met in the order flown.
-pub fn projectile_hits(projectile: &Projectile, (from, to): (f32, f32), player_pos: Vec2, feet: f32) -> Option<f32> {
+pub fn projectile_hits(projectile: &Projectile, (from, to): (f32, f32), (player_pos, feet, size): (Vec2, f32, f32)) -> Option<f32> {
     let radius = shot(projectile).radius;
     let (a, b) = (projectile_pos(projectile, from), projectile_pos(projectile, to));
     let along = ((player_pos - a).dot(b - a) / a.distance_squared(b).max(1e-6)).clamp(0.0, 1.0);
     let tick = from + (to - from) * along;
     let height = projectile_height(projectile, tick);
-    let hits = projectile_pos(projectile, tick).distance(player_pos) <= PLAYER_RADIUS + radius && height - radius <= feet + BODY_HEIGHT && height + radius >= feet;
+    let hits = projectile_pos(projectile, tick).distance(player_pos) <= PLAYER_RADIUS * size + radius && height - radius <= feet + BODY_HEIGHT * size && height + radius >= feet;
     hits.then_some(tick)
 }
 

@@ -70,9 +70,10 @@ fn burst_at(
 ) {
     let at = end.at;
     crate::fx::spawn_fx(commands, side.0, Fx::at(FxKind::Blast(burst.color), at, burst.radius, now, 10).ended(end).by(projectile.owner));
-    let reach = burst.radius + PLAYER_RADIUS;
     let blow = Blow::attack(amount, sim::projectile_chill(projectile), false, projectile.crit);
-    hit_foes(commands, log, now, targets, (projectile.owner, projectile.class, "auto-attack"), (side, Source::Splash), blow, |id, p, _| Some(id) != spares && p.distance(at) <= reach);
+    hit_foes(commands, log, now, targets, (projectile.owner, projectile.class, "auto-attack"), (side, Source::Splash), blow, |id, (p, _, size)| {
+        Some(id) != spares && p.distance(at) <= burst.radius + PLAYER_RADIUS * size
+    });
 }
 
 /// Projectile hits on the shooter's foes (allies' pass through), judged against where everyone
@@ -109,7 +110,7 @@ pub(super) fn resolve_projectile_hits(
         }
         let mut struck: Vec<(Entity, f32)> = targets
             .iter()
-            .filter_map(|(target, target_id, (target_room, target_team), target_pos, health, _, _, _, (sheltered, decoy, motion))| {
+            .filter_map(|(target, target_id, (target_room, target_team), target_pos, health, _, _, _, (sheltered, decoy, motion, target_class, elite))| {
                 if target_id.0 == projectile.owner
                     || sheltered
                     || owns(projectile.owner, decoy)
@@ -120,12 +121,12 @@ pub(super) fn resolve_projectile_hits(
                 {
                     return None;
                 }
-                sim::projectile_hits(projectile, flew, target_pos.0, motion.height).map(|met_at| (target, met_at))
+                sim::projectile_hits(projectile, flew, (target_pos.0, motion.height, target_class.def().hit_size(elite))).map(|met_at| (target, met_at))
             })
             .collect();
         struck.sort_by(|a, b| a.1.total_cmp(&b.1));
         for (struck, _) in struck {
-            let Ok((target, target_id, (_, target_team), target_pos, mut health, mut chilled, mut recent, _, (_, _, motion))) = targets.get_mut(struck) else { continue };
+            let Ok((target, target_id, (_, target_team), target_pos, mut health, mut chilled, mut recent, _, (_, _, motion, ..))) = targets.get_mut(struck) else { continue };
             let goes_on = target_team.0 == arena_shared::rooms::ZOMBIES && (through.len() as u32) < through_at_most;
             let first = through.is_empty();
             if goes_on {

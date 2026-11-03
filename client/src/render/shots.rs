@@ -430,7 +430,7 @@ pub(super) fn pin_stuck_spears(
     mut commands: Commands,
     time: Res<Time>,
     mut spears: Query<(Entity, &PinTo, &mut StuckSpear, &mut Transform)>,
-    fighters: Query<(Entity, &PlayerId, &Transform, &Pos, Option<&Team>, Option<&RecentHits>, Option<&ShownHits>, Has<Shopkeeper>), Without<PinTo>>,
+    fighters: Query<(Entity, &PlayerId, &Transform, &Pos, Option<&Team>, (&ClassId, Has<Elite>), Option<&RecentHits>, Option<&ShownHits>, Has<Shopkeeper>), Without<PinTo>>,
 ) {
     let now = time.elapsed_secs();
     for (spear, pin, mut stuck, mut transform) in &mut spears {
@@ -441,31 +441,32 @@ pub(super) fn pin_stuck_spears(
         let span = (pin.to - pin.from).with_y(0.0).length();
         let candidates: Vec<_> = fighters
             .iter()
-            .filter_map(|(body, id, drawn, pos, team, hits, shown, keeper)| {
+            .filter_map(|(body, id, drawn, pos, team, (class, elite), hits, shown, keeper)| {
                 if id.0 == pin.owner || keeper || own_team.zip(team.copied()).is_some_and(|(mine, theirs)| mine.allied(theirs)) {
                     return None;
                 }
+                let size = class.def().hit_size(elite);
                 let to_body = (to_world(pos.0, 0.0) - pin.from).with_y(0.0);
                 let along = to_body.dot(ahead);
                 let height = pin.from.y + heading.y * along / level.length().max(1e-3);
                 let feet = drawn.translation.y;
                 let near = (-TING_SLACK..=span + TING_SLACK).contains(&along)
-                    && to_body.distance(ahead * along) < PLAYER_RADIUS + pin.radius + TING_SLACK
-                    && (feet - TING_SLACK..feet + BODY_HEIGHT + TING_SLACK).contains(&height);
+                    && to_body.distance(ahead * along) < PLAYER_RADIUS * size + pin.radius + TING_SLACK
+                    && (feet - TING_SLACK..feet + BODY_HEIGHT * size + TING_SLACK).contains(&height);
                 let named = hits.is_some_and(|hits| hits.0.iter().any(|hit| hit.seq > shown.map_or(0, |s| s.0) && hit.by == Some(pin.owner)));
-                near.then_some((body, *drawn, along, height, named))
+                near.then_some((body, *drawn, along, height, named, size))
             })
             .collect();
         let named = candidates.iter().filter(|c| c.4).max_by(|a, b| a.2.total_cmp(&b.2));
         let settle = now - pin.born > PIN_GRACE;
         let found = named.or_else(|| settle.then(|| candidates.iter().min_by(|a, b| a.2.total_cmp(&b.2))).flatten());
-        let Some(&(body, drawn, _, height, _)) = found else {
+        let Some(&(body, drawn, _, height, _, size)) = found else {
             if settle {
                 commands.entity(spear).remove::<PinTo>();
             }
             continue;
         };
-        let tip = drawn.translation.with_y(height) - ahead * PLAYER_RADIUS + transform.rotation * Vec3::X * BODY_BURY;
+        let tip = drawn.translation.with_y(height) - ahead * PLAYER_RADIUS * size + transform.rotation * Vec3::X * BODY_BURY;
         let placed = Transform::from_translation(tip).with_rotation(transform.rotation).with_scale(transform.scale);
         let local = Transform::from_matrix(drawn.to_matrix().inverse() * placed.to_matrix());
         stuck.scale = local.scale;

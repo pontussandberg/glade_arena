@@ -156,9 +156,10 @@ pub(crate) struct Zone {
 #[derive(Resource, Default)]
 pub(crate) struct Zones(Vec<Zone>);
 
-/// `blow` from `by` to its foes `hits` says are hit (`hit_foes`). How many it hit.
-fn strike(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut Targets, by: By, blow: Blow, mut hits: impl FnMut(PeerId, Vec2) -> bool) -> usize {
-    hit_foes(commands, log, now, targets, (by.id, by.class, by.name()), (by.side, by.source), blow, |id, at, _| hits(id, at))
+/// `blow` from `by` to its foes `hits` says are hit (`hit_foes`: by who, where they are, and how
+/// big they stand to hits). How many it hit.
+fn strike(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut Targets, by: By, blow: Blow, mut hits: impl FnMut(PeerId, Vec2, f32) -> bool) -> usize {
+    hit_foes(commands, log, now, targets, (by.id, by.class, by.name()), (by.side, by.source), blow, |id, (at, _, size)| hits(id, at, size))
 }
 
 /// Deals `damage` (and `chill`) to `by`'s foes within `radius` of `at`, shown as a blast in `color`.
@@ -172,7 +173,7 @@ pub(crate) fn blast(commands: &mut Commands, log: &mut HitLog, now: u32, targets
 #[allow(clippy::too_many_arguments)]
 fn blast_as(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut Targets, by: By, at: Vec2, radius: f32, damage: i32, chill: Chill, look: FxKind) -> usize {
     spawn_fx(commands, by.side.0, Fx::at(look, at, radius, now, 10).by(by.id));
-    strike(commands, log, now, targets, by, Blow::ability(damage, chill), |_, p| p.distance(at) <= radius + PLAYER_RADIUS)
+    strike(commands, log, now, targets, by, Blow::ability(damage, chill), |_, p, size| p.distance(at) <= radius + PLAYER_RADIUS * size)
 }
 
 /// The foe of `side` nearest `at` within `reach`, alive, other than those `skip` says: who and
@@ -181,10 +182,10 @@ fn blast_as(commands: &mut Commands, log: &mut HitLog, now: u32, targets: &mut T
 fn nearest_foe(targets: &Targets, (by, side): (PeerId, Side), at: Vec2, reach: f32, skip: impl Fn(PeerId) -> bool) -> Option<(PeerId, Vec2, f32)> {
     targets
         .iter()
-        .filter(|(_, id, (room, team), pos, health, .., (sheltered, decoy, _))| {
+        .filter(|(_, id, (room, team), pos, health, .., (sheltered, decoy, ..))| {
             health.0 > 0 && !sheltered && id.0 != by && !owns(by, *decoy) && !skip(id.0) && foes(side, (**room, **team)) && pos.0.distance(at) <= reach
         })
-        .map(|(_, id, _, pos, .., (_, _, motion))| (id.0, pos.0, motion.height))
+        .map(|(_, id, _, pos, .., (_, _, motion, ..))| (id.0, pos.0, motion.height))
         .min_by(|a, b| a.1.distance_squared(at).total_cmp(&b.1.distance_squared(at)))
 }
 
@@ -265,8 +266,8 @@ pub(super) fn tick_items(
                         let at = pos.0 + wisp_offset(now as f32, wisp, count, orbit);
                         let mut struck = Vec::new();
                         let resting = |target: PeerId, state: &ItemState| state.wisp_hits.iter().any(|&(w, p, _)| w == wisp && p == target);
-                        strike(&mut commands, &mut log, now, &mut targets, by(item), Blow::ability(damage, Chill::default()), |target, p| {
-                            let touched = p.distance(at) <= items::WISP_REACH + PLAYER_RADIUS && !resting(target, &state);
+                        strike(&mut commands, &mut log, now, &mut targets, by(item), Blow::ability(damage, Chill::default()), |target, p, size| {
+                            let touched = p.distance(at) <= items::WISP_REACH + PLAYER_RADIUS * size && !resting(target, &state);
                             if touched {
                                 struck.push(target);
                             }
@@ -298,8 +299,8 @@ pub(super) fn tick_items(
     for zone in &zones.0 {
         if zone.pull > 0.0 {
             // Only its maker's foes, as its pulse hurts (never them, nor the sheltered).
-            for (entity, id, (room, team), pos, health, .., (sheltered, decoy, _)) in targets.iter() {
-                if health.0 > 0 && !sheltered && id.0 != zone.by.id && !owns(zone.by.id, decoy) && foes(zone.by.side, (*room, *team)) && pos.0.distance(zone.at) <= zone.radius + PLAYER_RADIUS {
+            for (entity, id, (room, team), pos, health, .., (sheltered, decoy, _, class, elite)) in targets.iter() {
+                if health.0 > 0 && !sheltered && id.0 != zone.by.id && !owns(zone.by.id, decoy) && foes(zone.by.side, (*room, *team)) && pos.0.distance(zone.at) <= zone.radius + PLAYER_RADIUS * class.def().hit_size(elite) {
                     let next = pos.0.move_towards(zone.at, zone.pull * TICK_DT);
                     if lobby.map(room).line_walkable(pos.0, next) {
                         commands.entity(entity).insert(Pos(next));
@@ -309,8 +310,8 @@ pub(super) fn tick_items(
         }
         if pulse {
             let chill = if zone.slow > 0.0 { Chill { slow: zone.slow, slow_ticks: items::ZONE_PULSE_TICKS + 4, root_ticks: 0, lift_ticks: 0 } } else { Chill::default() };
-            let (at, reach) = (zone.at, zone.radius + PLAYER_RADIUS);
-            strike(&mut commands, &mut log, now, &mut targets, zone.by, Blow::ability(zone.damage, chill), |_, p| p.distance(at) <= reach);
+            let at = zone.at;
+            strike(&mut commands, &mut log, now, &mut targets, zone.by, Blow::ability(zone.damage, chill), |_, p, size| p.distance(at) <= zone.radius + PLAYER_RADIUS * size);
         }
     }
     // What was set to go off.
@@ -341,7 +342,7 @@ pub(super) fn tick_items(
         let victim = victim.0;
         spawn_fx(&mut commands, doom.side.0, Fx::at(FxKind::Blast(FxColor::Void), pos.0, 1.2, now, 12).by(doom.by));
         let by = By { id: doom.by, class: doom.class, side: doom.side, source: Source::Item(Item::DoomBell) };
-        strike(&mut commands, &mut log, now, &mut targets, by, Blow::ability(toll, Chill::default()), |p, _| p == victim);
+        strike(&mut commands, &mut log, now, &mut targets, by, Blow::ability(toll, Chill::default()), |p, _, _| p == victim);
     }
 }
 
@@ -545,7 +546,7 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                 for _ in 0..jumps {
                     let Some((next, at, _)) = nearest_foe(&r.targets, (hit.attacker, hit.side), from, reach, |p| struck.contains(&p)) else { break };
                     spawn_fx(&mut r.commands, hit.side.0, Fx::between(FxKind::Arc, from, at, 0.0, now, 8).by(hit.attacker));
-                    strike(&mut r.commands, &mut r.log, now, &mut r.targets, by(item), Blow::ability(damage, Chill::default()), |p, _| p == next);
+                    strike(&mut r.commands, &mut r.log, now, &mut r.targets, by(item), Blow::ability(damage, Chill::default()), |p, _, _| p == next);
                     struck.push(next);
                     from = at;
                 }
@@ -554,7 +555,7 @@ fn attacker_items(r: &mut Reacting, now: u32, hit: &Landed, (holder, satchel): (
                 let (every, freeze) = items::rime_sigil(level);
                 if hits % every == 0 && !hit.killed {
                     let blow = Blow::ability(0, Chill { root_ticks: freeze, ..default() });
-                    strike(&mut r.commands, &mut r.log, now, &mut r.targets, by(item), blow, |p, _| p == hit.victim_id);
+                    strike(&mut r.commands, &mut r.log, now, &mut r.targets, by(item), blow, |p, _, _| p == hit.victim_id);
                 }
             }
             Item::ThunderCrown => {
@@ -631,7 +632,7 @@ fn monster_hit(r: &mut Reacting, now: u32, hit: &Landed) {
         Some(Affix::Frostbound) if !hit.killed && hit.source != Source::Trick => {
             let by = By { id: hit.attacker, class: hit.class, side: hit.side, source: Source::Trick };
             let blow = Blow::ability(0, Chill { root_ticks: brain::FROSTBOUND_ROOT_TICKS, ..default() });
-            strike(&mut r.commands, &mut r.log, now, &mut r.targets, by, blow, |p, _| p == hit.victim_id);
+            strike(&mut r.commands, &mut r.log, now, &mut r.targets, by, blow, |p, _, _| p == hit.victim_id);
         }
         _ => {}
     }

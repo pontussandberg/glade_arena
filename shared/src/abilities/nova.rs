@@ -17,10 +17,11 @@ pub struct NovaDef {
 }
 
 impl NovaDef {
-    /// Does it, burst at `caster`, reach `target`, each with how high its feet are? Its radius
+    /// Does it, burst at `caster`, reach `target`, each with how high its feet are, the target
+    /// `size` big (`ClassDef::hit_size`)? Its radius
     /// out to the target's body, no further up or down, and not through a wall. Only the server
     /// decides this.
-    pub fn hits(&self, map: &Map, (caster, from): (Vec2, f32), (target, feet): (Vec2, f32)) -> bool {
-        caster.distance(target) <= self.radius + PLAYER_RADIUS && (feet - from).abs() <= self.radius && map.shot_clear((caster, from), (target, feet))
+    pub fn hits(&self, map: &Map, (caster, from): (Vec2, f32), (target, feet, size): (Vec2, f32, f32)) -> bool {
+        caster.distance(target) <= self.radius + PLAYER_RADIUS * size && (feet - from).abs() <= self.radius && map.shot_clear((caster, from), (target, feet))
     }
 }

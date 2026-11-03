@@ -147,27 +147,30 @@ pub fn struck_surface(map: &Map, from: Vec2, p: Vec2, feet: f32) -> f32 {
 }
 
 /// Whether a swing from a striker with its feet `from` high comes through a body with its feet
-/// `feet` high: the blade sweeps from over the striker's head down to as far below its feet as
+/// `feet` high, `size` big: the blade sweeps from over the striker's head down to as far below
+/// its feet as
 /// it reaches (`REACH_DOWN`), so it meets one on a step or a crate, or down a drop, but not one
 /// up on a roof, nor one far below.
-pub fn swing_reaches(from: f32, feet: f32) -> bool {
-    feet < from + BODY_HEIGHT && feet + BODY_HEIGHT > from - REACH_DOWN
+pub fn swing_reaches(from: f32, feet: f32, size: f32) -> bool {
+    feet < from + BODY_HEIGHT && feet + BODY_HEIGHT * size > from - REACH_DOWN
 }
 
 /// Does a swing whose lane starts across from its striker at `attacker` (`LastSwing::lane_from`)
 /// toward `dir` (`empowered` by its `follow_up` or not) reach `target`, each with how high its
-/// feet are? Its lane (`AttackDef::lane`) reaches the target's
+/// feet are, the target `size` big (`ClassDef::hit_size`)? Its lane (`AttackDef::lane`) reaches
+/// the target's
 /// body, as high or low as the swing sweeps (`swing_reaches`), and not through a wall. Only the
 /// server decides this.
-pub fn melee_hits(map: &Map, (attacker, attacker_feet): (Vec2, f32), dir: Vec2, (empowered, grown): (bool, f32), class: ClassId, (target, feet): (Vec2, f32)) -> bool {
+pub fn melee_hits(map: &Map, (attacker, attacker_feet): (Vec2, f32), dir: Vec2, (empowered, grown): (bool, f32), class: ClassId, (target, feet, size): (Vec2, f32, f32)) -> bool {
     let attack = &class.def().attack;
-    let (Some((from, _, width)), Some((nearest, farthest))) = (attack.lane_grown(empowered, grown), attack.hit_span_grown(empowered, grown)) else { return false };
+    let body = PLAYER_RADIUS * size;
+    let (Some((from, _, width)), Some((nearest, farthest))) = (attack.lane_grown(empowered, grown), attack.hit_span_grown(empowered, grown, body)) else { return false };
     let to_target = target - attacker;
     let dir = dir.normalize_or_zero();
     let (along, across) = (to_target.dot(dir), to_target.perp_dot(dir).abs());
     // A lane from the attacker: overlapping bodies always connect. One further out: a body
     // touching its near end does.
-    let overlapping = from <= 0.0 && to_target.length() <= PLAYER_RADIUS;
-    let in_lane = overlapping || ((nearest..=farthest).contains(&along) && across <= width / 2.0 + PLAYER_RADIUS);
-    in_lane && swing_reaches(attacker_feet, feet) && map.shot_clear((attacker, attacker_feet), (target, feet))
+    let overlapping = from <= 0.0 && to_target.length() <= body;
+    let in_lane = overlapping || ((nearest..=farthest).contains(&along) && across <= width / 2.0 + body);
+    in_lane && swing_reaches(attacker_feet, feet, size) && map.shot_clear((attacker, attacker_feet), (target, feet))
 }

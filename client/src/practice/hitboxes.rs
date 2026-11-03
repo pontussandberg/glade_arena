@@ -121,18 +121,18 @@ fn draw_hitboxes(
     mut gizmos: Gizmos,
     time: Res<Time>,
     flashes: Res<Flashes>,
-    fighters: Query<(&Pos, &ClassId, &AttackState, Option<&Health>)>,
+    fighters: Query<(&Pos, &ClassId, &AttackState, Option<&Health>, Has<Elite>)>,
     shots: Query<(&Projectile, &Transform)>,
 ) {
     let flat = Quat::from_rotation_x(FRAC_PI_2);
     let circle = |gizmos: &mut Gizmos, at: Vec3, radius: f32, color: Color| {
         gizmos.circle(Isometry3d::new(at.with_y(LIFT), flat), radius, color);
     };
-    for (pos, class, attack, health) in &fighters {
+    for (pos, class, attack, health, elite) in &fighters {
         if health.is_some_and(|h| !h.alive()) {
             continue;
         }
-        circle(&mut gizmos, to_world(pos.0, map.map().height_at(pos.0)), PLAYER_RADIUS, BODY);
+        circle(&mut gizmos, to_world(pos.0, map.map().height_at(pos.0)), PLAYER_RADIUS * class.def().hit_size(elite), BODY);
         if let Some(swing) = attack.winding_up() {
             lane(&mut gizmos, swing.lane_from(pos.0), swing.dir, swing.quick, *class, WINDING_UP);
         }
@@ -156,28 +156,26 @@ fn draw_hitboxes(
 fn draw_hitboxes_3d(
     map: Res<crate::rooms::CurrentMap>,
     mut gizmos: Gizmos,
-    fighters: Query<(&Pos, Option<&Health>), Without<Projectile>>,
+    fighters: Query<(&Pos, &ClassId, Option<&Health>, Has<Elite>), Without<Projectile>>,
     shots: Query<(&Projectile, &Transform, &InheritedVisibility)>,
 ) {
     let flat = Quat::from_rotation_x(FRAC_PI_2);
-    // The rings' heights and colors, the same for every fighter.
-    let rings: Vec<(f32, Color)> = (0..=(BODY_HEIGHT / RING_EVERY).round() as usize)
-        .map(|i| i as f32 * RING_EVERY)
-        .map(|height| (height, height_color(height)))
-        .collect();
-    let (floor, top) = (height_color(0.0), height_color(BODY_HEIGHT));
-    for (pos, health) in &fighters {
+    let floor = height_color(0.0);
+    for (pos, class, health, elite) in &fighters {
         if health.is_some_and(|h| !h.alive()) {
             continue;
         }
+        let size = class.def().hit_size(elite);
+        let (radius, tall) = (PLAYER_RADIUS * size, BODY_HEIGHT * size);
         let at = to_world(pos.0, map.map().height_at(pos.0));
-        for &(height, color) in &rings {
-            gizmos.circle(Isometry3d::new(at.with_y(height), flat), PLAYER_RADIUS, color);
+        for i in 0..=(tall / RING_EVERY).round() as usize {
+            let height = i as f32 * RING_EVERY;
+            gizmos.circle(Isometry3d::new(at.with_y(height), flat), radius, height_color(height));
         }
         // Its sides, so it reads as a column.
         for k in 0..4 {
-            let side = Quat::from_rotation_y(k as f32 * FRAC_PI_2) * Vec3::X * PLAYER_RADIUS;
-            gizmos.line_gradient(at + side, at + side + Vec3::Y * BODY_HEIGHT, floor, top);
+            let side = Quat::from_rotation_y(k as f32 * FRAC_PI_2) * Vec3::X * radius;
+            gizmos.line_gradient(at + side, at + side + Vec3::Y * tall, floor, height_color(tall));
         }
     }
     // What stands in the way (`map::Collider`): each box's edges, colored by how high its top

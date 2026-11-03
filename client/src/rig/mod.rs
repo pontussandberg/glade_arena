@@ -111,11 +111,10 @@ const SQUASH_SECONDS: f32 = 0.18;
 /// Walk cycles per meter walked (the swing and bob: `pose`).
 const STRIDES_PER_METER: f32 = 0.4;
 /// How much bigger an elite monster is drawn than its kind.
-const ELITE_SIZE: f32 = 1.25;
-
-/// How big a fighter of `class` is drawn, as a share of its figure's size (an `elite` bigger).
+/// How big a fighter of `class` is drawn, as a share of its figure's size (an `elite` bigger):
+/// just as big as it stands to hits.
 pub(crate) fn drawn_size(class: ClassId, elite: bool) -> f32 {
-    class.def().size() * if elite { ELITE_SIZE } else { 1.0 }
+    class.def().hit_size(elite)
 }
 /// A weapon that grows to strike (a class with a `follow_up`: as it's drawn, and while that's
 /// armed): how much bigger it grows, how quickly it grows to stay armed (per second,

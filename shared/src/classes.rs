@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 pub use crate::abilities::{AbilityDef, AbilityKind, AbilitySlot};
 use crate::abilities::MAX_ABILITIES;
 use crate::config::{PLAYER_RADIUS, TICK_HZ};
+
+/// How much bigger an elite stands than its class, drawn and hit alike (`ClassDef::hit_size`).
+pub const ELITE_SIZE: f32 = 1.25;
 use crate::protocol::FxColor;
 
 /// The class files, compiled into both server and client so they can't disagree. Their order is
@@ -436,6 +439,13 @@ impl ClassDef {
         self.look.as_ref().map_or(1.0, |look| look.size)
     }
 
+    /// How big a fighter's body is to hits, as a share of the common one (`PLAYER_RADIUS` wide,
+    /// `BODY_HEIGHT` tall): as big as it's drawn (`size`; an `elite` bigger still), so what looks
+    /// struck is struck.
+    pub fn hit_size(&self, elite: bool) -> f32 {
+        self.size() * if elite { ELITE_SIZE } else { 1.0 }
+    }
+
     /// What its figure's colors are multiplied by.
     pub fn tint(&self) -> (f32, f32, f32) {
         self.look.as_ref().map_or((1.0, 1.0, 1.0), |look| look.tint)
@@ -552,13 +562,13 @@ impl AttackDef {
     /// lane that starts further out than a body's radius has a dead zone in front of you, where
     /// nothing is hit. `None` for a ranged attack.
     pub fn hit_span(&self, empowered: bool) -> Option<(f32, f32)> {
-        self.hit_span_grown(empowered, 0.0)
+        self.hit_span_grown(empowered, 0.0, PLAYER_RADIUS)
     }
 
-    /// `hit_span` of a lane `grown` (`lane_grown`).
-    pub fn hit_span_grown(&self, empowered: bool, grown: f32) -> Option<(f32, f32)> {
+    /// `hit_span` of a lane `grown` (`lane_grown`), against a body `body` wide.
+    pub fn hit_span_grown(&self, empowered: bool, grown: f32, body: f32) -> Option<(f32, f32)> {
         let (from, range, _) = self.lane_grown(empowered, grown)?;
-        Some((if from > 0.0 { from - PLAYER_RADIUS } else { 0.0 }, range + PLAYER_RADIUS))
+        Some((if from > 0.0 { (from - body).max(0.0) } else { 0.0 }, range + body))
     }
 
     /// How far from your center a target's body can reach and still be hit (`AttackKind::edge_reach`),
