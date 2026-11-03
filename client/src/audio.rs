@@ -377,7 +377,7 @@ fn windup_sounds(
         }
         let Some(swing) = attack.swing else { continue };
         lapsed.remove(&attacker);
-        winding.insert(attacker, (swing.started_at, swing.releases_at(&class.def().attack), id.0));
+        winding.insert(attacker, (swing.started_at, swing.releases_at(class.def().attack_of(swing.style)), id.0));
         if unheard(&mut heard, attacker, swing.started_at, clock.as_ref().map(|clock| clock.now(is_me))) {
             let voice = attack_voice(*class);
             if let Some(gather) = voice.gather {
@@ -386,7 +386,7 @@ fn windup_sounds(
             if let Some((late, lead)) = voice.late {
                 // By the clock, the tick the attack goes off less its lead, however late the
                 // news of it came.
-                let windup_ticks = swing.windup_ticks(&class.def().attack);
+                let windup_ticks = swing.windup_ticks(class.def().attack_of(swing.style));
                 let windup = windup_ticks as f32 / arena_shared::config::TICK_HZ as f32;
                 let left = clock.as_ref().map_or(windup, |clock| (((swing.started_at + windup_ticks) as f32 - clock.now(is_me)) / arena_shared::config::TICK_HZ as f32).clamp(0.0, windup));
                 queue.add(late, 0.42).from(pos.0, Reach::Combat).after((left - lead).max(0.0)).pitched(voice.pitch).by(id.0);

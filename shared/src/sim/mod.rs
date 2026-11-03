@@ -319,7 +319,7 @@ mod tests {
         let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some()) else { return };
         let attack = quickened(class);
         let (period, windup) = (attack.period_ticks(1.0), attack.windup_ticks(1.0));
-        let mut swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0, aside: 0.0 };
+        let mut swing = Swing { started_at: 10, dir: Vec2::X, style: crate::classes::WeaponStyle::Primary, quick: false, hastened: false, haste: 0.0, primed: false, held: 0, aside: 0.0 };
         assert_eq!(swing.ready_at(&attack), 10 + period);
         // As the server does when the swing lands.
         swing.hastened = true;
@@ -1031,6 +1031,46 @@ mod tests {
         assert!(released.is_some() && gone.primed.is_none(), "still primed after it went off");
     }
 
+    #[test]
+    fn each_weapon_style_runs_its_own_cooldown() {
+        use crate::classes::WeaponStyle;
+        let class = ClassId::by_key("revenant").unwrap();
+        assert!(class.def().has_secondary());
+        let def = class.def();
+        let fire = |style| PlayerInput { style, ..aim(Vec2::X, true) };
+        let who = PeerId::Netcode(1);
+        // A primary attack, released: its backswing (its own cooldown) runs.
+        let state = start_attack(10, class, &fire(WeaponStyle::Primary), AttackState::default());
+        let first = state.swing.unwrap();
+        let (state, released) = release_attack(first.releases_at(&def.attack), who, class, Vec2::ZERO, false, state);
+        assert!(released.is_some());
+        // Swapped, the secondary starts right there in the primary's backswing (its own
+        // cooldown is fresh); the primary's swing is stowed, its cooldown still running.
+        let state = start_attack(first.releases_at(&def.attack) + 1, class, &fire(WeaponStyle::Secondary), state);
+        let second = state.swing.unwrap();
+        assert_eq!(second.style, WeaponStyle::Secondary, "the secondary waited on the primary's backswing");
+        assert_eq!(state.stowed.map(|swing| swing.style), Some(WeaponStyle::Primary), "the primary's cooldown was dropped");
+        // Mid-windup nothing starts, whatever the style.
+        let blocked = start_attack(second.started_at + 1, class, &fire(WeaponStyle::Primary), state);
+        assert_eq!(blocked.swing.unwrap().started_at, second.started_at, "an attack started mid-windup");
+        // Gone off, the secondary's long cooldown gates only itself: the primary starts again
+        // the moment its own timer is done, and the secondary is stowed in turn.
+        let secondary_attack = &def.secondary.as_ref().unwrap().attack;
+        let (state, spun) = release_attack(second.releases_at(secondary_attack), who, class, Vec2::ZERO, false, state);
+        assert!(matches!(spun, Some(Attack::Spin { .. })), "the revenant's secondary isn't a spin");
+        let again = first.ready_at(&def.attack).max(second.releases_at(secondary_attack) + 1);
+        let state = start_attack(again, class, &fire(WeaponStyle::Primary), state);
+        let third = state.swing.unwrap();
+        assert_eq!((third.style, third.started_at), (WeaponStyle::Primary, again), "the primary waited on the secondary's cooldown");
+        assert_eq!(state.stowed.map(|swing| swing.style), Some(WeaponStyle::Secondary));
+        // But the secondary, swapped back to before its cooldown is over, waits for it.
+        let (state, _) = release_attack(third.releases_at(&def.attack), who, class, Vec2::ZERO, false, state);
+        let early = third.releases_at(&def.attack) + 1;
+        assert!(early < second.ready_at(secondary_attack), "the spin's cooldown is too short to show the wait");
+        let waited = start_attack(early, class, &fire(WeaponStyle::Secondary), state);
+        assert_eq!(waited.swing.unwrap().started_at, third.started_at, "the secondary didn't wait out its own cooldown");
+    }
+
     /// A dash from `from` toward `dir` run to its end: where it ended, and how many ticks it moved.
     fn dash_run(from: Vec2, dir: Vec2, chilled: &Chilled, hasted: &Hasted) -> (Vec2, u32) {
         let (end, took, _) = dash_run_going(from, dir, chilled, hasted, Vec2::ZERO, Vec2::ZERO);
@@ -1267,22 +1307,22 @@ mod tests {
         let class = fighter();
         let at = spawns()[0];
         let reach = class.def().attack.kind.reach() - 0.05;
-        assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * reach, 0.0)), "straight ahead, at the edge of reach");
-        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * (reach + 0.2), 0.0)), "just out of reach");
-        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at - Vec2::Y * 1.0, 0.0)), "behind");
+        assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at + Vec2::Y * reach, 0.0)), "straight ahead, at the edge of reach");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at + Vec2::Y * (reach + 0.2), 0.0)), "just out of reach");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at - Vec2::Y * 1.0, 0.0)), "behind");
         let AttackKind::Melee { width, from, .. } = class.def().attack.kind else { unreachable!() };
         // Bodies overlapping connect when the lane starts at the attacker; one starting further
         // out misses what's closer than that.
-        assert_eq!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at - Vec2::Y * 0.3, 0.0)), from == 0.0, "bodies overlapping");
+        assert_eq!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at - Vec2::Y * 0.3, 0.0)), from == 0.0, "bodies overlapping");
         if from > 0.0 {
-            assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * (from - PLAYER_RADIUS + 0.05), 0.0)), "touching the lane's near end");
-            assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * (from - PLAYER_RADIUS - 0.05), 0.0)), "short of the lane");
+            assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at + Vec2::Y * (from - PLAYER_RADIUS + 0.05), 0.0)), "touching the lane's near end");
+            assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at + Vec2::Y * (from - PLAYER_RADIUS - 0.05), 0.0)), "short of the lane");
         }
         let edge = width / 2.0 + PLAYER_RADIUS;
         let middle = from.max(1.0);
-        assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::new(edge - 0.05, middle), 0.0)), "a body overlapping the lane");
-        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::new(edge + 0.05, middle), 0.0)), "beside the lane");
-        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), shooter(), (at + Vec2::Y, 0.0)), "projectile classes don't swing");
+        assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at + Vec2::new(edge - 0.05, middle), 0.0)), "a body overlapping the lane");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at + Vec2::new(edge + 0.05, middle), 0.0)), "beside the lane");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &shooter().def().attack, (at + Vec2::Y, 0.0)), "projectile classes don't swing");
     }
 
     #[test]
@@ -1290,7 +1330,7 @@ mod tests {
         let class = fighter();
         let at = spawns()[0];
         let ahead = at + Vec2::Y * (class.def().attack.kind.reach() - 0.3);
-        let hits = |feet: f32| melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (ahead, feet));
+        let hits = |feet: f32| melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (ahead, feet));
         assert!(hits(0.0) && hits(1.0), "one on the ground or up on a crate isn't struck");
         assert!(!hits(BODY_HEIGHT + 0.1), "one up on a roof is struck");
         // Struck from up on something: one down below it is, as far down as the blade reaches.
@@ -1303,7 +1343,7 @@ mod tests {
         let Some(class) = ClassId::all().find(|c| c.def().attack.rift.is_some()) else { return };
         let def = class.def().attack.rift.unwrap();
         let at = spawns()[0];
-        let swing = LastSwing { tick: 10, dir: Vec2::Y, empowered: false, grown: 0.0, aside: 0.0 };
+        let swing = LastSwing { tick: 10, dir: Vec2::Y, style: crate::classes::WeaponStyle::Primary, empowered: false, grown: 0.0, aside: 0.0 };
         let feet = map().height_at(at);
         let rift = Rift::torn(PeerId::Netcode(1), class, at, feet, &swing).unwrap();
         let (from, range, _) = class.def().attack.lane(false).unwrap();
@@ -1331,8 +1371,8 @@ mod tests {
         let beyond = at + Vec2::Y * (range + PLAYER_RADIUS + 0.2);
         let aside = at + Vec2::new(width / 2.0 + PLAYER_RADIUS + (wide - width) / 4.0, (near + far) / 2.0);
         for target in [beyond, aside] {
-            assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (target, 0.0)), "a plain swing reached {target}");
-            assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (true, 0.0), class, (target, 0.0)), "an empowered swing missed {target}");
+            assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (target, 0.0)), "a plain swing reached {target}");
+            assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (true, 0.0), &class.def().attack, (target, 0.0)), "an empowered swing missed {target}");
         }
     }
 

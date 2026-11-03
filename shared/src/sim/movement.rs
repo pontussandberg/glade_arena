@@ -231,6 +231,10 @@ impl Rift {
     /// (empowered or not), from where `owner` stood at `pos` (as far aside as it ran:
     /// `LastSwing::aside`), its feet `feet` high.
     pub fn torn(owner: PeerId, class: ClassId, pos: Vec2, feet: f32, swing: &LastSwing) -> Option<Rift> {
+        // Only the primary carries a rift (`class_file_is_sane`): a secondary's swing tears none.
+        if swing.style != crate::classes::WeaponStyle::Primary {
+            return None;
+        }
         let attack = &class.def().attack;
         let (rift, (from, range, width)) = (attack.rift?, attack.lane_grown(swing.empowered, swing.grown)?);
         let dir = swing.dir.normalize_or_zero();

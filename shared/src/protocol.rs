@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::abilities::dash::{Dash, Dashing};
 pub use crate::abilities::{AbilitySlot, CastOrder, Cooldowns, MAX_ABILITIES};
-pub use crate::classes::ClassId;
+pub use crate::classes::{ClassId, WeaponStyle};
 use crate::classes::{AttackDef, Chill};
 use crate::map::{MapId, ShotEnd};
 use crate::rooms::{LeaveReason, Mode, NO_TEAM, RoomKey, RoomSummary, RoomView};
@@ -112,8 +112,19 @@ impl RecentHits {
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct AttackState {
     pub swing: Option<Swing>,
+    /// The weapon style in hand (Q swaps it, `PlayerCommand::Style`): which attack the next
+    /// click starts, and whose cooldown the bar over the head tracks.
+    pub style: WeaponStyle,
+    /// The last swing of the style `swing` isn't (always already gone off), kept while its own
+    /// cooldown runs: each style's cooldown is its own, so weaving back only waits for that
+    /// style's last attack. Dropped once it's ready.
+    pub stowed: Option<Swing>,
     /// The tick the last attack went off (`None`: never).
     pub released_at: Option<u32>,
+    /// Which style's attack that was: the release may outlive its swing here (the swing clears
+    /// as its timer runs out, and a weave can replace it the very tick it released), and the
+    /// client poses the strike's follow-through only for the primary's.
+    pub released_style: WeaponStyle,
     /// An attack started by this tick is quick (`FollowUp`; `None`: not armed). Used up when an
     /// attack goes off, not when one is lost (`sim::interrupt_attack`).
     pub quick_until: Option<u32>,
@@ -141,14 +152,44 @@ impl AttackState {
         self.quick_at(now) || self.winding_up().is_some_and(|swing| swing.quick)
     }
 
-    /// Has the attack in progress gone off yet?
+    /// Has the attack in progress gone off yet? Strictly after its start: a release's tick is
+    /// always past its own swing's start (the windup is at least a tick), and an attack of the
+    /// other style starting the very tick one released mustn't count as gone off.
     pub fn released(&self) -> bool {
-        self.swing.is_some_and(|swing| self.released_at.is_some_and(|at| at >= swing.started_at))
+        self.swing.is_some_and(|swing| self.released_at.is_some_and(|at| at > swing.started_at))
     }
 
     /// The attack in progress while it's still winding up (rooting its fighter).
     pub fn winding_up(&self) -> Option<Swing> {
         self.swing.filter(|_| !self.released())
+    }
+
+    /// The most recent swing of `style`, if its state is still kept: the one in progress or just
+    /// done, or the one stowed at the last swap.
+    pub fn swing_of(&self, style: WeaponStyle) -> Option<Swing> {
+        self.swing.filter(|swing| swing.style == style).or(self.stowed.filter(|swing| swing.style == style))
+    }
+
+    /// Whether an attack of `style` may start at `now` (a fractional tick for the client; the
+    /// server asks at the tick): nothing winding up, and the style's own last attack done (each
+    /// style's cooldown is its own, so another style's backswing doesn't hold it up).
+    pub fn may_start(&self, class: ClassId, style: WeaponStyle, now: f32) -> bool {
+        let def = |swing: &Swing| class.def().attack_of(swing.style);
+        self.winding_up().is_none_or(|swing| now >= swing.releases_at(def(&swing)) as f32)
+            && self.swing_of(style).is_none_or(|swing| now >= swing.ready_at(def(&swing)) as f32)
+    }
+
+    /// What's left of `style`'s cooldown at `now`, 1 full (just went off) to 0 (ready), if its
+    /// last attack has gone off and the next can't start yet: the cast bar under the health bar,
+    /// and the style icons' wipes. `None` with nothing to show (ready, or still winding up).
+    pub fn cooldown_left(&self, class: ClassId, style: WeaponStyle, now: f32) -> Option<f32> {
+        let swing = self.swing_of(style)?;
+        // The one in progress shows nothing until it goes off (the windup shows in the fighter);
+        // a stowed one has always gone off.
+        if self.swing == Some(swing) && !self.released() {
+            return None;
+        }
+        Some(1.0 - swing.cooldown_progress(now, class.def().attack_of(swing.style)))
     }
 }
 
@@ -158,6 +199,8 @@ impl AttackState {
 pub struct Swing {
     pub started_at: u32,
     pub dir: Vec2,
+    /// Which weapon style it swings with: whose `AttackDef` times and resolves it.
+    pub style: WeaponStyle,
     /// Quickened by the attack's `follow_up`.
     pub quick: bool,
     /// Its hit armed the `follow_up`: the rest of its backswing runs at that attack speed too,
@@ -610,6 +653,9 @@ impl Waygate {
 pub struct LastSwing {
     pub tick: u32,
     pub dir: Vec2,
+    /// Which weapon style swung: whose `AttackDef` says what lane to draw the strike's marks
+    /// along (`ClassDef::attack_of`).
+    pub style: WeaponStyle,
     pub empowered: bool,
     /// An empowered swing's lane grown bigger again (0.2: a fifth), by an item
     /// (`AttackDef::lane_grown`).
@@ -706,6 +752,9 @@ pub struct PlayerInput {
     /// The attack button held down (`PlayerCommand::Draw`). For a class that shoots: its shot,
     /// once drawn (its windup over), is held so until it's let go (`sim::release_attack`).
     pub draw: bool,
+    /// The weapon style in hand (Q swaps it, `PlayerCommand::Style`): which attack a click
+    /// starts. Ignored for a class with no secondary.
+    pub style: WeaponStyle,
     /// Space: jump, if standing on the ground (else it's dropped: `sim::move_player`): pressed
     /// since the last tick (`PlayerCommand::Jump`), used up by the next one, so a tap let go
     /// before it still jumps; or held (`jump_held`), jumping again each time it lands
@@ -776,6 +825,9 @@ pub enum PlayerCommand {
     /// so the prediction walks it as the server does: a shot is held drawn while it's down
     /// (`PlayerInput::draw`). Sent as it changes.
     Draw(bool, u32),
+    /// Q: the weapon style to hold from the tick given, as a walk is (`Walk`), so a click sent
+    /// after the swap starts the style the player saw in hand. Sent as it changes.
+    Style(WeaponStyle, u32),
 }
 
 impl PlayerCommand {
@@ -814,6 +866,7 @@ impl PlayerCommand {
                 input.jump_held = held;
             }
             PlayerCommand::Draw(held, _) => input.draw = held,
+            PlayerCommand::Style(style, _) => input.style = style,
         }
     }
 }
@@ -1001,7 +1054,7 @@ mod tests {
     #[test]
     fn a_hasted_swing_is_quicker() {
         let attack = &crate::classes::ClassId(0).def().attack;
-        let plain = Swing { started_at: 0, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0, aside: 0.0 };
+        let plain = Swing { started_at: 0, dir: Vec2::X, style: WeaponStyle::Primary, quick: false, hastened: false, haste: 0.0, primed: false, held: 0, aside: 0.0 };
         let hasted = Swing { haste: 0.3, ..plain };
         assert!(hasted.windup_ticks(attack) < plain.windup_ticks(attack));
         assert!(hasted.ready_at(attack) < plain.ready_at(attack));

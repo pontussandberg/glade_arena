@@ -79,6 +79,10 @@ pub(crate) struct Moves {
     pub(crate) gait: Gait,
     /// How it fidgets standing still.
     pub(crate) idle: Idle,
+    /// Carrying with the secondary style in hand (Q): angles added onto the carry, eased in and
+    /// out as the styles swap, for a class that carries its weapon differently then (the
+    /// javelinist's spear comes down off the shoulder to the hip). None carry it the same.
+    pub(crate) secondary_carry: Option<Angles>,
     pub(super) head_dip: [f32; 4],
     /// The head turned about the neck on top of following the body (`head_follow`; keyframes,
     /// negative toward the weapon side, like `twist`).

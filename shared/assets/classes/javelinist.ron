@@ -15,6 +15,20 @@
         // Javelins go right through monsters (not players), skewering a line of them.
         pierces: true,
     ),
+    // Q: a shove with the spear's haft, from the hip. Its attack_ticks are its whole cooldown,
+    // a span of its own: attack speed quickens each style from its own base.
+    secondary: Some(
+        name: "Spear Shove",
+        description: "Drive the spear forward from the hip: enemies in front take a little damage, are shoved back and briefly slowed.",
+        attack: (
+            damage: 5,
+            attack_ticks: 43,
+            windup: 0.3,
+            kind: Melee(range: 2.4, width: 1.4),
+            chill: (slow: 0.35, slow_ticks: 24),
+        ),
+        knockback: 2.0,
+    ),
     abilities: [
         (
             name: "Deadeye",

@@ -12,7 +12,8 @@ pub(super) const JAVELINIST: Moves = Moves {
     // up over the shoulder (`contact`), the empty arm whipping on over the top after it (not down
     // past the hip) and down in front. After the throw it reaches back up over the shoulder for
     // the next.
-    weapon_arm: [-2.9, -2.6, -5.45, -2.1],
+    // (The fourth keyframe is the Spear Shove's pose: the spear driven forward from the hip.)
+    weapon_arm: [-2.9, -2.6, -5.45, -1.15],
     weapon_arm_untwist: 1.0,
     // A long arm, reaching mid-thigh.
     elbow_at: arena::JAVELINIST_ELBOW,
@@ -22,8 +23,8 @@ pub(super) const JAVELINIST: Moves = Moves {
     // come up over the front; straightening through the whip; spent in the follow-through, the
     // arm come in across the body, the elbow out, the forearm folded in across the belt, the
     // hand by the left hip.
-    elbow: [0.3, -0.35, 0.8, 0.3],
-    elbow_turn: [FRAC_PI_2, 0.0, 1.78, FRAC_PI_2],
+    elbow: [0.3, -0.35, 0.8, 0.1],
+    elbow_turn: [FRAC_PI_2, 0.0, 1.78, 0.35],
     // Drawn a little out to the right, over that shoulder, not round behind the back; after the
     // throw, come in across the body.
     arm_yaw: [0.0, -0.4, 1.56, 0.0],
@@ -50,10 +51,10 @@ pub(super) const JAVELINIST: Moves = Moves {
     // Drawn: the shoulder turned back only so far that the javelin, held on target, stays clear
     // of the head. Released: the whole shoulder driven round after the arm and on past the
     // facing, the throwing side leading, held there through the follow-through.
-    twist: [0.0, -0.5, 1.15, 0.0],
+    twist: [0.0, -0.5, 1.15, 0.45],
     // Leaning back at full draw (sunk low on bent knees), then pitching forward through the
     // throw and over into the follow-through.
-    lean: [0.0, 0.5, -0.8, -0.45],
+    lean: [0.0, 0.5, -0.8, -0.3],
     side_lean: [0.0; 4],
     standing_lean: 0.0,
     standing_arm: 0.0,
@@ -62,6 +63,9 @@ pub(super) const JAVELINIST: Moves = Moves {
     gait: EVEN,
     // Shifting easily from foot to foot, and now and then hitching the javelin higher on the
     // shoulder, the elbow working, with a roll of the neck.
+    // Shove style in hand: the spear comes down off the shoulder, carried at the hip, its
+    // point ahead and a touch up, the arm easy.
+    secondary_carry: Some(Angles { weapon_arm: 2.3, elbow: 0.2, arm_yaw: 0.25, twist: 0.1, tip: 0.15, ..STILL }),
     idle: Idle {
         shift: 0.14,
         every: 5.0,
@@ -73,7 +77,7 @@ pub(super) const JAVELINIST: Moves = Moves {
     // Tipped up a little over the aim carried; cocked and thrown level along the aim, so it
     // leaves the hand pointing the way it flies, just where its real path starts
     // (`config::RELEASE_HEIGHT`, `config::RELEASE_ASIDE`).
-    held: Held::OnTarget([0.12, 0.0, 0.0, 0.12]),
+    held: Held::OnTarget([0.12, 0.0, 0.0, 0.0]),
     throws: true,
     scale: 1.16,
     stretch: 0.0,

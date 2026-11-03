@@ -18,6 +18,21 @@
         // out over everyone round its mark.
         burst: Some(radius: 1.8, share: 0.7),
     ),
+    // Q: the stave's heel slammed into the ground just ahead: a frostbolt's hit over everyone
+    // round where it lands. Its attack_ticks are its whole cooldown, a span of its own: attack
+    // speed quickens each style from its own base.
+    secondary: Some(
+        name: "Stave Slam",
+        description: "Slam the stave's heel into the ground: the cold bursts out where it lands, a frostbolt's damage and slow over everyone near it.",
+        attack: (
+            damage: 11,
+            attack_ticks: 108,
+            windup: 0.12,
+            kind: Slam(radius: 1.68, reach: 0.8),
+            chill: (slow: 0.4, slow_ticks: 64),
+        ),
+        blast: Some(Frost),
+    ),
     abilities: [
         (
             name: "Frost Nova",

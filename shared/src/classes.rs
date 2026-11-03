@@ -84,6 +84,10 @@ pub struct ClassDef {
     pub max_hp: i32,
     pub move_speed: f32,
     pub attack: AttackDef,
+    /// A second weapon style, swapped to with Q (none by default): an attack of its own, on a
+    /// cooldown of its own.
+    #[serde(default)]
+    pub secondary: Option<SecondaryDef>,
     /// On keys 1 to 4, in that order (`AbilitySlot`). A playable class has at least one.
     pub abilities: Vec<AbilityDef>,
     /// What the class always has going for it, nothing to press (none by default).
@@ -354,6 +358,42 @@ impl Chill {
     }
 }
 
+/// Which of a fighter's two weapon styles is in hand: the primary auto-attack, or the class's
+/// `secondary` (swapped with Q). Each style's attack runs its own cooldown (`AttackDef::attack_ticks`,
+/// a fixed span scaled only by attack speed), so swapping shows the equipped style's own timer.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum WeaponStyle {
+    #[default]
+    Primary,
+    Secondary,
+}
+
+impl WeaponStyle {
+    pub fn other(self) -> WeaponStyle {
+        match self {
+            WeaponStyle::Primary => WeaponStyle::Secondary,
+            WeaponStyle::Secondary => WeaponStyle::Primary,
+        }
+    }
+}
+
+/// A class's secondary weapon style (`ClassDef::secondary`): its attack, read like the primary's
+/// (`attack_ticks` is its whole cooldown, in ticks at normal attack speed), and what its hits do
+/// on top.
+#[derive(Deserialize, Debug, Clone)]
+pub struct SecondaryDef {
+    pub name: String,
+    pub description: String,
+    pub attack: AttackDef,
+    /// Meters each hit shoves its victim straight away from the attacker (0 by default).
+    #[serde(default)]
+    pub knockback: f32,
+    /// A burst drawn where it hits (the whole area, as the clients see it), in this color (none
+    /// by default: the figure's motion is all there is to see).
+    #[serde(default)]
+    pub blast: Option<FxColor>,
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub enum AttackKind {
     /// A blow: hits everyone whose body a straight lane `width` wide toward the aim reaches,
@@ -381,6 +421,12 @@ pub enum AttackKind {
         #[serde(default)]
         falls: bool,
     },
+    /// A spin, weapon out: hits everyone whose body is within `radius` of the attacker's center,
+    /// all round it (a secondary style's).
+    Spin { radius: f32 },
+    /// A slam onto the ground `reach` ahead of the attacker, along the aim: hits everyone whose
+    /// body is within `radius` of that point (a secondary style's).
+    Slam { radius: f32, reach: f32 },
 }
 
 /// A passive, as players read it. Only words: its effect is in the numbers it describes (e.g.
@@ -429,6 +475,21 @@ impl Shot {
 }
 
 impl ClassDef {
+    /// The attack a weapon style swings with: the primary auto-attack, or the secondary's (the
+    /// primary again for a class with no secondary, so a style from a stale or hacked client
+    /// never reads attack numbers the class doesn't have).
+    pub fn attack_of(&self, style: WeaponStyle) -> &AttackDef {
+        match (style, &self.secondary) {
+            (WeaponStyle::Secondary, Some(secondary)) => &secondary.attack,
+            _ => &self.attack,
+        }
+    }
+
+    /// Whether the class has a secondary weapon style to swap to.
+    pub fn has_secondary(&self) -> bool {
+        self.secondary.is_some()
+    }
+
     /// Which figure it's drawn as: its own, or the one its `look` borrows.
     pub fn figure(&self) -> &str {
         self.look.as_ref().map_or(&self.id, |look| &look.figure)
@@ -607,6 +668,8 @@ impl AttackKind {
         match *self {
             AttackKind::Melee { range, .. } => range + PLAYER_RADIUS,
             AttackKind::Projectile { range, .. } => range,
+            AttackKind::Spin { radius } => radius + PLAYER_RADIUS,
+            AttackKind::Slam { radius, reach } => reach + radius + PLAYER_RADIUS,
         }
     }
 
@@ -617,6 +680,8 @@ impl AttackKind {
         match *self {
             AttackKind::Melee { range, .. } => range,
             AttackKind::Projectile { speed, radius, range, falls, .. } => Shot { speed, radius, range, falls }.edge_reach(),
+            AttackKind::Spin { radius } => radius,
+            AttackKind::Slam { radius, reach } => reach + radius,
         }
     }
 
@@ -772,6 +837,31 @@ mod tests {
                     assert!((2.0..=60.0).contains(&speed) && (0.05..=1.0).contains(&radius), "{}: projectile", c.id);
                     assert!((1.0..=30.0).contains(&range) || (range.is_infinite() && far_scale.is_none() && !falls), "{}: projectile range", c.id);
                 }
+                AttackKind::Spin { .. } | AttackKind::Slam { .. } => panic!("{}: a spin or slam primary (they're secondary styles')", c.id),
+            }
+            if let Some(secondary) = &c.secondary {
+                let what = format!("{}: {}", c.id, secondary.name);
+                assert!(c.playable, "{what}: a secondary on a monster");
+                assert!(!secondary.name.is_empty() && !secondary.description.is_empty(), "{what}: words");
+                let filled = c.describe(&secondary.description);
+                assert!(!filled.contains(['{', '}']), "{what}: unknown placeholder in {filled:?}");
+                let attack = &secondary.attack;
+                assert!(attack.damage > 0 && attack.attack_ticks > 1, "{what}: attack");
+                assert!(attack.windup > 0.0 && attack.windup < 1.0, "{what}: windup must be a part of the attack");
+                assert!((0.0..=5.0).contains(&secondary.knockback), "{what}: knockback");
+                // What only the primary auto-attack carries: its passive's trimmings.
+                assert!(attack.follow_up.is_none() && attack.rift.is_none() && attack.burst.is_none() && !attack.pierces, "{what}: a primary's trimmings");
+                match attack.kind {
+                    AttackKind::Melee { range, width, from } => {
+                        assert!((0.5..=5.0).contains(&range) && (0.05..=3.0).contains(&width) && (0.0..range).contains(&from), "{what}: melee");
+                    }
+                    AttackKind::Spin { radius } => assert!((1.0..=6.0).contains(&radius), "{what}: spin"),
+                    AttackKind::Slam { radius, reach } => {
+                        assert!((0.5..=8.0).contains(&radius) && (0.0..=6.0).contains(&reach), "{what}: slam")
+                    }
+                    AttackKind::Projectile { .. } => panic!("{what}: a thrown secondary (none swings one yet)"),
+                }
+                chill_is_sane(&c.id, attack.chill);
             }
             let fewest = if c.playable { 1 } else { 0 };
             assert!((fewest..=MAX_ABILITIES).contains(&c.abilities.len()), "{}: {fewest} to {MAX_ABILITIES} abilities", c.id);

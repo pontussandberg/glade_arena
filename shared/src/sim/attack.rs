@@ -6,17 +6,22 @@ use super::*;
 
 use lightyear::prelude::PeerId;
 
-use crate::classes::{AttackKind, ClassId};
+use crate::classes::{AttackKind, ClassId, WeaponStyle};
 use crate::config::BODY_HEIGHT;
 use crate::map::{CLIMB, Map};
 use crate::protocol::{AttackState, LastSwing, PlayerInput, Projectile, Swing};
 
 /// What an auto-attack produces.
+#[derive(Clone, Copy)]
 pub enum Attack {
     /// Spawn this projectile.
     Projectile(Projectile),
-    /// A swing; the server resolves who it hits (`melee_hits`).
-    Melee(LastSwing),
+    /// A swing, of the style given; the server resolves who it hits (`melee_hits`).
+    Melee(LastSwing, WeaponStyle),
+    /// A spin (`AttackKind::Spin`, a secondary's): the server hits everyone round the spinner.
+    Spin { dir: Vec2 },
+    /// A slam (`AttackKind::Slam`, a secondary's) onto `at`: the server hits everyone round it.
+    Slam { at: Vec2, dir: Vec2 },
 }
 
 /// One tick of the auto-attack. A click (`input.fire`) with no attack in progress, or once the
@@ -44,33 +49,44 @@ pub fn step_attack(
 /// The server resolves the swing (and arms `quick_until` if it landed) before the second half,
 /// `start_attack`, so an attack started on the same tick is quickened by it.
 pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, held: bool, mut state: AttackState) -> (AttackState, Option<Attack>) {
+    let def = |swing: &Swing| class.def().attack_of(swing.style);
     let mut released = None;
-    let drawn = state.winding_up().is_some_and(|swing| tick >= swing.releases_at(&class.def().attack));
+    let drawn = state.winding_up().is_some_and(|swing| tick >= swing.releases_at(def(&swing)));
     if drawn
         && held
-        && shoots(class)
+        && state.winding_up().is_some_and(|swing| matches!(def(&swing).kind, AttackKind::Projectile { .. }))
         && let Some(swing) = state.swing.as_mut()
     {
         swing.held += 1;
     }
-    if let Some(Swing { dir, quick, aside, .. }) = state.winding_up().filter(|swing| tick >= swing.releases_at(&class.def().attack)) {
+    if let Some(swing @ Swing { dir, quick, aside, style, .. }) = state.winding_up().filter(|swing| tick >= swing.releases_at(def(swing))) {
         state.released_at = Some(tick);
-        // An attack going off uses up the `follow_up` (one lost to a knock-up first doesn't), and a
-        // primed one the prime.
-        state.quick_until = None;
+        state.released_style = style;
+        // An attack going off uses up the `follow_up` (one lost to a knock-up first doesn't,
+        // and only the primary carries one), and a primed one the prime.
+        if style == WeaponStyle::Primary {
+            state.quick_until = None;
+        }
         if state.swing.is_some_and(|swing| swing.primed) {
             state.primed = None;
         }
-        released = Some(match class.def().attack.kind {
+        released = Some(match def(&swing).kind {
             AttackKind::Projectile { radius, .. } => {
                 let origin = shot_spawn(pos, dir, radius);
                 Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 })
             }
-            AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir, empowered: quick, grown: 0.0, aside }),
+            AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir, style, empowered: quick, grown: 0.0, aside }, style),
+            AttackKind::Spin { .. } => Attack::Spin { dir },
+            AttackKind::Slam { reach, .. } => Attack::Slam { at: pos + dir * reach, dir },
         });
     }
-    if state.released() && state.swing.is_some_and(|swing| tick >= swing.ready_at(&class.def().attack)) {
+    if state.released() && state.swing.is_some_and(|swing| tick >= swing.ready_at(def(&swing))) {
         state.swing = None;
+    }
+    // A stowed swing (the other style's last) only gates its style's next attack: gone once
+    // that cooldown is over.
+    if state.stowed.is_some_and(|swing| tick >= swing.ready_at(def(&swing))) {
+        state.stowed = None;
     }
     (state, released)
 }
@@ -83,14 +99,24 @@ pub fn start_attack(tick: u32, class: ClassId, input: &PlayerInput, state: Attac
 /// `start_attack`, a new attack `haste` faster (0.1 = 10% more attack speed) all through, and
 /// faster still if it's primed.
 pub fn start_attack_hasted(tick: u32, class: ClassId, input: &PlayerInput, mut state: AttackState, haste: f32) -> AttackState {
-    let ready = state.swing.is_none_or(|swing| tick >= swing.ready_at(&class.def().attack));
-    if ready
+    // A class with no secondary never swaps, whatever a stale (or hacked) client says.
+    let style = if class.def().has_secondary() { input.style } else { WeaponStyle::Primary };
+    state.style = style;
+    if state.may_start(class, style, tick as f32)
         && input.fire
         && let Some(dir) = input.aim.try_normalize()
     {
-        let primed = state.primed.is_some();
-        let haste = haste + state.primed.map_or(0.0, |(_, speed)| speed);
-        state.swing = Some(Swing { started_at: tick, dir, quick: state.quick_at(tick as f32), hastened: false, haste, primed, held: 0, aside: input.aside });
+        // A prime (Deadeye) readies the next auto-attack: the primary's, and so does the
+        // `follow_up`'s quickness.
+        let primary = style == WeaponStyle::Primary;
+        let primed = primary && state.primed.is_some();
+        let haste = haste + if primed { state.primed.map_or(0.0, |(_, speed)| speed) } else { 0.0 };
+        // The other style's last swing moves aside, its cooldown still running; a dropped
+        // same-style swing was ready (the gate), as was whatever the stow replaces.
+        if let Some(old) = state.swing.filter(|old| old.style != style) {
+            state.stowed = Some(old);
+        }
+        state.swing = Some(Swing { started_at: tick, dir, style, quick: primary && state.quick_at(tick as f32), hastened: false, haste, primed, held: 0, aside: input.aside });
     }
     state
 }
@@ -106,7 +132,8 @@ pub fn shoots(class: ClassId) -> bool {
 /// (`DRAW_SPEED`); else as fast as it walks. A walking boost (`move_player_boosted`): the speed
 /// asked for, not the speed it has.
 pub fn winding_speed(class: ClassId, attack: &AttackState) -> f32 {
-    if shoots(class) && attack.winding_up().is_some() { crate::config::DRAW_SPEED } else { 1.0 }
+    let shot_winding = attack.winding_up().is_some_and(|swing| matches!(class.def().attack_of(swing.style).kind, AttackKind::Projectile { .. }));
+    if shot_winding { crate::config::DRAW_SPEED } else { 1.0 }
 }
 
 /// Knocked up, an attack still winding up is lost: it never goes off, and the next may start at
@@ -158,9 +185,8 @@ pub fn swing_reaches(from: f32, feet: f32) -> bool {
 /// toward `dir` (`empowered` by its `follow_up` or not) reach `target`, each with how high its
 /// feet are? Its lane (`AttackDef::lane`) reaches the target's
 /// body, as high or low as the swing sweeps (`swing_reaches`), and not through a wall. Only the
-/// server decides this.
-pub fn melee_hits(map: &Map, (attacker, attacker_feet): (Vec2, f32), dir: Vec2, (empowered, grown): (bool, f32), class: ClassId, (target, feet): (Vec2, f32)) -> bool {
-    let attack = &class.def().attack;
+/// server decides this. `attack` is the swinging style's (`ClassDef::attack_of`).
+pub fn melee_hits(map: &Map, (attacker, attacker_feet): (Vec2, f32), dir: Vec2, (empowered, grown): (bool, f32), attack: &crate::classes::AttackDef, (target, feet): (Vec2, f32)) -> bool {
     let (Some((from, _, width)), Some((nearest, farthest))) = (attack.lane_grown(empowered, grown), attack.hit_span_grown(empowered, grown)) else { return false };
     let to_target = target - attacker;
     let dir = dir.normalize_or_zero();

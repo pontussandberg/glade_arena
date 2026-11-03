@@ -50,6 +50,8 @@ pub(super) const FROST_MAGE: Moves = Moves {
     // Composed: barely a shift. Now and then the free hand comes across to take the staff in
     // both hands, and it's lifted and set down again, a tap of its butt on the ground, with a
     // small formal nod.
+    // The slam style is carried as the stave always is.
+    secondary_carry: None,
     idle: Idle {
         shift: 0.08,
         every: 7.0,

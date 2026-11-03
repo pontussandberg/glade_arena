@@ -21,6 +21,21 @@
         // it can't keep anything in the air by itself. No quicker, and no further.
         follow_up: Some(within_ticks: 320, attack_speed: 0.0, lift_ticks: 10),
     ),
+    // Q: a full spin with the glaive out, knocking back whoever it touches. Its attack_ticks
+    // are its whole cooldown, a span of its own: attack speed quickens each style from its own
+    // base. The camera never spins with it.
+    secondary: Some(
+        name: "Reaping Spin",
+        description: "Spin full circle with the glaive out: everyone it touches takes a strike's damage and is knocked back.",
+        attack: (
+            damage: 20,
+            attack_ticks: 170,
+            windup: 0.1,
+            kind: Spin(radius: 2.75),
+        ),
+        knockback: 2.0,
+        blast: Some(Spirit),
+    ),
     abilities: [
         (
             name: "Rift Step",

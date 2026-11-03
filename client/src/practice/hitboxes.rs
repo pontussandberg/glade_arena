@@ -11,6 +11,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use arena_shared::abilities::AbilityKind;
+use arena_shared::classes::{AttackDef, AttackKind};
 use arena_shared::config::{BODY_HEIGHT, PLAYER_RADIUS};
 use arena_shared::protocol::*;
 use bevy::platform::collections::HashMap;
@@ -73,8 +74,8 @@ const BURST: Color = Color::srgb(0.75, 0.4, 1.0);
 struct Flashes(Vec<(f32, Flash)>);
 
 enum Flash {
-    /// A melee swing from `at` toward `dir`, by `class`, empowered or not.
-    Lane { at: Vec2, dir: Vec2, empowered: bool, class: ClassId },
+    /// A melee swing from `at` toward `dir`, by `class` with `style`'s attack, empowered or not.
+    Lane { at: Vec2, dir: Vec2, empowered: bool, class: ClassId, style: WeaponStyle },
     /// A nova `radius` around `at`.
     Burst { at: Vec2, radius: f32 },
 }
@@ -101,7 +102,7 @@ fn note_attacks(
     flashes.0.retain(|(until, _)| *until > now);
     for (swing, pos, class) in &swings {
         if show.0 && swing.tick > 0 {
-            flashes.0.push((now + FLASH_SECONDS, Flash::Lane { at: swing.lane_from(pos.0), dir: swing.dir, empowered: swing.empowered, class: *class }));
+            flashes.0.push((now + FLASH_SECONDS, Flash::Lane { at: swing.lane_from(pos.0), dir: swing.dir, empowered: swing.empowered, class: *class, style: swing.style }));
         }
     }
     for (entity, cooldowns, pos, class) in &casts {
@@ -134,7 +135,17 @@ fn draw_hitboxes(
         }
         circle(&mut gizmos, to_world(pos.0, map.map().height_at(pos.0)), PLAYER_RADIUS, BODY);
         if let Some(swing) = attack.winding_up() {
-            lane(&mut gizmos, swing.lane_from(pos.0), swing.dir, swing.quick, *class, WINDING_UP);
+            // A spin's or slam's circle where it will strike; anything else, its lane (none
+            // for a shot).
+            let winding = class.def().attack_of(swing.style);
+            match winding.kind {
+                AttackKind::Spin { radius } => circle(&mut gizmos, to_world(pos.0, map.map().height_at(pos.0)), radius + PLAYER_RADIUS, WINDING_UP),
+                AttackKind::Slam { radius, reach } => {
+                    let at = pos.0 + swing.dir.normalize_or_zero() * reach;
+                    circle(&mut gizmos, to_world(at, map.map().height_at(at)), radius + PLAYER_RADIUS, WINDING_UP);
+                }
+                _ => lane(&mut gizmos, swing.lane_from(pos.0), swing.dir, swing.quick, winding, WINDING_UP),
+            }
         }
     }
     let now = time.elapsed_secs();
@@ -142,7 +153,7 @@ fn draw_hitboxes(
         // Bright as it goes off, fading.
         let color = |base: Color| base.with_alpha(((until - now) / FLASH_SECONDS).clamp(0.0, 1.0));
         match *flash {
-            Flash::Lane { at, dir, empowered, class } => lane(&mut gizmos, at, dir, empowered, class, color(GOING_OFF)),
+            Flash::Lane { at, dir, empowered, class, style } => lane(&mut gizmos, at, dir, empowered, class.def().attack_of(style), color(GOING_OFF)),
             Flash::Burst { at, radius } => circle(&mut gizmos, to_world(at, map.map().height_at(at)), radius, color(BURST)),
         }
     }
@@ -213,8 +224,8 @@ fn draw_hitboxes_3d(
 /// A melee attack's lane from `at` toward `dir` (`empowered` or not: `AttackDef::lane`): from its
 /// start out to its range, as wide as its width, so a body touching it is hit
 /// (`sim::melee_hits`). Ranged attacks have none.
-fn lane(gizmos: &mut Gizmos, at: Vec2, dir: Vec2, empowered: bool, class: ClassId, color: Color) {
-    let Some((from, range, width)) = class.def().attack.lane(empowered) else { return };
+fn lane(gizmos: &mut Gizmos, at: Vec2, dir: Vec2, empowered: bool, attack: &AttackDef, color: Color) {
+    let Some((from, range, width)) = attack.lane(empowered) else { return };
     let dir = dir.normalize_or_zero();
     let side = dir.perp() * (width / 2.0).max(0.02);
     let (near, far) = (at + dir * from, at + dir * range);
