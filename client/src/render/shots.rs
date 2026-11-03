@@ -245,7 +245,7 @@ const TING_SLACK: f32 = 0.4;
 /// in past the whole blade and a hand of shaft (`BODY_BURY`), so a crowd of them reads as pins,
 /// not a thicket; into a wall, a crate or the ground it stays full size, only its tip in
 /// (meters, `TERRAIN_BURY`).
-const STUCK_SCALE: f32 = 0.75;
+const STUCK_SCALE: f32 = 0.9;
 const BODY_BURY: f32 = (arena::SPEAR_BLADE_LENGTH + 0.35) * STUCK_SCALE;
 const TERRAIN_BURY: f32 = 0.03;
 /// How long a stuck spear stays (seconds), and how long it then takes to sink away into what
