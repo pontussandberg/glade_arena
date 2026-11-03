@@ -366,7 +366,17 @@ pub(super) fn attack(
                     _ => def.kind.edge_reach(),
                 };
                 let map = lobby.map(room);
-                // A slam lands on what's there (a crate, a step): hits are judged around that
+                // A slam's point never lands inside a wall ahead: pulled back toward the
+                // attacker until the line to it is clear, so its hits and its burst stay on
+                // this side.
+                let mut center = center;
+                for _ in 0..6 {
+                    if map.shot_clear((pos.0, feet), (center, sim::struck_surface(map, pos.0, center, feet))) {
+                        break;
+                    }
+                    center = pos.0.lerp(center, 0.7);
+                }
+                // It lands on what's there (a crate, a step): hits are judged around that
                 // height, and the burst drawn on it.
                 let ground = sim::struck_surface(map, pos.0, center, feet);
                 let blow = Blow::attack(mighty(def.damage, might), def.chill, false, primed);
@@ -395,8 +405,9 @@ pub(super) fn attack(
     }
 }
 
-/// Server-only: knocked back along `dir` (a monster hit by a player's auto-attack), `left`
-/// meters of it still to go.
+/// Server-only: knocked back along `dir` (a monster hit by a player's auto-attack, or anyone a
+/// secondary's knockback struck), `left` meters of it still to go. A knocked-back player's own
+/// client only learns of it from the corrected positions coming back (no prediction).
 #[derive(Component)]
 pub(crate) struct Shoved {
     pub(crate) dir: Vec2,

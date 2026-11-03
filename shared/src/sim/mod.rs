@@ -1343,7 +1343,7 @@ mod tests {
         let Some(class) = ClassId::all().find(|c| c.def().attack.rift.is_some()) else { return };
         let def = class.def().attack.rift.unwrap();
         let at = spawns()[0];
-        let swing = LastSwing { tick: 10, dir: Vec2::Y, empowered: false, grown: 0.0, aside: 0.0 };
+        let swing = LastSwing { tick: 10, dir: Vec2::Y, style: crate::classes::WeaponStyle::Primary, empowered: false, grown: 0.0, aside: 0.0 };
         let feet = map().height_at(at);
         let rift = Rift::torn(PeerId::Netcode(1), class, at, feet, &swing).unwrap();
         let (from, range, _) = class.def().attack.lane(false).unwrap();

@@ -61,6 +61,7 @@ pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, held:
     }
     if let Some(swing @ Swing { dir, quick, aside, style, .. }) = state.winding_up().filter(|swing| tick >= swing.releases_at(def(swing))) {
         state.released_at = Some(tick);
+        state.released_style = style;
         // An attack going off uses up the `follow_up` (one lost to a knock-up first doesn't,
         // and only the primary carries one), and a primed one the prime.
         if style == WeaponStyle::Primary {
@@ -74,7 +75,7 @@ pub fn release_attack(tick: u32, owner: PeerId, class: ClassId, pos: Vec2, held:
                 let origin = shot_spawn(pos, dir, radius);
                 Attack::Projectile(Projectile { owner, class, origin, dir, spawn_tick: tick, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 })
             }
-            AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir, empowered: quick, grown: 0.0, aside }, style),
+            AttackKind::Melee { .. } => Attack::Melee(LastSwing { tick, dir, style, empowered: quick, grown: 0.0, aside }, style),
             AttackKind::Spin { .. } => Attack::Spin { dir },
             AttackKind::Slam { reach, .. } => Attack::Slam { at: pos + dir * reach, dir },
         });

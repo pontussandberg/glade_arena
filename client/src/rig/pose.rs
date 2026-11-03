@@ -588,8 +588,9 @@ pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, 
     };
     // A melee windup picks up from how much of the last strike's follow-through was left when
     // it started (1: still fully held; 0: settled back to carrying): the blade comes from
-    // there straight into the draw, never sinking further toward carrying.
-    let follow_left = |windup: &Swing| match (&def.attack.kind, attack.released_at) {
+    // there straight into the draw, never sinking further toward carrying. Only a primary
+    // release: a secondary's poses through the ability channel, so there's nothing held.
+    let follow_left = |windup: &Swing| match (&def.attack.kind, attack.released_at.filter(|_| attack.released_style == WeaponStyle::Primary)) {
         (AttackKind::Melee { .. }, Some(at)) if windup.started_at >= at => {
             1.0 - ease(FOLLOW_THROUGH.0, FOLLOW_THROUGH.1, (windup.started_at - at) as f32)
         }
@@ -612,7 +613,9 @@ pub(crate) fn strike_phase(class: ClassId, moves: &Moves, attack: &AttackState, 
             (draw, strike.max(held), strike.powi(3))
         }
         (None, Some(since)) => {
-            let striking = attack.swing.map_or(moves.strike_ticks, |swing| strike_ticks(&swing));
+            // The released swing's own pace, while it's still in the state (never a secondary's:
+            // its timing has nothing to do with this strike).
+            let striking = attack.swing.filter(|swing| swing.style == WeaponStyle::Primary).map_or(moves.strike_ticks, |swing| strike_ticks(&swing));
             // A shot held drawn strikes only once it's let go, up to its contact pose as the hand
             // lets go of it (`held_drive`).
             let since = since - held_drive(class, moves, attack);

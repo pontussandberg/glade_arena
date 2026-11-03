@@ -121,6 +121,10 @@ pub struct AttackState {
     pub stowed: Option<Swing>,
     /// The tick the last attack went off (`None`: never).
     pub released_at: Option<u32>,
+    /// Which style's attack that was: the release may outlive its swing here (the swing clears
+    /// as its timer runs out, and a weave can replace it the very tick it released), and the
+    /// client poses the strike's follow-through only for the primary's.
+    pub released_style: WeaponStyle,
     /// An attack started by this tick is quick (`FollowUp`; `None`: not armed). Used up when an
     /// attack goes off, not when one is lost (`sim::interrupt_attack`).
     pub quick_until: Option<u32>,
@@ -649,6 +653,9 @@ impl Waygate {
 pub struct LastSwing {
     pub tick: u32,
     pub dir: Vec2,
+    /// Which weapon style swung: whose `AttackDef` says what lane to draw the strike's marks
+    /// along (`ClassDef::attack_of`).
+    pub style: WeaponStyle,
     pub empowered: bool,
     /// An empowered swing's lane grown bigger again (0.2: a fifth), by an item
     /// (`AttackDef::lane_grown`).

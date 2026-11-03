@@ -17,7 +17,7 @@ use crate::Me;
 use crate::feedback::AttackClock;
 use crate::arena::palette;
 use crate::casting::key_label;
-use crate::render::{GameUi, pixel_art, set_fill, shown, ui_text};
+use crate::render::{GameUi, HudButton, pixel_art, set_fill, shown, ui_text};
 use crate::rooms::CurrentRoom;
 use crate::stat_frame::{self, Blurb};
 use crate::tooltip::{Side, hover_shows, tip, tip_note, tip_text, tip_title};
@@ -236,7 +236,8 @@ fn spawn_style(commands: &mut Commands, class: &ClassDef, style: WeaponStyle, fr
         .with_child((ui_text(name, 11.0, palette::ui::TEXT), TextLayout::justify(Justify::Center)))
         .id();
     commands
-        .spawn((StyleIcon { style, wipe, seconds: seconds_text }, IconShown::default(), ActionBarPart, GameUi, icon_frame(tip, STYLE, from_center, palette::ui::MUTED)))
+        // A `HudButton`, so a click on it never also attacks (`render::read_local_input`).
+        .spawn((StyleIcon { style, wipe, seconds: seconds_text }, IconShown::default(), ActionBarPart, HudButton, GameUi, icon_frame(tip, STYLE, from_center, palette::ui::MUTED)))
         .add_children(&[picture, wipe, seconds_box, key, label, tip]);
 }
 
@@ -258,36 +259,21 @@ fn update_styles(
         let held = icon.style == equipped;
         border.set_if_neq(BorderColor::all(if held { palette::SPIRIT } else { palette::ui::MUTED }));
         fill.set_if_neq(BackgroundColor(if held { palette::SPIRIT.with_alpha(0.12) } else { palette::ui::PANEL }));
-        // Its own cooldown: from the click to when its next attack may start, whichever swing
-        // of it is newest (in hand, or stowed by a swap).
+        // Its own cooldown, whichever swing of this style is newest (in hand, or stowed by a
+        // swap): fully dark through the windup (whose end can slide, held drawn), then draining
+        // from the release to when its next attack may start, with the seconds left.
         let def = |swing: &Swing| class.def().attack_of(swing.style);
-        let (left, total) = attack
-            .swing_of(icon.style)
-            .map(|swing| ((swing.ready_at(def(&swing)) as f32 - now).max(0.0), (swing.ready_at(def(&swing)) - swing.started_at).max(1) as f32))
-            .unwrap_or((0.0, 1.0));
-        let step = (left > 0.0).then(|| step_of(left, total));
-        let seconds_left = left / TICK_HZ as f32;
-        let tenths = (seconds_left * 10.0).ceil() as u32;
-        let label = match step {
-            None => String::new(),
-            Some(_) if tenths >= 10 => (seconds_left.ceil() as u32).to_string(),
-            Some(_) => format!("0.{tenths}"),
-        };
-        if shown_now.own != step
-            && let Ok((mut wipe, mut visibility)) = wipes.get_mut(icon.wipe)
-        {
-            shown_now.own = step;
-            visibility.set_if_neq(shown(step.is_some()));
-            if let Some(step) = step {
-                *wipe = wipe_gradient(step, palette::ui::BACKDROP.with_alpha(0.8));
+        let (step, left) = match attack.swing_of(icon.style) {
+            Some(swing) if attack.swing == Some(swing) && !attack.released() => (Some(0), 0.0),
+            Some(swing) => {
+                let left = (swing.ready_at(def(&swing)) as f32 - now).max(0.0);
+                let total = (swing.ready_at(def(&swing)) - swing.releases_at(def(&swing))).max(1) as f32;
+                ((left > 0.0).then(|| step_of(left, total)), left)
             }
-        }
-        if shown_now.seconds != label
-            && let Ok(mut text) = texts.get_mut(icon.seconds)
-        {
-            text.0.clone_from(&label);
-            shown_now.seconds = label;
-        }
+            None => (None, 0.0),
+        };
+        set_wipe(&mut wipes, icon.wipe, step, &mut shown_now.own, palette::ui::BACKDROP.with_alpha(0.8));
+        set_label(&mut texts, icon.seconds, cooldown_label(left > 0.0, left), &mut shown_now.seconds);
     }
 }
 
@@ -559,33 +545,45 @@ fn update_icon(
     let own = (left > 0.0).then(|| step_of(left, ability.cooldown_ticks as f32));
     let global = (global_left > 0.0).then(|| step_of(global_left, common().global_cooldown_ticks as f32));
     border.set_if_neq(BorderColor::all(if own.is_some() || global.is_some() { palette::ui::MUTED } else { palette::SPIRIT }));
-    // The seconds left: tenths under one second, whole seconds (rounded up) above.
-    let seconds = left / TICK_HZ as f32;
+    let IconShown { own: shown_own, global: shown_global, seconds: shown_label } = shown_now;
+    set_wipe(wipes, icon.wipe, own, shown_own, palette::ui::BACKDROP.with_alpha(0.8));
+    set_wipe(wipes, icon.global_wipe, global, shown_global, palette::ui::TEXT.with_alpha(0.3));
+    set_label(texts, icon.seconds, cooldown_label(own.is_some(), left), shown_label);
+}
+
+/// The seconds left on a cooldown, as every icon writes them (nothing while `shown` is off):
+/// tenths under one second, whole seconds (rounded up) above.
+fn cooldown_label(shown: bool, left_ticks: f32) -> String {
+    let seconds = left_ticks / TICK_HZ as f32;
     // (Just under a second rounds up to a whole one, not to ten tenths.)
     let tenths = (seconds * 10.0).ceil() as u32;
-    let label = match own {
-        None => String::new(),
-        Some(_) if tenths >= 10 => (seconds.ceil() as u32).to_string(),
-        Some(_) => format!("0.{tenths}"),
-    };
-    let IconShown { own: shown_own, global: shown_global, seconds: shown_label } = shown_now;
-    let mut set_wipe = |entity: Entity, step: Option<u32>, was: &mut Option<u32>, shade: Color| {
-        if *was == step {
-            return;
-        }
-        *was = step;
-        let Ok((mut wipe, mut visibility)) = wipes.get_mut(entity) else { return };
-        visibility.set_if_neq(shown(step.is_some()));
-        if let Some(step) = step {
-            *wipe = wipe_gradient(step, shade);
-        }
-    };
-    set_wipe(icon.wipe, own, shown_own, palette::ui::BACKDROP.with_alpha(0.8));
-    set_wipe(icon.global_wipe, global, shown_global, palette::ui::TEXT.with_alpha(0.3));
-    if *shown_label != label
-        && let Ok(mut text) = texts.get_mut(icon.seconds)
+    match shown {
+        false => String::new(),
+        true if tenths >= 10 => (seconds.ceil() as u32).to_string(),
+        true => format!("0.{tenths}"),
+    }
+}
+
+/// A cooldown wipe shown `step`s round in `shade` (hidden with none), written only as it moves
+/// (`was`: what it last showed).
+fn set_wipe(wipes: &mut Query<(&mut BackgroundGradient, &mut Visibility)>, entity: Entity, step: Option<u32>, was: &mut Option<u32>, shade: Color) {
+    if *was == step {
+        return;
+    }
+    *was = step;
+    let Ok((mut wipe, mut visibility)) = wipes.get_mut(entity) else { return };
+    visibility.set_if_neq(shown(step.is_some()));
+    if let Some(step) = step {
+        *wipe = wipe_gradient(step, shade);
+    }
+}
+
+/// An icon's text, written only on change (`was`: what it last said).
+fn set_label(texts: &mut Query<&mut Text>, entity: Entity, label: String, was: &mut String) {
+    if *was != label
+        && let Ok(mut text) = texts.get_mut(entity)
     {
         text.0.clone_from(&label);
-        *shown_label = label;
+        *was = label;
     }
 }

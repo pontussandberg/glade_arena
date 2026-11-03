@@ -15,8 +15,8 @@
         // Javelins go right through monsters (not players), skewering a line of them.
         pierces: true,
     ),
-    // Q: a shove with the spear's haft, from the hip. Its cooldown matches the throw's timer;
-    // attack speed quickens both from their own base.
+    // Q: a shove with the spear's haft, from the hip. Its attack_ticks are its whole cooldown,
+    // a span of its own: attack speed quickens each style from its own base.
     secondary: Some(
         name: "Spear Shove",
         description: "Drive the spear forward from the hip: enemies in front take a little damage, are shoved back and briefly slowed.",

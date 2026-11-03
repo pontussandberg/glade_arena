@@ -238,10 +238,6 @@ pub(crate) struct Rig {
     /// The last attack's backswing speed, and when it went off: kept once the server clears its
     /// swing, so its follow-through and the hand's rearming don't jump back to normal speed.
     backswing: Option<(Option<u32>, f32)>,
-    /// The last release seen with its swing still in the state: when, and which style's it was,
-    /// so a stale `released_at` (its swing long cleared) still reads as the right style's and a
-    /// shove or spin never plays the primary's follow-through.
-    released_style: Option<(u32, WeaponStyle)>,
     /// How far the secondary style is in hand (0..1, eased): blends `Moves::secondary_carry`.
     style_blend: f32,
     /// While its next attack is primed: when (seconds) it drips its next drop of light, and how
@@ -330,7 +326,6 @@ fn add_rigs(
             walking: 0.0,
             cut: None,
             backswing: None,
-            released_style: None,
             style_blend: 0.0,
             drips: (0.0, 0),
             empowered: 0.0,
@@ -531,16 +526,10 @@ fn pose_rigs(
             Some(seen) => Some((present - seen as f32).max(0.0)),
             None => tick.map(|t| (now - t as f32).max(0.0)),
         };
-        // Which style the last release was: remembered while its swing is still in the state,
-        // so once that swing is cleared a stale `released_at` still reads as that style's.
-        if let (Some(swing), Some(at)) = (attack.swing, attack.released_at)
-            && at > swing.started_at
-        {
-            rig.released_style = Some((at, swing.style));
-        }
-        // The primary's last release: what the strike, the follow-through and a thrower's
-        // empty hand go by. A secondary's release only eases the ability pose back out (below).
-        let primary_released_at = attack.released_at.filter(|&at| !rig.released_style.is_some_and(|(r, style)| r == at && style != WeaponStyle::Primary));
+        // The primary's last release (`AttackState::released_style`): what the strike, the
+        // follow-through and a thrower's empty hand go by. A secondary's release only eases
+        // the ability pose back out (below).
+        let primary_released_at = attack.released_at.filter(|_| attack.released_style == WeaponStyle::Primary);
         // Ours: news of the attack going off arrives a moment (`ME_BEHIND_TICKS`) before our clock
         // gets there; until it does, it's still winding up, so the strike plays out in full.
         let windup = SeenThrows::windup(seen, attack)
