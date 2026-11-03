@@ -24,6 +24,11 @@ pub(crate) struct Spares(pub(crate) PeerId);
 #[derive(Component, Default)]
 pub(crate) struct Pierced(Vec<PeerId>);
 
+/// Server-only: up to what tick a shot's flight has been judged for hits, so each tick judges
+/// just the stretch flown since the last (`resolve_projectile_hits`).
+#[derive(Component)]
+pub(crate) struct Judged(u32);
+
 /// Shots fly on, and end at their range or against what's in their way. An auto-attack's shot
 /// that bursts (`AttackDef::burst`, a frostbolt) bursts where it ends too, hitting no one itself.
 #[allow(clippy::type_complexity)]
@@ -71,14 +76,17 @@ fn burst_at(
 }
 
 /// Projectile hits on the shooter's foes (allies' pass through), judged against where everyone
-/// is now, like every hit. Clients see the result through replicated `Health` (and `Chilled`).
-/// A shot ends at the first it hits, but an Impaler holder's attack javelins fly on through
-/// monsters (`items::impaler` of them at most), hitting each once.
+/// is now, like every hit, but along everything the shot flew since it was last judged (its
+/// whole flight so far, the first time): no one fits between one tick's spot and the next, and
+/// point blank counts. Those on the stretch are hit in the order flown: a shot that ends in one
+/// ends in the first body on its way. Clients see the result through replicated `Health` (and
+/// `Chilled`). A shot ends at the first it hits, but an Impaler holder's attack javelins fly on
+/// through monsters (`items::impaler` of them at most), hitting each once.
 #[allow(clippy::type_complexity)]
 pub(super) fn resolve_projectile_hits(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    mut projectiles: Query<(Entity, &Pos, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Spares>, (Option<&Bounces>, Option<&mut Pierced>))>,
+    mut projectiles: Query<(Entity, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Spares>, (Option<&Bounces>, Option<&mut Pierced>, Option<&mut Judged>))>,
     mut targets: Targets,
     holders: Query<(&PlayerId, &arena_shared::items::Satchel)>,
     lobby: Res<Lobby>,
@@ -88,21 +96,36 @@ pub(super) fn resolve_projectile_hits(
     // Frostbolts' bursts (`AttackDef::burst`), dealt once every shot's hit is: where, by whom,
     // how hard, and whom they spare (the one struck).
     let mut bursts = Vec::new();
-    for (projectile_entity, projectile_pos, projectile, room, team, might, spares, (bounces, mut pierced)) in &mut projectiles {
+    for (projectile_entity, projectile, room, team, might, spares, (bounces, mut pierced, mut judged)) in &mut projectiles {
         let impaler = holders.iter().find(|(id, _)| id.0 == projectile.owner).map_or(0, |(_, satchel)| satchel.level(Item::Impaler));
         let through_at_most = if projectile.ability.is_none() && impaler > 0 { arena_shared::items::impaler(impaler) } else { 0 };
         let mut through: Vec<PeerId> = pierced.as_ref().map_or_else(Vec::new, |p| p.0.clone());
-        for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent, _, (sheltered, decoy, motion)) in &mut targets {
-            if target_id.0 == projectile.owner
-                || sheltered
-                || owns(projectile.owner, decoy)
-                || spares.is_some_and(|s| s.0 == target_id.0)
-                || through.contains(&target_id.0)
-                || health.0 == 0
-                || !foes((*room, *team), (*target_room, *target_team))
-                || !sim::projectile_hits(projectile_pos.0, projectile, now.0, target_pos.0, motion.height) {
-                continue;
+        let flew = (judged.as_ref().map_or(projectile.spawn_tick as f32 - 1.0, |j| j.0 as f32), now.0 as f32);
+        match judged.as_mut() {
+            Some(judged) => judged.0 = now.0,
+            None => {
+                commands.entity(projectile_entity).try_insert(Judged(now.0));
             }
+        }
+        let mut struck: Vec<(Entity, f32)> = targets
+            .iter()
+            .filter_map(|(target, target_id, (target_room, target_team), target_pos, health, _, _, _, (sheltered, decoy, motion))| {
+                if target_id.0 == projectile.owner
+                    || sheltered
+                    || owns(projectile.owner, decoy)
+                    || spares.is_some_and(|s| s.0 == target_id.0)
+                    || through.contains(&target_id.0)
+                    || health.0 == 0
+                    || !foes((*room, *team), (*target_room, *target_team))
+                {
+                    return None;
+                }
+                sim::projectile_hits(projectile, flew, target_pos.0, motion.height).map(|met_at| (target, met_at))
+            })
+            .collect();
+        struck.sort_by(|a, b| a.1.total_cmp(&b.1));
+        for (struck, _) in struck {
+            let Ok((target, target_id, (_, target_team), target_pos, mut health, mut chilled, mut recent, _, (_, _, motion))) = targets.get_mut(struck) else { continue };
             let goes_on = target_team.0 == arena_shared::rooms::ZOMBIES && (through.len() as u32) < through_at_most;
             let first = through.is_empty();
             if goes_on {

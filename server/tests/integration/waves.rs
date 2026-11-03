@@ -273,14 +273,12 @@ fn javelins_stick_in_the_first_monster_until_an_impaler_sends_them_through() {
         let world = p.server.world_mut();
         world.query::<(&Team, &Health)>().iter(world).filter(|(t, h)| t.0 == ZOMBIES && h.alive()).count() >= 2
     });
-    // Out in the open east of the camp, two monsters in a row ahead of us, held still, each on
-    // a spot the javelin is judged at (it's judged where it is each tick, steps of its speed:
-    // between those spots it can pass a body by). The rest of the wave is held far off, out of
-    // the javelin's way.
+    // Out in the open east of the camp, two monsters in a row ahead of us, held still, the
+    // rest of the wave held far off, out of the javelin's way.
     let me = Vec2::new(10.5, 0.5);
     let world = p.server.world_mut();
     let monsters: Vec<Entity> = world.query::<(Entity, &Team, &Health)>().iter(world).filter(|(_, t, h)| t.0 == ZOMBIES && h.alive()).map(|(e, ..)| e).take(2).collect();
-    let spots = [me + Vec2::new(4.5, 0.0), me + Vec2::new(6.375, 0.0)];
+    let spots = [me + Vec2::new(3.0, 0.0), me + Vec2::new(5.0, 0.0)];
     let hold = |p: &mut Party| {
         let world = p.server.world_mut();
         let others: Vec<Entity> = world.query::<(Entity, &Team, &Health)>().iter(world).filter(|(e, t, h)| t.0 == ZOMBIES && h.alive() && !monsters.contains(e)).map(|(e, ..)| e).collect();
@@ -362,17 +360,23 @@ fn frostbolts_shatter_over_those_round_their_mark() {
         world.query::<(&Team, &Health)>().iter(world).filter(|(t, h)| t.0 == ZOMBIES && h.alive()).count() >= 2
     });
     // Out in the open east of the camp: one monster straight ahead, one beside it, out of the
-    // bolt's way; both held still.
+    // bolt's way; both held still and on the ground (a pouncer leaping in place would let the
+    // bolt pass under its feet), the rest of the wave held far off, out of the bolt's way.
     let me = Vec2::new(10.5, 0.5);
     let world = p.server.world_mut();
     let monsters: Vec<Entity> = world.query::<(Entity, &Team, &Health)>().iter(world).filter(|(_, t, h)| t.0 == ZOMBIES && h.alive()).map(|(e, ..)| e).take(2).collect();
     let spots = [me + Vec2::new(4.0, 0.0), me + Vec2::new(4.3, 1.3)];
     let hold = |p: &mut Party| {
         let world = p.server.world_mut();
+        let others: Vec<Entity> = world.query::<(Entity, &Team, &Health)>().iter(world).filter(|(e, t, h)| t.0 == ZOMBIES && h.alive() && !monsters.contains(e)).map(|(e, ..)| e).collect();
+        for other in others {
+            world.entity_mut(other).get_mut::<Pos>().unwrap().0 = Vec2::new(-52.0, 35.0);
+        }
         for (monster, spot) in monsters.iter().zip(spots) {
             let mut m = world.entity_mut(*monster);
             m.get_mut::<Pos>().unwrap().0 = spot;
             m.get_mut::<Chilled>().unwrap().rooted = Span { from: 0, until: u32::MAX };
+            *m.get_mut::<Motion>().unwrap() = Motion::default();
         }
         place(&mut p.server, 1, me);
     };
@@ -382,9 +386,10 @@ fn frostbolts_shatter_over_those_round_their_mark() {
     }
     let health = |p: &mut Party| [monsters[0], monsters[1]].map(|m| p.server.world().get::<Health>(m).map_or(0, |h| h.0));
     let before = health(&mut p);
-    set_input(&mut p.client, PlayerInput { aim: Vec2::X, fire: true, ..default() });
-    p.until(Duration::from_secs(3), "both hit by one frostbolt", |p| {
+    p.until(Duration::from_secs(5), "both hit by one frostbolt", |p| {
         hold(p);
+        // Fire is a click the server uses up: keep clicking until a bolt goes off.
+        set_input(&mut p.client, PlayerInput { aim: Vec2::X, fire: true, ..default() });
         let now = health(p);
         now[0] < before[0] && now[1] < before[1]
     });

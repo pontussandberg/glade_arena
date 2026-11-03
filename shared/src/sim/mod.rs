@@ -407,8 +407,24 @@ mod tests {
             panic!("a projectile class should shoot after its windup");
         };
         let lifetime = proj.class.def().shot(None).unwrap().lifetime_ticks();
-        let hit_tick = (windup..windup.saturating_add(lifetime)).find(|&tick| projectile_hits(projectile_pos(&proj, tick as f32), &proj, tick, target, 0.0));
-        assert!(hit_tick.is_some(), "projectile should hit a target 6 m away in its path");
+        let whole_flight = (proj.spawn_tick as f32 - 1.0, windup.saturating_add(lifetime) as f32);
+        assert!(projectile_hits(&proj, whole_flight, target, 0.0).is_some(), "projectile should hit a target 6 m away in its path");
+    }
+
+    /// Hits are swept along the flight, not spot-checked tick by tick: a body standing right
+    /// between where a fast shot is one tick and the next is still hit, and so is one right
+    /// out of the thrower's hand (closer than the shot's first tick of flight).
+    #[test]
+    fn a_shot_hits_between_its_ticks_and_point_blank() {
+        let proj = Projectile { owner: PeerId::Netcode(1), class: thrower(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 10, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
+        let shot = proj.class.def().shot(None).unwrap();
+        let step = shot.speed * crate::config::TICK_DT;
+        assert!(step > crate::config::PLAYER_RADIUS + shot.radius, "the thrown spear outflies its own hit window; spot checks would miss between ticks");
+        let between = Vec2::X * step * 1.5;
+        assert!(projectile_hits(&proj, (10.0, 11.0), between, 0.0).is_some(), "slipped between two ticks' spots");
+        let point_blank = Vec2::X * 0.1;
+        assert!(projectile_hits(&proj, (9.0, 10.0), point_blank, 0.0).is_some(), "missed point blank");
+        assert!(projectile_hits(&proj, (10.0, 11.0), between, SHOT_HEIGHT + 3.0).is_none(), "hit one far above its line");
     }
 
     #[test]
@@ -585,8 +601,8 @@ mod tests {
         assert!(landed > 20, "landed after only {landed} ticks");
         let proj = Projectile { owner: PeerId::Netcode(1), class: bolter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 0, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
         let at = projectile_pos(&proj, 3.0);
-        assert!(projectile_hits(at, &proj, 3, at, 0.0), "standing, it's hit");
-        assert!(!projectile_hits(at, &proj, 3, at, SHOT_HEIGHT + 0.5), "jumped over it");
+        assert!(projectile_hits(&proj, (2.0, 3.0), at, 0.0).is_some(), "standing, it's hit");
+        assert!(projectile_hits(&proj, (2.0, 3.0), at, SHOT_HEIGHT + 0.5).is_none(), "jumped over it");
     }
 
     /// Walks the yard toward each of `targets` in turn (jumping when on the ground and stuck
