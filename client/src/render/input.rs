@@ -125,13 +125,11 @@ pub(super) fn read_local_input(
     if !mouse.pressed(MouseButton::Left) {
         *held_click = false;
     }
-    // Not while the scoreboard is held up (Tab): the mouse is free then, for pointing at it.
-    let board = keys.pressed(KeyCode::Tab);
-    let attacking = mouse.pressed(MouseButton::Left) && attack_ready && !board;
+    let attacking = mouse.pressed(MouseButton::Left) && attack_ready;
     let fire = desired.0.fire || (attacking && aiming.0.is_none() && !*held_click);
     // Held down to attack (not for a control, nor to cast): a shot drawn is held so until it's
     // let go, walking slower meanwhile (`PlayerInput::draw`).
-    let draw = mouse.pressed(MouseButton::Left) && aiming.0.is_none() && !*held_click && !board;
+    let draw = mouse.pressed(MouseButton::Left) && aiming.0.is_none() && !*held_click;
     // WASD walks relative to the camera, dropping any destination.
     let (forward, right) = mode.ground_axes();
     let walk = forward * key_axis(&keys, KeyCode::KeyW, KeyCode::KeyS) + right * key_axis(&keys, KeyCode::KeyD, KeyCode::KeyA);
@@ -142,7 +140,7 @@ pub(super) fn read_local_input(
     // only from the ground): whether it's held, sent as that changes (`send_commands`), so a
     // tap is held for a frame at least. `casts` and `fire` are kept until they've been sent
     // (`send_commands` clears them), so a short click isn't missed.
-    let jump = (keys.pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Space)) && !board;
+    let jump = keys.pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Space);
     desired.0 = PlayerInput { move_to, walk, aim, climb, aside, fire, draw, jump, casts: casts.casts, ..default() };
 }
 

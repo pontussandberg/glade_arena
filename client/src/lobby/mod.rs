@@ -13,6 +13,8 @@
 //!   team buttons, and for the leader the mode and map switches
 //! - the way in at the bottom right: at home, play solo and practice; in a room, the
 //!   leader's start, or once the match is on, into the arena
+//! - the settings at the bottom left: a button, and over it the pane of sliders (`settings`),
+//!   while it's open
 //!
 //! In a room, the picked fighter goes to the server as it's picked: the others see it, and the
 //! start (or the way in) takes us in as it.
@@ -36,7 +38,7 @@ use crate::camera::{CameraControl, CameraMoves, Orbit};
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::{self, palette};
 use crate::plain::PlainMaterial;
-use crate::render::{ButtonFill, GameUi, ui_text};
+use crate::render::{ButtonFill, GameUi, button, clicked, shown, ui_text};
 use crate::rooms::{CurrentMap, Me, Picking, Screen};
 
 mod stage;
@@ -65,6 +67,7 @@ impl Plugin for LobbyPlugin {
             (
                 (move_stage, pick_fighter, fold_details, show_fighter, show_details, (fold_room, show_room, room_buttons).chain().run_if(in_state(Screen::Room)), enter_arena, scroll_panel).chain(),
                 show_status,
+                toggle_settings,
                 (turn_stage_camera, place_name_tag).chain().in_set(CameraMoves),
                 liven_stage,
                 raise_crag,
@@ -149,11 +152,20 @@ struct RoomButton(RoomRequest);
 #[derive(Component)]
 struct Status;
 
+/// Opens (and closes) the settings pane in the corner over it.
+#[derive(Component)]
+struct SettingsButton;
+
+/// The settings pane, shown while it's open.
+#[derive(Component)]
+struct SettingsPane;
+
 fn open_lobby(
     mut commands: Commands,
     current: Res<CurrentMap>,
     chosen: Res<ChosenClass>,
     me: Option<Res<Me>>,
+    settings: Res<crate::settings::Settings>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<PlainMaterial>>,
     mut shadows: Single<&mut CascadeShadowConfig, With<DirectionalLight>>,
@@ -167,7 +179,7 @@ fn open_lobby(
     let lift = commands.spawn((LobbyPart, lift_at(&stage), Visibility::default())).id();
     commands.insert_resource(Lobby { selected, shown: None, lift, stage, view, facing: front });
     spawn_stage(&mut commands, &mut meshes, &mut materials, &stage);
-    spawn_screen(&mut commands, me.as_ref().map_or("", |me| &me.name));
+    spawn_screen(&mut commands, me.as_ref().map_or("", |me| &me.name), &settings);
 }
 
 fn close_lobby(
@@ -187,7 +199,7 @@ fn close_lobby(
 /// The screen over the stage: our `name` over the fighter (`place_name_tag`), the selected fighter's details on the
 /// left, the side panel on the right, and along the bottom the controls hint, the fighter tiles
 /// and the way in.
-fn spawn_screen(commands: &mut Commands, name: &str) {
+fn spawn_screen(commands: &mut Commands, name: &str, settings: &crate::settings::Settings) {
     commands
         .spawn((
             LobbyPart,
@@ -270,7 +282,9 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                 },
             ));
             screen.spawn(Node { align_items: AlignItems::FlexEnd, ..default() }).with_children(|bottom| {
-                bottom.spawn(side(JustifyContent::FlexStart));
+                bottom.spawn(side(JustifyContent::FlexStart)).with_children(|left| {
+                    left.spawn((SettingsButton, button("SETTINGS", 14.0, palette::ui::PANEL, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5))));
+                });
                 bottom.spawn(Node { column_gap: px(GAP * 1.5), ..default() }).with_children(|tiles| {
                     for id in ClassId::playable() {
                         spawn_tile(tiles, id);
@@ -309,7 +323,27 @@ fn spawn_screen(commands: &mut Commands, name: &str) {
                         });
                 });
             });
+            // The settings pane, over the corner by its button.
+            screen
+                .spawn((
+                    SettingsPane,
+                    Visibility::Hidden,
+                    Node { position_type: PositionType::Absolute, left: px(MARGIN), bottom: px(MARGIN + BOTTOM_ROW), ..default() },
+                ))
+                .with_children(|corner| {
+                    crate::settings::spawn_pane(corner, settings);
+                });
         });
+}
+
+/// The Settings button opens the pane, and shuts it again.
+fn toggle_settings(button: Query<Ref<Interaction>, With<SettingsButton>>, mut panes: Query<&mut Visibility, With<SettingsPane>>) {
+    if !button.iter().any(clicked) {
+        return;
+    }
+    for mut pane in &mut panes {
+        *pane = shown(*pane == Visibility::Hidden);
+    }
 }
 
 /// The in-game HUD and minimap stay hidden until we're in the arena.

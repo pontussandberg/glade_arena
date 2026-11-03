@@ -321,17 +321,19 @@ pub(super) fn update_key_hints(
         .map(|(slot, _)| key_label(slot))
         .collect::<Vec<_>>();
     let abilities = (abilities.join(" "), if abilities.len() == 1 { "ability" } else { "abilities" });
-    let keys: [(&str, &str); 10] = [
+    let keys: [(&str, &str); 12] = [
         ("Click", "capture the mouse"),
         ("Mouse", "look / aim"),
         ("WASD", "move"),
         ("Hold left click", "attack"),
         (&abilities.0, abilities.1),
         ("Space", "jump"),
+        ("F", "interact"),
         ("Wheel, + -", "zoom"),
         ("Hold Tab", "scoreboard"),
+        ("Tab + Right click", "free the mouse"),
         ("F1", "watch next fighter"),
-        ("Esc", "free the mouse"),
+        ("Esc", "menu"),
     ];
     commands.entity(*hints).despawn_children().with_children(|grid| {
         for (key, action) in keys {
