@@ -8,7 +8,7 @@ use bevy::light::NotShadowCaster;
 
 use arena_shared::sim;
 
-use crate::feedback::AttackClock;
+use crate::feedback::{AttackClock, ME_BEHIND_TICKS};
 use crate::arena::{self, to_world};
 use crate::plain::PlainMaterial;
 use crate::rig::{HeldAt, MAX_HOLD_TICKS};
@@ -257,9 +257,12 @@ const TING_SLACK: f32 = 0.4;
 /// body, but only its tip (meters) into a wall, a crate or the ground.
 const BODY_BURY: f32 = arena::SPEAR_LENGTH * 0.2;
 const TERRAIN_BURY: f32 = 0.03;
-/// How far around where a spear was last drawn the terrain that stopped it is looked for
-/// (meters): it's drawn on our clock, a hair short of or past the server's point of impact.
+/// How far behind where a spear was last drawn its strike is still looked for (meters), and how
+/// far ahead in ticks of its flight: shots are drawn behind the server's clock (`AttackClock`,
+/// `ME_BEHIND_TICKS`), and the news of a spear's end arrives in the tick it ended, so it ends
+/// past where it was last drawn, up to that lag's worth of flight ahead.
 const STUCK_PROBE: f32 = 0.6;
+const STUCK_LAG_TICKS: f32 = ME_BEHIND_TICKS + 1.5;
 /// How long a stuck spear stays (seconds), and how long it then takes to sink away into what
 /// holds it.
 const STUCK_SECONDS: f32 = 8.0;
@@ -333,6 +336,35 @@ pub(super) fn strike_home(
     if thrown.launch.is_none() || (spent && !shot.falls) {
         return;
     }
+    // Where its point really stopped: a fighter on the stretch it flew past where it was last
+    // drawn (the nearest along it, `STUCK_LAG_TICKS`), or the terrain the map says is in its
+    // way there; nothing there to hold it (over water, off the map), it just ends.
+    let heading = (transform.rotation * Vec3::X).normalize_or(Vec3::X);
+    let level = heading.with_y(0.0);
+    let ahead = level.normalize_or(heading);
+    let reach = shot.speed * TICK_DT * STUCK_LAG_TICKS + STUCK_PROBE;
+    let struck = fighters
+        .iter()
+        .filter_map(|(body, held_by)| {
+            let to_body = (held_by.translation - point).with_y(0.0);
+            let along = to_body.dot(ahead);
+            let height = point.y + heading.y * along / level.length().max(1e-3);
+            let feet = held_by.translation.y;
+            let hits = (-TING_SLACK..=reach).contains(&along)
+                && to_body.distance(ahead * along) < PLAYER_RADIUS + shot.radius + TING_SLACK
+                && (feet - TING_SLACK..feet + BODY_HEIGHT + TING_SLACK).contains(&height);
+            hits.then_some((body, *held_by, along, height))
+        })
+        .min_by(|a, b| a.2.total_cmp(&b.2));
+    let stuck = match struck {
+        Some((body, held_by, _, height)) => Some((held_by.translation.with_y(height) - ahead * PLAYER_RADIUS, BODY_BURY, Some((body, held_by)))),
+        None => {
+            let (back, front) = (point - heading * STUCK_PROBE, point + heading * reach);
+            map.0.map().shot_end((arena::to_gameplay(back), back.y), (arena::to_gameplay(front), front.y)).map(|end| (to_world(end.at, end.height), TERRAIN_BURY, None))
+        }
+    };
+    // The flash and splinters right at the strike, not at the drawn point behind it.
+    let point = stuck.map_or(point, |(strike, ..)| strike);
     let light = visuals.material(&mut materials, Look::Spark);
     let bit = || (Mesh3d(visuals.impact.clone()), MeshMaterial3d(light.clone()), Transform::from_translation(point).with_scale(Vec3::ZERO), NotShadowCaster);
     commands.spawn((Impact { started: now, life: FLASH_SECONDS, size: FLASH_SIZE, velocity: None }, bit()));
@@ -348,37 +380,20 @@ pub(super) fn strike_home(
     }
     // Into anything but a fighter (whose hit sounds for itself), a miss: a faint chip on stone,
     // heard near it, or however far off if it's our own spear.
-    let struck = fighters.iter().find(|(_, body)| {
-        let feet = body.translation.y;
-        arena::to_gameplay(body.translation).distance(arena::to_gameplay(point)) < PLAYER_RADIUS + shot.radius + TING_SLACK
-            && (feet - TING_SLACK..feet + BODY_HEIGHT + TING_SLACK).contains(&point.y)
-    });
     if struck.is_none() {
         sounds.add(crate::audio::Sfx::SpearTing, 1.0).from(arena::to_gameplay(point), crate::audio::Reach::Combat).by(projectile.owner);
     }
     // The spear stays where it struck. Into a body: its point run `BODY_BURY` in from the side
     // it came, left a child of the fighter, riding along with it (and gone with it). Into
-    // terrain: just its tip in, where the map says the ground or wall is, right around where it
-    // was last drawn; nothing there to hold it, it just ends.
-    let heading = (transform.rotation * Vec3::X).normalize_or(Vec3::X);
-    let stuck = match struck {
-        Some((body, held_by)) => {
-            let ahead = heading.with_y(0.0).normalize_or(heading);
-            let tip = held_by.translation.with_y(point.y) - ahead * PLAYER_RADIUS + heading * BODY_BURY;
-            let placed = Transform::from_translation(tip).with_rotation(transform.rotation).with_scale(transform.scale);
-            Some((Transform::from_matrix(held_by.to_matrix().inverse() * placed.to_matrix()), Some(body)))
-        }
-        None => {
-            let (back, ahead) = (point - heading * STUCK_PROBE, point + heading * STUCK_PROBE);
-            map.0.map().shot_end((arena::to_gameplay(back), back.y), (arena::to_gameplay(ahead), ahead.y)).map(|end| {
-                let tip = to_world(end.at, end.height) + heading * TERRAIN_BURY;
-                (Transform::from_translation(tip).with_rotation(transform.rotation).with_scale(transform.scale), None)
-            })
-        }
-    };
-    if let Some((placed, held_by)) = stuck {
+    // terrain: just its tip in, where the map says the ground or wall is.
+    if let Some((strike, bury, held)) = stuck {
+        let placed = Transform::from_translation(strike + heading * bury).with_rotation(transform.rotation).with_scale(transform.scale);
+        let placed = match held {
+            Some((_, held_by)) => Transform::from_matrix(held_by.to_matrix().inverse() * placed.to_matrix()),
+            None => placed,
+        };
         let spear = commands.spawn((StuckSpear { born: now, scale: placed.scale }, Mesh3d(mesh.0.clone()), MeshMaterial3d(own_light.0.clone()), placed)).id();
-        if let Some(body) = held_by {
+        if let Some((body, _)) = held {
             commands.entity(spear).insert(ChildOf(body));
         }
     }
