@@ -5,7 +5,7 @@
 use super::*;
 
 use arena_shared::abilities::AbilitySlot;
-use arena_shared::classes::{Chill, common};
+use arena_shared::classes::{AttackKind, Chill, WeaponStyle, common};
 use arena_shared::items::Item;
 use arena_shared::sim;
 
@@ -262,6 +262,7 @@ pub(super) fn attack(
         InPlay,
     >,
     mut targets: Targets,
+    victim_classes: Query<&ClassId>,
     mut rifts: ResMut<Rifts>,
     mut log: ResMut<HitLog>,
 ) {
@@ -309,32 +310,40 @@ pub(super) fn attack(
                 let projectile = if player { sim::onto_sight(lobby.map(room), projectile, pos.0, input.aside, feet) } else { projectile };
                 spawn_projectile(&mut commands, projectile, side, might);
             }
-            Some(sim::Attack::Melee(mut swing)) => {
+            Some(sim::Attack::Melee(mut swing, style)) => {
+                let def = class.def().attack_of(style);
+                let primary = style == WeaponStyle::Primary;
                 // A player's lane runs along the crosshair's line, as far out to the right as a
                 // wall beside lets the camera's (`sim::shoulder_room`); a monster's straight out
                 // from it.
                 let right = Vec2::new(swing.dir.y, -swing.dir.x).normalize_or_zero();
                 swing.aside = if player { swing.aside.clamp(0.0, sim::shoulder_room(lobby.map(room), pos.0, right, feet)) } else { 0.0 };
-                // An empowered strike grows with a Gravecaller Rift.
+                // An empowered strike grows with a Gravecaller Rift (the primary's `follow_up`:
+                // only its swings are ever empowered).
                 let level = satchel.map_or(0, |s| s.level(arena_shared::items::Item::GravecallerRift));
                 swing.grown = if swing.empowered && level > 0 { arena_shared::items::gravecaller_rift(level) } else { 0.0 };
                 *last_swing = swing;
-                if let Some(rift) = sim::Rift::torn(id.0, *class, pos.0, feet, &swing) {
+                if primary && let Some(rift) = sim::Rift::torn(id.0, *class, pos.0, feet, &swing) {
                     rifts.0.push((*room, rift));
                 }
-                let amount = mighty(class.def().attack.damage, might);
+                let amount = mighty(def.damage, might);
                 // The empowered strike knocks up what it hits (`FollowUp::lift_ticks`).
-                let mut chill = class.def().attack.chill;
+                let mut chill = def.chill;
                 if swing.empowered {
-                    chill.lift_ticks = class.def().attack.follow_up.map_or(0, |f| f.lift_ticks);
+                    chill.lift_ticks = def.follow_up.map_or(0, |f| f.lift_ticks);
                 }
                 let blow = Blow::attack(amount, chill, swing.empowered, primed);
-                let with = (id.0, *class, "auto-attack");
+                let with = (id.0, *class, if primary { "auto-attack" } else { "secondary" });
+                let before = log.0.len();
                 let landed = hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Attack), blow, |_, at, target_feet| {
-                    sim::melee_hits(lobby.map(room), (swing.lane_from(pos.0), feet), swing.dir, (swing.empowered, swing.grown), *class, (at, target_feet))
+                    sim::melee_hits(lobby.map(room), (swing.lane_from(pos.0), feet), swing.dir, (swing.empowered, swing.grown), def, (at, target_feet))
                 });
-                if landed > 0
-                    && let Some(follow_up) = class.def().attack.follow_up
+                if !primary {
+                    shove_struck(&mut commands, &log, before, &victim_classes, pos.0, swing.dir, class.def().secondary.as_ref());
+                }
+                if primary
+                    && landed > 0
+                    && let Some(follow_up) = def.follow_up
                 {
                     next.quick_until = Some(now.0 + follow_up.within_ticks);
                     // The rest of this attack's timer runs at the empowered speed already.
@@ -343,6 +352,36 @@ pub(super) fn attack(
                     }
                 }
             }
+            // A secondary's spin or slam: everyone round its center is struck at once, as high
+            // or low as a swing sweeps, and never through a wall.
+            Some(sim::Attack::Spin { dir }) | Some(sim::Attack::Slam { dir, .. }) if class.def().secondary.is_some() => {
+                let secondary = class.def().secondary.as_ref().unwrap();
+                let def = &secondary.attack;
+                let center = match released {
+                    Some(sim::Attack::Slam { at, .. }) => at,
+                    _ => pos.0,
+                };
+                let radius = match def.kind {
+                    AttackKind::Spin { radius } | AttackKind::Slam { radius, .. } => radius,
+                    _ => def.kind.edge_reach(),
+                };
+                let map = lobby.map(room);
+                // A slam lands on what's there (a crate, a step): hits are judged around that
+                // height, and the burst drawn on it.
+                let ground = sim::struck_surface(map, pos.0, center, feet);
+                let blow = Blow::attack(mighty(def.damage, might), def.chill, false, primed);
+                let with = (id.0, *class, "secondary");
+                let before = log.0.len();
+                hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Attack), blow, |_, at, target_feet| {
+                    at.distance(center) <= radius + PLAYER_RADIUS && sim::swing_reaches(ground, target_feet) && map.shot_clear((pos.0, feet), (at, target_feet))
+                });
+                shove_struck(&mut commands, &log, before, &victim_classes, center, dir, Some(secondary));
+                if let Some(color) = secondary.blast {
+                    crate::fx::spawn_fx(&mut commands, *room, Fx::at(FxKind::Blast(color), center, radius, now.0, 10).on(ground).by(id.0));
+                }
+            }
+            // A spin or slam released by a class with no secondary (never the sim's doing): air.
+            Some(sim::Attack::Spin { .. }) | Some(sim::Attack::Slam { .. }) => {}
         }
         // A frenzy (or a fury stone's rush, or practice's set speed) speeds up the attack it
         // starts, all through.
@@ -368,6 +407,26 @@ pub(crate) struct Shoved {
 /// and how fast it slides.
 pub(crate) const KNOCKBACK: f32 = 0.55;
 const SHOVE_SPEED: f32 = 7.0;
+
+/// Knocks back everyone a secondary's strike just hit (the hits pushed onto `log` past
+/// `before`): `SecondaryDef::knockback` meters straight away from `from` (a bigger victim
+/// less, as an item's knockback shoves), `dir` for one standing right on it.
+fn shove_struck(
+    commands: &mut Commands,
+    log: &HitLog,
+    before: usize,
+    classes: &Query<&ClassId>,
+    from: Vec2,
+    dir: Vec2,
+    secondary: Option<&arena_shared::classes::SecondaryDef>,
+) {
+    let Some(meters) = secondary.map(|s| s.knockback).filter(|&m| m > 0.0) else { return };
+    for hit in &log.0[before.min(log.0.len())..] {
+        let away = (hit.at - from).try_normalize().unwrap_or(dir);
+        let size = classes.get(hit.victim).map_or(1.0, |class| class.def().size());
+        commands.entity(hit.victim).try_insert(Shoved { dir: away, left: meters / size.max(0.5) });
+    }
+}
 
 /// The knocked back slide, a step a tick, until it's gone its way or meets a wall.
 pub(super) fn shove(mut commands: Commands, lobby: Res<Lobby>, mut shoved: Query<(Entity, &mut Pos, &InRoom, &mut Shoved)>) {

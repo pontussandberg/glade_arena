@@ -319,7 +319,7 @@ mod tests {
         let Some(class) = ClassId::all().find(|c| c.def().attack.follow_up.is_some()) else { return };
         let attack = quickened(class);
         let (period, windup) = (attack.period_ticks(1.0), attack.windup_ticks(1.0));
-        let mut swing = Swing { started_at: 10, dir: Vec2::X, quick: false, hastened: false, haste: 0.0, primed: false, held: 0, aside: 0.0 };
+        let mut swing = Swing { started_at: 10, dir: Vec2::X, style: crate::classes::WeaponStyle::Primary, quick: false, hastened: false, haste: 0.0, primed: false, held: 0, aside: 0.0 };
         assert_eq!(swing.ready_at(&attack), 10 + period);
         // As the server does when the swing lands.
         swing.hastened = true;
@@ -1267,22 +1267,22 @@ mod tests {
         let class = fighter();
         let at = spawns()[0];
         let reach = class.def().attack.kind.reach() - 0.05;
-        assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * reach, 0.0)), "straight ahead, at the edge of reach");
-        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * (reach + 0.2), 0.0)), "just out of reach");
-        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at - Vec2::Y * 1.0, 0.0)), "behind");
+        assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at + Vec2::Y * reach, 0.0)), "straight ahead, at the edge of reach");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at + Vec2::Y * (reach + 0.2), 0.0)), "just out of reach");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at - Vec2::Y * 1.0, 0.0)), "behind");
         let AttackKind::Melee { width, from, .. } = class.def().attack.kind else { unreachable!() };
         // Bodies overlapping connect when the lane starts at the attacker; one starting further
         // out misses what's closer than that.
-        assert_eq!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at - Vec2::Y * 0.3, 0.0)), from == 0.0, "bodies overlapping");
+        assert_eq!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at - Vec2::Y * 0.3, 0.0)), from == 0.0, "bodies overlapping");
         if from > 0.0 {
-            assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * (from - PLAYER_RADIUS + 0.05), 0.0)), "touching the lane's near end");
-            assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * (from - PLAYER_RADIUS - 0.05), 0.0)), "short of the lane");
+            assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at + Vec2::Y * (from - PLAYER_RADIUS + 0.05), 0.0)), "touching the lane's near end");
+            assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at + Vec2::Y * (from - PLAYER_RADIUS - 0.05), 0.0)), "short of the lane");
         }
         let edge = width / 2.0 + PLAYER_RADIUS;
         let middle = from.max(1.0);
-        assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::new(edge - 0.05, middle), 0.0)), "a body overlapping the lane");
-        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::new(edge + 0.05, middle), 0.0)), "beside the lane");
-        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), shooter(), (at + Vec2::Y, 0.0)), "projectile classes don't swing");
+        assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at + Vec2::new(edge - 0.05, middle), 0.0)), "a body overlapping the lane");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (at + Vec2::new(edge + 0.05, middle), 0.0)), "beside the lane");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &shooter().def().attack, (at + Vec2::Y, 0.0)), "projectile classes don't swing");
     }
 
     #[test]
@@ -1290,7 +1290,7 @@ mod tests {
         let class = fighter();
         let at = spawns()[0];
         let ahead = at + Vec2::Y * (class.def().attack.kind.reach() - 0.3);
-        let hits = |feet: f32| melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (ahead, feet));
+        let hits = |feet: f32| melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (ahead, feet));
         assert!(hits(0.0) && hits(1.0), "one on the ground or up on a crate isn't struck");
         assert!(!hits(BODY_HEIGHT + 0.1), "one up on a roof is struck");
         // Struck from up on something: one down below it is, as far down as the blade reaches.
@@ -1331,8 +1331,8 @@ mod tests {
         let beyond = at + Vec2::Y * (range + PLAYER_RADIUS + 0.2);
         let aside = at + Vec2::new(width / 2.0 + PLAYER_RADIUS + (wide - width) / 4.0, (near + far) / 2.0);
         for target in [beyond, aside] {
-            assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (target, 0.0)), "a plain swing reached {target}");
-            assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (true, 0.0), class, (target, 0.0)), "an empowered swing missed {target}");
+            assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), &class.def().attack, (target, 0.0)), "a plain swing reached {target}");
+            assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (true, 0.0), &class.def().attack, (target, 0.0)), "an empowered swing missed {target}");
         }
     }
 

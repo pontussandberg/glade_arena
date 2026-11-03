@@ -51,8 +51,14 @@ pub(super) fn read_local_input(
             class.def().ability(slot).is_some_and(|ability| cooldowns.usable_at(slot, ability) as f32 <= clock.now(true))
         })
     };
-    // Whether our next attack may start now: none in progress, or the last one's timer run out.
-    let attack_ready = me.is_some_and(|(_, class, _, attack)| attack.swing.is_none_or(|swing| swing.ready_at(&class.def().attack) as f32 <= clock.now(true)));
+    // Q swaps weapon styles (for a class with one to swap to), from the next click on.
+    let mut style = desired.0.style;
+    if keys.just_pressed(KeyCode::KeyQ) && my_class.is_some_and(|def| def.has_secondary()) {
+        style = style.other();
+    }
+    // Whether our next attack may start now: nothing winding up, and the equipped style's own
+    // cooldown over (the other style's backswing doesn't hold it up).
+    let attack_ready = me.is_some_and(|(_, class, _, attack)| attack.may_start(*class, style, clock.now(true)));
     let me = me.map(|(p, ..)| p.0);
     // Whether the cursor is on a HUD control, or on an ability's icon (and which). Tested on the
     // nodes themselves, so nothing drawn over them can get in the way.
@@ -141,7 +147,7 @@ pub(super) fn read_local_input(
     // tap is held for a frame at least. `casts` and `fire` are kept until they've been sent
     // (`send_commands` clears them), so a short click isn't missed.
     let jump = keys.pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Space);
-    desired.0 = PlayerInput { move_to, walk, aim, climb, aside, fire, draw, jump, casts: casts.casts, ..default() };
+    desired.0 = PlayerInput { move_to, walk, aim, climb, aside, fire, draw, jump, style, casts: casts.casts, ..default() };
 }
 
 /// What a cast of `kind` is aimed with, aiming `aim`: a dash's aim reaches its whole distance

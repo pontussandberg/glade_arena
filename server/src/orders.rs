@@ -64,7 +64,9 @@ pub(super) fn apply_commands(
             match command {
                 // A walk (or an attack click, Space, or the attack button's hold) for a tick to
                 // come waits for it (`take_due_orders`).
-                PlayerCommand::Walk(_, tick) | PlayerCommand::Attack(_, tick) | PlayerCommand::Jump(_, tick) | PlayerCommand::Draw(_, tick) => orders.order(&mut input, command, tick, now),
+                PlayerCommand::Walk(_, tick) | PlayerCommand::Attack(_, tick) | PlayerCommand::Jump(_, tick) | PlayerCommand::Draw(_, tick) | PlayerCommand::Style(_, tick) => {
+                    orders.order(&mut input, command, tick, now)
+                }
                 _ => command.apply(&mut input),
             }
         }
