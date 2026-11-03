@@ -156,7 +156,7 @@ fn draw_hitboxes(
 fn draw_hitboxes_3d(
     map: Res<crate::rooms::CurrentMap>,
     mut gizmos: Gizmos,
-    fighters: Query<(&Pos, Option<&Health>), Without<Projectile>>,
+    fighters: Query<(&Pos, Option<&Health>, (Option<&Motion>, Option<&crate::render::PredictedWalk>)), Without<Projectile>>,
     shots: Query<(&Projectile, &Transform, &InheritedVisibility)>,
 ) {
     let flat = Quat::from_rotation_x(FRAC_PI_2);
@@ -166,13 +166,14 @@ fn draw_hitboxes_3d(
         .map(|height| (height, height_color(height)))
         .collect();
     let (floor, top) = (height_color(0.0), height_color(BODY_HEIGHT));
-    for (pos, health) in &fighters {
+    for (pos, health, (motion, predicted)) in &fighters {
         if health.is_some_and(|h| !h.alive()) {
             continue;
         }
-        let at = to_world(pos.0, map.map().height_at(pos.0));
+        // From its feet, where hits judge it (`Motion::height`): up with a jump, on a crate.
+        let at = to_world(pos.0, crate::render::shown_height(map.map(), motion, predicted, pos.0));
         for &(height, color) in &rings {
-            gizmos.circle(Isometry3d::new(at.with_y(height), flat), PLAYER_RADIUS, color);
+            gizmos.circle(Isometry3d::new(at + Vec3::Y * height, flat), PLAYER_RADIUS, color);
         }
         // Its sides, so it reads as a column.
         for k in 0..4 {
