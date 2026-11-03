@@ -83,7 +83,7 @@ impl Plugin for RenderPlugin {
                 (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
                 (add_visuals, sync_transforms, lift_fighters).chain().before(crate::rig::Posing),
                 (fly_shots, fade_wakes, fly_impacts, fade_stuck_spears, crate::rig::empty_hands).chain().after(crate::rig::Posing),
-                pin_stuck_spears.before(crate::feedback::NotingHits),
+                pin_stuck_spears,
                 (show_novas, grow_bursts, end_fleeting),
                 // Once a new fighter's rig and cloth are on it, so they go over to the frosted
                 // material with its body.

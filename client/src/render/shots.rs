@@ -8,7 +8,7 @@ use bevy::light::NotShadowCaster;
 
 use arena_shared::sim;
 
-use crate::feedback::{AttackClock, ShownHits};
+use crate::feedback::AttackClock;
 use crate::arena::{self, to_world};
 use crate::plain::PlainMaterial;
 use crate::rig::{HeldAt, MAX_HOLD_TICKS};
@@ -394,9 +394,10 @@ pub(super) fn strike_home(
 }
 
 /// How long a seeking spear waits for the damage to name its body before settling for the
-/// nearest one along its stretch instead (seconds): the news of the damage can slip a packet
-/// behind the news of the spear's end.
+/// nearest one along its stretch instead (seconds), and how much earlier than the spear's end
+/// the naming hit may have come: the two travel separately and either can arrive a beat first.
 const PIN_GRACE: f32 = 0.25;
+const NAMED_SLACK: f32 = 0.35;
 
 /// A stuck spear still seeking the body it stands in: it struck one of `owner`'s foes somewhere
 /// along `from`..`to` (the stretch judged the tick it was removed, a shot `radius` wide), and
@@ -411,8 +412,9 @@ pub(super) struct PinTo {
 }
 
 /// Pins each seeking spear (`PinTo`, `strike_home`) into its body: the foe along its stretch
-/// whose fresh hit the spear's owner dealt (`RecentHits` past `ShownHits` -- so this runs before
-/// `spawn_damage_numbers` notes them; through several, an Impaler's, the farthest along, the one
+/// whose fresh hit the spear's owner dealt (noted here from `RecentHits` the frame each hit
+/// arrives, and kept a moment, since the hit and the spear's end can come a frame apart either
+/// way; through several, an Impaler's, the farthest along, the one
 /// it stuck in), its point run `BODY_BURY` in from the side it came, left a child of the
 /// fighter, riding along with it (and gone with it). The damage not come within `PIN_GRACE`, the
 /// nearest foe along the stretch; no one there at all (the body gone), it stays standing free.
@@ -423,9 +425,27 @@ pub(super) fn pin_stuck_spears(
     mut commands: Commands,
     time: Res<Time>,
     mut spears: Query<(Entity, &PinTo, &mut StuckSpear, &mut Transform)>,
-    fighters: Query<(Entity, &PlayerId, &Transform, &Pos, Option<&Team>, (&ClassId, Has<Elite>), Option<&RecentHits>, Option<&ShownHits>, Has<Shopkeeper>), Without<PinTo>>,
+    fighters: Query<(Entity, &PlayerId, &Transform, &Pos, Option<&Team>, (&ClassId, Has<Elite>), Option<&RecentHits>, Has<Shopkeeper>), Without<PinTo>>,
+    mut seen: Local<bevy::platform::collections::HashMap<Entity, u32>>,
+    mut named: Local<Vec<(Entity, PeerId, f32)>>,
 ) {
     let now = time.elapsed_secs();
+    // Who was just hit by whom: each new hit noted the frame it arrives (a fighter's hits already
+    // there when it's first seen are only noted), kept a moment.
+    seen.retain(|&body, _| fighters.contains(body));
+    named.retain(|&(_, _, at)| now - at < 1.0);
+    for (body, .., hits, _) in &fighters {
+        let Some(hits) = hits else { continue };
+        let Some(&last) = seen.get(&body) else {
+            seen.insert(body, hits.seq());
+            continue;
+        };
+        if hits.seq() == last {
+            continue;
+        }
+        named.extend(hits.0.iter().filter(|hit| hit.seq > last).filter_map(|hit| hit.by.map(|by| (body, by, now))));
+        seen.insert(body, hits.seq());
+    }
     for (spear, pin, mut stuck, mut transform) in &mut spears {
         let own_team = fighters.iter().find(|(_, id, ..)| id.0 == pin.owner).and_then(|(_, _, _, _, team, ..)| team.copied());
         let heading = (pin.to - pin.from).normalize_or(Vec3::X);
@@ -434,7 +454,7 @@ pub(super) fn pin_stuck_spears(
         let span = (pin.to - pin.from).with_y(0.0).length();
         let candidates: Vec<_> = fighters
             .iter()
-            .filter_map(|(body, id, drawn, pos, team, (class, elite), hits, shown, keeper)| {
+            .filter_map(|(body, id, drawn, pos, team, (class, elite), _, keeper)| {
                 if id.0 == pin.owner || keeper || own_team.zip(team.copied()).is_some_and(|(mine, theirs)| mine.allied(theirs)) {
                     return None;
                 }
@@ -446,7 +466,7 @@ pub(super) fn pin_stuck_spears(
                 let near = (-TING_SLACK..=span + TING_SLACK).contains(&along)
                     && to_body.distance(ahead * along) < body_radius(size, height - feet) + pin.radius + TING_SLACK
                     && (feet - TING_SLACK..feet + BODY_HEIGHT * size + TING_SLACK).contains(&height);
-                let named = hits.is_some_and(|hits| hits.0.iter().any(|hit| hit.seq > shown.map_or(0, |s| s.0) && hit.by == Some(pin.owner)));
+                let named = named.iter().any(|&(hit, by, at)| hit == body && by == pin.owner && at + NAMED_SLACK >= pin.born);
                 near.then_some((body, *drawn, along, height, named, size))
             })
             .collect();

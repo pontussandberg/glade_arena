@@ -128,7 +128,7 @@ impl Plugin for ServerGamePlugin {
         app.add_systems(
             FixedUpdate,
             (
-                (chase, think, do_deeds, take_due_orders, record_inputs, drive_replays, move_players, fall_into_chasms, shove, spread_out, walk_dummies, stand_unwalked, take_pickups, use_gates).chain(),
+                (chase, think, do_deeds, take_due_orders, record_inputs, drive_replays, move_players, fall_into_chasms, shove, press_apart, spread_out, walk_dummies, stand_unwalked, take_pickups, use_gates).chain(),
                 (attack, use_abilities, move_projectiles, resolve_projectile_hits, burn_rifts, tick_items, react).chain(),
                 (rooms::count_kills, feed_frenzy, fall, revive, pay_bounties, restore_dummies, respawn, count_down_respawns, bury_zombies, raise_zombies).chain(),
                 (run_waves, shelter, sync_satchels, place_players, use_up_clicks, close_rifts, end_fx).chain(),
