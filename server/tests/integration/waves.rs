@@ -340,12 +340,24 @@ fn javelins_stick_in_the_first_monster_until_an_impaler_sends_them_through() {
         p.update();
     }
     let before = health(&mut p);
+    // Both hit by ONE javelin: each drop's tick is noted, and they must fall together -- two
+    // javelins landing one after the other would be ticks apart.
+    let (mut first_at, mut second_at): (Option<u32>, Option<u32>) = (None, None);
     p.until(Duration::from_secs(5), "both hit by one javelin", |p| {
         pin(p);
         set_input(&mut p.client, PlayerInput { aim: Vec2::X, fire: true, ..default() });
+        let tick = p.server.world().resource::<LocalTimeline>().tick().0;
         let now = health(p);
-        now[0] < before[0] && now[1] < before[1]
+        if first_at.is_none() && now[0] < before[0] {
+            first_at = Some(tick);
+        }
+        if second_at.is_none() && now[1] < before[1] {
+            second_at = Some(tick);
+        }
+        first_at.is_some() && second_at.is_some()
     });
+    let (a, b) = (first_at.unwrap(), second_at.unwrap());
+    assert!(a.abs_diff(b) <= 1, "the two were hit {} ticks apart: by different javelins, not pierced by one", a.abs_diff(b));
 }
 
 /// A Frost Mage's frostbolt shatters on the monster it hits: the one beside it is hit too.

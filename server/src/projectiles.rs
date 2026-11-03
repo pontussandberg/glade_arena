@@ -44,29 +44,26 @@ fn despawn_spent(commands: &mut Commands, entity: Entity, projectile: &Projectil
     }
 }
 
-/// Shots fly on, and end at their range or against what's in their way. An auto-attack's shot
-/// that bursts (`AttackDef::burst`, a frostbolt) bursts where it ends too, hitting no one itself.
-#[allow(clippy::type_complexity)]
+/// Server-only: ended this tick, by the map or its range. Its last stretch of flight is still
+/// judged for hits (`resolve_projectile_hits`, which chains after); not stopped by anyone on it,
+/// it bursts where it ended, if it's one that bursts, and goes.
+#[derive(Component)]
+pub(crate) struct Ending;
+
+/// Shots fly on, and end at their range or against what's in their way (`Ending`: the hits on
+/// their last stretch, and the burst where they end, are `resolve_projectile_hits`', right
+/// after, so nothing standing just before the wall is passed over).
 pub(super) fn move_projectiles(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
-    mut projectiles: Query<(Entity, &mut Pos, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Bounces>), (Without<PlayerId>, Without<Spent>)>,
-    mut targets: Targets,
-    mut log: ResMut<HitLog>,
+    mut projectiles: Query<(Entity, &mut Pos, &Projectile, &InRoom), (Without<PlayerId>, Without<Spent>)>,
 ) {
     let tick = timeline.tick().0;
-    for (entity, mut pos, projectile, room, team, might, bounces) in &mut projectiles {
+    for (entity, mut pos, projectile, room) in &mut projectiles {
         pos.0 = sim::projectile_pos(projectile, tick as f32);
-        if !sim::projectile_expired(lobby.map(room), pos.0, projectile, tick) {
-            continue;
-        }
-        despawn_spent(&mut commands, entity, projectile, tick);
-        let burst = projectile.class.def().attack.burst.filter(|_| projectile.ability.is_none() && bounces.is_none());
-        if let Some(burst) = burst {
-            let amount = mighty(mighty(sim::projectile_damage(projectile, tick), might_of(might)), burst.share);
-            let end = sim::projectile_end(lobby.map(room), projectile, tick);
-            burst_at(&mut commands, &mut log, tick, &mut targets, (projectile, amount), (burst, end, None), (*room, *team));
+        if sim::projectile_expired(lobby.map(room), pos.0, projectile, tick) {
+            commands.entity(entity).try_insert(Ending);
         }
     }
 }
@@ -102,7 +99,7 @@ fn burst_at(
 pub(super) fn resolve_projectile_hits(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    mut projectiles: Query<(Entity, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Spares>, (Option<&Bounces>, Option<&mut Pierced>, Option<&mut Judged>, Option<&Spent>))>,
+    mut projectiles: Query<(Entity, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Spares>, (Option<&Bounces>, Option<&mut Pierced>, Option<&mut Judged>, Option<&Spent>, Has<Ending>))>,
     mut targets: Targets,
     holders: Query<(&PlayerId, &arena_shared::items::Satchel)>,
     lobby: Res<Lobby>,
@@ -112,7 +109,7 @@ pub(super) fn resolve_projectile_hits(
     // Frostbolts' bursts (`AttackDef::burst`), dealt once every shot's hit is: where, by whom,
     // how hard, and whom they spare (the one struck).
     let mut bursts = Vec::new();
-    for (projectile_entity, projectile, room, team, might, spares, (bounces, mut pierced, mut judged, spent)) in &mut projectiles {
+    for (projectile_entity, projectile, room, team, might, spares, (bounces, mut pierced, mut judged, spent, ending)) in &mut projectiles {
         // Done already, lingering a tick for the wire: its time come, it goes.
         if let Some(spent) = spent {
             if now.0 > spent.0 {
@@ -147,7 +144,8 @@ pub(super) fn resolve_projectile_hits(
             })
             .collect();
         struck.sort_by(|a, b| a.1.total_cmp(&b.1));
-        for (struck, _) in struck {
+        let mut stopped = false;
+        for (struck, met) in struck {
             let Ok((target, target_id, (_, target_team), target_pos, mut health, mut chilled, mut recent, _, (_, _, motion, ..))) = targets.get_mut(struck) else { continue };
             let goes_on = target_team.0 == arena_shared::rooms::ZOMBIES && (through.len() as u32) < through_at_most;
             let first = through.is_empty();
@@ -155,8 +153,11 @@ pub(super) fn resolve_projectile_hits(
                 through.push(target_id.0);
             } else {
                 despawn_spent(&mut commands, projectile_entity, projectile, now.0);
+                stopped = true;
             }
-            let amount = mighty(sim::projectile_damage(projectile, now.0), might_of(might));
+            // Priced where the body was met, not at the stretch's end: `far_scale` earns only
+            // the flight really flown.
+            let amount = mighty(sim::projectile_damage(projectile, met.round() as u32), might_of(might));
             let chill = sim::projectile_chill(projectile);
             // Only an auto-attack's own javelin or bolt (a Hydra Spear's barrage too: thrown like
             // it) is the attack's, setting off on-hit items; a bounce is the Ricochet Charm's.
@@ -174,7 +175,7 @@ pub(super) fn resolve_projectile_hits(
             if let Some(burst) = def.attack.burst.filter(|_| source == Source::Attack) {
                 // On the one struck: where its feet are.
                 let end = ShotEnd { at: target_pos.0, height: lobby.map(room).surface_under(target_pos.0, motion.height + 1e-3), wall: None };
-                bursts.push((burst, end, target_id.0, *projectile, mighty(amount, burst.share), (*room, *team)));
+                bursts.push((burst, end, Some(target_id.0), *projectile, mighty(amount, burst.share), (*room, *team)));
             }
             if !goes_on {
                 break;
@@ -188,9 +189,19 @@ pub(super) fn resolve_projectile_hits(
             }
             _ => {}
         }
+        // Ended by the map (or its range) with no one on its last stretch to stop it: it bursts
+        // there, if it's one that bursts, and goes.
+        if ending && !stopped {
+            despawn_spent(&mut commands, projectile_entity, projectile, now.0);
+            if let Some(burst) = projectile.class.def().attack.burst.filter(|_| projectile.ability.is_none() && bounces.is_none()) {
+                let amount = mighty(mighty(sim::projectile_damage(projectile, now.0), might_of(might)), burst.share);
+                let end = sim::projectile_end(lobby.map(room), projectile, now.0);
+                bursts.push((burst, end, None, *projectile, amount, (*room, *team)));
+            }
+        }
     }
     for (burst, end, struck, projectile, amount, side) in bursts {
-        burst_at(&mut commands, &mut log, now.0, &mut targets, (&projectile, amount), (burst, end, Some(struck)), side);
+        burst_at(&mut commands, &mut log, now.0, &mut targets, (&projectile, amount), (burst, end, struck), side);
     }
 }
 

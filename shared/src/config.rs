@@ -62,6 +62,9 @@ pub const SHOULDER_WALL_MARGIN: f32 = 0.45;
 /// own appears on the path itself).
 pub const RELEASE_ASIDE: f32 = 0.45;
 pub const RELEASE_HEIGHT: f32 = 2.07;
+/// The longest practice take (ticks): recording stops and saves by itself there, and the
+/// client's REC light turns itself off in step (`practice` panel).
+pub const LONGEST_TAKE_TICKS: usize = 60 * TICK_HZ as usize;
 /// How fast a thrown shot falls (m/s², the real thing), one that falls at all (`Shot::falls`).
 pub const GRAVITY: f32 = 9.81;
 /// How high a jump goes at the top (meters), from flat ground (`sim::jump_speed`).

@@ -175,10 +175,22 @@ impl CurrentMap {
 
 /// When the map last changed (seconds since start), for what clears away with it: a shot removed
 /// around then was cleared by the change, not spent on anything, and mustn't strike the new
-/// ground (`render::strike_home` -- an observer, which can't ask `is_changed` itself: its first
-/// run ever would count the resource's birth as a change and swallow the first strike).
-#[derive(Resource, Default)]
+/// ground (`render::resolve_strikes` -- which runs after the frame's lobby news is in
+/// (`LobbyNews`), so a removal riding the very packet that changes the map is judged against the
+/// fresh mark, not last frame's).
+#[derive(Resource)]
 pub struct MapChangedAt(pub f32);
+
+impl Default for MapChangedAt {
+    fn default() -> Self {
+        MapChangedAt(f32::NEG_INFINITY)
+    }
+}
+
+/// Where each frame's word from the lobby lands (the room, the map, the change mark): what reads
+/// them fresh runs after this.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LobbyNews;
 
 fn note_map_change(time: Res<Time>, map: Res<CurrentMap>, mut changed: ResMut<MapChangedAt>) {
     if map.is_changed() {
@@ -212,10 +224,9 @@ impl Plugin for RoomsNetPlugin {
         app.init_state::<Screen>().add_computed_state::<Picking>();
         app.init_resource::<RoomList>().init_resource::<Leaderboards>().init_resource::<TextPrompt>().init_resource::<CurrentRoom>().init_resource::<CurrentMap>();
         app.init_resource::<Notice>().init_resource::<Leaving>().init_resource::<MapChangedAt>();
-        app.add_systems(Update, note_map_change);
         app.insert_resource(QuickJoin(self.quick_join.clone()));
         app.insert_resource(StoredName(self.guest_name.clone()));
-        app.add_systems(Update, (say_hello, read_lobby_events, send_class_choice, enter_game).chain());
+        app.add_systems(Update, (say_hello, read_lobby_events, send_class_choice, enter_game, note_map_change).chain().in_set(LobbyNews));
     }
 }
 

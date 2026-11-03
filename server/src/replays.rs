@@ -13,9 +13,6 @@ use crate::rooms::{InRoom, Lobby};
 /// Where the saved take lives, across restarts.
 const TAKE_PATH: &str = "recordings/practice-bot.ron";
 
-/// The longest take (ticks): recording stops and saves by itself there.
-const LONGEST_TAKE: usize = 60 * TICK_HZ as usize;
-
 /// A saved take: whose class, on which map and from where it plays, and the fighter's whole
 /// input, tick by tick.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -49,36 +46,49 @@ pub(crate) struct Replay {
 
 /// Writes down each recording fighter's input, just as the tick's systems are about to take it
 /// (after `take_due_orders` has brought the due orders in, before anything walks or attacks on
-/// it), and saves the take when it's stopped or as long as one may be.
+/// it), and saves the take when it's stopped, as long as one may be, or the room has stopped
+/// being a practice (takes are practice play only, however the room changed under one).
 pub(super) fn record_inputs(
     mut commands: Commands,
     lobby: Res<Lobby>,
     mut recording: Query<(Entity, &mut Recording, &PlayerInput, &Pos, &ClassId, &InRoom, Has<StopRecording>)>,
 ) {
     for (player, mut recording, input, pos, class, room, stop) in &mut recording {
+        let stop = stop || !lobby.practicing(room);
         if !stop {
             if recording.began.is_none() {
                 recording.began = Some((pos.0, *class, lobby.map_id(room)));
             }
             recording.ticks.push(*input);
         }
-        if stop || recording.ticks.len() >= LONGEST_TAKE {
+        if stop || recording.ticks.len() >= LONGEST_TAKE_TICKS {
             if let Some((start, class, map)) = recording.began {
-                let take = Take { map, class, start, ticks: std::mem::take(&mut recording.ticks) };
-                match save(&take) {
-                    Ok(()) => info!(ticks = take.ticks.len(), class = class.def().name, "take saved"),
-                    Err(why) => warn!(%why, "the take couldn't be saved"),
-                }
+                save(Take { map, class, start, ticks: std::mem::take(&mut recording.ticks) });
             }
             commands.entity(player).remove::<(Recording, StopRecording)>();
         }
     }
 }
 
-fn save(take: &Take) -> Result<(), Box<dyn std::error::Error>> {
-    std::fs::create_dir_all(std::path::Path::new(TAKE_PATH).parent().expect("a folder in the path"))?;
-    std::fs::write(TAKE_PATH, ron::to_string(take)?)?;
-    Ok(())
+/// Serialized here (cheap), written to disk off the simulation thread: a slow disk mustn't
+/// stall the tick.
+fn save(take: Take) {
+    let (ticks, class) = (take.ticks.len(), take.class.def().name.clone());
+    match ron::to_string(&take) {
+        Ok(text) => {
+            std::thread::spawn(move || {
+                let write = || -> std::io::Result<()> {
+                    std::fs::create_dir_all(std::path::Path::new(TAKE_PATH).parent().expect("a folder in the path"))?;
+                    std::fs::write(TAKE_PATH, text)
+                };
+                match write() {
+                    Ok(()) => info!(ticks, class, "take saved"),
+                    Err(why) => warn!(%why, "the take couldn't be saved"),
+                }
+            });
+        }
+        Err(why) => warn!(%why, "the take couldn't be serialized"),
+    }
 }
 
 /// The saved take, if there's one to be read.
@@ -120,10 +130,11 @@ pub(super) fn drive_replays(
         &mut PlayerInput,
         (&mut Pos, &mut arena_shared::protocol::Motion, &mut Health, &mut Chilled, &mut Hasted),
         (&mut AttackState, &mut Cooldowns, &mut Dashing, &mut Walking, &mut LastSwing),
+        (&mut Frenzy, &mut Fury, &mut DashHits),
         Has<Dead>,
     )>,
 ) {
-    for (bot, mut replay, room, max, mut input, (mut pos, mut motion, mut health, mut chilled, mut hasted), (mut attack, mut cooldowns, mut dashing, mut walking, mut last_swing), dead) in &mut bots {
+    for (bot, mut replay, room, max, mut input, (mut pos, mut motion, mut health, mut chilled, mut hasted), (mut attack, mut cooldowns, mut dashing, mut walking, mut last_swing), (mut frenzy, mut fury, mut dash_hits), dead) in &mut bots {
         if dead || replay.at >= replay.ticks.len() {
             replay.at = 0;
             let start = replay.start;
@@ -137,6 +148,10 @@ pub(super) fn drive_replays(
             dashing.set_if_neq(Dashing::default());
             walking.set_if_neq(Walking::default());
             *last_swing = LastSwing::default();
+            // Nothing earned mid-take carries into the next loop: it would drift the playback.
+            frenzy.set_if_neq(Frenzy::default());
+            fury.set_if_neq(Fury::default());
+            *dash_hits = DashHits::default();
             commands.entity(bot).remove::<Dead>();
         }
         *input = replay.ticks[replay.at];

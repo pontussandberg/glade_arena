@@ -122,19 +122,28 @@ pub fn projectile_end(map: &Map, projectile: &Projectile, tick: u32) -> ShotEnd 
 /// ground, and between its feet and its top (`BODY_HEIGHT` over them) at the height it flies
 /// there; aimed up it flies over, and under one that has jumped or stands below. The body is as
 /// wide as it stands where the shot crosses it: full up to the shoulders, its head's width at
-/// the top (`body_radius`). Swept, not
+/// the top (`body_radius`), and its height band is judged over the whole stretch the shot is
+/// within reach, not just the nearest point, so one falling steeply still meets what it drops
+/// into just past its closest pass. Swept, not
 /// spot-checked, so nothing fits between one tick's spot and the next however fast it flies.
-/// The tick of the pass, so several bodies on one stretch are met in the order flown.
+/// The tick it comes in reach, so several bodies on one stretch are met in the order flown.
 pub fn projectile_hits(projectile: &Projectile, (from, to): (f32, f32), (player_pos, feet, size): (Vec2, f32, f32)) -> Option<f32> {
     let radius = shot(projectile).radius;
     let (a, b) = (projectile_pos(projectile, from), projectile_pos(projectile, to));
-    let along = ((player_pos - a).dot(b - a) / a.distance_squared(b).max(1e-6)).clamp(0.0, 1.0);
-    let tick = from + (to - from) * along;
-    let height = projectile_height(projectile, tick);
-    let hits = projectile_pos(projectile, tick).distance(player_pos) <= crate::config::body_radius(size, height - feet) + radius
-        && height - radius <= feet + BODY_HEIGHT * size
-        && height + radius >= feet;
-    hits.then_some(tick)
+    let span2 = a.distance_squared(b).max(1e-6);
+    let along = ((player_pos - a).dot(b - a) / span2).clamp(0.0, 1.0);
+    let tick_at = |s: f32| from + (to - from) * s;
+    let height = projectile_height(projectile, tick_at(along));
+    let wide = crate::config::body_radius(size, height - feet) + radius;
+    let apart2 = a.lerp(b, along).distance_squared(player_pos);
+    if apart2 > wide * wide {
+        return None;
+    }
+    let reach = ((wide * wide - apart2) / span2).sqrt();
+    let (meets, leaves) = (tick_at((along - reach).max(0.0)), tick_at((along + reach).min(1.0)));
+    let (h_in, h_out) = (projectile_height(projectile, meets), projectile_height(projectile, leaves));
+    let hits = h_in.max(h_out) + radius >= feet && h_in.min(h_out) - radius <= feet + BODY_HEIGHT * size;
+    hits.then_some(meets)
 }
 
 /// Damage of a projectile hitting at `tick`: the ability's, or the auto-attack's by how far it

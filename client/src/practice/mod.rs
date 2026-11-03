@@ -120,10 +120,11 @@ struct FakePingState;
 /// What "Fake ping" steps through, in ms: off first.
 const FAKE_PINGS: [u64; 3] = [0, 50, 100];
 
-/// Whether we're recording a take of our own play, as last asked (`RoomRequest::Record`: the
-/// recording itself is the server's).
+/// Since when we're recording a take of our own play, as last asked (`RoomRequest::Record`: the
+/// recording itself is the server's). A take saves itself at its longest, so the REC light turns
+/// itself off in step then.
 #[derive(Resource, Default, PartialEq)]
-struct Taking(bool);
+struct Taking(Option<f32>);
 
 /// Starts recording a take, and stops it (the server saves it for "Replay bot").
 #[derive(Component)]
@@ -232,7 +233,7 @@ fn tools_off(
     hitboxes_3d.set_if_neq(ShowHitboxes3d(false));
     fake_ping.set_if_neq(FakeLatency::default());
     placing.set_if_neq(Placing::default());
-    taking.set_if_neq(Taking(false));
+    taking.set_if_neq(Taking(None));
 }
 
 /// The tools under the header: folded away, they keep their width (so the panel stays the same
@@ -319,18 +320,26 @@ fn step_fake_ping(
 /// stops); "Replay bot" spawns a bot playing the saved take back, looping. REC shows what we
 /// last asked for.
 fn use_recorder(
+    time: Res<Time>,
     mut taking: ResMut<Taking>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
     record: Single<(Ref<Interaction>, &mut BorderColor), With<RecordButton>>,
     bot: Single<Ref<Interaction>, With<BotButton>>,
     state: Single<(&mut Text, &mut TextColor), With<RecordState>>,
 ) {
+    let now = time.elapsed_secs();
+    if taking.0.is_some_and(|since| now - since >= arena_shared::config::LONGEST_TAKE_TICKS as f32 / arena_shared::config::TICK_HZ as f32) {
+        taking.0 = None;
+    }
     let (interaction, mut border) = record.into_inner();
     if clicked(interaction) {
-        taking.0 = !taking.0;
-        request(&mut sender, RoomRequest::Record(taking.0));
+        taking.0 = match taking.0 {
+            None => Some(now),
+            Some(_) => None,
+        };
+        request(&mut sender, RoomRequest::Record(taking.0.is_some()));
     }
-    let (label, edge, tint) = if taking.0 {
+    let (label, edge, tint) = if taking.0.is_some() {
         ("REC", palette::ui::ACCENT, palette::ui::ACCENT)
     } else {
         ("OFF", palette::ui::MUTED.with_alpha(0.5), palette::ui::MUTED)

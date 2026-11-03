@@ -38,7 +38,9 @@ pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<Strikes>();
         app.add_observer(strike_home);
+        app.add_systems(Update, resolve_strikes.after(crate::rooms::LobbyNews));
         app.add_plugins(bounds::plugin);
         app.add_plugins((
             arena::ArenaPlugin,
@@ -83,7 +85,7 @@ impl Plugin for RenderPlugin {
                 (read_local_input.in_set(crate::PlayerControls).in_set(CameraPlaced), show_destination).chain(),
                 (add_visuals, sync_transforms, lift_fighters).chain().before(crate::rig::Posing),
                 (fly_shots, fade_wakes, fly_impacts, fade_stuck_spears, crate::rig::empty_hands).chain().after(crate::rig::Posing),
-                pin_stuck_spears,
+                pin_stuck_spears.after(resolve_strikes),
                 (show_novas, grow_bursts, end_fleeting),
                 // Once a new fighter's rig and cloth are on it, so they go over to the frosted
                 // material with its body.

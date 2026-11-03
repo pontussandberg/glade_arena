@@ -463,24 +463,24 @@ const GIVE_RATE: f32 = 0.08;
 pub(super) fn press_apart(
     lobby: Res<Lobby>,
     mut fighters: Query<
-        (&mut Pos, &InRoom, &ClassId, Has<Elite>, &arena_shared::protocol::Motion, &Dashing, (Has<ControlledBy>, Has<crate::replays::Replay>)),
+        (Entity, &mut Pos, &InRoom, &ClassId, Has<Elite>, &arena_shared::protocol::Motion, &Dashing, (Has<ControlledBy>, Has<crate::replays::Replay>)),
         (InPlay, With<PlayerId>, Without<crate::Dummy>, Without<Untouchable>, Without<crate::items::Decoy>),
     >,
 ) {
-    let mut by_room: HashMap<RoomKey, Vec<(usize, Vec2, f32, f32, bool)>> = HashMap::new();
-    for (i, (pos, room, class, elite, motion, _, (player, replay))) in fighters.iter().enumerate() {
+    let mut by_room: HashMap<RoomKey, Vec<(Entity, Vec2, f32, f32, bool)>> = HashMap::new();
+    for (body, pos, room, class, elite, motion, _, (player, replay)) in fighters.iter() {
         let size = class.def().hit_size(elite);
-        by_room.entry(room.key).or_default().push((i, pos.0, size, motion.height, player || replay));
+        by_room.entry(room.key).or_default().push((body, pos.0, size, motion.height, player || replay));
     }
-    for (i, (mut pos, room, class, elite, motion, dashing, (player, replay))) in fighters.iter_mut().enumerate() {
+    for (body, mut pos, room, class, elite, motion, dashing, (player, replay)) in fighters.iter_mut() {
         if dashing.0.is_some() {
             continue;
         }
         let (hero, size) = (player || replay, class.def().hit_size(elite));
         let mut push = Vec2::ZERO;
-        for &(j, other, other_size, other_feet, other_hero) in by_room.get(&room.key).map_or(&[][..], |v| &v[..]) {
+        for &(other_body, other, other_size, other_feet, other_hero) in by_room.get(&room.key).map_or(&[][..], |v| &v[..]) {
             let over = motion.height >= other_feet + BODY_HEIGHT * other_size || other_feet >= motion.height + BODY_HEIGHT * size;
-            if i == j || !(hero || other_hero) || over {
+            if body == other_body || !(hero || other_hero) || over {
                 continue;
             }
             let apart = pos.0 - other;
@@ -488,7 +488,7 @@ pub(super) fn press_apart(
             if apart.length_squared() >= room_for * room_for {
                 continue;
             }
-            let away = apart.try_normalize().unwrap_or(Vec2::from_angle(i as f32));
+            let away = apart.try_normalize().unwrap_or(Vec2::from_angle(body.index().index() as f32));
             push += away * (room_for - apart.length());
         }
         let push = push.clamp_length_max(GIVE_RATE);

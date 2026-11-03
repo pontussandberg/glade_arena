@@ -221,6 +221,11 @@ impl Lobby {
         self.rooms.get(&room.key).map_or(MapId::default(), |r| r.map)
     }
 
+    /// Whether `room` is someone's practice.
+    pub(crate) fn practicing(&self, room: &InRoom) -> bool {
+        self.rooms.get(&room.key).is_some_and(|r| r.practice)
+    }
+
     /// Where a player in `room` starts, away from `others` there: its spawn point farthest from
     /// them, or where it was asked to start (`Room::start`).
     pub fn spawn_point(&self, room: &InRoom, others: impl IntoIterator<Item = Vec2> + Clone) -> Vec2 {

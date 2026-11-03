@@ -156,21 +156,22 @@ fn draw_hitboxes(
 fn draw_hitboxes_3d(
     map: Res<crate::rooms::CurrentMap>,
     mut gizmos: Gizmos,
-    fighters: Query<(&Pos, &ClassId, Option<&Health>, Has<Elite>), Without<Projectile>>,
+    fighters: Query<(&Pos, &ClassId, Option<&Health>, Has<Elite>, (Option<&Motion>, Option<&crate::render::PredictedWalk>)), Without<Projectile>>,
     shots: Query<(&Projectile, &Transform, &InheritedVisibility)>,
 ) {
     let flat = Quat::from_rotation_x(FRAC_PI_2);
     let floor = height_color(0.0);
-    for (pos, class, health, elite) in &fighters {
+    for (pos, class, health, elite, (motion, predicted)) in &fighters {
         if health.is_some_and(|h| !h.alive()) {
             continue;
         }
         let size = class.def().hit_size(elite);
         let tall = BODY_HEIGHT * size;
-        let at = to_world(pos.0, map.map().height_at(pos.0));
+        // From its feet, where hits judge it (`Motion::height`): up with a jump, on a crate.
+        let at = to_world(pos.0, crate::render::shown_height(map.map(), motion, predicted, pos.0));
         for i in 0..=(tall / RING_EVERY).round() as usize {
             let height = i as f32 * RING_EVERY;
-            gizmos.circle(Isometry3d::new(at.with_y(height), flat), body_radius(size, height), height_color(height));
+            gizmos.circle(Isometry3d::new(at + Vec3::Y * height, flat), body_radius(size, height), height_color(height));
         }
         // Its sides, so it reads as a column (tapering to the head).
         for k in 0..4 {

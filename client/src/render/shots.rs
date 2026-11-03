@@ -289,6 +289,45 @@ pub(super) struct StuckSpear {
     sinking: Option<f32>,
 }
 
+/// Shots just removed, captured as the removal is applied (`strike_home`) and shown the same
+/// frame once the frame's news is in (`resolve_strikes`): judged in the observer itself, a
+/// removal riding the packet that also changes the map or ends the match would be judged against
+/// last frame's map, clock and clear marks.
+#[derive(Resource, Default)]
+pub(super) struct Strikes(Vec<Strike>);
+
+/// What a strike needs of the shot the moment it went: everything else is put back together from
+/// the sim.
+struct Strike {
+    projectile: Projectile,
+    /// As big as it was drawn in flight (never shown flying, as big as its thrower draws it).
+    scale: Vec3,
+    thrown: bool,
+    visible: bool,
+    mesh: Handle<Mesh>,
+    light: Handle<PlainMaterial>,
+    seed: u32,
+}
+
+/// Notes a removed shot for `resolve_strikes`, with what only exists while it's being removed.
+pub(super) fn strike_home(
+    trigger: On<Remove, Projectile>,
+    mut strikes: ResMut<Strikes>,
+    shots: Query<(&Projectile, Option<&Thrown>, &InheritedVisibility, &Mesh3d, &MeshMaterial3d<PlainMaterial>)>,
+) {
+    let Ok((projectile, thrown, visible, mesh, own_light)) = shots.get(trigger.entity) else { return };
+    let scale = thrown.and_then(|t| t.launch.map(|l| l.scale)).unwrap_or(Vec3::splat(crate::rig::drawn_size(projectile.class, false)));
+    strikes.0.push(Strike {
+        projectile: *projectile,
+        scale,
+        thrown: thrown.is_some(),
+        visible: visible.get(),
+        mesh: mesh.0.clone(),
+        light: own_light.0.clone(),
+        seed: trigger.entity.index().index(),
+    });
+}
+
 /// A thrown spear gone short of its range hit something (a fighter, a wall, a rock, a tree), and
 /// one that falls (`Shot::falls`) ends on something (or the ground) past it too: a flash where
 /// its point was, splinters thrown back the way it came, out and up, and the spear itself left
@@ -303,8 +342,8 @@ pub(super) struct StuckSpear {
 /// (its hit is the fighter's to show), and so does every one cleared away mid-flight: at the
 /// end of a won match, or with the map changed.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn strike_home(
-    trigger: On<Remove, Projectile>,
+pub(super) fn resolve_strikes(
+    mut strikes: ResMut<Strikes>,
     mut commands: Commands,
     time: Res<Time>,
     clock: AttackClock,
@@ -314,13 +353,33 @@ pub(super) fn strike_home(
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<PlainMaterial>>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
-    shots: Query<(&Projectile, &Transform, Option<&Thrown>, &InheritedVisibility, &Mesh3d, &MeshMaterial3d<PlainMaterial>)>,
 ) {
-    let cleared = room.0.as_ref().is_some_and(|view| view.winner.is_some()) || time.elapsed_secs() - map_changed.0 < MAP_CLEAR_SECONDS;
-    let Ok((projectile, transform, thrown, visible, mesh, own_light)) = shots.get(trigger.entity) else { return };
-    if cleared {
+    if strikes.0.is_empty() {
         return;
     }
+    let cleared = room.0.as_ref().is_some_and(|view| view.winner.is_some()) || time.elapsed_secs() - map_changed.0 < MAP_CLEAR_SECONDS;
+    for strike in std::mem::take(&mut strikes.0) {
+        if cleared {
+            continue;
+        }
+        resolve_strike(&strike, (&mut commands, &time, &clock, &map, &mut visuals, &mut materials, &mut sounds));
+    }
+}
+
+/// One removed shot's strike (`resolve_strikes`).
+fn resolve_strike(
+    strike: &Strike,
+    (commands, time, clock, map, visuals, materials, sounds): (
+        &mut Commands,
+        &Res<Time>,
+        &AttackClock,
+        &Res<crate::rooms::CurrentMap>,
+        &mut ResMut<Visuals>,
+        &mut ResMut<Assets<PlainMaterial>>,
+        &mut ResMut<crate::audio::SoundQueue>,
+    ),
+) {
+    let projectile = &strike.projectile;
     let Some(shot) = projectile.class.def().shot(projectile.ability) else { return };
     let Some(removed) = clock.latest_tick() else { return };
     let ground = map.0.map();
@@ -334,12 +393,12 @@ pub(super) fn strike_home(
     let flown = sim::projectile_flown(projectile, removed as f32);
     let spent = flown > shot.range - STOPPED_SHORT;
     let now = time.elapsed_secs();
-    let seed = trigger.entity.index().index();
+    let seed = strike.seed;
     // A spear strikes whether or not it was ever shown flying: thrown point blank, it ends
     // before the hand has visibly let go of it, and the strike is all there is to see of it.
-    if thrown.is_none() {
-        if spent && visible.get() {
-            burst(&mut commands, &visuals, own_light.0.clone(), at(end_tick as f32), now, seed);
+    if !strike.thrown {
+        if spent && strike.visible {
+            burst(commands, visuals, strike.light.clone(), at(end_tick as f32), now, seed);
         }
         return;
     }
@@ -373,7 +432,7 @@ pub(super) fn strike_home(
         (_, Some((strike, _))) => strike,
         _ => at(end_tick as f32),
     };
-    let light = visuals.material(&mut materials, Look::Spark);
+    let light = visuals.material(materials, Look::Spark);
     let bit = || (Mesh3d(visuals.impact.clone()), MeshMaterial3d(light.clone()), Transform::from_translation(point).with_scale(Vec3::ZERO), NotShadowCaster);
     commands.spawn((Impact { started: now, life: FLASH_SECONDS, size: FLASH_SIZE, velocity: None }, bit()));
     let back = -(turned * Vec3::X).with_y(0.0).normalize_or(Vec3::X);
@@ -393,16 +452,16 @@ pub(super) fn strike_home(
     }
     // The spear stays where it struck: its tip run into the terrain that ended it, or seeking
     // the body it stands in (`pin_stuck_spears`).
-    let placed = |tip: Vec3| Transform::from_translation(tip).with_rotation(turned).with_scale(transform.scale);
+    let placed = |tip: Vec3| Transform::from_translation(tip).with_rotation(turned).with_scale(strike.scale);
     match (seek, end) {
         (Some((from, to)), _) => {
             let placed = placed(to);
             let fallback = ground_end.map(|(strike, turned)| (strike + turned * Vec3::X * TERRAIN_BURY, turned));
-            commands.spawn((StuckSpear { born: now, scale: placed.scale, held: true, sinking: None }, PinTo { owner: projectile.owner, from, to, radius: shot.radius, born: now, fallback }, Mesh3d(mesh.0.clone()), MeshMaterial3d(own_light.0.clone()), placed));
+            commands.spawn((StuckSpear { born: now, scale: placed.scale, held: true, sinking: None }, PinTo { owner: projectile.owner, from, to, radius: shot.radius, born: now, fallback }, Mesh3d(strike.mesh.clone()), MeshMaterial3d(strike.light.clone()), placed));
         }
-        (None, Some((strike, _))) => {
-            let placed = placed(strike + turned * Vec3::X * TERRAIN_BURY);
-            commands.spawn((StuckSpear { born: now, scale: placed.scale, held: false, sinking: None }, Mesh3d(mesh.0.clone()), MeshMaterial3d(own_light.0.clone()), placed));
+        (None, Some((at, _))) => {
+            let placed = placed(at + turned * Vec3::X * TERRAIN_BURY);
+            commands.spawn((StuckSpear { born: now, scale: placed.scale, held: false, sinking: None }, Mesh3d(strike.mesh.clone()), MeshMaterial3d(strike.light.clone()), placed));
         }
         _ => {}
     }
@@ -429,19 +488,22 @@ pub(super) struct PinTo {
     fallback: Option<(Vec3, Quat)>,
 }
 
-/// Pins each seeking spear (`PinTo`, `strike_home`) into its body: the foe along its stretch
-/// whose fresh hit the spear's owner dealt (noted here from `RecentHits` the frame each hit
-/// arrives, and kept a moment, since the hit and the spear's end can come a frame apart either
-/// way; through several, an Impaler's, the farthest along, the one
+/// Pins each seeking spear (`PinTo`, `resolve_strikes`) into its body: the foe along its stretch
+/// whose fresh hit the spear's owner dealt around the spear's own end (noted here from
+/// `RecentHits` the frame each hit arrives, and matched within `NAMED_SLACK` either way, so
+/// neither packet order nor the owner's other hits moments later can mislead it; through
+/// several, an Impaler's, the farthest along, the one
 /// it stuck in), its point run `BODY_BURY` in from the side it came, left a child of the
 /// fighter, riding along with it (and gone with it). The damage not come within `PIN_GRACE`, the
-/// nearest foe along the stretch; no one there at all (the body gone), it stays standing free.
+/// nearest foe along the stretch; no one there at all, the terrain the map blames (`fallback`),
+/// with the chip ting a terrain strike gets; nothing anywhere, it stays standing free.
 /// Foes are judged where the server last had them (`Pos`), but the spear is pinned onto the body
 /// as drawn; the shopkeeper and allies are passed over, as the server flies shots through them.
 #[allow(clippy::type_complexity)]
 pub(super) fn pin_stuck_spears(
     mut commands: Commands,
     time: Res<Time>,
+    mut sounds: ResMut<crate::audio::SoundQueue>,
     mut spears: Query<(Entity, &PinTo, &mut StuckSpear, &mut Transform)>,
     fighters: Query<(Entity, &PlayerId, &Transform, &Pos, Option<&Team>, (&ClassId, Has<Elite>), Option<&RecentHits>, Has<Shopkeeper>), Without<PinTo>>,
     mut seen: Local<bevy::platform::collections::HashMap<Entity, u32>>,
@@ -452,7 +514,12 @@ pub(super) fn pin_stuck_spears(
     // there when it's first seen are only noted), kept a moment.
     seen.retain(|&body, _| fighters.contains(body));
     named.retain(|&(_, _, at)| now - at < 1.0);
-    for (body, .., hits, _) in &fighters {
+    let mut teams: bevy::platform::collections::HashMap<PeerId, Option<Team>> = default();
+    let scanning = !spears.is_empty();
+    for (body, id, _, _, team, _, hits, _) in &fighters {
+        if scanning {
+            teams.insert(id.0, team.copied());
+        }
         let Some(hits) = hits else { continue };
         let Some(&last) = seen.get(&body) else {
             seen.insert(body, hits.seq());
@@ -465,42 +532,49 @@ pub(super) fn pin_stuck_spears(
         seen.insert(body, hits.seq());
     }
     for (spear, pin, mut stuck, mut transform) in &mut spears {
-        let own_team = fighters.iter().find(|(_, id, ..)| id.0 == pin.owner).and_then(|(_, _, _, _, team, ..)| team.copied());
+        let own_team = teams.get(&pin.owner).copied().flatten();
         let heading = (pin.to - pin.from).normalize_or(Vec3::X);
         let level = heading.with_y(0.0);
         let ahead = level.normalize_or(heading);
         let span = (pin.to - pin.from).with_y(0.0).length();
-        let candidates: Vec<_> = fighters
-            .iter()
-            .filter_map(|(body, id, drawn, pos, team, (class, elite), _, keeper)| {
-                if id.0 == pin.owner || keeper || own_team.zip(team.copied()).is_some_and(|(mine, theirs)| mine.allied(theirs)) {
-                    return None;
-                }
-                let size = class.def().hit_size(elite);
-                let to_body = (to_world(pos.0, 0.0) - pin.from).with_y(0.0);
-                let along = to_body.dot(ahead);
-                let height = pin.from.y + heading.y * along / level.length().max(1e-3);
-                let feet = drawn.translation.y;
-                let near = (-TING_SLACK..=span + TING_SLACK).contains(&along)
-                    && to_body.distance(ahead * along) < body_radius(size, height - feet) + pin.radius + TING_SLACK
-                    && (feet - TING_SLACK..feet + BODY_HEIGHT * size + TING_SLACK).contains(&height);
-                let named = named.iter().any(|&(hit, by, at)| hit == body && by == pin.owner && at + NAMED_SLACK >= pin.born);
-                near.then_some((body, *drawn, along, height, named, size))
-            })
-            .collect();
-        let named = candidates.iter().filter(|c| c.4).max_by(|a, b| a.2.total_cmp(&b.2));
+        // The farthest named body along the stretch, and the nearest of any kind, in one pass.
+        let (mut named_body, mut nearest): (Option<(Entity, Transform, f32, f32, f32)>, Option<(Entity, Transform, f32, f32, f32)>) = (None, None);
+        for (body, id, drawn, pos, team, (class, elite), _, keeper) in &fighters {
+            if id.0 == pin.owner || keeper || own_team.zip(team.copied()).is_some_and(|(mine, theirs)| mine.allied(theirs)) {
+                continue;
+            }
+            let size = class.def().hit_size(elite);
+            let to_body = (to_world(pos.0, 0.0) - pin.from).with_y(0.0);
+            let along = to_body.dot(ahead);
+            let height = pin.from.y + heading.y * along / level.length().max(1e-3);
+            let feet = drawn.translation.y;
+            let near = (-TING_SLACK..=span + TING_SLACK).contains(&along)
+                && to_body.distance(ahead * along) < body_radius(size, height - feet) + pin.radius + TING_SLACK
+                && (feet - TING_SLACK..feet + BODY_HEIGHT * size + TING_SLACK).contains(&height);
+            if !near {
+                continue;
+            }
+            let found = (body, *drawn, along, height, size);
+            if named.iter().any(|&(hit, by, at)| hit == body && by == pin.owner && (at - pin.born).abs() <= NAMED_SLACK) && named_body.is_none_or(|best| along > best.2) {
+                named_body = Some(found);
+            }
+            if nearest.is_none_or(|best| along < best.2) {
+                nearest = Some(found);
+            }
+        }
         let settle = now - pin.born > PIN_GRACE;
-        let found = named.or_else(|| settle.then(|| candidates.iter().min_by(|a, b| a.2.total_cmp(&b.2))).flatten());
-        let Some(&(body, drawn, _, height, _, size)) = found else {
+        let Some((body, drawn, _, height, size)) = named_body.or(settle.then_some(nearest).flatten()) else {
             if settle {
                 if let Some((tip, turned)) = pin.fallback {
                     *transform = Transform::from_translation(tip).with_rotation(turned).with_scale(stuck.scale);
+                    stuck.held = false;
+                    sounds.add(crate::audio::Sfx::SpearTing, 1.0).from(arena::to_gameplay(tip), crate::audio::Reach::Combat).by(pin.owner);
                 }
                 commands.entity(spear).remove::<PinTo>();
             }
             continue;
         };
-        let tip = drawn.translation.with_y(height) - ahead * PLAYER_RADIUS * size + transform.rotation * Vec3::X * BODY_BURY;
+        let tip = drawn.translation.with_y(height) - ahead * body_radius(size, height - drawn.translation.y) + transform.rotation * Vec3::X * BODY_BURY;
         let placed = Transform::from_translation(tip).with_rotation(transform.rotation).with_scale(transform.scale * STUCK_SCALE);
         let local = Transform::from_matrix(drawn.to_matrix().inverse() * placed.to_matrix());
         stuck.scale = local.scale;
