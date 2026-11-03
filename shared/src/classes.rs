@@ -271,9 +271,6 @@ pub struct AttackDef {
     /// there (none by default).
     #[serde(default)]
     pub rift: Option<RiftDef>,
-    /// Its shots fly on through monsters (never players), hitting each once (no by default).
-    #[serde(default)]
-    pub pierces: bool,
     /// Its shots burst where they hit or end, hitting the shooter's foes round there too (none by
     /// default).
     #[serde(default)]
@@ -805,7 +802,6 @@ mod tests {
                 assert!(!filled.contains(['{', '}']), "{what}: unknown placeholder in {filled:?}");
             }
             chill_is_sane(&c.id, c.attack.chill);
-            assert!(!c.attack.pierces || c.attack.kind.shot().is_some(), "{}: pierces, but throws nothing", c.id);
             assert!(c.attack.burst.is_none() || c.attack.kind.shot().is_some(), "{}: bursts, but throws nothing", c.id);
             // A knock-up shorter than the empowered attack: the striker alone can't chain it.
             if let Some(follow_up) = c.attack.follow_up {
@@ -865,7 +861,7 @@ mod tests {
     #[test]
     fn far_scale_scales_with_distance() {
         let kind = |far_scale| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_scale, falls: false };
-        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None, pierces: false, burst: None };
+        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None, burst: None };
         assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(3.0))).damage_at(d)), [10, 20, 30, 30]);
         assert_eq!(attack(kind(None)).damage_at(5.0), 10);
     }

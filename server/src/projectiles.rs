@@ -19,8 +19,8 @@ pub(super) fn spawn_projectile(commands: &mut Commands, projectile: Projectile, 
 #[derive(Component)]
 pub(crate) struct Spares(pub(crate) PeerId);
 
-/// Server-only: the monsters a piercing shot (`AttackDef::pierces`) has gone through, so it hits
-/// each once.
+/// Server-only: the monsters a piercing shot (an Impaler holder's javelin) has gone through, so
+/// it hits each once.
 #[derive(Component, Default)]
 pub(crate) struct Pierced(Vec<PeerId>);
 
@@ -72,14 +72,15 @@ fn burst_at(
 
 /// Projectile hits on the shooter's foes (allies' pass through), judged against where everyone
 /// is now, like every hit. Clients see the result through replicated `Health` (and `Chilled`).
-/// A shot ends at the first it hits, but one that pierces (`AttackDef::pierces`, an auto-attack's)
-/// flies on through monsters, hitting each once.
+/// A shot ends at the first it hits, but an Impaler holder's attack javelins fly on through
+/// monsters (`items::impaler` of them at most), hitting each once.
 #[allow(clippy::type_complexity)]
 pub(super) fn resolve_projectile_hits(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
     mut projectiles: Query<(Entity, &Pos, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Spares>, (Option<&Bounces>, Option<&mut Pierced>))>,
     mut targets: Targets,
+    holders: Query<(&PlayerId, &arena_shared::items::Satchel)>,
     lobby: Res<Lobby>,
     mut log: ResMut<HitLog>,
 ) {
@@ -88,7 +89,8 @@ pub(super) fn resolve_projectile_hits(
     // how hard, and whom they spare (the one struck).
     let mut bursts = Vec::new();
     for (projectile_entity, projectile_pos, projectile, room, team, might, spares, (bounces, mut pierced)) in &mut projectiles {
-        let pierces = projectile.ability.is_none() && projectile.class.def().attack.pierces;
+        let impaler = holders.iter().find(|(id, _)| id.0 == projectile.owner).map_or(0, |(_, satchel)| satchel.level(Item::Impaler));
+        let through_at_most = if projectile.ability.is_none() && impaler > 0 { arena_shared::items::impaler(impaler) } else { 0 };
         let mut through: Vec<PeerId> = pierced.as_ref().map_or_else(Vec::new, |p| p.0.clone());
         for (target, target_id, (target_room, target_team), target_pos, mut health, mut chilled, mut recent, _, (sheltered, decoy, motion)) in &mut targets {
             if target_id.0 == projectile.owner
@@ -101,7 +103,7 @@ pub(super) fn resolve_projectile_hits(
                 || !sim::projectile_hits(projectile_pos.0, projectile, now.0, target_pos.0, motion.height) {
                 continue;
             }
-            let goes_on = pierces && target_team.0 == arena_shared::rooms::ZOMBIES;
+            let goes_on = target_team.0 == arena_shared::rooms::ZOMBIES && (through.len() as u32) < through_at_most;
             let first = through.is_empty();
             if goes_on {
                 through.push(target_id.0);

@@ -253,6 +253,17 @@ const SPLINTER_FALL: f32 = 9.0;
 const STOPPED_SHORT: f32 = 0.4;
 /// A spear ending this near a fighter's body (meters) struck it, not what's around it.
 const TING_SLACK: f32 = 0.4;
+/// How deep a spear buries where it strikes: its point run this share of its length into a
+/// body, but only its tip (meters) into a wall, a crate or the ground.
+const BODY_BURY: f32 = arena::SPEAR_LENGTH * 0.2;
+const TERRAIN_BURY: f32 = 0.03;
+/// How far around where a spear was last drawn the terrain that stopped it is looked for
+/// (meters): it's drawn on our clock, a hair short of or past the server's point of impact.
+const STUCK_PROBE: f32 = 0.6;
+/// How long a stuck spear stays (seconds), and how long it then takes to sink away into what
+/// holds it.
+const STUCK_SECONDS: f32 = 8.0;
+const STUCK_SINK: f32 = 0.25;
 /// A bolt bursting as it's spent (`strike_home`): how long its flash lasts and how big it gets
 /// (seconds, meters); how many sparks fly out of it every way, how fast (m/s) and for how long.
 const BURST_SECONDS: f32 = 0.12;
@@ -271,11 +282,22 @@ pub(super) struct Impact {
     velocity: Option<Vec3>,
 }
 
+/// A spear left standing where it struck (`strike_home`), from `born` (seconds), drawn `scale`
+/// big: in a body (a child of it, riding along) or in the ground or a wall.
+#[derive(Component)]
+pub(super) struct StuckSpear {
+    born: f32,
+    scale: Vec3,
+}
+
 /// A thrown spear gone short of its range hit something (a fighter, a wall, a rock, a tree), and
 /// one that falls (`Shot::falls`) ends on something (or the ground) past it too: a flash where
-/// its point was, and splinters thrown back the way it came, out and up. A bolt that flew its whole range
+/// its point was, splinters thrown back the way it came, out and up, and the spear itself left
+/// stuck where it struck (`StuckSpear`): its point run into the body it hit, riding along with
+/// it, or just its tip into the terrain that stopped it; one ending in the air (over water, off
+/// the map) just ends. A bolt that flew its whole range
 /// bursts there, in its own light, as if it lost hold of itself: a bigger flash, sparks flung
-/// out every way. A spear that flew its whole range just ends, as does a bolt stopped short
+/// out every way. A bolt stopped short just ends
 /// (its hit is the fighter's to show), and so does every one cleared away mid-flight: at the
 /// end of a won match, or with the map changed.
 #[allow(clippy::too_many_arguments)]
@@ -288,11 +310,11 @@ pub(super) fn strike_home(
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<PlainMaterial>>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
-    shots: Query<(&Projectile, &Transform, Option<&Thrown>, &InheritedVisibility, &MeshMaterial3d<PlainMaterial>)>,
-    fighters: Query<&Transform, (With<PlayerId>, Without<Projectile>)>,
+    shots: Query<(&Projectile, &Transform, Option<&Thrown>, &InheritedVisibility, &Mesh3d, &MeshMaterial3d<PlainMaterial>)>,
+    fighters: Query<(Entity, &Transform), (With<PlayerId>, Without<Projectile>)>,
 ) {
     let cleared = room.0.as_ref().is_some_and(|view| view.winner.is_some()) || map.is_changed();
-    let Ok((projectile, transform, thrown, visible, own_light)) = shots.get(trigger.entity) else { return };
+    let Ok((projectile, transform, thrown, visible, mesh, own_light)) = shots.get(trigger.entity) else { return };
     if cleared || !visible.get() {
         return;
     }
@@ -326,13 +348,39 @@ pub(super) fn strike_home(
     }
     // Into anything but a fighter (whose hit sounds for itself), a miss: a faint chip on stone,
     // heard near it, or however far off if it's our own spear.
-    let into_fighter = fighters.iter().any(|body| {
+    let struck = fighters.iter().find(|(_, body)| {
         let feet = body.translation.y;
         arena::to_gameplay(body.translation).distance(arena::to_gameplay(point)) < PLAYER_RADIUS + shot.radius + TING_SLACK
             && (feet - TING_SLACK..feet + BODY_HEIGHT + TING_SLACK).contains(&point.y)
     });
-    if !into_fighter {
+    if struck.is_none() {
         sounds.add(crate::audio::Sfx::SpearTing, 1.0).from(arena::to_gameplay(point), crate::audio::Reach::Combat).by(projectile.owner);
+    }
+    // The spear stays where it struck. Into a body: its point run `BODY_BURY` in from the side
+    // it came, left a child of the fighter, riding along with it (and gone with it). Into
+    // terrain: just its tip in, where the map says the ground or wall is, right around where it
+    // was last drawn; nothing there to hold it, it just ends.
+    let heading = (transform.rotation * Vec3::X).normalize_or(Vec3::X);
+    let stuck = match struck {
+        Some((body, held_by)) => {
+            let ahead = heading.with_y(0.0).normalize_or(heading);
+            let tip = held_by.translation.with_y(point.y) - ahead * PLAYER_RADIUS + heading * BODY_BURY;
+            let placed = Transform::from_translation(tip).with_rotation(transform.rotation).with_scale(transform.scale);
+            Some((Transform::from_matrix(held_by.to_matrix().inverse() * placed.to_matrix()), Some(body)))
+        }
+        None => {
+            let (back, ahead) = (point - heading * STUCK_PROBE, point + heading * STUCK_PROBE);
+            map.0.map().shot_end((arena::to_gameplay(back), back.y), (arena::to_gameplay(ahead), ahead.y)).map(|end| {
+                let tip = to_world(end.at, end.height) + heading * TERRAIN_BURY;
+                (Transform::from_translation(tip).with_rotation(transform.rotation).with_scale(transform.scale), None)
+            })
+        }
+    };
+    if let Some((placed, held_by)) = stuck {
+        let spear = commands.spawn((StuckSpear { born: now, scale: placed.scale }, Mesh3d(mesh.0.clone()), MeshMaterial3d(own_light.0.clone()), placed)).id();
+        if let Some(body) = held_by {
+            commands.entity(spear).insert(ChildOf(body));
+        }
     }
 }
 
@@ -348,6 +396,25 @@ fn burst(commands: &mut Commands, visuals: &Visuals, light: Handle<PlainMaterial
         let size = SPLINTER_SIZE.0 + (SPLINTER_SIZE.1 - SPLINTER_SIZE.0) * r(4);
         let life = BURST_LIFE.0 + (BURST_LIFE.1 - BURST_LIFE.0) * r(5);
         commands.spawn((Impact { started: now, life, size, velocity: Some(dir * speed) }, bit()));
+    }
+}
+
+/// A stuck spear holds a while, then sinks away into what holds it (its origin is its buried
+/// point), and is gone; with the map gone from under it, it's gone at once.
+pub(super) fn fade_stuck_spears(
+    mut commands: Commands,
+    time: Res<Time>,
+    map: Res<crate::rooms::CurrentMap>,
+    mut spears: Query<(Entity, &StuckSpear, &mut Transform)>,
+) {
+    let now = time.elapsed_secs();
+    for (entity, spear, mut transform) in &mut spears {
+        let sunk = (now - spear.born - STUCK_SECONDS) / STUCK_SINK;
+        if map.is_changed() || sunk >= 1.0 {
+            commands.entity(entity).despawn();
+        } else if sunk > 0.0 {
+            transform.scale = spear.scale * (1.0 - sunk);
+        }
     }
 }
 

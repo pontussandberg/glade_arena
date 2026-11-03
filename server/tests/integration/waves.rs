@@ -261,9 +261,10 @@ fn coop_picks_the_fallen_up() {
     }
 }
 
-/// A Jav's javelin goes through a line of monsters, hitting each; and the hit knocks them back.
+/// A Jav's javelin ends in the first monster it hits (the one behind goes untouched), and the
+/// hit knocks it back; with an Impaler bought, it runs on through the line, hitting both.
 #[test]
-fn javelins_pierce_monsters_and_knock_them_back() {
+fn javelins_stick_in_the_first_monster_until_an_impaler_sends_them_through() {
     let mut p = Party::new(5865, "javelinist", false);
     p.ask(RoomRequest::QuickJoin("Waves 3".into()));
     p.until(Duration::from_secs(10), "in the run", |p| p.satchel().is_some_and(|s| s.gold > 0));
@@ -272,13 +273,20 @@ fn javelins_pierce_monsters_and_knock_them_back() {
         let world = p.server.world_mut();
         world.query::<(&Team, &Health)>().iter(world).filter(|(t, h)| t.0 == ZOMBIES && h.alive()).count() >= 2
     });
-    // Out in the open east of the camp, two monsters in a row ahead of us, held still.
+    // Out in the open east of the camp, two monsters in a row ahead of us, held still, each on
+    // a spot the javelin is judged at (it's judged where it is each tick, steps of its speed:
+    // between those spots it can pass a body by). The rest of the wave is held far off, out of
+    // the javelin's way.
     let me = Vec2::new(10.5, 0.5);
     let world = p.server.world_mut();
     let monsters: Vec<Entity> = world.query::<(Entity, &Team, &Health)>().iter(world).filter(|(_, t, h)| t.0 == ZOMBIES && h.alive()).map(|(e, ..)| e).take(2).collect();
-    let spots = [me + Vec2::new(3.0, 0.0), me + Vec2::new(5.0, 0.0)];
+    let spots = [me + Vec2::new(4.5, 0.0), me + Vec2::new(6.375, 0.0)];
     let hold = |p: &mut Party| {
         let world = p.server.world_mut();
+        let others: Vec<Entity> = world.query::<(Entity, &Team, &Health)>().iter(world).filter(|(e, t, h)| t.0 == ZOMBIES && h.alive() && !monsters.contains(e)).map(|(e, ..)| e).collect();
+        for other in others {
+            world.entity_mut(other).get_mut::<Pos>().unwrap().0 = Vec2::new(-52.0, 35.0);
+        }
         for (monster, spot) in monsters.iter().zip(spots) {
             let mut m = world.entity_mut(*monster);
             m.get_mut::<Pos>().unwrap().0 = spot;
@@ -287,23 +295,59 @@ fn javelins_pierce_monsters_and_knock_them_back() {
         }
         place(&mut p.server, 1, me);
     };
+    // Kept on the ground while javelins fly: a pouncer leaping in place would let them pass
+    // under its feet.
+    let pin = |p: &mut Party| {
+        let world = p.server.world_mut();
+        for monster in &monsters {
+            if let Ok(mut m) = world.get_entity_mut(*monster)
+                && let Some(mut motion) = m.get_mut::<Motion>()
+            {
+                *motion = Motion::default();
+            }
+        }
+    };
     for _ in 0..30 {
         hold(&mut p);
         p.update();
     }
     let health = |p: &mut Party| [monsters[0], monsters[1]].map(|m| p.server.world().get::<Health>(m).map_or(0, |h| h.0));
+    // Without the item, the javelin ends in the first: the one right behind it goes untouched.
     let before = health(&mut p);
-    set_input(&mut p.client, PlayerInput { aim: Vec2::X, fire: true, ..default() });
-    p.until(Duration::from_secs(3), "both hit by one javelin", |p| {
+    p.until(Duration::from_secs(5), "the first hit", |p| {
+        pin(p);
+        // Fire is a click the server uses up: keep clicking until the throw goes off.
+        set_input(&mut p.client, PlayerInput { aim: Vec2::X, fire: true, ..default() });
+        health(p)[0] < before[0]
+    });
+    set_input(&mut p.client, PlayerInput::default());
+    // The knockback takes a few ticks to slide out (and any javelin still in the air lands).
+    for _ in 0..20 {
+        pin(&mut p);
+        p.update();
+    }
+    assert_eq!(health(&mut p)[1], before[1], "the second was hit through the first");
+    let pushed = p.server.world().get::<Pos>(monsters[0]).unwrap().0;
+    assert!(pushed.x > spots[0].x + 0.1, "the first wasn't knocked back: {pushed}");
+    // With an Impaler (the shop trades mid-fight, up close), one javelin runs through both.
+    let shop = p.room().expect("in a room").map.map().shop.expect("the waves map has a shop");
+    for _ in 0..5 {
+        place(&mut p.server, 1, shop + Vec2::new(0.0, -1.5));
+        p.update();
+    }
+    p.ask(RoomRequest::Buy(Item::Impaler));
+    p.until(Duration::from_secs(3), "the Impaler bought", |p| p.satchel().is_some_and(|s| s.level(Item::Impaler) == 1));
+    for _ in 0..30 {
+        hold(&mut p);
+        p.update();
+    }
+    let before = health(&mut p);
+    p.until(Duration::from_secs(5), "both hit by one javelin", |p| {
+        pin(p);
+        set_input(&mut p.client, PlayerInput { aim: Vec2::X, fire: true, ..default() });
         let now = health(p);
         now[0] < before[0] && now[1] < before[1]
     });
-    // The knockback takes a few ticks to slide out.
-    for _ in 0..20 {
-        p.update();
-    }
-    let pushed = p.server.world().get::<Pos>(monsters[0]).unwrap().0;
-    assert!(pushed.x > spots[0].x + 0.1, "the first wasn't knocked back: {pushed}");
 }
 
 /// A Frost Mage's frostbolt shatters on the monster it hits: the one beside it is hit too.
