@@ -500,7 +500,8 @@ fn open_shop(
     let (near, facing) = both.map_or((false, false), |(me, merchant)| {
         (me.distance(merchant.0) <= SHOP_RADIUS, (merchant.0 - me.0).normalize_or_zero().dot(mode.forward()) >= INTERACT_AIM)
     });
-    let hand = near && facing;
+    // Under the menu, F is the menu's to be ignored: it can't open the shop over it.
+    let hand = near && facing && !open.is(Frame::Menu);
     // A click on the field takes the cursor back for the fight, and shuts the shop with it.
     let mut now = open.is(Frame::Shop) && near && !mode.locked;
     if hand && keys.just_pressed(KeyCode::KeyF) && !typing.is_some_and(|t| t.0) {

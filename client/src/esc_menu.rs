@@ -191,9 +191,10 @@ fn menu_buttons(
     }
 }
 
+/// Leaving the game shuts every frame, so none carries into the next one.
 fn close_menu(mut commands: Commands, menu: Query<Entity, With<EscMenu>>, mut open: ResMut<OpenFrame>) {
     for menu in &menu {
         commands.entity(menu).despawn();
     }
-    open.close(Frame::Menu);
+    open.0 = None;
 }
