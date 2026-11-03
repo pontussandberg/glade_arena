@@ -315,7 +315,7 @@ pub(super) fn strike_home(
 ) {
     let cleared = room.0.as_ref().is_some_and(|view| view.winner.is_some()) || map.is_changed();
     let Ok((projectile, transform, thrown, visible, mesh, own_light)) = shots.get(trigger.entity) else { return };
-    if cleared || !visible.get() {
+    if cleared {
         return;
     }
     let Some(shot) = projectile.class.def().shot(projectile.ability) else { return };
@@ -332,13 +332,15 @@ pub(super) fn strike_home(
     let spent = flown > shot.range - STOPPED_SHORT;
     let now = time.elapsed_secs();
     let seed = trigger.entity.index().index();
-    let Some(thrown) = thrown else {
-        if spent {
+    // A spear strikes whether or not it was ever shown flying: thrown point blank, it ends
+    // before the hand has visibly let go of it, and the strike is all there is to see of it.
+    if thrown.is_none() {
+        if spent && visible.get() {
             burst(&mut commands, &visuals, own_light.0.clone(), at(end_tick as f32), now, seed);
         }
         return;
-    };
-    if thrown.launch.is_none() || (spent && !shot.falls) {
+    }
+    if spent && !shot.falls {
         return;
     }
     // Removed before the map would have ended it: it struck a fighter on the stretch judged the
@@ -451,7 +453,7 @@ pub(super) fn pin_stuck_spears(
                 let height = pin.from.y + heading.y * along / level.length().max(1e-3);
                 let feet = drawn.translation.y;
                 let near = (-TING_SLACK..=span + TING_SLACK).contains(&along)
-                    && to_body.distance(ahead * along) < PLAYER_RADIUS * size + pin.radius + TING_SLACK
+                    && to_body.distance(ahead * along) < body_radius(size, height - feet) + pin.radius + TING_SLACK
                     && (feet - TING_SLACK..feet + BODY_HEIGHT * size + TING_SLACK).contains(&height);
                 let named = hits.is_some_and(|hits| hits.0.iter().any(|hit| hit.seq > shown.map_or(0, |s| s.0) && hit.by == Some(pin.owner)));
                 near.then_some((body, *drawn, along, height, named, size))
