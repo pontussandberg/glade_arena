@@ -2,8 +2,8 @@
 //! frame is primary, so opening one replaces whichever is open. M toggles the whole map and F
 //! the shop (`waves::open_shop`), both taking the screen from each other; the menu takes it too.
 //! ESC shuts the open frame first (`route_keys`), and only when none is open does it open the
-//! menu (`esc_menu::toggle_menu`). Whichever frame the cursor was let go for, a frame shutting
-//! with nothing left open takes it back for the fight.
+//! menu (`esc_menu::toggle_menu`). Each frame says in `frees_cursor` whether the cursor is let go
+//! while it's open; `sync_cursor` applies that whenever the open frame changes.
 
 use bevy::prelude::*;
 use bevy::window::CursorOptions;
@@ -28,6 +28,15 @@ impl Frame {
         match self {
             Frame::Menu => false,
             Frame::Shop | Frame::Map => true,
+        }
+    }
+
+    /// Whether the cursor is let go while this frame is open. Nothing open, or a frame that
+    /// doesn't, takes it for the fight (`sync_cursor`).
+    pub(crate) const fn frees_cursor(self) -> bool {
+        match self {
+            Frame::Menu | Frame::Shop => true,
+            Frame::Map => false,
         }
     }
 }
@@ -60,25 +69,39 @@ impl OpenFrame {
 
 /// Takes the cursor back for the fight, unless it's already ours (a fresh lock waits for the
 /// browser's grant anew: `CameraMode::lock`).
-pub(crate) fn lock_for_fight(mode: &mut CameraMode, cursor: &mut CursorOptions) {
+fn lock_for_fight(mode: &mut CameraMode, cursor: &mut CursorOptions) {
     if !mode.locked {
         mode.lock(cursor);
     }
 }
 
-/// M toggles the map and ESC shuts the open frame, spending the key so nothing after it (the
-/// menu, the aim) takes it too. The menu's own keys are `toggle_menu`'s.
-pub(crate) fn route_keys(
-    mut keys: ResMut<ButtonInput<KeyCode>>,
-    typing: Option<Res<Typing>>,
-    mut open: ResMut<OpenFrame>,
+/// The cursor follows the open frame: let go while it frees it, taken for the fight otherwise.
+/// Runs only when the frame changes, so the Tab right-click's free cursor isn't taken back.
+pub(crate) fn sync_cursor(
+    open: Res<OpenFrame>,
+    mut applied: Local<Option<OpenFrame>>,
     mut mode: ResMut<CameraMode>,
     mut cursor: Single<&mut CursorOptions>,
 ) {
+    if *applied == Some(*open) {
+        return;
+    }
+    // The first run takes the state as it is: nothing to change yet.
+    if applied.replace(*open).is_none() {
+        return;
+    }
+    match open.0 {
+        Some(frame) if frame.frees_cursor() => mode.unlock(&mut cursor),
+        _ => lock_for_fight(&mut mode, &mut cursor),
+    }
+}
+
+/// M toggles the map and ESC shuts the open frame, spending the key so nothing after it (the
+/// menu, the aim) takes it too. The menu's own keys are `toggle_menu`'s.
+pub(crate) fn route_keys(mut keys: ResMut<ButtonInput<KeyCode>>, typing: Option<Res<Typing>>, mut open: ResMut<OpenFrame>) {
     if open.is(Frame::Menu) {
         return;
     }
-    let was_open = open.any();
     let typing = typing.is_some_and(|t| t.0);
     if keys.just_pressed(KeyCode::KeyM) && !typing {
         keys.clear_just_pressed(KeyCode::KeyM);
@@ -93,9 +116,5 @@ pub(crate) fn route_keys(
             keys.reset(KeyCode::Escape);
             open.close(frame);
         }
-    }
-    // Only the frame that shut it takes the cursor back, not every frame after.
-    if was_open && !open.any() {
-        lock_for_fight(&mut mode, &mut cursor);
     }
 }

@@ -7,14 +7,13 @@
 
 use arena_shared::protocol::RoomRequest;
 use bevy::prelude::*;
-use bevy::window::CursorOptions;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use crate::PlayerControls;
 use crate::camera::CameraControl;
 use crate::arena::palette;
-use crate::frames::{Frame, OpenFrame, route_keys};
+use crate::frames::{Frame, OpenFrame, route_keys, sync_cursor};
 use crate::render::{button, clicked, ui_text};
 use crate::rooms::{CurrentRoom, Leaving, Screen, leave_room, request};
 use crate::arena::palette::ui::ACCENT;
@@ -28,7 +27,7 @@ impl Plugin for EscMenuPlugin {
         // browser swallowed (`camera::follow_camera`), and the frames take it this same frame.
         app.configure_sets(Update, MenuKey.after(CameraControl));
         app.init_resource::<OpenFrame>();
-        app.add_systems(Update, (route_keys, toggle_menu, menu_buttons).chain().in_set(MenuKey).run_if(in_state(Screen::InGame)));
+        app.add_systems(Update, (route_keys, toggle_menu, menu_buttons, sync_cursor).chain().in_set(MenuKey).run_if(in_state(Screen::InGame)));
         app.add_systems(OnExit(Screen::InGame), close_menu);
     }
 }
@@ -69,9 +68,8 @@ fn menu_open(menu: Query<(), With<EscMenu>>) -> bool {
 }
 
 /// The menu's own ESC and the Home button, for the menu frame: ESC opens it (once no other frame
-/// is open: `route_keys` shuts those first) or closes it; the Home button opens it. Opening it
-/// lets the cursor go, to click it with; closing it, however it's closed, takes the cursor
-/// straight back for the fight.
+/// is open: `route_keys` shuts those first) or closes it; the Home button opens it. The cursor
+/// follows the frame (`sync_cursor`).
 #[allow(clippy::too_many_arguments)]
 fn toggle_menu(
     mut commands: Commands,
@@ -82,8 +80,6 @@ fn toggle_menu(
     mut desired: ResMut<crate::DesiredInput>,
     mut aiming: ResMut<crate::casting::Aiming>,
     mut open: ResMut<OpenFrame>,
-    mut mode: ResMut<crate::camera::CameraMode>,
-    mut cursor: Single<&mut CursorOptions>,
 ) {
     let esc = keys.just_pressed(KeyCode::Escape);
     // ESC first drops a normal cast's aim; the next one opens the menu.
@@ -95,18 +91,16 @@ fn toggle_menu(
         Ok(menu) if esc => {
             commands.entity(menu).despawn();
             open.close(Frame::Menu);
-            mode.lock(&mut cursor);
             return;
         }
         Err(_) if esc || home.iter().any(clicked) => {}
         _ => return,
     }
     // One frame at a time: the Home button can be clicked with the shop or map open, and the
-    // menu takes the screen from them.
+    // menu takes the screen from them. The cursor follows the frame (`sync_cursor`): let go for
+    // the menu, to click it with.
     open.open(Frame::Menu);
-    // The cursor is let go for the menu; stand still and stop attacking while away from the
-    // controls.
-    mode.unlock(&mut cursor);
+    // Stand still and stop attacking while away from the controls.
     desired.0 = default();
     let practice = room.0.as_ref().is_none_or(|r| r.practice);
     let title = match &room.0 {
@@ -159,8 +153,6 @@ fn menu_buttons(
     menu: Query<Entity, With<EscMenu>>,
     mut open: ResMut<OpenFrame>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
-    mut mode: ResMut<crate::camera::CameraMode>,
-    mut cursor: Single<&mut CursorOptions>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
     if settings_button.iter().any(clicked) {
@@ -181,7 +173,6 @@ fn menu_buttons(
             commands.entity(menu).despawn();
         }
         open.close(Frame::Menu);
-        mode.lock(&mut cursor);
     }
     if lobby.iter().any(clicked) {
         request(&mut sender, RoomRequest::LeaveArena);

@@ -480,17 +480,16 @@ fn show_satchel(
 const INTERACT_AIM: f32 = 0.9;
 
 /// The merchant is at hand while we're by them and aiming their way; then the hint under the
-/// crosshair shows, and F opens the shop (or shuts it), letting the cursor go to trade with and
-/// taking it back when it shuts. The press is spent, or it would also ready us up (`ready_up`,
-/// ordered after this). Walking off shuts the shop; the cursor isn't taken back for that: a click
-/// on the field does that. ESC shuts it too (`frames::route_keys`).
+/// crosshair shows, and F opens the shop (or shuts it). The cursor follows the frame
+/// (`frames::sync_cursor`). The press is spent, or it would also ready us up (`ready_up`, ordered
+/// after this). Walking off shuts the shop, and a click on the field shuts it too (the camera
+/// takes the cursor); ESC shuts it as well (`frames::route_keys`).
 #[allow(clippy::too_many_arguments)]
 fn open_shop(
     room: Res<CurrentRoom>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     typing: Option<Res<crate::browser::Typing>>,
-    mut mode: ResMut<crate::camera::CameraMode>,
-    mut cursor: Single<&mut bevy::window::CursorOptions>,
+    mode: Res<crate::camera::CameraMode>,
     mut open: ResMut<OpenFrame>,
     hint: Single<&mut Node, With<InteractHint>>,
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
@@ -507,11 +506,6 @@ fn open_shop(
     if hand && keys.just_pressed(KeyCode::KeyF) && !typing.is_some_and(|t| t.0) {
         keys.clear_just_pressed(KeyCode::KeyF);
         now = !now;
-        if now {
-            mode.unlock(&mut cursor);
-        } else {
-            mode.lock(&mut cursor);
-        }
     }
     // Opening the shop replaces the map (or whatever else is open): one frame at a time.
     if now {
