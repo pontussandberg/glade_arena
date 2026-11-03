@@ -87,9 +87,10 @@ struct SellButton(u8);
 #[derive(Component)]
 struct HasteButton(f32);
 
-/// Whether the shop is open: opened with F by the merchant, shut walking off.
+/// Whether the shop is open: opened with F by the merchant, shut walking off (the click-back
+/// hint stands down for it: `render::show_click_hint`).
 #[derive(Resource, Default, PartialEq)]
-struct ShopOpen(bool);
+pub(crate) struct ShopOpen(pub(crate) bool);
 
 /// The hint under the crosshair: press F to open the shop.
 #[derive(Component)]

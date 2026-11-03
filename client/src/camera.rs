@@ -139,7 +139,7 @@ impl Default for CameraMode {
 impl CameraMode {
     /// Whether the right button, since it went down, has been dragged (turning the camera, the
     /// cursor hidden) rather than just clicked.
-    fn turning(&self) -> bool {
+    pub(crate) fn turning(&self) -> bool {
         self.dragged > DRAG_PX
     }
 
@@ -176,6 +176,18 @@ impl CameraMode {
     pub(crate) fn unlock(&mut self, cursor: &mut CursorOptions) {
         self.locked = false;
         release_cursor(cursor);
+    }
+
+    /// Takes the cursor (hidden, locked in place): a click on the field does this, and the menu
+    /// closing back into the fight. What asked is no attack (`just_locked`), and the browser's
+    /// grant is waited for anew (`lock_seen`).
+    pub(crate) fn lock(&mut self, cursor: &mut CursorOptions) {
+        self.locked = true;
+        self.just_locked = true;
+        self.dragged = 0.0;
+        self.lock_seen = false;
+        cursor.visible = false;
+        cursor.grab_mode = CursorGrabMode::Locked;
     }
 }
 
@@ -409,12 +421,7 @@ fn follow_camera(
         mouse.reset(MouseButton::Right);
     }
     if !mode.locked && mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]) && !mode.turning() && !on_hud && !keys.pressed(KeyCode::Tab) {
-        mode.locked = true;
-        mode.just_locked = true;
-        mode.dragged = 0.0;
-        mode.lock_seen = false;
-        cursor.visible = false;
-        cursor.grab_mode = CursorGrabMode::Locked;
+        mode.lock(&mut cursor);
     }
     let turn = TURN_SPEED * settings.sensitivity;
     let pitch_range = if mode.first_person { FIRST_PERSON_PITCH } else { PITCH_RANGE };

@@ -88,7 +88,7 @@ impl Plugin for RenderPlugin {
                 // material with its body.
                 show_frost.after(crate::rig::Posing),
                 align_to_world.after(crate::rig::Posing).after(fly_shots),
-                (update_status, update_key_hints, fold_controls, show_crosshair),
+                (update_status, update_key_hints, fold_controls, show_crosshair, show_click_hint),
                 (mark_relations, light_buttons),
             ),
         );
@@ -295,6 +295,7 @@ fn setup_scene(
         bodies: HashMap::default(),
     });
     spawn_crosshair(&mut commands);
+    spawn_click_hint(&mut commands);
     commands
         .spawn(corner_panel(false, 8.0))
         .with_children(|corner| {

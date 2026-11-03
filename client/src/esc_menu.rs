@@ -33,9 +33,9 @@ impl Plugin for EscMenuPlugin {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct MenuKey;
 
-/// The menu, while it's open.
+/// The menu, while it's open (the click-back hint stands down for it: `render::show_click_hint`).
 #[derive(Component)]
-struct EscMenu;
+pub(crate) struct EscMenu;
 
 /// The HUD's button that opens the menu (`render/` puts it in the top-left panel).
 #[derive(Component)]
@@ -66,7 +66,8 @@ fn menu_open(menu: Query<(), With<EscMenu>>) -> bool {
 
 /// ESC opens the menu straight away (in the browser, where the camera's lock swallows the key,
 /// the watchdog presses it as the lock goes: `camera::follow_camera`), or closes it; the Home
-/// button opens it. Opening it lets the cursor go, to click it with.
+/// button opens it. Opening it lets the cursor go, to click it with; closing it, however it's
+/// closed, takes the cursor straight back for the fight.
 #[allow(clippy::too_many_arguments)]
 fn toggle_menu(
     mut commands: Commands,
@@ -88,6 +89,7 @@ fn toggle_menu(
     match menu.single() {
         Ok(menu) if esc => {
             commands.entity(menu).despawn();
+            mode.lock(&mut cursor);
             return;
         }
         Err(_) if esc || home.iter().any(clicked) => {}
@@ -147,6 +149,8 @@ fn menu_buttons(
     mut leaving: ResMut<Leaving>,
     menu: Query<Entity, With<EscMenu>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
+    mut mode: ResMut<crate::camera::CameraMode>,
+    mut cursor: Single<&mut CursorOptions>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
     if settings_button.iter().any(clicked) {
@@ -166,6 +170,7 @@ fn menu_buttons(
         for menu in &menu {
             commands.entity(menu).despawn();
         }
+        mode.lock(&mut cursor);
     }
     if lobby.iter().any(clicked) {
         request(&mut sender, RoomRequest::LeaveArena);
