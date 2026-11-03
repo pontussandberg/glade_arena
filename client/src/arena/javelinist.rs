@@ -693,5 +693,7 @@ fn hunter_bandana() -> Mesh {
     sculpted(parts)
 }
 
-/// How long the executioner's spear is, from its point to the end of its butt spike.
+/// How long the executioner's spear is, from its point to the end of its butt spike, and how
+/// long its blade is, from its point back to where it narrows into the socket.
 pub const SPEAR_LENGTH: f32 = 2.05;
+pub const SPEAR_BLADE_LENGTH: f32 = SPEAR_BLADE[0].0;

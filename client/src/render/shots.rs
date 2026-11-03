@@ -251,9 +251,9 @@ const SPLINTER_FALL: f32 = 9.0;
 const STOPPED_SHORT: f32 = 0.4;
 /// A spear ending this near a fighter's body (meters) struck it, not what's around it.
 const TING_SLACK: f32 = 0.4;
-/// How deep a spear buries where it strikes: its point run this share of its length into a
-/// body, but only its tip (meters) into a wall, a crate or the ground.
-const BODY_BURY: f32 = arena::SPEAR_LENGTH * 0.2;
+/// How deep a spear buries where it strikes: into a body up to the whole blade, run in to its
+/// socket, but only its tip (meters) into a wall, a crate or the ground.
+const BODY_BURY: f32 = arena::SPEAR_BLADE_LENGTH;
 const TERRAIN_BURY: f32 = 0.03;
 /// How long a stuck spear stays (seconds), and how long it then takes to sink away into what
 /// holds it.
