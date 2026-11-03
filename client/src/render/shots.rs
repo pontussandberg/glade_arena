@@ -248,9 +248,12 @@ const TING_SLACK: f32 = 0.4;
 const STUCK_SCALE: f32 = 0.9;
 const BODY_BURY: f32 = (arena::SPEAR_BLADE_LENGTH + 0.35) * STUCK_SCALE;
 const TERRAIN_BURY: f32 = 0.03;
-/// How long a stuck spear stays (seconds), and how long it then takes to sink away into what
-/// holds it.
-const STUCK_SECONDS: f32 = 8.0;
+/// How many spears stuck in terrain stand in the world at once: they stay for good until the
+/// newest puts the count over, when the oldest sinks away (over `STUCK_SINK` seconds) -- a
+/// budget, so an endless session can't pile up entities and draw calls without end. One standing
+/// in a body sinks after `BODY_STUCK_SECONDS` instead.
+const STUCK_AT_MOST: usize = 60;
+const BODY_STUCK_SECONDS: f32 = 1.5;
 const STUCK_SINK: f32 = 0.25;
 /// A bolt bursting as it's spent (`strike_home`): how long its flash lasts and how big it gets
 /// (seconds, meters); how many sparks fly out of it every way, how fast (m/s) and for how long.
@@ -271,11 +274,15 @@ pub(super) struct Impact {
 }
 
 /// A spear left standing where it struck (`strike_home`), from `born` (seconds), drawn `scale`
-/// big: in a body (a child of it, riding along) or in the ground or a wall.
+/// big: `held` in a body (a child of it, riding along, gone with it, sunk away soon) or in the
+/// ground or a wall, where it stays until the budget turns it out (`fade_stuck_spears`,
+/// `sinking` from when).
 #[derive(Component)]
 pub(super) struct StuckSpear {
     born: f32,
     scale: Vec3,
+    held: bool,
+    sinking: Option<f32>,
 }
 
 /// A thrown spear gone short of its range hit something (a fighter, a wall, a rock, a tree), and
@@ -383,11 +390,11 @@ pub(super) fn strike_home(
     match (seek, end) {
         (Some((from, to)), _) => {
             let placed = placed(to);
-            commands.spawn((StuckSpear { born: now, scale: placed.scale }, PinTo { owner: projectile.owner, from, to, radius: shot.radius, born: now }, Mesh3d(mesh.0.clone()), MeshMaterial3d(own_light.0.clone()), placed));
+            commands.spawn((StuckSpear { born: now, scale: placed.scale, held: true, sinking: None }, PinTo { owner: projectile.owner, from, to, radius: shot.radius, born: now }, Mesh3d(mesh.0.clone()), MeshMaterial3d(own_light.0.clone()), placed));
         }
         (None, Some((strike, _))) => {
             let placed = placed(strike + turned * Vec3::X * TERRAIN_BURY);
-            commands.spawn((StuckSpear { born: now, scale: placed.scale }, Mesh3d(mesh.0.clone()), MeshMaterial3d(own_light.0.clone()), placed));
+            commands.spawn((StuckSpear { born: now, scale: placed.scale, held: false, sinking: None }, Mesh3d(mesh.0.clone()), MeshMaterial3d(own_light.0.clone()), placed));
         }
         _ => {}
     }
@@ -503,20 +510,45 @@ fn burst(commands: &mut Commands, visuals: &Visuals, light: Handle<PlainMaterial
     }
 }
 
-/// A stuck spear holds a while, then sinks away into what holds it (its origin is its buried
-/// point), and is gone; with the map gone from under it, it's gone at once.
+/// Stuck spears sink away into what holds them (shrinking to their buried point) when their time
+/// comes: one in a body after `BODY_STUCK_SECONDS`; one in terrain only once the standing crowd
+/// of them is over its budget (`STUCK_AT_MOST`), the oldest first. With the map gone from under
+/// them, all are gone at once.
 pub(super) fn fade_stuck_spears(
     mut commands: Commands,
     time: Res<Time>,
     map: Res<crate::rooms::CurrentMap>,
-    mut spears: Query<(Entity, &StuckSpear, &mut Transform)>,
+    mut spears: Query<(Entity, &mut StuckSpear, &mut Transform)>,
 ) {
     let now = time.elapsed_secs();
-    for (entity, spear, mut transform) in &mut spears {
-        let sunk = (now - spear.born - STUCK_SECONDS) / STUCK_SINK;
-        if map.is_changed() || sunk >= 1.0 {
+    if map.is_changed() {
+        for (entity, ..) in &spears {
             commands.entity(entity).despawn();
-        } else if sunk > 0.0 {
+        }
+        return;
+    }
+    let mut standing: Vec<(Entity, f32)> = Vec::new();
+    for (entity, mut spear, _) in &mut spears {
+        match (spear.held, spear.sinking) {
+            (true, None) if now - spear.born >= BODY_STUCK_SECONDS => spear.sinking = Some(now),
+            (false, None) => standing.push((entity, spear.born)),
+            _ => {}
+        }
+    }
+    if standing.len() > STUCK_AT_MOST {
+        standing.sort_by(|a, b| a.1.total_cmp(&b.1));
+        for &(entity, _) in &standing[..standing.len() - STUCK_AT_MOST] {
+            if let Ok((_, mut spear, _)) = spears.get_mut(entity) {
+                spear.sinking = Some(now);
+            }
+        }
+    }
+    for (entity, spear, mut transform) in &mut spears {
+        let Some(started) = spear.sinking else { continue };
+        let sunk = (now - started) / STUCK_SINK;
+        if sunk >= 1.0 {
+            commands.entity(entity).despawn();
+        } else {
             transform.scale = spear.scale * (1.0 - sunk);
         }
     }
