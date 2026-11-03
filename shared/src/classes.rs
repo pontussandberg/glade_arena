@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 pub use crate::abilities::{AbilityDef, AbilityKind, AbilitySlot};
 use crate::abilities::MAX_ABILITIES;
 use crate::config::{PLAYER_RADIUS, TICK_HZ};
+
+/// How much bigger an elite stands than its class, drawn and hit alike (`ClassDef::hit_size`).
+pub const ELITE_SIZE: f32 = 1.25;
 use crate::protocol::FxColor;
 
 /// The class files, compiled into both server and client so they can't disagree. Their order is
@@ -271,9 +274,6 @@ pub struct AttackDef {
     /// there (none by default).
     #[serde(default)]
     pub rift: Option<RiftDef>,
-    /// Its shots fly on through monsters (never players), hitting each once (no by default).
-    #[serde(default)]
-    pub pierces: bool,
     /// Its shots burst where they hit or end, hitting the shooter's foes round there too (none by
     /// default).
     #[serde(default)]
@@ -439,6 +439,13 @@ impl ClassDef {
         self.look.as_ref().map_or(1.0, |look| look.size)
     }
 
+    /// How big a fighter's body is to hits, as a share of the common one (`PLAYER_RADIUS` wide,
+    /// `BODY_HEIGHT` tall): as big as it's drawn (`size`; an `elite` bigger still), so what looks
+    /// struck is struck.
+    pub fn hit_size(&self, elite: bool) -> f32 {
+        self.size() * if elite { ELITE_SIZE } else { 1.0 }
+    }
+
     /// What its figure's colors are multiplied by.
     pub fn tint(&self) -> (f32, f32, f32) {
         self.look.as_ref().map_or((1.0, 1.0, 1.0), |look| look.tint)
@@ -555,13 +562,13 @@ impl AttackDef {
     /// lane that starts further out than a body's radius has a dead zone in front of you, where
     /// nothing is hit. `None` for a ranged attack.
     pub fn hit_span(&self, empowered: bool) -> Option<(f32, f32)> {
-        self.hit_span_grown(empowered, 0.0)
+        self.hit_span_grown(empowered, 0.0, PLAYER_RADIUS)
     }
 
-    /// `hit_span` of a lane `grown` (`lane_grown`).
-    pub fn hit_span_grown(&self, empowered: bool, grown: f32) -> Option<(f32, f32)> {
+    /// `hit_span` of a lane `grown` (`lane_grown`), against a body `body` wide.
+    pub fn hit_span_grown(&self, empowered: bool, grown: f32, body: f32) -> Option<(f32, f32)> {
         let (from, range, _) = self.lane_grown(empowered, grown)?;
-        Some((if from > 0.0 { from - PLAYER_RADIUS } else { 0.0 }, range + PLAYER_RADIUS))
+        Some((if from > 0.0 { (from - body).max(0.0) } else { 0.0 }, range + body))
     }
 
     /// How far from your center a target's body can reach and still be hit (`AttackKind::edge_reach`),
@@ -805,7 +812,6 @@ mod tests {
                 assert!(!filled.contains(['{', '}']), "{what}: unknown placeholder in {filled:?}");
             }
             chill_is_sane(&c.id, c.attack.chill);
-            assert!(!c.attack.pierces || c.attack.kind.shot().is_some(), "{}: pierces, but throws nothing", c.id);
             assert!(c.attack.burst.is_none() || c.attack.kind.shot().is_some(), "{}: bursts, but throws nothing", c.id);
             // A knock-up shorter than the empowered attack: the striker alone can't chain it.
             if let Some(follow_up) = c.attack.follow_up {
@@ -865,7 +871,7 @@ mod tests {
     #[test]
     fn far_scale_scales_with_distance() {
         let kind = |far_scale| AttackKind::Projectile { speed: 10.0, radius: 0.2, range: 10.0, far_scale, falls: false };
-        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None, pierces: false, burst: None };
+        let attack = |kind| AttackDef { damage: 10, attack_ticks: 10, windup: 0.25, kind, chill: Chill::default(), follow_up: None, rift: None, burst: None };
         assert_eq!([0.0, 5.0, 10.0, 99.0].map(|d| attack(kind(Some(3.0))).damage_at(d)), [10, 20, 30, 30]);
         assert_eq!(attack(kind(None)).damage_at(5.0), 10);
     }

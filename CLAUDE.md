@@ -5,6 +5,23 @@
 - Start every new feature on a new branch off `main`, never on `main` itself.
 - Usually open a PR against `main` for it once it's ready.
 
+## Parallel work: one agent per checkout
+
+When another agent (or the user) is already working in a checkout, don't work there too — take a
+git worktree instead.
+
+- Create it as a sibling of the repo, on its own branch:
+  `git worktree add ../arena-<branch> -b <branch>`. The same branch can't be checked out twice,
+  so each checkout works its own branch.
+- A fresh worktree has no `target/`: the first build is a full rebuild and roughly doubles build
+  disk usage. Watch the disk, and don't share a target dir via `CARGO_TARGET_DIR` — parallel
+  builds just fight over the build lock. When the branch is merged, clean up with
+  `git worktree remove` (which also frees its `target/`).
+- Only one checkout runs the dev server. `dev.sh` kills ALL running arena-servers, and switching
+  it between checkouts can silently serve the other one's stale build — so in a worktree, default
+  to `cargo check` and leave the dev server to the main checkout. If a second running game is
+  truly needed: `PORT=8090` for serve.mjs, `ARENA_PORT=5899`, and `?server=<ip:port>` in the URL.
+
 ## After a change: rebuild and run, don't test
 
 - To check a change, rebuild and run the game locally with `./scripts/dev.sh dev` (run it in the

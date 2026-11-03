@@ -134,7 +134,7 @@ pub(super) fn respawn(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
     // Dummies come back on the spot instead (`restore_dummies`); zombies don't (`bury_zombies`).
-    mut dead: Query<(Entity, &MaxHealth, &mut Health, (&mut Chilled, &mut Hasted, &mut Frenzy, &mut Fury), &mut AttackState, (&mut Cooldowns, &mut Dashing), &mut Dead), (Without<Dummy>, Without<Zombie>, Without<Decoy>)>,
+    mut dead: Query<(Entity, &MaxHealth, &mut Health, (&mut Chilled, &mut Hasted, &mut Frenzy, &mut Fury), &mut AttackState, (&mut Cooldowns, &mut Dashing), &mut Dead), (Without<Dummy>, Without<Zombie>, Without<Decoy>, Without<crate::replays::Replay>)>,
 ) {
     let now = timeline.tick().0;
     for (player, max, mut health, (mut chilled, mut hasted, mut frenzy, mut fury), mut attack, (mut cooldowns, mut dashing), mut dead) in &mut dead {

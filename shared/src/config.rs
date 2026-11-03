@@ -30,6 +30,19 @@ pub const JUMP: f32 = 2.5;
 pub const PLAYER_RADIUS: f32 = 0.5;
 /// How tall a body is to a shot (meters): one flying higher passes over it.
 pub const BODY_HEIGHT: f32 = 2.1;
+/// A body stands its full width to hits up to this share of its height (its shoulders), then
+/// narrows to this share of that width at the top of its head, as the figures taper.
+pub const SHOULDERS: f32 = 0.7;
+pub const HEAD_WIDTH: f32 = 0.5;
+
+/// How wide a body `size` big (`ClassDef::hit_size`) stands to hits `over` meters above its
+/// feet: its full width (`PLAYER_RADIUS` of it) up to its shoulders, its head's at the top
+/// (`SHOULDERS`, `HEAD_WIDTH`).
+pub fn body_radius(size: f32, over: f32) -> f32 {
+    let (wide, tall) = (PLAYER_RADIUS * size, BODY_HEIGHT * size);
+    let narrowed = ((over - tall * SHOULDERS) / (tall * (1.0 - SHOULDERS))).clamp(0.0, 1.0);
+    wide * (1.0 - (1.0 - HEAD_WIDTH) * narrowed)
+}
 /// How high a shot leaves the hand (meters): where its climb or fall starts from.
 pub const SHOT_HEIGHT: f32 = 1.0;
 /// The third-person camera: how far to a fighter's right (meters, over the shoulder)
@@ -43,10 +56,15 @@ pub const MOST_CLIMB: f32 = 3.6;
 pub const ACTION_LOOK_HEIGHT: f32 = 2.0;
 pub const SHOULDER_WALL_MARGIN: f32 = 0.45;
 /// A player's thrower's raised hand lets go of the spear this far to their right and this
-/// high over their feet (meters), near the line of sight its shot starts on (`sim::onto_sight`),
-/// where the spear in flight appears as the hand empties (`render::fly_shots`).
+/// high over their feet (meters), near the line of sight its shot starts on (`sim::onto_sight`):
+/// the contract the throw animation is tuned to (`rig/`, held there by its release test), and
+/// where another player's spear in flight takes over from their hand (`render::fly_shots`; our
+/// own appears on the path itself).
 pub const RELEASE_ASIDE: f32 = 0.45;
 pub const RELEASE_HEIGHT: f32 = 2.07;
+/// The longest practice take (ticks): recording stops and saves by itself there, and the
+/// client's REC light turns itself off in step (`practice` panel).
+pub const LONGEST_TAKE_TICKS: usize = 60 * TICK_HZ as usize;
 /// How fast a thrown shot falls (m/s², the real thing), one that falls at all (`Shot::falls`).
 pub const GRAVITY: f32 = 9.81;
 /// How high a jump goes at the top (meters), from flat ground (`sim::jump_speed`).

@@ -407,8 +407,39 @@ mod tests {
             panic!("a projectile class should shoot after its windup");
         };
         let lifetime = proj.class.def().shot(None).unwrap().lifetime_ticks();
-        let hit_tick = (windup..windup.saturating_add(lifetime)).find(|&tick| projectile_hits(projectile_pos(&proj, tick as f32), &proj, tick, target, 0.0));
-        assert!(hit_tick.is_some(), "projectile should hit a target 6 m away in its path");
+        let whole_flight = (proj.spawn_tick as f32 - 1.0, windup.saturating_add(lifetime) as f32);
+        assert!(projectile_hits(&proj, whole_flight, (target, 0.0, 1.0)).is_some(), "projectile should hit a target 6 m away in its path");
+    }
+
+    /// Hits are swept along the flight, not spot-checked tick by tick: a body standing right
+    /// between where a fast shot is one tick and the next is still hit, and so is one right
+    /// out of the thrower's hand (closer than the shot's first tick of flight).
+    #[test]
+    fn a_shot_hits_between_its_ticks_and_point_blank() {
+        let proj = Projectile { owner: PeerId::Netcode(1), class: thrower(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 10, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
+        let shot = proj.class.def().shot(None).unwrap();
+        let step = shot.speed * crate::config::TICK_DT;
+        assert!(step > crate::config::PLAYER_RADIUS + shot.radius, "the thrown spear outflies its own hit window; spot checks would miss between ticks");
+        let between = Vec2::X * step * 1.5;
+        assert!(projectile_hits(&proj, (10.0, 11.0), (between, 0.0, 1.0)).is_some(), "slipped between two ticks' spots");
+        let point_blank = Vec2::X * 0.1;
+        assert!(projectile_hits(&proj, (9.0, 10.0), (point_blank, 0.0, 1.0)).is_some(), "missed point blank");
+        assert!(projectile_hits(&proj, (10.0, 11.0), (between, SHOT_HEIGHT + 3.0, 1.0)).is_none(), "hit one far above its line");
+    }
+
+    /// A body is its full width to a shot crossing at chest height, but only its head's width to
+    /// one crossing near its top (`body_radius`): standing beside the line, the chest is clipped
+    /// and the head is passed by.
+    #[test]
+    fn a_shot_narrows_to_the_head_it_flies_past() {
+        let proj = Projectile { owner: PeerId::Netcode(1), class: thrower(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 10, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
+        let shot = proj.class.def().shot(None).unwrap();
+        let step = shot.speed * crate::config::TICK_DT;
+        let beside = Vec2::new(step * 1.5, crate::config::PLAYER_RADIUS + shot.radius - 0.05);
+        assert!(projectile_hits(&proj, (10.0, 11.0), (beside, 0.0, 1.0)).is_some(), "its chest is its full width");
+        let head_on_the_line = SHOT_HEIGHT - BODY_HEIGHT + 0.1;
+        assert!(projectile_hits(&proj, (10.0, 11.0), (beside, head_on_the_line, 1.0)).is_none(), "its head is as wide as its chest");
+        assert!(projectile_hits(&proj, (10.0, 11.0), (Vec2::X * step * 1.5, head_on_the_line, 1.0)).is_some(), "a head right on the line isn't hit");
     }
 
     #[test]
@@ -585,8 +616,8 @@ mod tests {
         assert!(landed > 20, "landed after only {landed} ticks");
         let proj = Projectile { owner: PeerId::Netcode(1), class: bolter(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 0, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
         let at = projectile_pos(&proj, 3.0);
-        assert!(projectile_hits(at, &proj, 3, at, 0.0), "standing, it's hit");
-        assert!(!projectile_hits(at, &proj, 3, at, SHOT_HEIGHT + 0.5), "jumped over it");
+        assert!(projectile_hits(&proj, (2.0, 3.0), (at, 0.0, 1.0)).is_some(), "standing, it's hit");
+        assert!(projectile_hits(&proj, (2.0, 3.0), (at, SHOT_HEIGHT + 0.5, 1.0)).is_none(), "jumped over it");
     }
 
     /// Walks the yard toward each of `targets` in turn (jumping when on the ground and stuck
@@ -1243,15 +1274,16 @@ mod tests {
         let dirs = [Vec2::X, Vec2::Y, -Vec2::X, Vec2::new(0.6, -0.8)];
         // Open ground all around (walls stop novas too).
         let ground = |p: Vec2| (p, map().height_at(p));
+        let body = |p: Vec2| (p, map().height_at(p), 1.0);
         let open = |p: Vec2| dirs.iter().all(|d| map().shot_clear(ground(p), ground(p + *d * (radius + 1.5))));
         let at = map().tiles().map(|(tile, _)| Map::center(tile)).find(|&p| open(p)).unwrap();
         for dir in dirs {
-            assert!(nova.hits(map(), ground(at), ground(at + dir * (radius + PLAYER_RADIUS - 0.05))), "inside, toward {dir}");
-            assert!(!nova.hits(map(), ground(at), ground(at + dir * (radius + PLAYER_RADIUS + 0.05))), "outside, toward {dir}");
+            assert!(nova.hits(map(), ground(at), body(at + dir * (radius + PLAYER_RADIUS - 0.05))), "inside, toward {dir}");
+            assert!(!nova.hits(map(), ground(at), body(at + dir * (radius + PLAYER_RADIUS + 0.05))), "outside, toward {dir}");
         }
         // Not up out of its reach, over the caster's head.
         let (near, feet) = ground(at + Vec2::X);
-        assert!(!nova.hits(map(), ground(at), (near, feet + radius + 0.1)), "far over its head");
+        assert!(!nova.hits(map(), ground(at), (near, feet + radius + 0.1, 1.0)), "far over its head");
     }
 
     #[test]
@@ -1267,22 +1299,22 @@ mod tests {
         let class = fighter();
         let at = spawns()[0];
         let reach = class.def().attack.kind.reach() - 0.05;
-        assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * reach, 0.0)), "straight ahead, at the edge of reach");
-        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * (reach + 0.2), 0.0)), "just out of reach");
-        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at - Vec2::Y * 1.0, 0.0)), "behind");
+        assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * reach, 0.0, 1.0)), "straight ahead, at the edge of reach");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * (reach + 0.2), 0.0, 1.0)), "just out of reach");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at - Vec2::Y * 1.0, 0.0, 1.0)), "behind");
         let AttackKind::Melee { width, from, .. } = class.def().attack.kind else { unreachable!() };
         // Bodies overlapping connect when the lane starts at the attacker; one starting further
         // out misses what's closer than that.
-        assert_eq!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at - Vec2::Y * 0.3, 0.0)), from == 0.0, "bodies overlapping");
+        assert_eq!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at - Vec2::Y * 0.3, 0.0, 1.0)), from == 0.0, "bodies overlapping");
         if from > 0.0 {
-            assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * (from - PLAYER_RADIUS + 0.05), 0.0)), "touching the lane's near end");
-            assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * (from - PLAYER_RADIUS - 0.05), 0.0)), "short of the lane");
+            assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * (from - PLAYER_RADIUS + 0.05), 0.0, 1.0)), "touching the lane's near end");
+            assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::Y * (from - PLAYER_RADIUS - 0.05), 0.0, 1.0)), "short of the lane");
         }
         let edge = width / 2.0 + PLAYER_RADIUS;
         let middle = from.max(1.0);
-        assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::new(edge - 0.05, middle), 0.0)), "a body overlapping the lane");
-        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::new(edge + 0.05, middle), 0.0)), "beside the lane");
-        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), shooter(), (at + Vec2::Y, 0.0)), "projectile classes don't swing");
+        assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::new(edge - 0.05, middle), 0.0, 1.0)), "a body overlapping the lane");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (at + Vec2::new(edge + 0.05, middle), 0.0, 1.0)), "beside the lane");
+        assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), shooter(), (at + Vec2::Y, 0.0, 1.0)), "projectile classes don't swing");
     }
 
     #[test]
@@ -1290,12 +1322,12 @@ mod tests {
         let class = fighter();
         let at = spawns()[0];
         let ahead = at + Vec2::Y * (class.def().attack.kind.reach() - 0.3);
-        let hits = |feet: f32| melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (ahead, feet));
+        let hits = |feet: f32| melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (ahead, feet, 1.0));
         assert!(hits(0.0) && hits(1.0), "one on the ground or up on a crate isn't struck");
         assert!(!hits(BODY_HEIGHT + 0.1), "one up on a roof is struck");
         // Struck from up on something: one down below it is, as far down as the blade reaches.
-        assert!(swing_reaches(2.5, 1.0) && swing_reaches(2.5, 0.0), "one down off a terrace isn't struck");
-        assert!(!swing_reaches(0.0, -BODY_HEIGHT - REACH_DOWN - 0.1), "one far below is struck");
+        assert!(swing_reaches(2.5, 1.0, 1.0) && swing_reaches(2.5, 0.0, 1.0), "one down off a terrace isn't struck");
+        assert!(!swing_reaches(0.0, -BODY_HEIGHT - REACH_DOWN - 0.1, 1.0), "one far below is struck");
     }
 
     #[test]
@@ -1309,11 +1341,11 @@ mod tests {
         let (from, range, _) = class.def().attack.lane(false).unwrap();
         let inside = at + Vec2::Y * (from + range) / 2.0;
         let on = map().height_at(inside);
-        assert!(rift.holds(map(), inside, on, 11) && rift.holds(map(), inside, on, 9 + def.ticks), "not in its own rift");
-        assert!(!rift.holds(map(), inside, on, 10 + def.ticks), "still open after it closed");
-        assert!(!rift.holds(map(), at - Vec2::Y * 2.0, feet, 11), "behind it");
+        assert!(rift.holds(map(), (inside, on, 1.0), 11) && rift.holds(map(), (inside, on, 1.0), 9 + def.ticks), "not in its own rift");
+        assert!(!rift.holds(map(), (inside, on, 1.0), 10 + def.ticks), "still open after it closed");
+        assert!(!rift.holds(map(), (at - Vec2::Y * 2.0, feet, 1.0), 11), "behind it");
         // Jumped up over it, it isn't in it; just off its ground, it still is.
-        assert!(!rift.holds(map(), inside, on + 1.0, 11) && rift.holds(map(), inside, on + 0.2, 11), "in it however high over it");
+        assert!(!rift.holds(map(), (inside, on + 1.0, 1.0), 11) && rift.holds(map(), (inside, on + 0.2, 1.0), 11), "in it however high over it");
         // Walking there is that much faster.
         let walk = PlayerInput { walk: Vec2::X, ..default() };
         let (idle, warm) = (Dashing::default(), Chilled::default());
@@ -1331,8 +1363,8 @@ mod tests {
         let beyond = at + Vec2::Y * (range + PLAYER_RADIUS + 0.2);
         let aside = at + Vec2::new(width / 2.0 + PLAYER_RADIUS + (wide - width) / 4.0, (near + far) / 2.0);
         for target in [beyond, aside] {
-            assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (target, 0.0)), "a plain swing reached {target}");
-            assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (true, 0.0), class, (target, 0.0)), "an empowered swing missed {target}");
+            assert!(!melee_hits(map(), (at, 0.0), Vec2::Y, (false, 0.0), class, (target, 0.0, 1.0)), "a plain swing reached {target}");
+            assert!(melee_hits(map(), (at, 0.0), Vec2::Y, (true, 0.0), class, (target, 0.0, 1.0)), "an empowered swing missed {target}");
         }
     }
 

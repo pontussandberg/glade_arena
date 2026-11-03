@@ -25,7 +25,7 @@ use lightyear::prelude::*;
 
 use crate::{FakeLatency, Me};
 use crate::arena::palette;
-use crate::render::{FoldUpright, HUD_FOLD_SIGN, HudButton, button_fill, clicked, corner_panel, fold_header, fold_sign, shown, turn_fold_sign, ui_text};
+use crate::render::{FoldUpright, HUD_FOLD_SIGN, HudButton, button, button_fill, clicked, corner_panel, fold_header, fold_sign, shown, turn_fold_sign, ui_text};
 use crate::rooms::{CurrentRoom, Screen, request};
 use dummies::Placing;
 use hitboxes::{ShowHitboxes, ShowHitboxes3d};
@@ -35,10 +35,11 @@ pub struct PracticePlugin;
 impl Plugin for PracticePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((dummies::DummiesPlugin, hitboxes::HitboxesPlugin));
+        app.init_resource::<Taking>();
         app.add_systems(Startup, picker::load_faces);
         app.add_systems(
             Update,
-            (show_tools, fold_tools, use_switches, step_fake_ping, switch_map).chain().run_if(in_state(Screen::InGame)),
+            (show_tools, fold_tools, use_switches, step_fake_ping, use_recorder, switch_map).chain().run_if(in_state(Screen::InGame)),
         );
         app.add_systems(Update, (picker::show_picker, picker::pick_class, picker::mark_current, picker::rest_faces));
         app.add_systems(Update, tools_off.run_if(not(in_state(Screen::InGame)).or_else(not(practicing))));
@@ -119,6 +120,24 @@ struct FakePingState;
 /// What "Fake ping" steps through, in ms: off first.
 const FAKE_PINGS: [u64; 3] = [0, 50, 100];
 
+/// Since when we're recording a take of our own play, as last asked (`RoomRequest::Record`: the
+/// recording itself is the server's). A take saves itself at its longest, so the REC light turns
+/// itself off in step then.
+#[derive(Resource, Default, PartialEq)]
+struct Taking(Option<f32>);
+
+/// Starts recording a take, and stops it (the server saves it for "Replay bot").
+#[derive(Component)]
+struct RecordButton;
+
+/// REC / OFF beside "Record a take".
+#[derive(Component)]
+struct RecordState;
+
+/// Spawns a bot playing the saved take back, looping.
+#[derive(Component)]
+struct BotButton;
+
 /// Switches practice to the next map: everything starts over on it.
 #[derive(Component)]
 struct MapButton;
@@ -179,6 +198,13 @@ fn show_tools(mut commands: Commands, room: Res<CurrentRoom>, tools: Query<Entit
                     );
                     row(tools, FakePingButton, "Fake ping", state);
                     dummies::spawn_buttons(tools);
+                    let state = (
+                        Node { width: px(32.0), justify_content: JustifyContent::FlexEnd, ..default() },
+                        children![(RecordState, ui_text("OFF", 13.0, palette::ui::MUTED))],
+                    );
+                    row(tools, RecordButton, "Record a take", state);
+                    let look = button("Replay bot".to_string(), 13.0, palette::ui::PANEL, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5));
+                    tools.spawn((BotButton, HudButton, look));
                 })
                 .id();
             let header = commands.spawn((ToolsHeader { sign, tools, open: true }, fold_header())).add_children(&[sign, label]).id();
@@ -201,11 +227,13 @@ fn tools_off(
     mut hitboxes_3d: ResMut<ShowHitboxes3d>,
     mut placing: ResMut<Placing>,
     mut fake_ping: ResMut<FakeLatency>,
+    mut taking: ResMut<Taking>,
 ) {
     hitboxes.set_if_neq(ShowHitboxes(false));
     hitboxes_3d.set_if_neq(ShowHitboxes3d(false));
     fake_ping.set_if_neq(FakeLatency::default());
     placing.set_if_neq(Placing::default());
+    taking.set_if_neq(Taking(None));
 }
 
 /// The tools under the header: folded away, they keep their width (so the panel stays the same
@@ -286,6 +314,45 @@ fn step_fake_ping(
         text.0 = label;
     }
     color.set_if_neq(TextColor(tint));
+}
+
+/// "Record a take" starts recording our play and stops it (the server saves the take as it
+/// stops); "Replay bot" spawns a bot playing the saved take back, looping. REC shows what we
+/// last asked for.
+fn use_recorder(
+    time: Res<Time>,
+    mut taking: ResMut<Taking>,
+    mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
+    record: Single<(Ref<Interaction>, &mut BorderColor), With<RecordButton>>,
+    bot: Single<Ref<Interaction>, With<BotButton>>,
+    state: Single<(&mut Text, &mut TextColor), With<RecordState>>,
+) {
+    let now = time.elapsed_secs();
+    if taking.0.is_some_and(|since| now - since >= arena_shared::config::LONGEST_TAKE_TICKS as f32 / arena_shared::config::TICK_HZ as f32) {
+        taking.0 = None;
+    }
+    let (interaction, mut border) = record.into_inner();
+    if clicked(interaction) {
+        taking.0 = match taking.0 {
+            None => Some(now),
+            Some(_) => None,
+        };
+        request(&mut sender, RoomRequest::Record(taking.0.is_some()));
+    }
+    let (label, edge, tint) = if taking.0.is_some() {
+        ("REC", palette::ui::ACCENT, palette::ui::ACCENT)
+    } else {
+        ("OFF", palette::ui::MUTED.with_alpha(0.5), palette::ui::MUTED)
+    };
+    border.set_if_neq(BorderColor::all(edge));
+    let (mut text, mut color) = state.into_inner();
+    if text.0 != label {
+        text.0 = label.to_string();
+    }
+    color.set_if_neq(TextColor(tint));
+    if clicked(*bot) {
+        request(&mut sender, RoomRequest::PlaceBot);
+    }
 }
 
 /// The map button asks the server for the next map (dummies placed go with the old one, so

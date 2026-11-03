@@ -448,6 +448,59 @@ pub(super) fn spread_out(lobby: Res<Lobby>, mut mobs: Query<(&mut Pos, &InRoom, 
     }
 }
 
+/// How much of two bodies' hit widths they insist on between their centers (soft collision:
+/// half, so neither is a wall), and the most one gives way a tick.
+const GIVE_WAY: f32 = 0.5;
+const GIVE_RATE: f32 = 0.08;
+
+/// Heroes and monsters don't stand inside each other: a hero (a player's fighter, a replay bot)
+/// overlapping anyone -- or anyone overlapping a hero -- gives way, a step a tick, where the
+/// ground lets it. Soft, not solid: half their hit widths between centers, slow enough that a
+/// dash or a shove still drives through, and one jumped clear over another passes freely.
+/// Monsters among themselves keep their own elbow room (`spread_out`); dummies, decoys and the
+/// shopkeeper stand where they're put.
+#[allow(clippy::type_complexity)]
+pub(super) fn press_apart(
+    lobby: Res<Lobby>,
+    mut fighters: Query<
+        (Entity, &mut Pos, &InRoom, &ClassId, Has<Elite>, &arena_shared::protocol::Motion, &Dashing, (Has<ControlledBy>, Has<crate::replays::Replay>)),
+        (InPlay, With<PlayerId>, Without<crate::Dummy>, Without<Untouchable>, Without<crate::items::Decoy>),
+    >,
+) {
+    let mut by_room: HashMap<RoomKey, Vec<(Entity, Vec2, f32, f32, bool)>> = HashMap::new();
+    for (body, pos, room, class, elite, motion, _, (player, replay)) in fighters.iter() {
+        let size = class.def().hit_size(elite);
+        by_room.entry(room.key).or_default().push((body, pos.0, size, motion.height, player || replay));
+    }
+    for (body, mut pos, room, class, elite, motion, dashing, (player, replay)) in fighters.iter_mut() {
+        if dashing.0.is_some() {
+            continue;
+        }
+        let (hero, size) = (player || replay, class.def().hit_size(elite));
+        let mut push = Vec2::ZERO;
+        for &(other_body, other, other_size, other_feet, other_hero) in by_room.get(&room.key).map_or(&[][..], |v| &v[..]) {
+            let over = motion.height >= other_feet + BODY_HEIGHT * other_size || other_feet >= motion.height + BODY_HEIGHT * size;
+            if body == other_body || !(hero || other_hero) || over {
+                continue;
+            }
+            let apart = pos.0 - other;
+            let room_for = PLAYER_RADIUS * (size + other_size) * GIVE_WAY;
+            if apart.length_squared() >= room_for * room_for {
+                continue;
+            }
+            let away = apart.try_normalize().unwrap_or(Vec2::from_angle(body.index().index() as f32));
+            push += away * (room_for - apart.length());
+        }
+        let push = push.clamp_length_max(GIVE_RATE);
+        if push != Vec2::ZERO {
+            let next = pos.0 + push;
+            if lobby.map(room).line_walkable(pos.0, next) {
+                pos.0 = next;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

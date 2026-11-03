@@ -263,7 +263,7 @@ fn update_live_stats(
     let tick = now as u32;
     // Hasted in our own rift (the most hasting, if we stand in several), as `move_players` has it.
     let feet = crate::render::shown_height(map.map(), motion, predicted, pos.0);
-    let rift = rifts.map_or(0.0, |rifts| rifts.0.iter().filter(|rift| rift.holds(map.map(), pos.0, feet, tick)).fold(0.0f32, |most, rift| most.max(rift.haste)));
+    let rift = rifts.map_or(0.0, |rifts| rifts.0.iter().filter(|rift| rift.holds(map.map(), (pos.0, feet, def.hit_size(false)), tick)).fold(0.0f32, |most, rift| most.max(rift.haste)));
     let factor = chilled.map_or(1.0, |c| c.speed_factor(tick))
         * hasted.map_or(1.0, |h| h.speed_factor(tick))
         * (1.0 + frenzy.map_or(0.0, |f| f.at(now)))
