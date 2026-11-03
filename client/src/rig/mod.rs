@@ -399,10 +399,10 @@ fn rate(time: &Time, per_second: f32) -> f32 {
 /// until its next attack, or until it walks off once the dash is over (`STEADY_SETTLE` after, so
 /// the dash's own last steps don't count). A dash in the backswing cuts it short and turns it
 /// to the dash, like walking off.
-fn turn_fighters(time: Res<Time>, mode: Res<crate::camera::CameraMode>, mut fighters: Query<(&mut Facing, &Pos, &AttackState, &Dashing, Has<Me>)>) {
+fn turn_fighters(time: Res<Time>, mode: Res<crate::camera::CameraMode>, mut fighters: Query<(&mut Facing, &Pos, &AttackState, &Dashing, Option<&HitSquash>, Has<Me>)>) {
     let turn = rate(&time, TURN_RATE);
     let now = time.elapsed_secs();
-    for (mut facing, pos, attack, dashing, me) in &mut fighters {
+    for (mut facing, pos, attack, dashing, squash, me) in &mut fighters {
         let moved = pos.0 - facing.last_pos;
         let mut steady = facing.steady;
         let mut dash_seen = facing.dash_seen;
@@ -421,12 +421,15 @@ fn turn_fighters(time: Res<Time>, mode: Res<crate::camera::CameraMode>, mut figh
         if attacked_since || walked_off {
             steady = None;
         }
+        // Knocked back by a fresh blow (moved against its look), it holds its facing through the
+        // slide instead of whipping round to face it.
+        let shoved = squash.is_some_and(|hit| now - hit.at < SHOVE_HOLD) && moved.dot(facing.look) < 0.0;
         let wants = match (attack.winding_up(), dashing.0) {
             (Some(windup), _) => windup.dir,
             _ if me && mode.watching().is_none() => mode.forward(),
             _ if steady.is_some() => facing.look,
             (None, Some(dash)) => dash.dir,
-            (None, None) if moved.length() > 0.01 => moved.normalize(),
+            (None, None) if moved.length() > 0.01 && !shoved => moved.normalize(),
             (None, None) => facing.look,
         };
         let look = facing.look.lerp(wants, turn).try_normalize().unwrap_or(wants);
@@ -437,6 +440,10 @@ fn turn_fighters(time: Res<Time>, mode: Res<crate::camera::CameraMode>, mut figh
         }
     }
 }
+
+/// How long (seconds) after a blow lands that backward movement doesn't turn the fighter: the
+/// knockback's slide, with room for how smoothly its position is drawn.
+const SHOVE_HOLD: f32 = 0.35;
 
 /// How long (seconds) after a dash ends before walking turns a fighter that held its look
 /// through it (`turn_fighters`).
