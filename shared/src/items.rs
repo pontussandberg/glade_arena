@@ -42,6 +42,7 @@ pub enum Item {
     BerserkerTotem,
     RicochetCharm,
     HydraSpear,
+    Impaler,
     GravecallerRift,
     HeartOfWinter,
 }
@@ -167,6 +168,11 @@ pub fn ricochet_charm(level: u8) -> (u8, f32, f32) {
 pub fn hydra_spear(level: u8) -> (u32, f32, u32) {
     (lv(level, [2, 3, 4]), lv(level, [0.5, 0.45, 0.4]), 3)
 }
+/// Impaler: how many monsters a javelin runs through, hitting each, before sticking in the one
+/// after (`u32::MAX` at its top: every monster in its line).
+pub fn impaler(level: u8) -> u32 {
+    lv(level, [3, 10, u32::MAX])
+}
 
 /// How long after an ability's damage set off its holder's ability items they can go off again:
 /// each use of an ability sets them off once, however many it hits.
@@ -182,7 +188,7 @@ pub fn heart_of_winter(level: u8) -> (f32, f32, i32, u32) {
 }
 
 impl Item {
-    pub const ALL: [Item; 19] = [
+    pub const ALL: [Item; 20] = [
         Item::StormCoil,
         Item::EmberHeart,
         Item::RimeSigil,
@@ -200,6 +206,7 @@ impl Item {
         Item::BerserkerTotem,
         Item::RicochetCharm,
         Item::HydraSpear,
+        Item::Impaler,
         Item::GravecallerRift,
         Item::HeartOfWinter,
     ];
@@ -223,6 +230,7 @@ impl Item {
             Item::BerserkerTotem => "Berserker Totem",
             Item::RicochetCharm => "Ricochet Charm",
             Item::HydraSpear => "Hydra Spear",
+            Item::Impaler => "Impaler",
             Item::GravecallerRift => "Gravecaller Rift",
             Item::HeartOfWinter => "Heart of Winter",
         }
@@ -234,7 +242,7 @@ impl Item {
             Item::Bloodfang | Item::BrambleMantle | Item::HoarfrostBoots => 250,
             Item::StormCoil | Item::RimeSigil | Item::MidasCoin | Item::BerserkerTotem => 300,
             Item::RicochetCharm | Item::GravecallerRift | Item::HeartOfWinter => 300,
-            Item::EmberHeart | Item::EchoStone | Item::DoomBell | Item::MirrorShard | Item::HydraSpear => 350,
+            Item::EmberHeart | Item::EchoStone | Item::DoomBell | Item::MirrorShard | Item::HydraSpear | Item::Impaler => 350,
             Item::PowderKeg | Item::WispLantern | Item::ThunderCrown | Item::VoidOrb => 400,
         }
     }
@@ -252,7 +260,7 @@ impl Item {
     /// The only class (its `ClassDef::id`) that can carry it, if it's one class's.
     pub fn class(self) -> Option<&'static str> {
         match self {
-            Item::HydraSpear => Some("javelinist"),
+            Item::HydraSpear | Item::Impaler => Some("javelinist"),
             Item::GravecallerRift => Some("revenant"),
             Item::HeartOfWinter => Some("frost_mage"),
             _ => None,
@@ -276,7 +284,7 @@ impl Item {
             Item::EmberHeart | Item::BerserkerTotem => Trigger::OnKill,
             Item::EchoStone | Item::VoidOrb | Item::MirrorShard | Item::HeartOfWinter => Trigger::OnCast,
             Item::BrambleMantle => Trigger::WhenHit,
-            Item::PowderKeg | Item::WispLantern | Item::HoarfrostBoots | Item::GravecallerRift => Trigger::Always,
+            Item::PowderKeg | Item::WispLantern | Item::HoarfrostBoots | Item::GravecallerRift | Item::Impaler => Trigger::Always,
         }
     }
 
@@ -300,6 +308,7 @@ impl Item {
             Item::BerserkerTotem => "Every kill feeds the next.",
             Item::RicochetCharm => "Why stop at one?",
             Item::HydraSpear => "One throw, and the sky fills with points.",
+            Item::Impaler => "A spit long enough for the whole pack.",
             Item::GravecallerRift => "The wounds you open in the earth grow wider.",
             Item::HeartOfWinter => "Your nova leaves a storm behind.",
         }
@@ -376,6 +385,10 @@ impl Item {
                 let (count, keeps, _) = hydra_spear(level);
                 format!("Each auto-attack throws {count} javelins in a barrage, one right after the other; each after the first deals {} of the damage.", pct(keeps))
             }
+            Item::Impaler => match impaler(level) {
+                u32::MAX => "Your javelins fly on through every monster in their line (never players), hitting each once.".into(),
+                count => format!("Your javelins fly on through up to {count} monsters (never players), hitting each once, and stick in the next."),
+            },
             Item::GravecallerRift => {
                 format!("Follow Through's empowered strike is {} longer and wider, and so is the rift it tears.", pct(gravecaller_rift(level)))
             }

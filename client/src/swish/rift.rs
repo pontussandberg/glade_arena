@@ -373,7 +373,7 @@ pub(super) fn burn_in_rifts(
     art: Res<crate::fx::FxArt>,
     map: Res<crate::rooms::CurrentMap>,
     zones: Query<(Entity, &RiftZone)>,
-    fighters: Query<(&Pos, &Health, Option<&Team>, (Option<&Motion>, Option<&crate::render::PredictedWalk>)), (With<PlayerId>, Without<Shopkeeper>)>,
+    fighters: Query<(&Pos, &Health, Option<&Team>, (Option<&Motion>, Option<&crate::render::PredictedWalk>, &ClassId, Has<Elite>)), (With<PlayerId>, Without<Shopkeeper>)>,
     mut next: Local<(f32, u32)>,
 ) {
     let now = time.elapsed_secs();
@@ -387,10 +387,10 @@ pub(super) fn burn_in_rifts(
     }
     *next = (now + BURN_EVERY, next.1.wrapping_add(1));
     let mut k = next.1.wrapping_mul(97);
-    for (pos, health, team, (motion, predicted)) in &fighters {
+    for (pos, health, team, (motion, predicted, class, elite)) in &fighters {
         let foe = |zone: &RiftZone| !zone.team.zip(team).is_some_and(|(theirs, mine)| theirs.allied(*mine));
         let feet = crate::render::shown_height(map.map(), motion, predicted, pos.0);
-        if health.alive() && zones.iter().any(|(_, zone)| now < zone.until && foe(zone) && zone.rift.holds(map.map(), pos.0, feet, zone.tick)) {
+        if health.alive() && zones.iter().any(|(_, zone)| now < zone.until && foe(zone) && zone.rift.holds(map.map(), (pos.0, feet, class.def().hit_size(elite)), zone.tick)) {
             k = k.wrapping_add(1);
             crate::fx::sparkle(&mut commands, &art, now, to_world(pos.0, 0.0), crate::fx::Sparkle::Burn, k);
         }

@@ -53,8 +53,8 @@ pub(super) fn use_abilities(
                 hits.0 = dash.started_at;
                 hits.1.clear();
             }
-            hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Ability(dash.slot)), blow, |target, at, feet| {
-                let fresh = !hits.1.contains(&target) && dash::hits(map, (pos.0, motion.height), (at, feet));
+            hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Ability(dash.slot)), blow, |target, body| {
+                let fresh = !hits.1.contains(&target) && dash::hits(map, (pos.0, motion.height), body);
                 if fresh {
                     hits.1.push(target);
                 }
@@ -102,7 +102,7 @@ pub(super) fn use_abilities(
                 }
                 Cast::Nova { slot, ability, nova } => {
                     let (blow, with) = blow(ability);
-                    hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Ability(slot)), blow, |_, at, feet| nova.hits(map, (pos.0, motion.height), (at, feet)));
+                    hit_foes(&mut commands, &mut log, now.0, &mut targets, with, (side, Source::Ability(slot)), blow, |_, body| nova.hits(map, (pos.0, motion.height), body));
                 }
             }
         }

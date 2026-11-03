@@ -24,7 +24,7 @@ shares (field reference in the README there):
 
 | Class | Role | Auto-attack | Ability |
 |---|---|---|---|
-| Jav | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`), pierce monsters, and crit now and then | **Deadeye**: at once, your next auto-attack will critically strike, with 50% more attack speed; press again to call it off (15s cooldown, from the throw; off the global cooldown) |
+| Jav | Marksman | Slow, heavy javelins that hit harder the farther they fly (`far_scale`), stick in what they strike, and crit now and then | **Deadeye**: at once, your next auto-attack will critically strike, with 50% more attack speed; press again to call it off (15s cooldown, from the throw; off the global cooldown) |
 | Revenant | Duelist | A heavy overhead blow of its dark glaive, the blade coming down flat on the ground from 2 m to 4.62 m ahead, 0.75 m wide, tearing it open for 3s (inside the tear the revenant moves 30% faster, and enemies standing in it burn for 4 every 0.5s, the revenant healing a third of it); each hit arms the next blow, if it follows within 10s (time to kite): it knocks enemies up for 0.3s (shorter than the attack itself, so it can't chain alone), lost on a miss, and an armed hit arms the next (`follow_up`, the **Follow Through** passive) | **Rift Step**: dash toward the cursor, 1 m to 12 m, damaging each enemy you pass through |
 | Frost Mage | Controller | Frostbolts that fly until they meet something and shatter there, the burst of ice hitting everyone round the mark for most of the damage; every hit slows (40% for 2s), and it always crits a frozen enemy | **Frost Nova**: slam the staff down and freeze everyone within 8.75 m in place for 2.5s (no walking, no dashing) |
 
@@ -98,8 +98,8 @@ again), a Frenzy (every monster hasted), the Restless Dead (every third to die r
 Blood Moon (elites everywhere), Volatile (everything bursts as it dies), and round again.
 
 Players' auto-attacks
-knock monsters (zombies too) back a little, bosses aside, and the Jav's javelins pierce straight
-through monsters (never players).
+knock monsters (zombies too) back a little, bosses aside. The Jav's javelins stick in the first
+thing they strike (an Impaler sends them on through monsters, never players).
 
 **Items** (`shared/src/items.rs`) never give stats: each does something, and each has its own
 pixel icon (`client/src/item_icons.rs`). Six at most; buying one
@@ -142,10 +142,11 @@ procedural shapes (`shapes.rs`).
 | Berserker Totem | Kills stack a frenzy (walk and attack faster) |
 | Ricochet Charm | Shots that hit bounce on (ranged classes) |
 | Hydra Spear | Each auto-attack throws a barrage of 2-4 javelins (Jav only) |
+| Impaler | Javelins fly on through 3/10/every monster by level, sticking in the next (Jav only) |
 | Gravecaller Rift | Follow Through's empowered strike, and the rift it tears, 15/30/50% longer and wider by level (Revenant only) |
 | Heart of Winter | Frost Nova's damage leaves a blizzard (Frost Mage only) |
 
-They combine: a Hydra Spear's barrage pierces a whole line and sets off Storm Coil arcs, Ember Heart's bursts kill into
+They combine: an Impaler's javelin skewers a whole line and sets off Storm Coil arcs, Ember Heart's bursts kill into
 more bursts and feed a Berserker Totem, a Void Orb gathers a pack for Thunder Crown and the kegs.
 
 **Monsters** are classes too (`shared/assets/classes/`, with a `mob` section: how it gets about,
