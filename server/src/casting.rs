@@ -1,4 +1,4 @@
-//! Abilities cast and taking effect: dashes, novas and thrown abilities (`use_abilities`).
+//! Abilities cast and taking effect: dashes, novas, primes and thrown abilities (`use_abilities`).
 
 use super::*;
 

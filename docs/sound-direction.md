@@ -1,9 +1,11 @@
 # Sound direction
 
-The sound bible for Arena. `docs/art-direction.md` is its visual twin. Every sound in the game
-is layered at play time from short CC0 and CC BY sounds in `client/web/sfx/` (`client/src/audio.rs`,
-`AudioOut::play`; credits in `client/web/sfx/CREDITS.txt`). This page says what those layers
-are for, and how a sound gets made or remade.
+The sound bible for Arena. `docs/art-direction.md` is its visual twin. Nearly every sound in the
+game is layered at play time from short CC0 and CC BY sounds in `client/web/sfx/`
+(`client/src/audio.rs`, `AudioOut::play`; credits in `client/web/sfx/CREDITS.txt`); the few
+exceptions are synthesized where nothing recorded fits (the low-health heartbeat, the dirge, the
+horns, the ambient wind bed). This page says what those layers are for, and how a sound gets made
+or remade.
 
 ## Identity
 
@@ -42,11 +44,11 @@ long a shot is held), a late sound some fixed time before the attack goes off, a
 on the tick it goes off. Each is timed by the attack clock, so they line up however late the
 news of the attack came.
 
-| Hero | Gather (windup) | Release | Flight / landing |
-| --- | --- | --- | --- |
-| Revenant | nothing: the whoosh is the only sound before the blow | a `spear_swing` slowed and dulled with `cloth_heavy`, peaking just before the blade lands (no synthesized sweeps: they read as lasers) | the thunk, short and all at once: `groundhit`, a slowed `impactPunch_heavy` and a short lowpassed `boom` (no `chop`: it reads as sticks knocking); then on its heels the rift opening: `thunder_01`'s roll slowed and lowpassed into the earth groaning open like a heavy gate, kept short (no slowed cracks: they knock; no `ghost_breath`: not dramatic; no `stones` debris: it reads as a splash) |
-| Javelinist | `jav_draw`, a soft swish going into stance (0.14–0.32 s of the recording), starting as far before the throw as it does in the recording; kept to a faint confirmation that the attack is coming | `jav_whoosh`, the same recording's harder whoosh (0.41–0.76 s). Both at natural speed, at the recording's own balance (Pontus's pick and cuts, replacing his own `jav_throw` and the cloth, bow-creak and air draw) | nothing: the spear flies silent (the `spear_flight` drone is gone) |
-| Frost mage | `frost_channel` (Pontus's, AI-generated), crackling frost channelled up from its start; if the windup outlasts its rise it crackles on (an even, patternless bed of it) until the bolt goes, then ends under the cast, which has its own tail; a windup cut off hushes it | `frost_cast` (Pontus's, AI-generated), cut to start on its climax: the climax as the bolt goes, then its long icy tail | `frost_impact`, a punch of ice breaking, where the bolt hits or ends (CC BY, EminYILDIRIM). Before: an ice crunch and a magic swell under a spell's crack, which he replaced |
+| Hero | Gather (windup) | Late (a fixed time before it goes off) | Release (the tick it goes off) | Flight / landing |
+| --- | --- | --- | --- | --- |
+| Revenant | nothing: the whoosh is the only sound before the blow | the whoosh, 0.3 s before the blade lands: a `spear_swing` slowed and dulled with `cloth_heavy`, peaking just before it lands (no synthesized sweeps: they read as lasers) | the thunk, short and all at once: `groundhit`, a slowed `impactPunch_heavy` and a short lowpassed `boom` (no `chop`: it reads as sticks knocking); then on its heels the rift opening: `thunder_01`'s roll slowed and lowpassed into the earth groaning open like a heavy gate, kept short (no slowed cracks: they knock; no `ghost_breath`: not dramatic; no `stones` debris: it reads as a splash) | nothing more: the blow lands as it goes off |
+| Javelinist | nothing | `jav_draw`, a soft swish going into stance (0.14–0.32 s of the recording), as far before the throw as it sits in the recording (0.27 s); kept to a faint confirmation that the attack is coming | `jav_whoosh`, the same recording's harder whoosh (0.41–0.76 s). Both at natural speed, at the recording's own balance (Pontus's pick and cuts, replacing his own `jav_throw` and the cloth, bow-creak and air draw) | nothing: the spear flies silent (the `spear_flight` drone is gone) |
+| Frost mage | `frost_channel` (Pontus's, AI-generated), crackling frost channelled up from its start; if the windup outlasts its rise it crackles on (an even, patternless bed of it) until the bolt goes, then ends under the cast, which has its own tail; a windup cut off hushes it | nothing | `frost_cast` (Pontus's, AI-generated), cut to start on its climax: the climax as the bolt goes, then its long icy tail | `frost_impact`, a punch of ice breaking, where the bolt hits or ends (CC BY, EminYILDIRIM), played by the bolt's burst, not the attack voice. Before: an ice crunch and a magic swell under a spell's crack, which he replaced |
 
 These three are the playable heroes (the warden, breaker, pyre witch, stormweaver and shade
 were dropped, sounds and all). Every row was picked and cut by Pontus, by ear.
@@ -64,11 +66,14 @@ were dropped, sounds and all). Every row was picked and cut by Pontus, by ear.
 5. **Cut single takes** with `scripts/sfx/` (`serve.mjs` serves the sources and the game's sfx
    folder on 8099; `probe.mjs info` prints a 50 ms RMS envelope so you can see where each take
    is; `render.mjs` cuts, reverses, pitches, filters and normalizes a slice into a 22 kHz mono
-   WAV). They run inside the muted headless Chrome, so any format Chrome decodes works.
+   WAV; `sfxtool.py info` looks at a WAV without Chrome). They run inside the muted headless
+   Chrome, so any format Chrome decodes works.
 6. **Register** the file in `SAMPLES` and `CREDITS.txt`, write the recipe as a few `sample`
    calls at the moments the body makes them, with `pick` over 2–3 takes so it never repeats.
 7. **Rebuild** (`./scripts/dev.sh dev`), check the browser console for `sfx/... didn't load`
-   (a misspelled key is a silent missing layer), and hand it to an ear. Expect retunes.
+   (it catches a missing or undecodable file in `SAMPLES`; a recipe key misspelled against
+   `SAMPLES` plays nothing and logs nothing, so proofread those by hand), and hand it to an
+   ear. Expect retunes.
 
 Levels: every clip is normalized to -1 dBFS on the way in, so the recipe's gains are the mix.
 Measure the result (an AnalyserNode before the destination) rather than guessing; recordings

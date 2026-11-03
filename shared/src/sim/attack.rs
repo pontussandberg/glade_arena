@@ -22,7 +22,7 @@ pub enum Attack {
 /// One tick of the auto-attack. A click (`input.fire`) with no attack in progress, or once the
 /// last one is done (`Swing::ready_at`), starts one: the aim locks. Any other click is dropped,
 /// not queued. When its windup is over the attack goes off (returned here) from wherever the
-/// player stands then (winding up roots it, but a dash mid-windup still moves it), or a shot
+/// player stands then (walking carries on through it, and a dash mid-windup moves it too), or a shot
 /// with its button still held (`input.draw`) once that's let go; after that it may walk away
 /// while the attack timer runs out. An attack started while `quick_until` is armed is quick
 /// (`follow_up`), and uses it up as it goes off: lost to a knock-up first, the next is.

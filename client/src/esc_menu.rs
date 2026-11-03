@@ -5,6 +5,7 @@
 
 use arena_shared::protocol::RoomRequest;
 use bevy::prelude::*;
+use bevy::window::CursorOptions;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
@@ -20,6 +21,9 @@ pub struct EscMenuPlugin;
 impl Plugin for EscMenuPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(Update, (PlayerControls, CameraControl).run_if(not(menu_open)));
+        // After the camera's controls: in the browser, the lock's watchdog presses the ESC the
+        // browser swallowed (`camera::follow_camera`), and the menu takes it this same frame.
+        app.configure_sets(Update, MenuKey.after(CameraControl));
         app.add_systems(Update, (toggle_menu.in_set(MenuKey), menu_buttons).chain().run_if(in_state(Screen::InGame)));
         app.add_systems(OnExit(Screen::InGame), close_menu);
     }
@@ -29,9 +33,9 @@ impl Plugin for EscMenuPlugin {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct MenuKey;
 
-/// The menu, while it's open.
+/// The menu, while it's open (the click-back hint stands down for it: `render::show_click_hint`).
 #[derive(Component)]
-struct EscMenu;
+pub(crate) struct EscMenu;
 
 /// The HUD's button that opens the menu (`render/` puts it in the top-left panel).
 #[derive(Component)]
@@ -60,7 +64,11 @@ fn menu_open(menu: Query<(), With<EscMenu>>) -> bool {
     !menu.is_empty()
 }
 
-/// ESC opens the menu, or closes it; the Home button opens it.
+/// ESC opens the menu straight away (in the browser, where the camera's lock swallows the key,
+/// the watchdog presses it as the lock goes: `camera::follow_camera`), or closes it; the Home
+/// button opens it. Opening it lets the cursor go, to click it with; closing it, however it's
+/// closed, takes the cursor straight back for the fight.
+#[allow(clippy::too_many_arguments)]
 fn toggle_menu(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
@@ -69,14 +77,10 @@ fn toggle_menu(
     room: Res<CurrentRoom>,
     mut desired: ResMut<crate::DesiredInput>,
     mut aiming: ResMut<crate::casting::Aiming>,
-    mode: Res<crate::camera::CameraMode>,
+    mut mode: ResMut<crate::camera::CameraMode>,
+    mut cursor: Single<&mut CursorOptions>,
 ) {
     let esc = keys.just_pressed(KeyCode::Escape);
-    // While the camera has the cursor, ESC only lets it go (`camera::follow_camera`, before or
-    // after this); the next one opens the menu.
-    if esc && (mode.locked || mode.just_unlocked) {
-        return;
-    }
     // ESC first drops a normal cast's aim; the next one opens the menu.
     if esc && aiming.0.is_some() {
         aiming.0 = None;
@@ -85,12 +89,15 @@ fn toggle_menu(
     match menu.single() {
         Ok(menu) if esc => {
             commands.entity(menu).despawn();
+            mode.lock(&mut cursor);
             return;
         }
         Err(_) if esc || home.iter().any(clicked) => {}
         _ => return,
     }
-    // Stand still and stop attacking while away from the controls.
+    // The cursor is let go for the menu; stand still and stop attacking while away from the
+    // controls.
+    mode.unlock(&mut cursor);
     desired.0 = default();
     let practice = room.0.as_ref().is_none_or(|r| r.practice);
     let title = match &room.0 {
@@ -142,6 +149,8 @@ fn menu_buttons(
     mut leaving: ResMut<Leaving>,
     menu: Query<Entity, With<EscMenu>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
+    mut mode: ResMut<crate::camera::CameraMode>,
+    mut cursor: Single<&mut CursorOptions>,
     mut sender: Single<&mut MessageSender<RoomRequest>, With<Client>>,
 ) {
     if settings_button.iter().any(clicked) {
@@ -149,16 +158,7 @@ fn menu_buttons(
             (Ok(pane), _) => commands.entity(pane).despawn(),
             (Err(_), Ok(menu)) => {
                 commands.entity(menu).with_children(|menu| {
-                    menu.spawn((
-                        SettingsPane,
-                        Node { flex_direction: FlexDirection::Column, row_gap: px(14.0), padding: UiRect::axes(px(20.0), px(16.0)), border: UiRect::all(px(1.0)), ..default() },
-                        BackgroundColor(palette::ui::PANEL),
-                        BorderColor::all(palette::ui::MUTED.with_alpha(0.5)),
-                    ))
-                    .with_children(|pane| {
-                        crate::settings::slider(pane, crate::settings::Setting::Sensitivity, &settings);
-                        crate::settings::slider(pane, crate::settings::Setting::Volume, &settings);
-                    });
+                    crate::settings::spawn_pane(menu, &settings).insert(SettingsPane);
                 });
             }
             _ => {}
@@ -170,6 +170,7 @@ fn menu_buttons(
         for menu in &menu {
             commands.entity(menu).despawn();
         }
+        mode.lock(&mut cursor);
     }
     if lobby.iter().any(clicked) {
         request(&mut sender, RoomRequest::LeaveArena);

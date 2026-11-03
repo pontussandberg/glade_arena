@@ -1,7 +1,6 @@
-//! Normal cast: an ability that waits to be aimed (a strike from its key, any aimed one from its
-//! icon) first shows where it will go (its aim indicator, on the ground at your feet, or where a
-//! strike lands) and casts it on the next left click (a right click drops it). Every other
-//! ability's key sends it off at once. The keys themselves are read in
+//! Normal cast: an aimed ability picked from its icon first shows where it will go (its aim
+//! indicator, on the ground at your feet) and casts on the next left click (a right click drops
+//! it). An ability's key sends it off at once. The keys themselves are read in
 //! `render::read_local_input`.
 
 use arena_shared::protocol::*;

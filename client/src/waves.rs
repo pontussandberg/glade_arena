@@ -1,7 +1,8 @@
 //! The waves mode, on screen: the run's banner at the top (the wave, the shop's countdown and the
 //! way to say we're ready, the monsters left, who's down), a boss's health under it, the
 //! end of a lost run across the middle; our gold and items over the action bar; the merchant's
-//! shop, open while we stand by them (in practice, where we set our attack speed too); and what
+//! shop, opened with F while we stand by them aiming their way — a hint under the crosshair
+//! says so — and shut walking off (in practice too, where we set our attack speed); and what
 //! items and monsters do (`Fx`), and wisps circling whoever carries a Wisp Lantern.
 
 use arena_shared::items::{self, Item, MAX_LEVEL, SLOTS, Satchel};
@@ -13,12 +14,14 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use crate::Me;
+use crate::action_bar::centered;
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::{self, palette, to_world};
 use crate::feedback::AttackClock;
+use crate::lobby::label;
 use crate::item_icons::{ICON_PIXELS, ItemIcons, load_item_icons};
 use crate::plain::PlainMaterial;
-use crate::render::{GameUi, HudButton, button, clicked, set_fill, shown, ui_text};
+use crate::render::{GameUi, HudButton, button, clicked, key_chip, set_fill, shown, ui_text};
 use crate::rooms::{CurrentRoom, request};
 use crate::tooltip::{Side, hover_shows, tip, tip_note, tip_text, tip_title};
 
@@ -31,7 +34,7 @@ impl Plugin for WavesPlugin {
             Update,
             (
                 (show_banner, show_boss, show_over, ready_up, leave_when_over).chain(),
-                (show_satchel, open_shop, show_shop, trade).chain(),
+                (show_satchel, open_shop.before(ready_up), show_shop, trade).chain(),
                 circle_wisps,
                 (name_in_world, place_names).chain(),
             ),
@@ -44,7 +47,7 @@ const GAP: f32 = 8.0;
 /// An item's tile in our satchel, and in the shop.
 const SLOT: f32 = 44.0;
 /// The shop's width.
-const SHOP_WIDTH: f32 = 470.0;
+const SHOP_WIDTH: f32 = 620.0;
 const TIP_WIDTH: f32 = 300.0;
 
 /// The banner at the top: its lines (rebuilt as the run changes).
@@ -70,7 +73,7 @@ struct ReadyButton;
 #[derive(Component)]
 struct SatchelBar;
 
-/// The merchant's shop, at the right.
+/// The merchant's shop, in the middle of the screen.
 #[derive(Component)]
 struct ShopPanel;
 
@@ -86,9 +89,14 @@ struct SellButton(u8);
 #[derive(Component)]
 struct HasteButton(f32);
 
-/// Whether the shop is open: we're by the merchant in a run.
+/// Whether the shop is open: opened with F by the merchant, shut walking off (the click-back
+/// hint stands down for it: `render::show_click_hint`).
 #[derive(Resource, Default, PartialEq)]
-struct ShopOpen(bool);
+pub(crate) struct ShopOpen(pub(crate) bool);
+
+/// The hint under the crosshair: press F to open the shop.
+#[derive(Component)]
+struct InteractHint;
 
 fn spawn_hud(mut commands: Commands) {
     commands.init_resource::<ShopOpen>();
@@ -143,25 +151,35 @@ fn spawn_hud(mut commands: Commands) {
         Node { position_type: PositionType::Absolute, width: percent(100.0), bottom: px(100.0), justify_content: JustifyContent::Center, ..default() },
     ))
     .with_child((SatchelBar, HudButton, Node { display: Display::None, column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::all(px(5.0)), ..default() }, BackgroundColor(palette::ui::PANEL.with_alpha(0.8))));
-    commands.spawn((
-        GameUi,
-        ShopPanel,
-        HudButton,
-        Node {
-            display: Display::None,
-            position_type: PositionType::Absolute,
-            right: px(12.0),
-            top: px(64.0),
-            width: px(SHOP_WIDTH),
-            flex_direction: FlexDirection::Column,
-            row_gap: px(4.0),
-            padding: UiRect::all(px(12.0)),
-            border: UiRect::all(px(1.0)),
-            ..default()
-        },
-        BackgroundColor(palette::ui::PANEL.with_alpha(0.95)),
-        BorderColor::all(ACCENT.with_alpha(0.6)),
-        Interaction::default(),
+    // Over the rest of the HUD.
+    commands
+        .spawn((GameUi, centered(), GlobalZIndex(7)))
+        .with_child((
+            ShopPanel,
+            HudButton,
+            Node {
+                display: Display::None,
+                width: px(SHOP_WIDTH),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(7.0),
+                padding: UiRect::all(px(22.0)),
+                border: UiRect::all(px(1.0)),
+                ..default()
+            },
+            BackgroundColor(palette::ui::BACKDROP.with_alpha(0.93)),
+            BorderColor::all(palette::GOLD.with_alpha(0.5)),
+            Interaction::default(),
+        ));
+    // The interact hint, under the crosshair.
+    commands.spawn((GameUi, top_center(percent(57.0)))).with_child((
+        InteractHint,
+        Node { display: Display::None, column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::axes(px(10.0), px(5.0)), ..default() },
+        BackgroundColor(palette::ui::PANEL.with_alpha(0.85)),
+        children![
+            ui_text("Press", 12.0, palette::ui::TEXT),
+            key_chip("F", 11.0, palette::ui::TEXT, palette::ui::MUTED.with_alpha(0.5)),
+            ui_text("to open the shop", 12.0, palette::ui::TEXT),
+        ],
     ));
 }
 
@@ -308,7 +326,8 @@ fn show_over(mut commands: Commands, room: Res<CurrentRoom>, banner: Single<(Ent
     }
 }
 
-/// F, or the banner's button, says we're ready for the next wave (or not, again).
+/// F, or the banner's button, says we're ready for the next wave (or not, again). By the
+/// merchant, F is theirs first (`open_shop`, ordered before this, spends it).
 fn ready_up(
     keys: Res<ButtonInput<KeyCode>>,
     room: Res<CurrentRoom>,
@@ -358,6 +377,15 @@ fn item_tile(parent: &mut ChildSpawnerCommands, icons: &ItemIcons, item: Item, l
         .id()
 }
 
+/// Our gold: the count in gold over its caption, at `sizes` — the satchel bar's and the shop
+/// header's.
+fn gold_readout(gold: u32, sizes: (f32, f32), align: AlignItems) -> impl Bundle {
+    (
+        Node { flex_direction: FlexDirection::Column, align_items: align, ..default() },
+        children![ui_text(gold.to_string(), sizes.0, palette::GOLD), ui_text("GOLD", sizes.1, palette::ui::MUTED)],
+    )
+}
+
 /// What sets an item off, as a color.
 fn trigger_color(item: Item) -> Color {
     match item.trigger() {
@@ -373,8 +401,8 @@ fn trigger_color(item: Item) -> Color {
 fn item_tip(parent: &mut EntityCommands, item: Item, level: u8, next: bool) {
     let mut tip_id = None;
     parent.with_children(|tile| {
-        // In the shop (up at the right) it opens below, leftward; on our satchel, above.
-        let place = if next { tip(Side::Below, -TIP_WIDTH + 30.0, TIP_WIDTH) } else { tip(Side::Above, -TIP_WIDTH / 2.0, TIP_WIDTH) };
+        // In the shop it opens below the tile; on our satchel, above.
+        let place = tip(if next { Side::Below } else { Side::Above }, -TIP_WIDTH / 2.0, TIP_WIDTH);
         tip_id = Some(
             tile.spawn(place)
                 .with_children(|tip| {
@@ -419,10 +447,7 @@ fn show_satchel(
     }
     commands.entity(bar).despawn_children();
     commands.entity(bar).with_children(|bar| {
-        bar.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, margin: UiRect::right(px(6.0)), ..default() }).with_children(|gold| {
-            gold.spawn(ui_text(satchel.gold.to_string(), 18.0, palette::GOLD));
-            gold.spawn(ui_text("GOLD", 9.0, palette::ui::MUTED));
-        });
+        bar.spawn(gold_readout(satchel.gold, (18.0, 9.0), AlignItems::Center));
         for slot in 0..SLOTS {
             match satchel.slots[slot] {
                 Some(owned) => {
@@ -455,16 +480,45 @@ fn show_satchel(
     });
 }
 
-/// The shop opens as we come up to the merchant, in a run, and shuts as we walk off.
+/// How close to straight at the merchant the aim must be for them to be at hand (the cosine of
+/// the angle between the camera's forward and the way to them, along the ground).
+const INTERACT_AIM: f32 = 0.9;
+
+/// The merchant is at hand while we're by them and aiming their way; then the hint under the
+/// crosshair shows, and F opens the shop (or shuts it), letting the cursor go to trade with.
+/// The press is spent, or it would also ready us up (`ready_up`, ordered after this). Walking
+/// off shuts the shop. The cursor isn't taken back for us: a click on the field does that.
+#[allow(clippy::too_many_arguments)]
 fn open_shop(
     room: Res<CurrentRoom>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    typing: Option<Res<crate::browser::Typing>>,
+    mut mode: ResMut<crate::camera::CameraMode>,
+    mut cursor: Single<&mut bevy::window::CursorOptions>,
     mut open: ResMut<ShopOpen>,
+    hint: Single<&mut Node, With<InteractHint>>,
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     merchant: Query<&Pos, With<Shopkeeper>>,
 ) {
-    let near = room.shopping()
-        && me.single().ok().zip(merchant.iter().next()).is_some_and(|(me, merchant)| me.distance(merchant.0) <= SHOP_RADIUS);
-    open.set_if_neq(ShopOpen(near));
+    let both = if room.shopping() { me.single().ok().zip(merchant.iter().next()) } else { None };
+    let (near, facing) = both.map_or((false, false), |(me, merchant)| {
+        (me.distance(merchant.0) <= SHOP_RADIUS, (merchant.0 - me.0).normalize_or_zero().dot(mode.forward()) >= INTERACT_AIM)
+    });
+    let hand = near && facing;
+    let mut now = open.0 && near;
+    if hand && keys.just_pressed(KeyCode::KeyF) && !typing.is_some_and(|t| t.0) {
+        keys.clear_just_pressed(KeyCode::KeyF);
+        now = !now;
+        if now {
+            mode.unlock(&mut cursor);
+        }
+    }
+    open.set_if_neq(ShopOpen(now));
+    let display = if hand && !now { Display::Flex } else { Display::None };
+    let mut hint = hint.into_inner();
+    if hint.display != display {
+        hint.display = display;
+    }
 }
 
 /// The shop: every item our fighter can carry, what it costs us now and a way to buy it; rebuilt
@@ -495,13 +549,22 @@ fn show_shop(
     }
     commands.entity(panel).despawn_children();
     commands.entity(panel).with_children(|panel| {
-        panel.spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, ..default() }).with_children(|head| {
-            head.spawn(ui_text("THE MERCHANT", 18.0, palette::ui::TEXT));
-            head.spawn(ui_text(format!("{} gold", satchel.gold), 14.0, palette::GOLD));
-        });
+        // The header: who, and our gold, over a gold rule.
+        panel
+            .spawn((
+                Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::FlexEnd, padding: UiRect::bottom(px(8.0)), border: UiRect::bottom(px(1.0)), margin: UiRect::bottom(px(3.0)), ..default() },
+                BorderColor::all(palette::GOLD.with_alpha(0.4)),
+            ))
+            .with_children(|head| {
+                head.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|name| {
+                    name.spawn(label("Wares & trade"));
+                    name.spawn(ui_text("THE MERCHANT", 27.0, palette::GOLD));
+                });
+                head.spawn(gold_readout(satchel.gold, (24.0, 11.0), AlignItems::FlexEnd));
+            });
         let free = room.practice();
         let note = if free { "Practice: everything's free. Items do things, never stats." } else { "Items do things, never stats. Buy one again to raise it." };
-        panel.spawn(ui_text(note, 10.0, palette::ui::MUTED));
+        panel.spawn(ui_text(note, 12.0, palette::ui::MUTED));
         if free {
             haste_row(panel, haste.map_or(0.0, |haste| haste.0));
         }
@@ -513,53 +576,57 @@ fn show_shop(
             if stock.is_empty() {
                 continue;
             }
-            panel.spawn((Node { margin: UiRect::top(px(4.0)), ..default() }, ui_text(title, 10.0, color)));
-            let grid = Node { display: Display::Grid, grid_template_columns: RepeatedGridTrack::flex(2, 1.0), column_gap: px(GAP), row_gap: px(3.0), ..default() };
+            panel.spawn((Node { margin: UiRect::top(px(5.0)), ..default() }, ui_text(title, 12.0, color)));
+            let grid = Node { display: Display::Grid, grid_template_columns: RepeatedGridTrack::flex(2, 1.0), column_gap: px(GAP), row_gap: px(5.0), ..default() };
             panel.spawn(grid).with_children(|grid| {
                 for item in stock {
                     let level = satchel.level(item);
                     let price = satchel.price_of(item, *class, free);
                     let own = item.class().is_some();
                     grid.spawn((
-                        Node { column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::all(px(3.0)), border: UiRect::left(px(if own { 2.0 } else { 0.0 })), ..default() },
+                        Node { column_gap: px(8.0), align_items: AlignItems::Center, padding: UiRect::all(px(5.0)), border: UiRect::left(px(if own { 2.0 } else { 0.0 })), ..default() },
                         BackgroundColor(if own { palette::GOLD.with_alpha(0.12) } else { palette::ui::BACKDROP.with_alpha(0.5) }),
                         BorderColor::all(palette::GOLD),
                     ))
                     .with_children(|row| {
-                        let tile = item_tile(row, &icons, item, level, 32.0);
+                        let tile = item_tile(row, &icons, item, level, 40.0);
                         let mut commands = row.commands();
                         item_tip(&mut commands.entity(tile), item, level, true);
                         row.spawn(Node { flex_direction: FlexDirection::Column, flex_grow: 1.0, flex_basis: px(0.0), ..default() }).with_children(|words| {
                             let name = if level > 0 { format!("{} {level}/{MAX_LEVEL}", item.name()) } else { item.name().to_string() };
-                            words.spawn(ui_text(name, 11.0, palette::ui::TEXT));
-                            words.spawn(ui_text(item.trigger().label(), 8.0, trigger_color(item)));
+                            words.spawn(ui_text(name, 13.0, palette::ui::TEXT));
+                            words.spawn(ui_text(item.trigger().label(), 10.0, trigger_color(item)));
                         });
                         match price {
                             Ok(cost) => {
                                 let affordable = satchel.gold >= cost;
                                 let (fill, text) = if affordable { (palette::ui::SELECTED, palette::GOLD) } else { (palette::ui::BACKDROP, palette::ui::MUTED) };
                                 let label = if free { "FREE".to_string() } else { cost.to_string() };
-                                row.spawn((BuyButton(item), HudButton, button(label, 10.0, fill, text, palette::GOLD.with_alpha(0.5))));
+                                row.spawn((BuyButton(item), HudButton, button(label, 12.0, fill, text, palette::GOLD.with_alpha(0.5))));
                             }
                             Err(why) => {
                                 let why = if level >= MAX_LEVEL { "MAX" } else if why.starts_with("No room") { "FULL" } else { "-" };
-                                row.spawn(ui_text(why, 10.0, palette::ui::MUTED));
+                                row.spawn(ui_text(why, 12.0, palette::ui::MUTED));
                             }
                         }
                     });
                 }
             });
         }
-        panel.spawn(ui_text("Hover an item to see what it does. Walk away to close.", 9.0, palette::ui::MUTED));
+        panel.spawn(Node { justify_content: JustifyContent::Center, align_items: AlignItems::Center, column_gap: px(6.0), margin: UiRect::top(px(8.0)), ..default() }).with_children(|foot| {
+            foot.spawn(ui_text("Hover an item to see what it does", 11.0, palette::ui::MUTED));
+            foot.spawn(key_chip("F", 11.0, palette::ui::MUTED, palette::ui::MUTED.with_alpha(0.5)));
+            foot.spawn(ui_text("or walking away closes", 11.0, palette::ui::MUTED));
+        });
     });
 }
 
 /// Practice's attack speed, `haste` more than the normal now: slower and faster a step
 /// (`PracticeHaste`), as far as it goes either way.
 fn haste_row(panel: &mut ChildSpawnerCommands, haste: f32) {
-    let row = Node { column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::all(px(3.0)), margin: UiRect::top(px(4.0)), ..default() };
+    let row = Node { column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::all(px(5.0)), margin: UiRect::top(px(4.0)), ..default() };
     panel.spawn((row, BackgroundColor(palette::ui::BACKDROP.with_alpha(0.5)))).with_children(|row| {
-        row.spawn((Node { flex_grow: 1.0, ..default() }, ui_text("ATTACK SPEED", 10.0, palette::ui::TEXT)));
+        row.spawn((Node { flex_grow: 1.0, ..default() }, ui_text("ATTACK SPEED", 12.0, palette::ui::TEXT)));
         let (least, most) = PracticeHaste::RANGE;
         let step = |row: &mut ChildSpawnerCommands, label: &str, to: f32, can: bool| {
             let (fill, text) = if can { (palette::ui::SELECTED, palette::GOLD) } else { (palette::ui::BACKDROP, palette::ui::MUTED) };
@@ -570,7 +637,7 @@ fn haste_row(panel: &mut ChildSpawnerCommands, haste: f32) {
         };
         step(row, "-", haste - PracticeHaste::STEP, haste - PracticeHaste::STEP >= least - 1e-3);
         let color = if haste.abs() < 1e-3 { palette::ui::TEXT } else { ACCENT };
-        row.spawn((Node { width: px(48.0), justify_content: JustifyContent::Center, ..default() }, children![ui_text(format!("{:+.0}%", haste * 100.0), 11.0, color)]));
+        row.spawn((Node { width: px(52.0), justify_content: JustifyContent::Center, ..default() }, children![ui_text(format!("{:+.0}%", haste * 100.0), 13.0, color)]));
         step(row, "+", haste + PracticeHaste::STEP, haste + PracticeHaste::STEP <= most + 1e-3);
     });
 }

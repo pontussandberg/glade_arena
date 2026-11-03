@@ -1,9 +1,9 @@
 //! Pickups lying in the arena, and what taking one shows: a glowing green cross (a heal), a blue
-//! winged boot (a haste: walking faster, like a sprint's) or pale yellow crossed blades (a fury
+//! winged boot (a haste: walking faster) or pale yellow crossed blades (a fury
 //! stone: attacking faster) floating over a glow on the ground, bobbing and turning, gone while
 //! they're waiting to come back. A heal bursts around whoever takes it, even at full health (a
-//! ring spreading on the ground, sparks spiraling up); a hasted fighter trails blue wind streaks while it runs, like a
-//! sprint. Who takes a pickup is the server's call (`Pickup`, `Hasted`); a heal's number is in
+//! ring spreading on the ground, sparks spiraling up); a hasted fighter trails blue wind streaks
+//! while it runs. Who takes a pickup is the server's call (`Pickup`, `Hasted`); a heal's number is in
 //! `feedback`, the timers on the minimap.
 
 use std::f32::consts::FRAC_PI_2;
@@ -405,8 +405,8 @@ struct Streak {
     length: f32,
 }
 
-/// While a fighter is hasted (on the timeline it's drawn on) and moving, it sheds golden wind
-/// streaks along the way it runs, around its body at varying heights: a sprint's rush of air.
+/// While a fighter is hasted (on the timeline it's drawn on) and moving, it sheds blue wind
+/// streaks along the way it runs, around its body at varying heights: a rush of air.
 fn trail_haste(
     mut commands: Commands,
     time: Res<Time>,

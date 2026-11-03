@@ -1,8 +1,9 @@
 //! Gameplay rules as pure functions of (state, input, tick).
 //!
 //! No wall-clock time and no randomness. The server runs them; clients use the few they draw
-//! with (where a projectile is at a tick, whether a player has arrived). Per-class numbers come
-//! from `ClassDef`.
+//! with (where a projectile is at a tick, whether a player has arrived) and the movement and
+//! attack steps the prediction of our own fighter replays (`render::glide`). Per-class numbers
+//! come from `ClassDef`.
 
 use bevy::prelude::*;
 
@@ -915,28 +916,30 @@ mod tests {
         assert!(lands(&lobbed) > landed, "a lob carries farther");
     }
 
-    const Q: AbilitySlot = AbilitySlot(0);
+    /// The first ability slot, on key 1.
+    const ONE: AbilitySlot = AbilitySlot(0);
 
-    /// `class`'s ability on Q.
-    fn q(class: ClassId) -> &'static AbilityDef {
-        class.def().ability(Q).unwrap()
+    /// `class`'s first ability.
+    fn first(class: ClassId) -> &'static AbilityDef {
+        class.def().ability(ONE).unwrap()
     }
 
-    /// The first class whose Q is a prime / a dash.
+    /// The first class whose first ability is a prime / a dash.
     fn primer() -> ClassId {
-        ClassId::playable().find(|c| matches!(q(*c).kind, AbilityKind::Prime(_))).unwrap()
+        ClassId::playable().find(|c| matches!(first(*c).kind, AbilityKind::Prime(_))).unwrap()
     }
     fn dasher() -> ClassId {
-        ClassId::all().find(|c| matches!(q(*c).kind, AbilityKind::Dash(_))).unwrap()
+        ClassId::all().find(|c| matches!(first(*c).kind, AbilityKind::Dash(_))).unwrap()
     }
     fn dash_def() -> DashDef {
-        let AbilityKind::Dash(dash) = q(dasher()).kind else { unreachable!() };
+        let AbilityKind::Dash(dash) = first(dasher()).kind else { unreachable!() };
         dash
     }
 
-    /// Q pressed toward `aim`, the cursor far off along it (a dash goes its full distance).
-    fn press_q(aim: Vec2) -> PlayerInput {
-        press(Q, aim * 100.0)
+    /// The first ability pressed toward `aim`, the cursor far off along it (a dash goes its
+    /// full distance).
+    fn press_first(aim: Vec2) -> PlayerInput {
+        press(ONE, aim * 100.0)
     }
 
     /// The ability in `slot` pressed, aimed `aim`.
@@ -965,7 +968,7 @@ mod tests {
         let class = dasher();
         let DashDef { distance, min_distance: Some(min), .. } = dash_def() else { panic!("the dash has no least distance") };
         let dash_to = |cursor: f32| {
-            let input = press(Q, Vec2::X * cursor);
+            let input = press(ONE, Vec2::X * cursor);
             step_kit(10, class, Vec2::ZERO, &input, &default(), default()).0.dashing.0.unwrap().left
         };
         let between = (min + distance) / 2.0;
@@ -977,11 +980,11 @@ mod tests {
     #[test]
     fn with_no_cooldown_an_ability_still_waits_for_the_global_cooldown() {
         let class = dasher();
-        assert!(q(class).global_cooldown);
+        assert!(first(class).global_cooldown);
         let free = Kit { cooldowns: Cooldowns { free: true, ..default() }, ..default() };
-        let (state, thrown) = step_kit(10, class, Vec2::ZERO, &press_q(Vec2::X), &default(), free);
+        let (state, thrown) = step_kit(10, class, Vec2::ZERO, &press_first(Vec2::X), &default(), free);
         assert!(thrown.is_some());
-        let again = |tick| step_kit(tick, class, Vec2::ZERO, &press_q(Vec2::X), &default(), state).1;
+        let again = |tick| step_kit(tick, class, Vec2::ZERO, &press_first(Vec2::X), &default(), state).1;
         let global = common().global_cooldown_ticks;
         assert!(again(10 + global - 1).is_none(), "used again during the global cooldown");
         assert!(again(10 + global).is_some(), "its own cooldown should be none");
@@ -992,28 +995,28 @@ mod tests {
         let class = dasher();
         let empty = AbilitySlot(class.def().abilities.len() as u8);
         assert!(step_kit(10, class, Vec2::ZERO, &press(empty, Vec2::X), &default(), default()).1.is_none(), "cast from an empty slot");
-        assert!(step_kit(10, class, Vec2::ZERO, &press_q(Vec2::ZERO), &default(), default()).1.is_none(), "cast without an aim");
+        assert!(step_kit(10, class, Vec2::ZERO, &press_first(Vec2::ZERO), &default(), default()).1.is_none(), "cast without an aim");
     }
 
     #[test]
     fn abilities_pressed_together_are_all_tried_in_order() {
-        let mut input = press(Q, Vec2::X);
+        let mut input = press(ONE, Vec2::X);
         input.order_cast(AbilitySlot(1), Vec2::Y);
-        input.order_cast(Q, -Vec2::X);
+        input.order_cast(ONE, -Vec2::X);
         let orders: Vec<_> = input.casts().collect();
-        assert_eq!(orders, [CastOrder { slot: Q, aim: -Vec2::X }, CastOrder { slot: AbilitySlot(1), aim: Vec2::Y }], "pressed again, Q kept its place and took the new aim");
+        assert_eq!(orders, [CastOrder { slot: ONE, aim: -Vec2::X }, CastOrder { slot: AbilitySlot(1), aim: Vec2::Y }], "pressed again, the first ability kept its place and took the new aim");
         // A press the class has no ability for doesn't keep the one before it from going off.
         let class = primer();
         let mut both = press(AbilitySlot(class.def().abilities.len() as u8), Vec2::X);
-        both.order_cast(Q, Vec2::X);
-        assert!(matches!(step_kit(10, class, Vec2::ZERO, &both, &default(), default()).1, Some(Cast::Prime { .. })), "Q lost to a later press");
+        both.order_cast(ONE, Vec2::X);
+        assert!(matches!(step_kit(10, class, Vec2::ZERO, &both, &default(), default()).1, Some(Cast::Prime { .. })), "the first ability lost to a later press");
     }
 
     #[test]
     fn a_prime_needs_no_aim_and_readies_one_quicker_attack() {
         let class = primer();
-        let Some(Cast::Prime { slot, prime }) = step_kit(10, class, Vec2::ZERO, &press_q(Vec2::ZERO), &default(), default()).1 else {
-            panic!("no prime the tick Q is pressed")
+        let Some(Cast::Prime { slot, prime }) = step_kit(10, class, Vec2::ZERO, &press_first(Vec2::ZERO), &default(), default()).1 else {
+            panic!("no prime the tick the ability is pressed")
         };
         let attack = &class.def().attack;
         let fire = aim(Vec2::X, true);
@@ -1038,7 +1041,7 @@ mod tests {
     /// all the while; and the motion it came out of it with.
     fn dash_run_going(from: Vec2, dir: Vec2, chilled: &Chilled, hasted: &Hasted, along: Vec2, walk: Vec2) -> (Vec2, u32, Motion) {
         let class = dasher();
-        let (mut state, _) = step_kit(1, class, from, &press_q(dir), chilled, default());
+        let (mut state, _) = step_kit(1, class, from, &press_first(dir), chilled, default());
         let (mut pos, mut tick) = (from, 1);
         let mut motion = Motion { along, height: map().height_at(from), ..default() };
         while state.dashing.0.is_some() {
@@ -1137,7 +1140,7 @@ mod tests {
         let class = dasher();
         let from = spawns()[0];
         let (_, winding) = attack_ticks(class, &[10], 10, 10);
-        let (kit, _) = step_kit(11, class, from, &press_q(Vec2::Y), &default(), default());
+        let (kit, _) = step_kit(11, class, from, &press_first(Vec2::Y), &default(), default());
         assert!(kit.dashing.0.is_some(), "no dash mid-windup");
         let moved = move_player(map(), from, &PlayerInput::default(), class, &winding, &mut { kit.dashing }, &mut Motion::default(), &default(), &default(), 11);
         assert_ne!(moved, from, "the dash didn't move you mid-windup");
@@ -1149,12 +1152,12 @@ mod tests {
         assert_eq!(released, Some(10 + windup), "the dash cancelled the attack");
     }
 
-    /// The first class whose auto-attack chills / whose Q is a nova.
+    /// The first class whose auto-attack chills / whose first ability is a nova.
     fn chiller() -> ClassId {
         ClassId::all().find(|c| !c.def().attack.chill.is_none()).unwrap()
     }
     fn novaer() -> ClassId {
-        ClassId::all().find(|c| matches!(q(*c).kind, AbilityKind::Nova(_))).unwrap()
+        ClassId::all().find(|c| matches!(first(*c).kind, AbilityKind::Nova(_))).unwrap()
     }
 
     #[test]
@@ -1218,11 +1221,11 @@ mod tests {
         assert_eq!(move_player(map(), from, &walk, class, &attack, &mut { idle }, &mut Motion::default(), &chilled, &default(), 11), from, "walked while rooted");
         assert_ne!(move_player(map(), from, &walk, class, &attack, &mut { idle }, &mut Motion::default(), &chilled, &default(), 11 + TICK_HZ as u32), from, "still rooted after it wore off");
 
-        let (state, _) = step_kit(11, class, from, &press_q(Vec2::X), &chilled, default());
-        assert!(state.dashing.0.is_none() && state.cooldowns.used_at(Q).is_none(), "dashed (or spent the cooldown) while rooted");
+        let (state, _) = step_kit(11, class, from, &press_first(Vec2::X), &chilled, default());
+        assert!(state.dashing.0.is_none() && state.cooldowns.used_at(ONE).is_none(), "dashed (or spent the cooldown) while rooted");
 
         // A dash in progress when the root lands goes no further, and ends.
-        let (dashing, _) = step_kit(9, class, from, &press_q(Vec2::X), &default(), default());
+        let (dashing, _) = step_kit(9, class, from, &press_first(Vec2::X), &default(), default());
         assert!(dashing.dashing.0.is_some());
         assert_eq!(move_player(map(), from, &walk, class, &attack, &mut { dashing.dashing }, &mut Motion::default(), &chilled, &default(), 11), from, "dashed on while rooted");
         let (stopped, _) = step_kit(11, class, from, &PlayerInput::default(), &chilled, dashing);
@@ -1232,11 +1235,11 @@ mod tests {
     #[test]
     fn nova_bursts_at_once_around_the_caster_only() {
         let class = novaer();
-        let AbilityKind::Nova(nova) = q(class).kind else { unreachable!() };
+        let AbilityKind::Nova(nova) = first(class).kind else { unreachable!() };
         let radius = nova.radius;
-        let (state, cast) = step_kit(10, class, Vec2::ZERO, &press_q(Vec2::X), &default(), default());
-        assert!(matches!(cast, Some(Cast::Nova { nova: cast, .. }) if cast == nova), "no nova the tick Q is pressed");
-        assert_eq!(state.cooldowns.cooldown_over_at(Q), 10 + q(class).cooldown_ticks);
+        let (state, cast) = step_kit(10, class, Vec2::ZERO, &press_first(Vec2::X), &default(), default());
+        assert!(matches!(cast, Some(Cast::Nova { nova: cast, .. }) if cast == nova), "no nova the tick the ability is pressed");
+        assert_eq!(state.cooldowns.cooldown_over_at(ONE), 10 + first(class).cooldown_ticks);
         let dirs = [Vec2::X, Vec2::Y, -Vec2::X, Vec2::new(0.6, -0.8)];
         // Open ground all around (walls stop novas too).
         let ground = |p: Vec2| (p, map().height_at(p));
@@ -1256,7 +1259,7 @@ mod tests {
         let class = chiller();
         let shot = Projectile { owner: PeerId::Netcode(1), class, origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 1, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
         assert_eq!(projectile_chill(&shot), class.def().attack.chill);
-        assert!(projectile_chill(&Projectile { class: primer(), ability: Some(Q), ..shot }).is_none());
+        assert!(projectile_chill(&Projectile { class: primer(), ability: Some(ONE), ..shot }).is_none());
     }
 
     #[test]
@@ -1352,7 +1355,7 @@ mod tests {
         // A dash goes at its own pace, marsh or not.
         let class = dasher();
         let DashDef { distance, ticks, .. } = dash_def();
-        let mut dashing = Dashing(Some(dash_def().start(Q, Vec2::X, Vec2::X * 100.0, 10)));
+        let mut dashing = Dashing(Some(dash_def().start(ONE, Vec2::X, Vec2::X * 100.0, 10)));
         let warm = Chilled::default();
         let moved = move_player(wilds, from, &PlayerInput::default(), class, &AttackState::default(), &mut dashing, &mut Motion::default(), &warm, &default(), 11);
         // Its first tick, the longest of an eased-out dash.

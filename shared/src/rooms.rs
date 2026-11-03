@@ -1,8 +1,8 @@
 //! Rooms: what the server browser lists and a room's lobby shows. A room is a private arena a
-//! guest creates and leads: the leader picks free-for-all or two teams and starts the match,
-//! which runs until a fighter (or a team) has `KILLS_TO_WIN` kills, zombies roaming the arena
-//! meanwhile; then everyone is back in the lobby, to start another. Anyone can join from the
-//! browser, before or during the match.
+//! guest creates and leads: the leader picks a mode (free-for-all, two teams, or the waves) and
+//! starts it. A fight runs until a fighter (or a team) has `KILLS_TO_WIN` kills, zombies roaming
+//! the arena meanwhile; the result stays until each member leaves. Only a room still waiting can
+//! be joined from the browser (a started one shows "In progress").
 
 use core::time::Duration;
 

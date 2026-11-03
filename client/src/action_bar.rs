@@ -62,7 +62,7 @@ const PRIMED_PULSE_HZ: f32 = 1.2;
 const TIP_WIDTH: f32 = 280.0;
 
 /// An ability's icon (this entity) and the parts that change: the wipe and the seconds.
-/// Clicking it aims the ability, a normal cast whatever quick cast is set to
+/// Clicking it aims the ability, a normal cast
 /// (`render::read_local_input`).
 #[derive(Component)]
 pub(crate) struct AbilityIcon {
@@ -81,12 +81,12 @@ struct IconShown {
     seconds: String,
 }
 
-/// A node filling its icon.
+/// A node filling its parent (an icon, the screen).
 pub(crate) fn fill() -> Node {
     Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() }
 }
 
-/// A node filling its icon, its content in the middle.
+/// A node filling its parent, its content in the middle.
 pub(crate) fn centered() -> Node {
     Node { justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..fill() }
 }

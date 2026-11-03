@@ -1,7 +1,7 @@
 //! The player's settings (`Settings`): how fast the mouse turns the camera, and how loud
-//! the game is. Kept in the browser (`localStorage`) across reloads, and set from the ESC
-//! menu's settings pane (`esc_menu`): a slider each (`slider`), dragged with the mouse
-//! (`drag_sliders`).
+//! the game is. Kept in the browser (`localStorage`) across reloads, and set from a settings
+//! pane (`spawn_pane`) — the ESC menu's (`esc_menu`) or the home screen's (`lobby`): a slider
+//! each (`slider`), dragged with the mouse (`drag_sliders`).
 
 use bevy::prelude::*;
 
@@ -118,8 +118,25 @@ struct Knob(Setting);
 #[derive(Component)]
 struct Reading(Setting);
 
+/// The settings pane under `parent`: every setting's slider in a panel. It minds the mouse
+/// (`Interaction`), held pressed for the whole of a press that starts on it, even dragged off
+/// the pane: what else drags with the mouse (the lobby's stage) stands aside for a pressed node.
+pub(crate) fn spawn_pane<'a>(parent: &'a mut ChildSpawnerCommands, settings: &Settings) -> EntityCommands<'a> {
+    let mut pane = parent.spawn((
+        Node { flex_direction: FlexDirection::Column, row_gap: px(14.0), padding: UiRect::axes(px(20.0), px(16.0)), border: UiRect::all(px(1.0)), ..default() },
+        Interaction::default(),
+        BackgroundColor(palette::ui::PANEL),
+        BorderColor::all(palette::ui::MUTED.with_alpha(0.5)),
+    ));
+    pane.with_children(|pane| {
+        slider(pane, Setting::Sensitivity, settings);
+        slider(pane, Setting::Volume, settings);
+    });
+    pane
+}
+
 /// A setting's row under `parent`: its label and reading over a slider.
-pub(crate) fn slider(parent: &mut ChildSpawnerCommands, setting: Setting, settings: &Settings) {
+fn slider(parent: &mut ChildSpawnerCommands, setting: Setting, settings: &Settings) {
     let value = settings.get(setting);
     parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4.0), width: px(300.0), ..default() }).with_children(|row| {
         row.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|over| {

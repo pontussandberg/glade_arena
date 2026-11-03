@@ -3,8 +3,8 @@
 //! The lobby shows it for the selected fighter; in the arena it sits in the bottom-left corner
 //! for your own, its health live.
 //!
-//! Also the words for a class's passive and Q, which the lobby lists and the action bar shows
-//! as tooltips.
+//! Also the words for a class's passive and abilities, which the lobby lists and the action bar
+//! shows as tooltips.
 
 use arena_shared::classes::{AbilityDef, ClassDef, seconds};
 use arena_shared::config::TICK_HZ;

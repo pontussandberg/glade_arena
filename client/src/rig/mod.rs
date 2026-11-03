@@ -17,16 +17,16 @@
 //! pointing at the target, while drawing the javelin further back; then lunge forward through
 //! the throw, the arm whipping over the top, hold the follow-through for a moment and settle
 //! back. Head and javelin stay on the target throughout. The hand is empty until a new javelin
-//! is drawn, as the next attack is ready. A thrown Q is a quick flick of the arm through the
-//! same throw.
+//! is drawn, as the next attack is ready. A thrown ability (no class has one today) is a quick
+//! flick of the arm through the same throw.
 //!
 //! The revenant drags its great blade behind it, the point trailing just above the ground. Its
 //! attack is a heavy overhead blow: the windup heaves the blade up from behind and over its
 //! head, leaning back with the lead hand thrown out at the target; the strike brings it down
 //! over the top in one great arc as the lead leg steps long into it and the body crunches in
 //! behind it, the blade smearing out longer, and on into the ground, where it leaves a crack
-//! (`swish/`). It lands as the blade comes level, out in front. Its blade grows half as big
-//! again as it's drawn up (`EMPOWERED_BLADE`), smearing out further as it strikes to reach the
+//! (`swish/`). It lands as the blade comes level, out in front. Its blade grows
+//! as it's drawn up (`EMPOWERED_BLADE`), smearing out further as it strikes to reach the
 //! whole of its long lane (`EMPOWERED_STRETCH`), and shrinks back as it settles; unless the
 //! hit empowered the next (Follow Through), which it stays grown for. A strike started before the last one has settled chains onto it: the blade comes
 //! straight back into the draw instead of sinking to the carry in between. A dash is no move of
@@ -126,9 +126,9 @@ pub(crate) const EMPOWERED_STRETCH: f32 = 0.05;
 /// How quickly dashing off cuts the backswing short (per second, exponential): the
 /// follow-through blends out into the dash.
 const CUT_RATE: f32 = 30.0;
-/// A thrown Q's flick: ticks after the throw until the arm starts and finishes coming back.
+/// A thrown ability's flick (no class has one today): ticks after the throw until the arm starts and finishes coming back.
 const FLICK: (f32, f32) = (0.5, 5.0);
-/// How far through its throw (0 to 1) a thrower's arm flicks for a Q: through the release, short
+/// How far through its throw (0 to 1) a thrower's arm flicks for a thrown ability: through the release, short
 /// of the spent follow-through its throw ends in.
 const FLICK_REACH: f32 = 0.55;
 /// A nova's slam: ticks after the cast until it starts and finishes rising out of it.
@@ -227,7 +227,7 @@ pub(crate) struct Rig {
     /// Walk cycles so far, and how much the fighter is walking (0..1, eased).
     stride: f32,
     walking: f32,
-    /// The backswing cut short by walking off: the attack's `released_at`, and how far it's
+    /// The backswing cut short by a dash: the attack's `released_at`, and how far it's
     /// blended out (0..1).
     cut: Option<(u32, f32)>,
     /// The last attack's backswing speed, and when it went off: kept once the server clears its
@@ -504,7 +504,7 @@ fn pose_rigs(
 
         // Where in the strike we are: drawing (0..1), holding, then striking during the windup,
         // up to its contact pose as the attack goes off; then the rest of the strike, and the
-        // follow-through easing back to carrying, unless a dash cuts it short. A thrown Q
+        // follow-through easing back to carrying, unless a dash cuts it short. A thrown ability
         // flicks through it.
         let def = class.def();
         let now = clock.as_ref().map_or(0.0, |clock| clock.now(is_me));
