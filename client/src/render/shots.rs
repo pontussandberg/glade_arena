@@ -249,8 +249,8 @@ const TING_SLACK: f32 = 0.4;
 /// not a thicket; into a wall, a crate or the ground it stays full size, buried near the whole
 /// blade (`TERRAIN_BURY`).
 const STUCK_SCALE: f32 = 0.9;
-const BODY_BURY: f32 = (arena::SPEAR_BLADE_LENGTH + 0.35) * STUCK_SCALE;
-const TERRAIN_BURY: f32 = arena::SPEAR_BLADE_LENGTH * 0.95;
+const BODY_BURY: f32 = (arena::SPEAR_BLADE_LENGTH + 0.28) * STUCK_SCALE;
+const TERRAIN_BURY: f32 = arena::SPEAR_BLADE_LENGTH * 0.85;
 /// How long a spear stuck in terrain stands, how long one stuck in a body does, and how many may
 /// stand at once before the oldest goes early -- roomy enough (measured free to render) that
 /// the backstop stays out of sight even spamming throws at practice attack speeds. Its time
