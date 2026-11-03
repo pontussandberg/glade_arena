@@ -248,12 +248,12 @@ const TING_SLACK: f32 = 0.4;
 const STUCK_SCALE: f32 = 0.9;
 const BODY_BURY: f32 = (arena::SPEAR_BLADE_LENGTH + 0.35) * STUCK_SCALE;
 const TERRAIN_BURY: f32 = 0.03;
-/// How many spears stuck in terrain stand in the world at once: they stay for good until the
-/// newest puts the count over, when the oldest sinks away (over `STUCK_SINK` seconds) -- a
-/// budget, so an endless session can't pile up entities and draw calls without end. One standing
-/// in a body sinks after `BODY_STUCK_SECONDS` instead.
-const STUCK_AT_MOST: usize = 60;
+/// How long a spear stuck in terrain stands, how long one stuck in a body does (it rides a
+/// fighter about to shed it anyway), and how many may stand at once before the oldest sinks
+/// early; sinking takes `STUCK_SINK` seconds.
+const STUCK_SECONDS: f32 = 7.0;
 const BODY_STUCK_SECONDS: f32 = 1.5;
+const STUCK_AT_MOST: usize = 50;
 const STUCK_SINK: f32 = 0.25;
 /// A bolt bursting as it's spent (`strike_home`): how long its flash lasts and how big it gets
 /// (seconds, meters); how many sparks fly out of it every way, how fast (m/s) and for how long.
@@ -511,9 +511,9 @@ fn burst(commands: &mut Commands, visuals: &Visuals, light: Handle<PlainMaterial
 }
 
 /// Stuck spears sink away into what holds them (shrinking to their buried point) when their time
-/// comes: one in a body after `BODY_STUCK_SECONDS`; one in terrain only once the standing crowd
-/// of them is over its budget (`STUCK_AT_MOST`), the oldest first. With the map gone from under
-/// them, all are gone at once.
+/// comes: one in a body after `BODY_STUCK_SECONDS`, one in terrain after `STUCK_SECONDS` -- or
+/// early, oldest first, once the standing crowd is over its budget (`STUCK_AT_MOST`). With the
+/// map gone from under them, all are gone at once.
 pub(super) fn fade_stuck_spears(
     mut commands: Commands,
     time: Res<Time>,
@@ -529,9 +529,10 @@ pub(super) fn fade_stuck_spears(
     }
     let mut standing: Vec<(Entity, f32)> = Vec::new();
     for (entity, mut spear, _) in &mut spears {
-        match (spear.held, spear.sinking) {
-            (true, None) if now - spear.born >= BODY_STUCK_SECONDS => spear.sinking = Some(now),
-            (false, None) => standing.push((entity, spear.born)),
+        let stays = if spear.held { BODY_STUCK_SECONDS } else { STUCK_SECONDS };
+        match spear.sinking {
+            None if now - spear.born >= stays => spear.sinking = Some(now),
+            None if !spear.held => standing.push((entity, spear.born)),
             _ => {}
         }
     }
