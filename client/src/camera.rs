@@ -101,8 +101,8 @@ pub struct CameraMode {
     /// The camera is in first person, at your fighter's eyes (V), not over its shoulder.
     pub(crate) first_person: bool,
     /// The camera has the cursor (hidden, locked in place): the mouse turns it. A click on the
-    /// field takes it; an interface over the fight (the menu, the shop) or a right click while
-    /// Tab is held lets it go (`unlock`).
+    /// field or the menu closing takes it (`lock`); an interface over the fight (the menu, the
+    /// shop) or a right click while Tab is held lets it go (`unlock`).
     pub(crate) locked: bool,
     /// A click took the cursor this frame (so it's no attack: `render::read_local_input`).
     pub(crate) just_locked: bool,
@@ -139,7 +139,7 @@ impl Default for CameraMode {
 impl CameraMode {
     /// Whether the right button, since it went down, has been dragged (turning the camera, the
     /// cursor hidden) rather than just clicked.
-    pub(crate) fn turning(&self) -> bool {
+    fn turning(&self) -> bool {
         self.dragged > DRAG_PX
     }
 
@@ -188,8 +188,6 @@ impl CameraMode {
         self.lock_seen = false;
         cursor.visible = false;
         cursor.grab_mode = CursorGrabMode::Locked;
-        #[cfg(target_family = "wasm")]
-        ask_pointer_lock();
     }
 }
 
@@ -342,16 +340,6 @@ fn release_cursor(cursor: &mut CursorOptions) {
     cursor.grab_mode = CursorGrabMode::None;
 }
 
-/// Asks the browser for the pointer itself, straight off the click or key in hand. Winit asks
-/// too, off `CursorOptions`, but a denied ask leaves it believing the cursor grabbed, never to
-/// ask again; this one can be asked anew (`follow_camera` does, off a fresh click).
-#[cfg(target_family = "wasm")]
-fn ask_pointer_lock() {
-    if let Some(Ok(Some(canvas))) = web_sys::window().and_then(|w| w.document()).map(|document| document.query_selector("canvas")) {
-        canvas.request_pointer_lock();
-    }
-}
-
 /// F1 moves the camera on to the next fighter, and after the last back to you.
 fn next_fighter(
     keys: Res<ButtonInput<KeyCode>>,
@@ -424,10 +412,10 @@ fn follow_camera(
                 keys.release(KeyCode::Escape);
             }
         } else if mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]) && !on_hud {
-            // Asked, not yet granted: a fresh click asks again. The browser can refuse an ask
-            // (the lock just lost to the window leaving, or too soon after its own ESC), and a
-            // refusal would otherwise stand forever.
-            ask_pointer_lock();
+            // Asked, not yet granted: a fresh click asks again — the browser can refuse an ask
+            // (the lock just lost to the window leaving, or too soon after its own ESC), and
+            // bevy_winit asks anew on any `CursorOptions` change, never from its cache.
+            cursor.set_changed();
         }
     }
     // While Tab holds the scoreboard up, a right click lets the cursor go, and it stays free past

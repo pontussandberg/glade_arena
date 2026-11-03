@@ -342,7 +342,8 @@ Controls: in the lobby, pick a class with a click or its number key and enter wi
 In the arena the camera is third person, behind you over your right shoulder: a click
 captures the mouse, which then turns it (Esc opens the menu, freeing it, and closing the menu
 takes it back; a right click while Tab is held frees it to point with, and a click takes it back;
-until then, dragging with the right button or the arrow keys turn it). WASD walks relative to it, holding left click attacks onto the
+until then, dragging with the right button or the arrow keys turn it). WASD walks relative to
+it, holding left click attacks onto the
 crosshair, the number keys use your abilities, Space jumps, the wheel (or + / -) zooms, down to
 arm's length, holding Tab shows the scoreboard, M opens the full map, F interacts (the merchant's
 shop) and readies up between waves, and F1 moves the camera on to the next fighter,

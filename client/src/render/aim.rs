@@ -6,6 +6,9 @@
 
 use super::*;
 
+use bevy::window::CursorOptions;
+
+use crate::action_bar::centered;
 use crate::camera::CameraMode;
 
 /// A part of the crosshair.
@@ -52,55 +55,35 @@ pub(super) fn show_crosshair(mode: Res<CameraMode>, mut crosshair: Query<&mut Vi
 pub(super) struct ClickBackHint;
 
 pub(super) fn spawn_click_hint(commands: &mut Commands) {
-    commands
-        .spawn((
-            ClickBackHint,
-            Node {
-                position_type: PositionType::Absolute,
-                width: percent(100.0),
-                height: percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            Visibility::Hidden,
-            GlobalZIndex(5),
-        ))
-        .with_child((
-            ui_text("Left click anywhere", 15.0, palette::GOLD),
-            TextShadow { offset: Vec2::splat(1.0), color: palette::ui::BACKDROP },
-            UiTransform::default(),
-        ));
+    // The swell scales the screen-filling node, which turns about its middle: where the words are.
+    commands.spawn((ClickBackHint, centered(), Visibility::Hidden, GlobalZIndex(5), UiTransform::default())).with_child((
+        ui_text("Left click anywhere", 15.0, palette::GOLD),
+        TextShadow { offset: Vec2::splat(1.0), color: palette::ui::BACKDROP },
+    ));
 }
 
 /// How much the click-back hint swells either way, and how fast it breathes (radians per second).
 const HINT_SWELL: f32 = 0.05;
 const HINT_BREATH: f32 = 4.0;
 
-/// Shown in the arena, in gold, while the cursor is free with nothing open for it — no menu, no
-/// shop, no right drag turning the camera — however it came free (Tab and a right click, the
-/// window left and come back to): a left click takes the camera back (`camera::follow_camera`).
-/// It breathes a little, to be seen.
+/// Shown in the arena, in gold, while the cursor is shown and free (`CursorOptions`: neither the
+/// camera's nor hidden for a right-drag turn) with nothing open for it — no menu, no shop —
+/// however it came free (Tab and a right click, the window left and come back to): a left click
+/// takes the camera back (`camera::follow_camera`). It breathes a little, to be seen.
 pub(super) fn show_click_hint(
     time: Res<Time>,
     screen: Res<State<crate::rooms::Screen>>,
-    mode: Res<CameraMode>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    cursor: Single<&CursorOptions>,
     menu: Query<(), With<crate::esc_menu::EscMenu>>,
     shop: Res<crate::waves::ShopOpen>,
-    hint: Single<(&mut Visibility, &Children), With<ClickBackHint>>,
-    mut words: Query<&mut UiTransform>,
+    hint: Single<(&mut Visibility, &mut UiTransform), With<ClickBackHint>>,
 ) {
-    let dragging = mouse.pressed(MouseButton::Right) && mode.turning();
-    let show = *screen.get() == crate::rooms::Screen::InGame && !mode.locked && menu.is_empty() && !shop.0 && !dragging;
-    let (mut visibility, children) = hint.into_inner();
+    let show = *screen.get() == crate::rooms::Screen::InGame && cursor.visible && menu.is_empty() && !shop.0;
+    let (mut visibility, mut swelling) = hint.into_inner();
     visibility.set_if_neq(shown(show));
     if !show {
         return;
     }
     let swell = 1.0 + HINT_SWELL * (time.elapsed_secs() * HINT_BREATH).sin();
-    let mut words = words.iter_many_mut(children);
-    while let Some(mut word) = words.fetch_next() {
-        word.scale = Vec2::splat(swell);
-    }
+    swelling.scale = Vec2::splat(swell);
 }

@@ -81,12 +81,12 @@ struct IconShown {
     seconds: String,
 }
 
-/// A node filling its icon.
+/// A node filling its parent (an icon, the screen).
 pub(crate) fn fill() -> Node {
     Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() }
 }
 
-/// A node filling its icon, its content in the middle.
+/// A node filling its parent, its content in the middle.
 pub(crate) fn centered() -> Node {
     Node { justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..fill() }
 }

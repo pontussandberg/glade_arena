@@ -14,9 +14,11 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use crate::Me;
+use crate::action_bar::centered;
 use crate::arena::palette::ui::ACCENT;
 use crate::arena::{self, palette, to_world};
 use crate::feedback::AttackClock;
+use crate::lobby::label;
 use crate::item_icons::{ICON_PIXELS, ItemIcons, load_item_icons};
 use crate::plain::PlainMaterial;
 use crate::render::{GameUi, HudButton, button, clicked, key_chip, set_fill, shown, ui_text};
@@ -149,20 +151,9 @@ fn spawn_hud(mut commands: Commands) {
         Node { position_type: PositionType::Absolute, width: percent(100.0), bottom: px(100.0), justify_content: JustifyContent::Center, ..default() },
     ))
     .with_child((SatchelBar, HudButton, Node { display: Display::None, column_gap: px(6.0), align_items: AlignItems::Center, padding: UiRect::all(px(5.0)), ..default() }, BackgroundColor(palette::ui::PANEL.with_alpha(0.8))));
-    // The shop, in the middle of the screen, over the rest of the HUD.
+    // Over the rest of the HUD.
     commands
-        .spawn((
-            GameUi,
-            Node {
-                position_type: PositionType::Absolute,
-                width: percent(100.0),
-                height: percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            GlobalZIndex(7),
-        ))
+        .spawn((GameUi, centered(), GlobalZIndex(7)))
         .with_child((
             ShopPanel,
             HudButton,
@@ -386,6 +377,15 @@ fn item_tile(parent: &mut ChildSpawnerCommands, icons: &ItemIcons, item: Item, l
         .id()
 }
 
+/// Our gold: the count in gold over its caption, at `sizes` — the satchel bar's and the shop
+/// header's.
+fn gold_readout(gold: u32, sizes: (f32, f32), align: AlignItems) -> impl Bundle {
+    (
+        Node { flex_direction: FlexDirection::Column, align_items: align, ..default() },
+        children![ui_text(gold.to_string(), sizes.0, palette::GOLD), ui_text("GOLD", sizes.1, palette::ui::MUTED)],
+    )
+}
+
 /// What sets an item off, as a color.
 fn trigger_color(item: Item) -> Color {
     match item.trigger() {
@@ -401,8 +401,8 @@ fn trigger_color(item: Item) -> Color {
 fn item_tip(parent: &mut EntityCommands, item: Item, level: u8, next: bool) {
     let mut tip_id = None;
     parent.with_children(|tile| {
-        // In the shop (up at the right) it opens below, leftward; on our satchel, above.
-        let place = if next { tip(Side::Below, -TIP_WIDTH + 30.0, TIP_WIDTH) } else { tip(Side::Above, -TIP_WIDTH / 2.0, TIP_WIDTH) };
+        // In the shop it opens below the tile; on our satchel, above.
+        let place = tip(if next { Side::Below } else { Side::Above }, -TIP_WIDTH / 2.0, TIP_WIDTH);
         tip_id = Some(
             tile.spawn(place)
                 .with_children(|tip| {
@@ -447,10 +447,7 @@ fn show_satchel(
     }
     commands.entity(bar).despawn_children();
     commands.entity(bar).with_children(|bar| {
-        bar.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, margin: UiRect::right(px(6.0)), ..default() }).with_children(|gold| {
-            gold.spawn(ui_text(satchel.gold.to_string(), 18.0, palette::GOLD));
-            gold.spawn(ui_text("GOLD", 9.0, palette::ui::MUTED));
-        });
+        bar.spawn(gold_readout(satchel.gold, (18.0, 9.0), AlignItems::Center));
         for slot in 0..SLOTS {
             match satchel.slots[slot] {
                 Some(owned) => {
@@ -560,13 +557,10 @@ fn show_shop(
             ))
             .with_children(|head| {
                 head.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|name| {
-                    name.spawn(ui_text("WARES & TRADE", 11.0, palette::ui::MUTED));
+                    name.spawn(label("Wares & trade"));
                     name.spawn(ui_text("THE MERCHANT", 27.0, palette::GOLD));
                 });
-                head.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::FlexEnd, ..default() }).with_children(|gold| {
-                    gold.spawn(ui_text(satchel.gold.to_string(), 24.0, palette::GOLD));
-                    gold.spawn(ui_text("GOLD", 11.0, palette::ui::MUTED));
-                });
+                head.spawn(gold_readout(satchel.gold, (24.0, 11.0), AlignItems::FlexEnd));
             });
         let free = room.practice();
         let note = if free { "Practice: everything's free. Items do things, never stats." } else { "Items do things, never stats. Buy one again to raise it." };
