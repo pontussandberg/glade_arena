@@ -239,6 +239,9 @@ const SPLINTER_STRETCH: f32 = 4.0;
 const SPLINTER_FALL: f32 = 9.0;
 /// A spear gone this much short of its range (meters) was stopped by something, not spent.
 const STOPPED_SHORT: f32 = 0.4;
+/// A shot removed within this long of a map change (seconds) was cleared away by it, not spent
+/// on anything: no strike to show.
+const MAP_CLEAR_SECONDS: f32 = 0.5;
 /// A spear ending this near a fighter's body (meters) struck it, not what's around it.
 const TING_SLACK: f32 = 0.4;
 /// A spear stands in a body a little smaller than it flew (`STUCK_SCALE` of it), its point run
@@ -307,12 +310,13 @@ pub(super) fn strike_home(
     clock: AttackClock,
     room: Res<crate::rooms::CurrentRoom>,
     map: Res<crate::rooms::CurrentMap>,
+    map_changed: Res<crate::rooms::MapChangedAt>,
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<PlainMaterial>>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
     shots: Query<(&Projectile, &Transform, Option<&Thrown>, &InheritedVisibility, &Mesh3d, &MeshMaterial3d<PlainMaterial>)>,
 ) {
-    let cleared = room.0.as_ref().is_some_and(|view| view.winner.is_some()) || map.is_changed();
+    let cleared = room.0.as_ref().is_some_and(|view| view.winner.is_some()) || time.elapsed_secs() - map_changed.0 < MAP_CLEAR_SECONDS;
     let Ok((projectile, transform, thrown, visible, mesh, own_light)) = shots.get(trigger.entity) else { return };
     if cleared {
         return;
@@ -342,24 +346,26 @@ pub(super) fn strike_home(
     if spent && !shot.falls {
         return;
     }
+    // Where the map ended it, or would have a tick or two on: the spear stands exactly there if
+    // nothing stopped it sooner; nothing in its way at all (spent in the air over water, off the
+    // map), it just ends.
+    let ground_end = map_end.and_then(|e| {
+        let step = |tick: f32| (sim::projectile_pos(projectile, tick), sim::projectile_height(projectile, tick));
+        ground.shot_end(step(e as f32 - 1.0), step(e as f32)).map(|found| (to_world(found.at, found.height), posed(e as f32)))
+    });
     // Removed before the map would have ended it: it struck a fighter on the stretch judged the
-    // tick it was removed. Which one is `pin_stuck_spears`' to settle (the damage dealt names
-    // it), so the spear first stands free at that stretch's far end, seeking (`PinTo`).
+    // tick it was removed -- reaching back far enough to cover a point-blank hit, whose removal
+    // (lingering a tick for the wire) and the tick it's read at both trail the hit itself. Which
+    // body is `pin_stuck_spears`' to settle (the damage dealt names it), so the spear first
+    // stands free at that stretch's far end, seeking (`PinTo`); the removal and the map's end
+    // read a tick apart either way, so a seeker that finds no one takes the map's end instead.
     let into_fighter = map_end.is_none_or(|e| e > removed);
     let seek = into_fighter.then(|| {
-        let from = at((removed as f32 - 1.0).max(projectile.spawn_tick as f32 - 1.0));
+        let from = at((removed as f32 - 3.0).max(projectile.spawn_tick as f32 - 1.0));
         let to = at(map_end.map_or(removed as f32 + 1.0, |e| e as f32));
         (from, to)
     });
-    // Ended by the map: the spear stands exactly where it says; nothing in its way (spent in the
-    // air over water, off the map), it just ends.
-    let end = match into_fighter {
-        true => None,
-        false => map_end.and_then(|e| {
-            let step = |tick: f32| (sim::projectile_pos(projectile, tick), sim::projectile_height(projectile, tick));
-            ground.shot_end(step(e as f32 - 1.0), step(e as f32)).map(|found| (to_world(found.at, found.height), posed(e as f32)))
-        }),
-    };
+    let end = if into_fighter { None } else { ground_end };
     // The flash and splinters right at the strike; ended in the air, where the sim ends it.
     let turned = end.map_or_else(|| posed(removed as f32), |(_, turned)| turned);
     let point = match (seek, end) {
@@ -391,7 +397,8 @@ pub(super) fn strike_home(
     match (seek, end) {
         (Some((from, to)), _) => {
             let placed = placed(to);
-            commands.spawn((StuckSpear { born: now, scale: placed.scale, held: true, sinking: None }, PinTo { owner: projectile.owner, from, to, radius: shot.radius, born: now }, Mesh3d(mesh.0.clone()), MeshMaterial3d(own_light.0.clone()), placed));
+            let fallback = ground_end.map(|(strike, turned)| (strike + turned * Vec3::X * TERRAIN_BURY, turned));
+            commands.spawn((StuckSpear { born: now, scale: placed.scale, held: true, sinking: None }, PinTo { owner: projectile.owner, from, to, radius: shot.radius, born: now, fallback }, Mesh3d(mesh.0.clone()), MeshMaterial3d(own_light.0.clone()), placed));
         }
         (None, Some((strike, _))) => {
             let placed = placed(strike + turned * Vec3::X * TERRAIN_BURY);
@@ -409,7 +416,9 @@ const NAMED_SLACK: f32 = 0.35;
 
 /// A stuck spear still seeking the body it stands in: it struck one of `owner`'s foes somewhere
 /// along `from`..`to` (the stretch judged the tick it was removed, a shot `radius` wide), and
-/// the one it damaged gives itself away by a hit of `owner`'s not yet shown a damage number.
+/// the one it damaged gives itself away by a fresh hit of `owner`'s. No one to be found at all,
+/// it takes `fallback`, where the map would have ended it: the removal and the map's end are
+/// read a tick apart either way, so a wall hit can first look like a fighter's.
 #[derive(Component)]
 pub(super) struct PinTo {
     owner: PeerId,
@@ -417,6 +426,7 @@ pub(super) struct PinTo {
     to: Vec3,
     radius: f32,
     born: f32,
+    fallback: Option<(Vec3, Quat)>,
 }
 
 /// Pins each seeking spear (`PinTo`, `strike_home`) into its body: the foe along its stretch
@@ -483,6 +493,9 @@ pub(super) fn pin_stuck_spears(
         let found = named.or_else(|| settle.then(|| candidates.iter().min_by(|a, b| a.2.total_cmp(&b.2))).flatten());
         let Some(&(body, drawn, _, height, _, size)) = found else {
             if settle {
+                if let Some((tip, turned)) = pin.fallback {
+                    *transform = Transform::from_translation(tip).with_rotation(turned).with_scale(stuck.scale);
+                }
                 commands.entity(spear).remove::<PinTo>();
             }
             continue;

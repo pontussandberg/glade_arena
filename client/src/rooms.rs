@@ -173,6 +173,19 @@ impl CurrentMap {
     }
 }
 
+/// When the map last changed (seconds since start), for what clears away with it: a shot removed
+/// around then was cleared by the change, not spent on anything, and mustn't strike the new
+/// ground (`render::strike_home` -- an observer, which can't ask `is_changed` itself: its first
+/// run ever would count the resource's birth as a change and swallow the first strike).
+#[derive(Resource, Default)]
+pub struct MapChangedAt(pub f32);
+
+fn note_map_change(time: Res<Time>, map: Res<CurrentMap>, mut changed: ResMut<MapChangedAt>) {
+    if map.is_changed() {
+        changed.0 = time.elapsed_secs();
+    }
+}
+
 /// Something to tell the player: why a request was refused, or why we were taken out of a room.
 #[derive(Resource, Default, Debug)]
 pub struct Notice(pub Option<String>);
@@ -198,7 +211,8 @@ impl Plugin for RoomsNetPlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<Screen>().add_computed_state::<Picking>();
         app.init_resource::<RoomList>().init_resource::<Leaderboards>().init_resource::<TextPrompt>().init_resource::<CurrentRoom>().init_resource::<CurrentMap>();
-        app.init_resource::<Notice>().init_resource::<Leaving>();
+        app.init_resource::<Notice>().init_resource::<Leaving>().init_resource::<MapChangedAt>();
+        app.add_systems(Update, note_map_change);
         app.insert_resource(QuickJoin(self.quick_join.clone()));
         app.insert_resource(StoredName(self.guest_name.clone()));
         app.add_systems(Update, (say_hello, read_lobby_events, send_class_choice, enter_game).chain());
