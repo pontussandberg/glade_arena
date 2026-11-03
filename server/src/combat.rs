@@ -260,7 +260,7 @@ pub(super) fn attack(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     mut attackers: Query<
-        (Entity, &PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), (&Frenzy, Option<&Fury>, Option<&PracticeHaste>), (&mut Cooldowns, Option<&Might>, Option<&arena_shared::items::Satchel>), Has<ControlledBy>, Option<&arena_shared::protocol::Motion>),
+        (Entity, &PlayerId, &ClassId, &Pos, &mut PlayerInput, &mut AttackState, &mut LastSwing, (&InRoom, &Team), (&Frenzy, Option<&Fury>, Option<&PracticeHaste>), (&mut Cooldowns, Option<&Might>, Option<&arena_shared::items::Satchel>), (Has<ControlledBy>, Has<crate::replays::Replay>), Option<&arena_shared::protocol::Motion>),
         InPlay,
     >,
     mut targets: Targets,
@@ -268,7 +268,9 @@ pub(super) fn attack(
     mut log: ResMut<HitLog>,
 ) {
     let now = timeline.tick();
-    for (entity, id, class, pos, mut input, mut state, mut last_swing, (room, team), (frenzy, fury, practice), (mut cooldowns, might, satchel), player, motion) in &mut attackers {
+    for (entity, id, class, pos, mut input, mut state, mut last_swing, (room, team), (frenzy, fury, practice), (mut cooldowns, might, satchel), (player, replay), motion) in &mut attackers {
+        // A replay bot plays a player's take back: its aim and shots work as a player's.
+        let player = player || replay;
         let might = might_of(might);
         let side = (*room, *team);
         // Knocked up: no attacking; one winding up is lost.

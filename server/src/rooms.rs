@@ -213,7 +213,12 @@ impl Room {
 impl Lobby {
     /// The map `room` plays on (the default one if it's gone).
     pub fn map(&self, room: &InRoom) -> &'static Map {
-        self.rooms.get(&room.key).map_or(MapId::default(), |r| r.map).map()
+        self.map_id(room).map()
+    }
+
+    /// Which map `room` plays on.
+    pub(crate) fn map_id(&self, room: &InRoom) -> MapId {
+        self.rooms.get(&room.key).map_or(MapId::default(), |r| r.map)
     }
 
     /// Where a player in `room` starts, away from `others` there: its spawn point farthest from
@@ -892,6 +897,40 @@ fn handle(lobby: &mut Lobby, allocator: &mut RoomAllocator, ctx: &mut Ctx, link:
                 ctx.commands.entity(zombie).insert((crate::zombies::Sluggish(crate::zombies::PRACTICE_ZOMBIE_SPEED), crate::replicated_npc()));
             }
             info!(room = key.0, count, "practice zombies placed");
+        }
+        RoomRequest::Record(on) => {
+            let key = room_key.ok_or("You're not in a room")?;
+            if !lobby.rooms[&key].practice {
+                return Err("Recording a take is for practice");
+            }
+            let player = ctx.player_of(link).ok_or("You're not in the arena")?;
+            match on {
+                true => {
+                    ctx.commands.entity(player).remove::<crate::replays::StopRecording>().insert(crate::replays::Recording::default());
+                    info!(room = key.0, "recording a take");
+                }
+                false => {
+                    ctx.commands.entity(player).insert(crate::replays::StopRecording);
+                }
+            }
+        }
+        RoomRequest::PlaceBot => {
+            let key = room_key.ok_or("You're not in a room")?;
+            let room = lobby.rooms.get(&key).expect("in it");
+            if !room.practice {
+                return Err("Replay bots are for practice");
+            }
+            if room.dummies.len() >= MAX_DUMMIES {
+                return Err("That's enough dummies");
+            }
+            let take = crate::replays::load_take()?;
+            if take.map != room.map {
+                return Err("The take was recorded on another map");
+            }
+            let in_room = room.in_room(key);
+            let bot = crate::replays::spawn_replay(&mut ctx.commands, lobby.next_local(), in_room, take);
+            lobby.rooms.get_mut(&key).expect("in it").dummies.push(bot);
+            info!(room = key.0, "replay bot placed");
         }
         RoomRequest::AttackSpeed(haste) => {
             let key = room_key.ok_or("You're not in a room")?;

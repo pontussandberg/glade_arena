@@ -343,6 +343,8 @@ dependencies = [
  "bevy",
  "fastrand",
  "lightyear",
+ "ron",
+ "serde",
  "tokio",
  "tracing-subscriber",
 ]

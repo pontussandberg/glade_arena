@@ -395,6 +395,50 @@ fn frostbolts_shatter_over_those_round_their_mark() {
     });
 }
 
+/// Practice records a take of our play and a bot plays it back: walk a stretch while recording,
+/// stop, and the placed bot retraces it from where the take began, looping back there when it
+/// runs out.
+#[test]
+fn a_recorded_take_plays_back_as_a_looping_bot() {
+    let _ = std::fs::remove_file("recordings/practice-bot.ron");
+    let mut p = Party::new(5855, "javelinist", false);
+    p.ask(RoomRequest::Practice(MapId::Crossing));
+    p.until(Duration::from_secs(10), "practicing", |p| p.room().is_some_and(|r| r.practice) && sees(&mut p.client, 1).is_some());
+    let start = open_near(MapId::Crossing, Vec2::ZERO);
+    for _ in 0..5 {
+        place(&mut p.server, 1, start);
+        p.update();
+    }
+    p.ask(RoomRequest::Record(true));
+    // The request and the walk travel separately: let the recording begin before the walk does.
+    for _ in 0..50 {
+        p.update();
+    }
+    set_input(&mut p.client, PlayerInput { walk: Vec2::X, ..default() });
+    p.until(Duration::from_secs(5), "walked while recording", |p| player::<Pos>(&mut p.server, 1).is_some_and(|pos| pos.0.x > start.x + 1.5));
+    p.ask(RoomRequest::Record(false));
+    set_input(&mut p.client, PlayerInput::default());
+    p.until(Duration::from_secs(3), "the take saved", |_| std::path::Path::new("recordings/practice-bot.ron").exists());
+    // Out of the way, so the bot walks its stretch alone.
+    let away = open_near(MapId::Crossing, start + Vec2::new(0.0, 6.0));
+    for _ in 0..5 {
+        place(&mut p.server, 1, away);
+        p.update();
+    }
+    p.ask(RoomRequest::PlaceBot);
+    let bot = |p: &mut Party| {
+        let world = p.server.world_mut();
+        world
+            .query_filtered::<(&PlayerId, &Pos), Without<Shopkeeper>>()
+            .iter(world)
+            .find(|(id, _)| matches!(id.0, PeerId::Local(_)))
+            .map(|(_, pos)| pos.0)
+    };
+    p.until(Duration::from_secs(3), "the bot up where the take began", |p| bot(p).is_some_and(|at| at.distance(start) < 0.75));
+    p.until(Duration::from_secs(8), "the bot retraced the walk", |p| bot(p).is_some_and(|at| at.x > start.x + 1.2));
+    p.until(Duration::from_secs(10), "the take looped back to its start", |p| bot(p).is_some_and(|at| at.distance(start) < 0.75));
+}
+
 /// Open ground near `p` on `map`.
 fn open_near(map: MapId, p: Vec2) -> Vec2 {
     let map = map.map();

@@ -136,10 +136,12 @@ pub(super) fn move_players(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     rifts: Res<Rifts>,
-    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, (&AttackState, Has<ControlledBy>), &mut Dashing, &Chilled, &Hasted, &InRoom, &Frenzy, Option<&Sluggish>, (&mut Walking, &WalkOrders), &mut arena_shared::protocol::Motion), InPlay>,
+    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, (&AttackState, Has<ControlledBy>, Has<crate::replays::Replay>), &mut Dashing, &Chilled, &Hasted, &InRoom, &Frenzy, Option<&Sluggish>, (&mut Walking, &WalkOrders), &mut arena_shared::protocol::Motion), InPlay>,
 ) {
     let now = timeline.tick().0;
-    for (id, mut pos, class, mut input, (attack, player), mut dashing, chilled, hasted, room, frenzy, sluggish, (mut walking, orders), mut motion) in &mut players {
+    for (id, mut pos, class, mut input, (attack, player, replay), mut dashing, chilled, hasted, room, frenzy, sluggish, (mut walking, orders), mut motion) in &mut players {
+        // A replay bot plays a player's take back: it walks through its windups as a player does.
+        let player = player || replay;
         let map = lobby.map(room);
         let mut next = *dashing;
         let winding = sim::winding_speed(*class, attack);

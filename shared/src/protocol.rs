@@ -868,6 +868,12 @@ pub enum RoomRequest {
     AttackSpeed(f32),
     /// Practice only, while dead: back on our feet now instead of when `Respawning` says.
     RespawnNow,
+    /// Practice only: start recording our fighter's inputs as a take (true), or stop and save it
+    /// for `PlaceBot` (false). A take that runs long enough stops and saves by itself.
+    Record(bool),
+    /// Practice only: a bot playing the saved take back, looping from where it began: our class,
+    /// moves, throws and casts, to spar against.
+    PlaceBot,
     /// Waves only, near the shopkeeper: buy this item, or raise it a level.
     Buy(crate::items::Item),
     /// Waves only, near the shopkeeper: sell the item in this slot.
