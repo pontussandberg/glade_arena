@@ -11,7 +11,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use arena_shared::abilities::AbilityKind;
-use arena_shared::config::{BODY_HEIGHT, PLAYER_RADIUS};
+use arena_shared::config::{BODY_HEIGHT, PLAYER_RADIUS, body_radius};
 use arena_shared::protocol::*;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -166,16 +166,16 @@ fn draw_hitboxes_3d(
             continue;
         }
         let size = class.def().hit_size(elite);
-        let (radius, tall) = (PLAYER_RADIUS * size, BODY_HEIGHT * size);
+        let tall = BODY_HEIGHT * size;
         let at = to_world(pos.0, map.map().height_at(pos.0));
         for i in 0..=(tall / RING_EVERY).round() as usize {
             let height = i as f32 * RING_EVERY;
-            gizmos.circle(Isometry3d::new(at.with_y(height), flat), radius, height_color(height));
+            gizmos.circle(Isometry3d::new(at.with_y(height), flat), body_radius(size, height), height_color(height));
         }
-        // Its sides, so it reads as a column.
+        // Its sides, so it reads as a column (tapering to the head).
         for k in 0..4 {
-            let side = Quat::from_rotation_y(k as f32 * FRAC_PI_2) * Vec3::X * radius;
-            gizmos.line_gradient(at + side, at + side + Vec3::Y * tall, floor, height_color(tall));
+            let out = Quat::from_rotation_y(k as f32 * FRAC_PI_2) * Vec3::X;
+            gizmos.line_gradient(at + out * body_radius(size, 0.0), at + out * body_radius(size, tall) + Vec3::Y * tall, floor, height_color(tall));
         }
     }
     // What stands in the way (`map::Collider`): each box's edges, colored by how high its top

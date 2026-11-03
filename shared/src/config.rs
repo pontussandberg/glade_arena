@@ -30,6 +30,19 @@ pub const JUMP: f32 = 2.5;
 pub const PLAYER_RADIUS: f32 = 0.5;
 /// How tall a body is to a shot (meters): one flying higher passes over it.
 pub const BODY_HEIGHT: f32 = 2.1;
+/// A body stands its full width to hits up to this share of its height (its shoulders), then
+/// narrows to this share of that width at the top of its head, as the figures taper.
+pub const SHOULDERS: f32 = 0.7;
+pub const HEAD_WIDTH: f32 = 0.5;
+
+/// How wide a body `size` big (`ClassDef::hit_size`) stands to hits `over` meters above its
+/// feet: its full width (`PLAYER_RADIUS` of it) up to its shoulders, its head's at the top
+/// (`SHOULDERS`, `HEAD_WIDTH`).
+pub fn body_radius(size: f32, over: f32) -> f32 {
+    let (wide, tall) = (PLAYER_RADIUS * size, BODY_HEIGHT * size);
+    let narrowed = ((over - tall * SHOULDERS) / (tall * (1.0 - SHOULDERS))).clamp(0.0, 1.0);
+    wide * (1.0 - (1.0 - HEAD_WIDTH) * narrowed)
+}
 /// How high a shot leaves the hand (meters): where its climb or fall starts from.
 pub const SHOT_HEIGHT: f32 = 1.0;
 /// The third-person camera: how far to a fighter's right (meters, over the shoulder)

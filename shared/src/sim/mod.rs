@@ -427,6 +427,21 @@ mod tests {
         assert!(projectile_hits(&proj, (10.0, 11.0), (between, SHOT_HEIGHT + 3.0, 1.0)).is_none(), "hit one far above its line");
     }
 
+    /// A body is its full width to a shot crossing at chest height, but only its head's width to
+    /// one crossing near its top (`body_radius`): standing beside the line, the chest is clipped
+    /// and the head is passed by.
+    #[test]
+    fn a_shot_narrows_to_the_head_it_flies_past() {
+        let proj = Projectile { owner: PeerId::Netcode(1), class: thrower(), origin: Vec2::ZERO, dir: Vec2::X, spawn_tick: 10, ability: None, crit: false, extra: false, climb: 0.0, lift: 0.0 };
+        let shot = proj.class.def().shot(None).unwrap();
+        let step = shot.speed * crate::config::TICK_DT;
+        let beside = Vec2::new(step * 1.5, crate::config::PLAYER_RADIUS + shot.radius - 0.05);
+        assert!(projectile_hits(&proj, (10.0, 11.0), (beside, 0.0, 1.0)).is_some(), "its chest is its full width");
+        let head_on_the_line = SHOT_HEIGHT - BODY_HEIGHT + 0.1;
+        assert!(projectile_hits(&proj, (10.0, 11.0), (beside, head_on_the_line, 1.0)).is_none(), "its head is as wide as its chest");
+        assert!(projectile_hits(&proj, (10.0, 11.0), (Vec2::X * step * 1.5, head_on_the_line, 1.0)).is_some(), "a head right on the line isn't hit");
+    }
+
     #[test]
     fn projectile_expires_at_its_range_and_at_walls() {
         // A bolt whose range ends within the map (the frost mage's doesn't).
