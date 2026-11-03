@@ -56,8 +56,10 @@ pub const MOST_CLIMB: f32 = 3.6;
 pub const ACTION_LOOK_HEIGHT: f32 = 2.0;
 pub const SHOULDER_WALL_MARGIN: f32 = 0.45;
 /// A player's thrower's raised hand lets go of the spear this far to their right and this
-/// high over their feet (meters), near the line of sight its shot starts on (`sim::onto_sight`),
-/// where the spear in flight appears as the hand empties (`render::fly_shots`).
+/// high over their feet (meters), near the line of sight its shot starts on (`sim::onto_sight`):
+/// the contract the throw animation is tuned to (`rig/`, held there by its release test), and
+/// where another player's spear in flight takes over from their hand (`render::fly_shots`; our
+/// own appears on the path itself).
 pub const RELEASE_ASIDE: f32 = 0.45;
 pub const RELEASE_HEIGHT: f32 = 2.07;
 /// How fast a thrown shot falls (m/s², the real thing), one that falls at all (`Shot::falls`).

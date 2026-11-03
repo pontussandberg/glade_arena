@@ -13,21 +13,11 @@ use crate::arena::{self, to_world};
 use crate::plain::PlainMaterial;
 use crate::rig::{HeldAt, MAX_HOLD_TICKS};
 
-/// Shots fly at chest height; fighters stand on the floor (their feet are at the mesh origin).
-const PROJECTILE_HEIGHT: f32 = 0.9;
-/// Thrown spears fly a little higher, at the height the throw lets go of them (`rig/` times the
-/// release to it), so they leave the hand straight down their line instead of sinking onto it.
-pub(crate) const THROWN_HEIGHT: f32 = 1.2;
-
-/// How high a shot flies: a thrown spear at `THROWN_HEIGHT`, the rest at `PROJECTILE_HEIGHT`.
-pub(super) fn shot_height(thrown: bool) -> f32 {
-    if thrown { THROWN_HEIGHT } else { PROJECTILE_HEIGHT }
-}
 /// How long a thrown spear takes to turn from how it was held to the way it flies, and to catch
 /// up its real path from a hand behind it (seconds).
 const SETTLE_SECONDS: f32 = 0.2;
 /// How far (meters) a thrown spear flies before it has come in from where it left the hand (to
-/// the side and above) onto its real path at `THROWN_HEIGHT`: one long, gentle curve, no dive.
+/// the side and above) onto its real path: one long, gentle curve, no dive.
 const CONVERGE_METERS: f32 = 7.0;
 /// Others' spears reach us a round trip (and a bit) after they're thrown, when their real path
 /// is already meters ahead of the hand. A spear never starts more than this far (meters) behind

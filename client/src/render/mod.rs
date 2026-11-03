@@ -398,8 +398,8 @@ fn add_visuals(
         shot.insert((
             Mesh3d(mesh),
             MeshMaterial3d(body),
-            Transform::from_translation(to_world(pos.0, shot_height(thrown)))
-                .with_rotation(Quat::from_rotation_y(projectile.dir.to_angle())),
+            // Placed for real by `fly_shots`, from the sim, before it's ever rendered.
+            Transform::from_translation(to_world(pos.0, 0.0)).with_rotation(Quat::from_rotation_y(projectile.dir.to_angle())),
         ));
         if spin != 0.0 {
             shot.insert(Spin(spin));
