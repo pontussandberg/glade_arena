@@ -29,6 +29,21 @@ pub(crate) struct Pierced(Vec<PeerId>);
 #[derive(Component)]
 pub(crate) struct Judged(u32);
 
+/// Server-only: done at this tick (hit, or ended by the map), kept one tick before it's
+/// despawned -- a shot spawned and despawned within one tick folds into nothing on the wire, and
+/// its strike would never show on any client. It hits no one and goes nowhere meanwhile.
+#[derive(Component)]
+pub(crate) struct Spent(u32);
+
+/// Despawns a done shot, or, done the very tick it spawned, keeps it one tick as `Spent`.
+fn despawn_spent(commands: &mut Commands, entity: Entity, projectile: &Projectile, now: u32) {
+    if now == projectile.spawn_tick {
+        commands.entity(entity).try_insert(Spent(now));
+    } else {
+        commands.entity(entity).try_despawn();
+    }
+}
+
 /// Shots fly on, and end at their range or against what's in their way. An auto-attack's shot
 /// that bursts (`AttackDef::burst`, a frostbolt) bursts where it ends too, hitting no one itself.
 #[allow(clippy::type_complexity)]
@@ -36,7 +51,7 @@ pub(super) fn move_projectiles(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
-    mut projectiles: Query<(Entity, &mut Pos, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Bounces>), Without<PlayerId>>,
+    mut projectiles: Query<(Entity, &mut Pos, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Bounces>), (Without<PlayerId>, Without<Spent>)>,
     mut targets: Targets,
     mut log: ResMut<HitLog>,
 ) {
@@ -46,7 +61,7 @@ pub(super) fn move_projectiles(
         if !sim::projectile_expired(lobby.map(room), pos.0, projectile, tick) {
             continue;
         }
-        commands.entity(entity).despawn();
+        despawn_spent(&mut commands, entity, projectile, tick);
         let burst = projectile.class.def().attack.burst.filter(|_| projectile.ability.is_none() && bounces.is_none());
         if let Some(burst) = burst {
             let amount = mighty(mighty(sim::projectile_damage(projectile, tick), might_of(might)), burst.share);
@@ -87,7 +102,7 @@ fn burst_at(
 pub(super) fn resolve_projectile_hits(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    mut projectiles: Query<(Entity, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Spares>, (Option<&Bounces>, Option<&mut Pierced>, Option<&mut Judged>))>,
+    mut projectiles: Query<(Entity, &Projectile, &InRoom, &Team, Option<&Might>, Option<&Spares>, (Option<&Bounces>, Option<&mut Pierced>, Option<&mut Judged>, Option<&Spent>))>,
     mut targets: Targets,
     holders: Query<(&PlayerId, &arena_shared::items::Satchel)>,
     lobby: Res<Lobby>,
@@ -97,7 +112,14 @@ pub(super) fn resolve_projectile_hits(
     // Frostbolts' bursts (`AttackDef::burst`), dealt once every shot's hit is: where, by whom,
     // how hard, and whom they spare (the one struck).
     let mut bursts = Vec::new();
-    for (projectile_entity, projectile, room, team, might, spares, (bounces, mut pierced, mut judged)) in &mut projectiles {
+    for (projectile_entity, projectile, room, team, might, spares, (bounces, mut pierced, mut judged, spent)) in &mut projectiles {
+        // Done already, lingering a tick for the wire: its time come, it goes.
+        if let Some(spent) = spent {
+            if now.0 > spent.0 {
+                commands.entity(projectile_entity).try_despawn();
+            }
+            continue;
+        }
         let impaler = holders.iter().find(|(id, _)| id.0 == projectile.owner).map_or(0, |(_, satchel)| satchel.level(Item::Impaler));
         let through_at_most = if projectile.ability.is_none() && impaler > 0 { arena_shared::items::impaler(impaler) } else { 0 };
         let mut through: Vec<PeerId> = pierced.as_ref().map_or_else(Vec::new, |p| p.0.clone());
@@ -132,7 +154,7 @@ pub(super) fn resolve_projectile_hits(
             if goes_on {
                 through.push(target_id.0);
             } else {
-                commands.entity(projectile_entity).try_despawn();
+                despawn_spent(&mut commands, projectile_entity, projectile, now.0);
             }
             let amount = mighty(sim::projectile_damage(projectile, now.0), might_of(might));
             let chill = sim::projectile_chill(projectile);

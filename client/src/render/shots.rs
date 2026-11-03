@@ -241,9 +241,12 @@ const SPLINTER_FALL: f32 = 9.0;
 const STOPPED_SHORT: f32 = 0.4;
 /// A spear ending this near a fighter's body (meters) struck it, not what's around it.
 const TING_SLACK: f32 = 0.4;
-/// How deep a spear buries where it strikes: into a body up to the whole blade, run in to its
-/// socket, but only its tip (meters) into a wall, a crate or the ground.
-const BODY_BURY: f32 = arena::SPEAR_BLADE_LENGTH;
+/// A spear stands in a body a little smaller than it flew (`STUCK_SCALE` of it), its point run
+/// in past the whole blade and a hand of shaft (`BODY_BURY`), so a crowd of them reads as pins,
+/// not a thicket; into a wall, a crate or the ground it stays full size, only its tip in
+/// (meters, `TERRAIN_BURY`).
+const STUCK_SCALE: f32 = 0.75;
+const BODY_BURY: f32 = (arena::SPEAR_BLADE_LENGTH + 0.35) * STUCK_SCALE;
 const TERRAIN_BURY: f32 = 0.03;
 /// How long a stuck spear stays (seconds), and how long it then takes to sink away into what
 /// holds it.
@@ -457,7 +460,7 @@ pub(super) fn pin_stuck_spears(
             continue;
         };
         let tip = drawn.translation.with_y(height) - ahead * PLAYER_RADIUS * size + transform.rotation * Vec3::X * BODY_BURY;
-        let placed = Transform::from_translation(tip).with_rotation(transform.rotation).with_scale(transform.scale);
+        let placed = Transform::from_translation(tip).with_rotation(transform.rotation).with_scale(transform.scale * STUCK_SCALE);
         let local = Transform::from_matrix(drawn.to_matrix().inverse() * placed.to_matrix());
         stuck.scale = local.scale;
         *transform = local;
