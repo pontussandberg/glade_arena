@@ -251,7 +251,7 @@ const TERRAIN_BURY: f32 = 0.03;
 /// How long a spear stuck in terrain stands, how long one stuck in a body does (it rides a
 /// fighter about to shed it anyway), and how many may stand at once before the oldest sinks
 /// early; sinking takes `STUCK_SINK` seconds.
-const STUCK_SECONDS: f32 = 7.0;
+const STUCK_SECONDS: f32 = 10.0;
 const BODY_STUCK_SECONDS: f32 = 1.5;
 const STUCK_AT_MOST: usize = 50;
 const STUCK_SINK: f32 = 0.25;
