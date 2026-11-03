@@ -29,9 +29,6 @@ const SETTLE_SECONDS: f32 = 0.2;
 /// How far (meters) a thrown spear flies before it has come in from where it left the hand (to
 /// the side and above) onto its real path at `THROWN_HEIGHT`: one long, gentle curve, no dive.
 const CONVERGE_METERS: f32 = 7.0;
-/// Our own spear starts dead on the crosshair's line; how far (meters) it takes to settle from
-/// the hand's tilt to its flight's.
-const OWN_CONVERGE_METERS: f32 = 20.0;
 /// Others' spears reach us a round trip (and a bit) after they're thrown, when their real path
 /// is already meters ahead of the hand. A spear never starts more than this far (meters) behind
 /// it; beyond that (a very high ping) the rest is skipped.
@@ -102,10 +99,9 @@ pub(crate) fn leaving_hand(held: &Transform) -> Transform {
 /// relative to us. Never before where it starts.
 ///
 /// A thrown spear leaves the hand: out of sight until the thrower's hand has let go of it (our
-/// own fighter is drawn a moment behind the news of its throw). Our own then appears dead on its
-/// real path, the crosshair's line, as the hand empties (the throw sells it), settling into its
-/// flight over `OWN_CONVERGE_METERS`. Another's takes over
-/// the held javelin's place (where the throw sends it, see `HeldAt`),
+/// own fighter is drawn a moment behind the news of its throw). It takes over
+/// the held javelin's place (where the throw sends it, see `HeldAt`: beside the head, not out in
+/// front — our own just as another's, only let go a drive late and caught up),
 /// then comes in onto its real path (which starts at the thrower's center, where hits are judged)
 /// along one gentle curve over its first `CONVERGE_METERS`, across and down (or up) at once:
 /// heading in from the moment it leaves the hand, it meets the path running along it, its nose
@@ -173,15 +169,10 @@ pub(super) fn fly_shots(
                     holders.iter_mut().find(|(id, ..)| id.0 == projectile.owner).map(|(_, mut held, me)| {
                         held.launched = held.launched.max(Some(projectile.spawn_tick));
                         let leaving = leaving_hand(&held.at);
-                        if me {
-                            // Dead on its real path, the crosshair's line; one held drawn, let go
-                            // a drive after it went off, that far behind along it.
-                            let lag = if held.released_from.is_some() && held.let_go == Some(projectile.spawn_tick) { held.drive } else { 0.0 };
-                            let (_, from, along, tilt) = path_at(at_tick - lag);
-                            (from, along * tilt, leaving.scale, lag, OWN_CONVERGE_METERS)
-                        } else {
-                            (leaving.translation, leaving.rotation, leaving.scale, 0.0, CONVERGE_METERS)
-                        }
+                        // Our own held drawn is let go a drive after the throw went off, that far
+                        // behind along its path, caught up as it settles.
+                        let lag = if me && held.released_from.is_some() && held.let_go == Some(projectile.spawn_tick) { held.drive } else { 0.0 };
+                        (leaving.translation, leaving.rotation, leaving.scale, lag, CONVERGE_METERS)
                     })
                 };
                 *thrown.launch.insert(match start {
