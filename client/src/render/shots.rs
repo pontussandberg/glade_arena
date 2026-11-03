@@ -8,7 +8,7 @@ use bevy::light::NotShadowCaster;
 
 use arena_shared::sim;
 
-use crate::feedback::{AttackClock, ME_BEHIND_TICKS};
+use crate::feedback::AttackClock;
 use crate::arena::{self, to_world};
 use crate::plain::PlainMaterial;
 use crate::rig::{HeldAt, MAX_HOLD_TICKS};
@@ -257,12 +257,6 @@ const TING_SLACK: f32 = 0.4;
 /// body, but only its tip (meters) into a wall, a crate or the ground.
 const BODY_BURY: f32 = arena::SPEAR_LENGTH * 0.2;
 const TERRAIN_BURY: f32 = 0.03;
-/// How far behind where a spear was last drawn its strike is still looked for (meters), and how
-/// far ahead in ticks of its flight: shots are drawn behind the server's clock (`AttackClock`,
-/// `ME_BEHIND_TICKS`), and the news of a spear's end arrives in the tick it ended, so it ends
-/// past where it was last drawn, up to that lag's worth of flight ahead.
-const STUCK_PROBE: f32 = 0.6;
-const STUCK_LAG_TICKS: f32 = ME_BEHIND_TICKS + 1.5;
 /// How long a stuck spear stays (seconds), and how long it then takes to sink away into what
 /// holds it.
 const STUCK_SECONDS: f32 = 8.0;
@@ -298,7 +292,10 @@ pub(super) struct StuckSpear {
 /// its point was, splinters thrown back the way it came, out and up, and the spear itself left
 /// stuck where it struck (`StuckSpear`): its point run into the body it hit, riding along with
 /// it, or just its tip into the terrain that stopped it; one ending in the air (over water, off
-/// the map) just ends. A bolt that flew its whole range
+/// the map) just ends. The drawn spear is a beat behind or past the server's clock when the news
+/// of its end arrives, so nothing here goes by where it was drawn: the end is put back together
+/// from the sim -- the tick the news came from (`AttackClock::latest_tick`), the flight both
+/// sides compute alike, and the map. A bolt that flew its whole range
 /// bursts there, in its own light, as if it lost hold of itself: a bigger flash, sparks flung
 /// out every way. A bolt stopped short just ends
 /// (its hit is the fighter's to show), and so does every one cleared away mid-flight: at the
@@ -308,13 +305,14 @@ pub(super) fn strike_home(
     trigger: On<Remove, Projectile>,
     mut commands: Commands,
     time: Res<Time>,
+    clock: AttackClock,
     room: Res<crate::rooms::CurrentRoom>,
     map: Res<crate::rooms::CurrentMap>,
     mut visuals: ResMut<Visuals>,
     mut materials: ResMut<Assets<PlainMaterial>>,
     mut sounds: ResMut<crate::audio::SoundQueue>,
     shots: Query<(&Projectile, &Transform, Option<&Thrown>, &InheritedVisibility, &Mesh3d, &MeshMaterial3d<PlainMaterial>)>,
-    fighters: Query<(Entity, &Transform), (With<PlayerId>, Without<Projectile>)>,
+    fighters: Query<(Entity, &PlayerId, &Transform, Option<&Team>, Has<Shopkeeper>), Without<Projectile>>,
 ) {
     let cleared = room.0.as_ref().is_some_and(|view| view.winner.is_some()) || map.is_changed();
     let Ok((projectile, transform, thrown, visible, mesh, own_light)) = shots.get(trigger.entity) else { return };
@@ -322,53 +320,78 @@ pub(super) fn strike_home(
         return;
     }
     let Some(shot) = projectile.class.def().shot(projectile.ability) else { return };
-    let point = transform.translation;
-    let flown = arena::to_gameplay(point).distance(projectile.origin);
+    let Some(removed) = clock.latest_tick() else { return };
+    let ground = map.0.map();
+    let at = |tick: f32| to_world(sim::projectile_pos(projectile, tick), sim::projectile_height(projectile, tick));
+    let posed = |tick: f32| Quat::from_rotation_y(projectile.dir.to_angle()) * Quat::from_rotation_z(sim::projectile_pitch(projectile, tick).atan());
+    // The tick the map itself would end it, looked for up to a couple past the removal (the
+    // removal's tick is read a packet late): removed earlier than that, it ended in a fighter.
+    let map_end = (projectile.spawn_tick..=removed.saturating_add(2))
+        .find(|&t| sim::projectile_expired(ground, sim::projectile_pos(projectile, t as f32), projectile, t));
+    let end_tick = map_end.unwrap_or(removed);
+    let flown = sim::projectile_flown(projectile, removed as f32);
     let spent = flown > shot.range - STOPPED_SHORT;
     let now = time.elapsed_secs();
     let seed = trigger.entity.index().index();
     let Some(thrown) = thrown else {
         if spent {
-            burst(&mut commands, &visuals, own_light.0.clone(), point, now, seed);
+            burst(&mut commands, &visuals, own_light.0.clone(), at(end_tick as f32), now, seed);
         }
         return;
     };
     if thrown.launch.is_none() || (spent && !shot.falls) {
         return;
     }
-    // Where its point really stopped: a fighter on the stretch it flew past where it was last
-    // drawn (the nearest along it, `STUCK_LAG_TICKS`), or the terrain the map says is in its
-    // way there; nothing there to hold it (over water, off the map), it just ends.
-    let heading = (transform.rotation * Vec3::X).normalize_or(Vec3::X);
-    let level = heading.with_y(0.0);
-    let ahead = level.normalize_or(heading);
-    let reach = shot.speed * TICK_DT * STUCK_LAG_TICKS + STUCK_PROBE;
-    let struck = fighters
-        .iter()
-        .filter_map(|(body, held_by)| {
-            let to_body = (held_by.translation - point).with_y(0.0);
-            let along = to_body.dot(ahead);
-            let height = point.y + heading.y * along / level.length().max(1e-3);
-            let feet = held_by.translation.y;
-            let hits = (-TING_SLACK..=reach).contains(&along)
-                && to_body.distance(ahead * along) < PLAYER_RADIUS + shot.radius + TING_SLACK
-                && (feet - TING_SLACK..feet + BODY_HEIGHT + TING_SLACK).contains(&height);
-            hits.then_some((body, *held_by, along, height))
+    // Removed before the map would have ended it: it struck a fighter, somewhere on the stretch
+    // judged the tick it was removed. The nearest of the owner's foes along that stretch, at the
+    // height the spear crosses its body there; the shopkeeper and allies are passed over, as the
+    // server flies shots straight through them.
+    let own_team = fighters.iter().find(|(_, id, ..)| id.0 == projectile.owner).and_then(|(.., team, _)| team.copied());
+    let struck = map_end
+        .is_none_or(|e| e > removed)
+        .then(|| {
+            let from = at((removed as f32 - 2.0).max(projectile.spawn_tick as f32 - 1.0));
+            let to = at(map_end.map_or(removed as f32 + 1.0, |e| e as f32));
+            let heading = (to - from).normalize_or(Vec3::X);
+            let level = heading.with_y(0.0);
+            let ahead = level.normalize_or(heading);
+            let span = (to - from).with_y(0.0).length();
+            fighters
+                .iter()
+                .filter_map(|(body, id, held_by, team, keeper)| {
+                    if id.0 == projectile.owner || keeper || own_team.zip(team.copied()).is_some_and(|(mine, theirs)| mine.allied(theirs)) {
+                        return None;
+                    }
+                    let to_body = (held_by.translation - from).with_y(0.0);
+                    let along = to_body.dot(ahead);
+                    let height = from.y + heading.y * along / level.length().max(1e-3);
+                    let feet = held_by.translation.y;
+                    let hits = (-TING_SLACK..=span + TING_SLACK).contains(&along)
+                        && to_body.distance(ahead * along) < PLAYER_RADIUS + shot.radius + TING_SLACK
+                        && (feet - TING_SLACK..feet + BODY_HEIGHT + TING_SLACK).contains(&height);
+                    hits.then_some((body, *held_by, along, height))
+                })
+                .min_by(|a, b| a.2.total_cmp(&b.2))
         })
-        .min_by(|a, b| a.2.total_cmp(&b.2));
+        .flatten();
     let stuck = match struck {
-        Some((body, held_by, _, height)) => Some((held_by.translation.with_y(height) - ahead * PLAYER_RADIUS, BODY_BURY, Some((body, held_by)))),
-        None => {
-            let (back, front) = (point - heading * STUCK_PROBE, point + heading * reach);
-            map.0.map().shot_end((arena::to_gameplay(back), back.y), (arena::to_gameplay(front), front.y)).map(|end| (to_world(end.at, end.height), TERRAIN_BURY, None))
+        Some((body, held_by, _, height)) => {
+            let turned = posed(removed as f32);
+            let ahead = (turned * Vec3::X).with_y(0.0).normalize_or(turned * Vec3::X);
+            Some((held_by.translation.with_y(height) - ahead * PLAYER_RADIUS, BODY_BURY, turned, Some((body, held_by))))
         }
+        None => map_end.and_then(|e| {
+            let step = |tick: f32| (sim::projectile_pos(projectile, tick), sim::projectile_height(projectile, tick));
+            ground.shot_end(step(e as f32 - 1.0), step(e as f32)).map(|end| (to_world(end.at, end.height), TERRAIN_BURY, posed(e as f32), None))
+        }),
     };
-    // The flash and splinters right at the strike, not at the drawn point behind it.
-    let point = stuck.map_or(point, |(strike, ..)| strike);
+    // The flash and splinters right at the strike; ending in the air, where the sim ends it.
+    let point = stuck.map_or_else(|| at(end_tick as f32), |(strike, ..)| strike);
+    let turned = stuck.map_or_else(|| posed(end_tick as f32), |(.., turned, _)| turned);
     let light = visuals.material(&mut materials, Look::Spark);
     let bit = || (Mesh3d(visuals.impact.clone()), MeshMaterial3d(light.clone()), Transform::from_translation(point).with_scale(Vec3::ZERO), NotShadowCaster);
     commands.spawn((Impact { started: now, life: FLASH_SECONDS, size: FLASH_SIZE, velocity: None }, bit()));
-    let back = -(transform.rotation * Vec3::X).with_y(0.0).normalize_or(Vec3::X);
+    let back = -(turned * Vec3::X).with_y(0.0).normalize_or(Vec3::X);
     let across = Vec3::new(-back.z, 0.0, back.x);
     for k in 0..SPLINTERS {
         let r = |i: u32| crate::swish::noise(seed, k * 8 + i);
@@ -386,8 +409,8 @@ pub(super) fn strike_home(
     // The spear stays where it struck. Into a body: its point run `BODY_BURY` in from the side
     // it came, left a child of the fighter, riding along with it (and gone with it). Into
     // terrain: just its tip in, where the map says the ground or wall is.
-    if let Some((strike, bury, held)) = stuck {
-        let placed = Transform::from_translation(strike + heading * bury).with_rotation(transform.rotation).with_scale(transform.scale);
+    if let Some((strike, bury, turned, held)) = stuck {
+        let placed = Transform::from_translation(strike + turned * Vec3::X * bury).with_rotation(turned).with_scale(transform.scale);
         let placed = match held {
             Some((_, held_by)) => Transform::from_matrix(held_by.to_matrix().inverse() * placed.to_matrix()),
             None => placed,
