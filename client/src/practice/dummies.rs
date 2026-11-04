@@ -30,7 +30,7 @@ impl Plugin for DummiesPlugin {
             Update,
             (
                 (use_tools, show_hint).chain(),
-                (place_dummy, show_marker).chain().in_set(CameraPlaced).before(crate::PlayerControls).before(crate::esc_menu::MenuKey),
+                (place_dummy, show_marker).chain().in_set(CameraPlaced).before(crate::PlayerControls).before(crate::frames::FrameKeys),
             )
                 .run_if(in_state(Screen::InGame)),
         );

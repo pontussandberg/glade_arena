@@ -39,6 +39,8 @@ pub mod casting;
 #[cfg(feature = "render")]
 pub mod esc_menu;
 #[cfg(feature = "render")]
+pub mod frames;
+#[cfg(feature = "render")]
 pub mod settings;
 #[cfg(feature = "render")]
 pub mod practice;

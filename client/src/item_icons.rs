@@ -378,6 +378,25 @@ fn art(item: Item) -> Art {
             ],
             &[('s', 0xA8B0BC), ('S', 0xFFFFFF), ('w', 0xB07A44)],
         ),
+        // One javelin run clean through two of the dead, its point out the far side.
+        Item::Impaler => (
+            &[
+                ".............",
+                ".............",
+                "..kkk...kkk..",
+                ".kgGgk.kgGgk.",
+                ".kGggk.kGggk.",
+                "kgggggkgggggk",
+                "wwwwwwwwwwwsS",
+                "kgggggkgggggk",
+                ".kgggk.kgggk.",
+                ".kgggk.kgggk.",
+                "..kkk...kkk..",
+                ".............",
+                ".............",
+            ],
+            &[('g', 0x4F6B3B), ('G', 0x72915A), ('w', 0xB07A44), ('s', 0xA8B0BC), ('S', 0xFFFFFF)],
+        ),
         // The ground torn open, the dead's light rising out of it.
         Item::GravecallerRift => (
             &[

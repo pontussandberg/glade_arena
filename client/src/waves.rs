@@ -22,6 +22,7 @@ use crate::lobby::label;
 use crate::item_icons::{ICON_PIXELS, ItemIcons, load_item_icons};
 use crate::plain::PlainMaterial;
 use crate::render::{GameUi, HudButton, button, clicked, key_chip, set_fill, shown, ui_text};
+use crate::frames::{Frame, OpenFrame};
 use crate::rooms::{CurrentRoom, request};
 use crate::tooltip::{Side, hover_shows, tip, tip_note, tip_text, tip_title};
 
@@ -89,17 +90,11 @@ struct SellButton(u8);
 #[derive(Component)]
 struct HasteButton(f32);
 
-/// Whether the shop is open: opened with F by the merchant, shut walking off (the click-back
-/// hint stands down for it: `render::show_click_hint`).
-#[derive(Resource, Default, PartialEq)]
-pub(crate) struct ShopOpen(pub(crate) bool);
-
 /// The hint under the crosshair: press F to open the shop.
 #[derive(Component)]
 struct InteractHint;
 
 fn spawn_hud(mut commands: Commands) {
-    commands.init_resource::<ShopOpen>();
     let top_center = |top: Val| Node { position_type: PositionType::Absolute, width: percent(100.0), top, justify_content: JustifyContent::Center, ..default() };
     commands.spawn((GameUi, top_center(px(8.0)))).with_child((
         Banner,
@@ -430,7 +425,7 @@ fn item_tip(parent: &mut EntityCommands, item: Item, level: u8, next: bool) {
 fn show_satchel(
     mut commands: Commands,
     room: Res<CurrentRoom>,
-    open: Res<ShopOpen>,
+    open: Res<OpenFrame>,
     icons: Res<ItemIcons>,
     me: Query<Ref<Satchel>, With<Me>>,
     bar: Single<(Entity, &mut Node), With<SatchelBar>>,
@@ -455,7 +450,7 @@ fn show_satchel(
                     let mut tile_commands = bar.commands();
                     let mut tile_entity = tile_commands.entity(tile);
                     item_tip(&mut tile_entity, owned.item, owned.level, false);
-                    if open.0 {
+                    if open.is(Frame::Shop) {
                         let back = owned.sell_value();
                         tile_entity.with_children(|tile| {
                             // Over the tile (under it is the action bar).
@@ -485,17 +480,17 @@ fn show_satchel(
 const INTERACT_AIM: f32 = 0.9;
 
 /// The merchant is at hand while we're by them and aiming their way; then the hint under the
-/// crosshair shows, and F opens the shop (or shuts it), letting the cursor go to trade with.
-/// The press is spent, or it would also ready us up (`ready_up`, ordered after this). Walking
-/// off shuts the shop. The cursor isn't taken back for us: a click on the field does that.
+/// crosshair shows, and F opens the shop (or shuts it). The cursor follows the frame
+/// (`frames::sync_cursor`). The press is spent, or it would also ready us up (`ready_up`, ordered
+/// after this). Walking off shuts the shop; so do a click on the field (`frames::sync_cursor`) and
+/// ESC (`frames::route_keys`).
 #[allow(clippy::too_many_arguments)]
 fn open_shop(
     room: Res<CurrentRoom>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     typing: Option<Res<crate::browser::Typing>>,
-    mut mode: ResMut<crate::camera::CameraMode>,
-    mut cursor: Single<&mut bevy::window::CursorOptions>,
-    mut open: ResMut<ShopOpen>,
+    mode: Res<crate::camera::CameraMode>,
+    mut open: ResMut<OpenFrame>,
     hint: Single<&mut Node, With<InteractHint>>,
     me: Query<&Pos, (With<Me>, With<PlayerId>)>,
     merchant: Query<&Pos, With<Shopkeeper>>,
@@ -505,15 +500,18 @@ fn open_shop(
         (me.distance(merchant.0) <= SHOP_RADIUS, (merchant.0 - me.0).normalize_or_zero().dot(mode.forward()) >= INTERACT_AIM)
     });
     let hand = near && facing;
-    let mut now = open.0 && near;
+    let mut now = open.is(Frame::Shop) && near;
     if hand && keys.just_pressed(KeyCode::KeyF) && !typing.is_some_and(|t| t.0) {
         keys.clear_just_pressed(KeyCode::KeyF);
         now = !now;
+    }
+    if now != open.is(Frame::Shop) {
         if now {
-            mode.unlock(&mut cursor);
+            open.open(Frame::Shop);
+        } else {
+            open.close(Frame::Shop);
         }
     }
-    open.set_if_neq(ShopOpen(now));
     let display = if hand && !now { Display::Flex } else { Display::None };
     let mut hint = hint.into_inner();
     if hint.display != display {
@@ -526,17 +524,18 @@ fn open_shop(
 fn show_shop(
     mut commands: Commands,
     room: Res<CurrentRoom>,
-    open: Res<ShopOpen>,
+    open: Res<OpenFrame>,
     icons: Res<ItemIcons>,
     me: Query<(Ref<Satchel>, &ClassId, Option<Ref<PracticeHaste>>), With<Me>>,
     panel: Single<(Entity, &mut Node), With<ShopPanel>>,
 ) {
     let (panel, mut node) = panel.into_inner();
-    let display = if open.0 { Display::Flex } else { Display::None };
+    let shown = open.is(Frame::Shop);
+    let display = if shown { Display::Flex } else { Display::None };
     if node.display != display {
         node.display = display;
     }
-    if !open.0 {
+    if !shown {
         // Nothing of it kept while it's shut: Bevy goes over even what isn't shown, every frame.
         if open.is_changed() {
             commands.entity(panel).despawn_children();

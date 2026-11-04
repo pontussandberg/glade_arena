@@ -74,12 +74,31 @@ fn swing_judged_on_server(d: &mut Duel) -> (Vec2, Vec2, i32) {
     (a, b, health - b_health(d))
 }
 
+/// B's latest hit number (`RecentHits::seq`) as A's client sees it.
+fn b_hits_seen_by_a(d: &mut Duel) -> u32 {
+    let world = d.a.world_mut();
+    let mut q = world.query::<(&PlayerId, &RecentHits)>();
+    q.iter(world).find(|(p, _)| p.0 == peer(B)).map_or(0, |(_, h)| h.seq())
+}
+
+/// A hit reaches the attacker's client as the victim's `RecentHits` (what damage numbers are
+/// drawn from) and its `Health`, an interpolated fighter's as well as anyone's.
+#[test]
+fn a_hit_reaches_clients_as_recent_hits_and_health() {
+    let mut d = duel_at_close_range(5856);
+    let seq = b_hits_seen_by_a(&mut d);
+    let health = player::<Health>(&mut d.a, B).map_or(0, |h| h.0);
+    a_swings_at_b(&mut d);
+    d.until(Duration::from_secs(3), "A sees B's health drop", |d| player::<Health>(&mut d.a, B).is_some_and(|h| h.0 < health));
+    d.until(Duration::from_secs(3), "A sees B's hit among its recent ones", |d| b_hits_seen_by_a(d) > seq);
+}
+
 #[test]
 fn melee_hits_where_the_target_is_now() {
     let a_spot = A_SPOT + Vec2::X * 2.0;
     let mut d = Duel::placed(5895, (A_CLASS, a_spot), (B_CLASS, a_spot + Vec2::X * (reach() - 0.3)));
     let damage = class_id(A_CLASS).def().attack.damage;
-    let hits = |a: Vec2, b: Vec2| sim::melee_hits(map(), (a, map().height_at(a)), Vec2::X, (false, 0.0), class_id(A_CLASS), (b, map().height_at(b)));
+    let hits = |a: Vec2, b: Vec2| sim::melee_hits(map(), (a, map().height_at(a)), Vec2::X, (false, 0.0), class_id(A_CLASS), (b, map().height_at(b), 1.0));
 
     // B standing just inside reach is hit; just outside, it isn't.
     let (_, _, dealt) = swing_judged_on_server(&mut d);

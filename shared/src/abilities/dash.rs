@@ -104,8 +104,9 @@ impl Dash {
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default, Reflect)]
 pub struct Dashing(pub Option<Dash>);
 
-/// Does a dash at `dasher` cut `target`, each with how high its feet are? Bodies touching (side
+/// Does a dash at `dasher` cut `target`, each with how high its feet are, the target `size` big
+/// (`ClassDef::hit_size`)? Bodies touching (side
 /// by side, and one not over the other's head), and not through a wall.
-pub fn hits(map: &Map, (dasher, from): (Vec2, f32), (target, feet): (Vec2, f32)) -> bool {
-    dasher.distance(target) <= 2.0 * PLAYER_RADIUS && (feet - from).abs() < BODY_HEIGHT && map.shot_clear((dasher, from), (target, feet))
+pub fn hits(map: &Map, (dasher, from): (Vec2, f32), (target, feet, size): (Vec2, f32, f32)) -> bool {
+    dasher.distance(target) <= PLAYER_RADIUS * (1.0 + size) && feet < from + BODY_HEIGHT && feet + BODY_HEIGHT * size > from && map.shot_clear((dasher, from), (target, feet))
 }

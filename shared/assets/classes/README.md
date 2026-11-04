@@ -60,8 +60,6 @@ Units: meters, meters per second, ticks (32 per second).
       gravity until it hits something or the ground. Optional `far_scale`: damage after flying
       the full range, as a multiple of `damage` (point blank), scaling linearly by how far the
       shot flew.
-  - `pierces` (optional, shots): a hit doesn't spend the shot: it flies on through monsters
-    (never through players)
   - `burst` (optional, shots): the hit shatters: everyone around the one struck (within
     `radius`) takes `share` of the damage, and the hit's `chill`, in `color`; an unspent shot
     ending at a wall or the ground bursts there too

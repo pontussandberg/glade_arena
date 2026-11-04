@@ -136,16 +136,18 @@ pub(super) fn move_players(
     timeline: Res<LocalTimeline>,
     lobby: Res<Lobby>,
     rifts: Res<Rifts>,
-    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, (&AttackState, Has<ControlledBy>), &mut Dashing, &Chilled, &Hasted, &InRoom, &Frenzy, Option<&Sluggish>, (&mut Walking, &WalkOrders), &mut arena_shared::protocol::Motion), InPlay>,
+    mut players: Query<(&PlayerId, &mut Pos, &ClassId, &mut PlayerInput, (&AttackState, Has<ControlledBy>, Has<crate::replays::Replay>), &mut Dashing, &Chilled, &Hasted, &InRoom, &Frenzy, Option<&Sluggish>, (&mut Walking, &WalkOrders), &mut arena_shared::protocol::Motion), InPlay>,
 ) {
     let now = timeline.tick().0;
-    for (id, mut pos, class, mut input, (attack, player), mut dashing, chilled, hasted, room, frenzy, sluggish, (mut walking, orders), mut motion) in &mut players {
+    for (id, mut pos, class, mut input, (attack, player, replay), mut dashing, chilled, hasted, room, frenzy, sluggish, (mut walking, orders), mut motion) in &mut players {
+        // A replay bot plays a player's take back: it walks through its windups as a player does.
+        let player = player || replay;
         let map = lobby.map(room);
         let mut next = *dashing;
         let winding = sim::winding_speed(*class, attack);
         let attack = if player { AttackState { swing: None, ..*attack } } else { *attack };
         // Hasted in its own rift (the most hasting, if it stands in several).
-        let boost = rifts.0.iter().filter(|(r, rift)| r == room && rift.owner == id.0 && rift.holds(map, pos.0, motion.height, now)).fold(1.0f32, |most, (_, rift)| most.max(1.0 + rift.haste));
+        let boost = rifts.0.iter().filter(|(r, rift)| r == room && rift.owner == id.0 && rift.holds(map, (pos.0, motion.height, class.def().hit_size(false)), now)).fold(1.0f32, |most, (_, rift)| most.max(1.0 + rift.haste));
         let boost = boost * (1.0 + frenzy.at(now as f32)) * sluggish.map_or(1.0, |s| s.0) * winding;
         let mut moving = *motion;
         pos.set_if_neq(Pos(sim::move_player_boosted(map, pos.0, &input, *class, &attack, &mut next, &mut moving, chilled, hasted, now, boost)));

@@ -101,7 +101,7 @@ pub(super) fn read_local_input(
     // A left click that casts, aims (on an ability's icon) or is for a HUD control doesn't also
     // attack. Any other one does, and held down it attacks again each time the attack is ready
     // (one `Attack` command per attack). A right
-    // click drops the aim (`drops_aim`); ESC does too (`esc_menu`).
+    // click drops the aim (`drops_aim`); ESC does too (`frames::route_keys`).
     if mouse.just_pressed(MouseButton::Left) {
         if on_control || mode.just_locked {
             *held_click = true;

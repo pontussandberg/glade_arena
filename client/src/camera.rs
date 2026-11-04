@@ -101,8 +101,8 @@ pub struct CameraMode {
     /// The camera is in first person, at your fighter's eyes (V), not over its shoulder.
     pub(crate) first_person: bool,
     /// The camera has the cursor (hidden, locked in place): the mouse turns it. A click on the
-    /// field or the menu closing takes it (`lock`); an interface over the fight (the menu, the
-    /// shop) or a right click while Tab is held lets it go (`unlock`).
+    /// field or a frame shutting takes it (`lock`); a frame that needs it (`frames::sync_cursor`)
+    /// or a right click while Tab is held lets it go (`unlock`).
     pub(crate) locked: bool,
     /// A click took the cursor this frame (so it's no attack: `render::read_local_input`).
     pub(crate) just_locked: bool,
@@ -125,14 +125,26 @@ pub struct CameraMode {
     dragged: f32,
     /// Where the cursor was when the right button went down, to put it back after a drag.
     grabbed_at: Option<Vec2>,
-    /// Whether the browser has been seen holding the pointer since the cursor was last taken
-    /// (`locked`): only then does an unlocked pointer mean the browser let it go.
-    lock_seen: bool,
+    /// Asked of the browser and not granted yet: until it is, the camera doesn't hold the cursor
+    /// (`locked` stays false) and the cursor stays free.
+    wanted: bool,
+    /// Whether taking the cursor waits on a grant (`lock_is_granted`).
+    grant_needed: bool,
+}
+
+/// Whether the cursor is the browser's to grant. A browser's pointer lock is, except a headless
+/// one (the capture scripts), which never grants it: that one is taken as holding it at once, as
+/// a native window does.
+fn lock_is_granted() -> bool {
+    #[cfg(target_family = "wasm")]
+    return web_sys::window().and_then(|w| w.navigator().user_agent().ok()).is_some_and(|agent| !agent.contains("HeadlessChrome"));
+    #[cfg(not(target_family = "wasm"))]
+    false
 }
 
 impl Default for CameraMode {
     fn default() -> Self {
-        CameraMode { first_person: false, locked: false, just_locked: false, orbit: Orbit { yaw: 0.0, pitch: START_PITCH, distance: START_DISTANCE }, held_at: START_DISTANCE, held_aside: ACTION_SHOULDER, aim: Vec2::Y, climb: 0.0, watching: None, dragged: 0.0, grabbed_at: None, lock_seen: false }
+        CameraMode { first_person: false, locked: false, just_locked: false, orbit: Orbit { yaw: 0.0, pitch: START_PITCH, distance: START_DISTANCE }, held_at: START_DISTANCE, held_aside: ACTION_SHOULDER, aim: Vec2::Y, climb: 0.0, watching: None, dragged: 0.0, grabbed_at: None, wanted: false, grant_needed: lock_is_granted() }
     }
 }
 
@@ -171,22 +183,35 @@ impl CameraMode {
         self.first_person && self.watching.is_none()
     }
 
-    /// Lets the cursor go (shown, free to point with): an interface opening over the fight (the
-    /// menu, the shop) does this. A click on the field takes it back (`follow_camera`).
+    /// Lets the cursor go (shown, free to point with): a frame that needs it does this
+    /// (`frames::sync_cursor`). A click on the field takes it back (`follow_camera`).
     pub(crate) fn unlock(&mut self, cursor: &mut CursorOptions) {
         self.locked = false;
+        self.wanted = false;
         release_cursor(cursor);
     }
 
-    /// Takes the cursor (hidden, locked in place): a click on the field does this, and the menu
-    /// closing back into the fight. What asked is no attack (`just_locked`), and the browser's
-    /// grant is waited for anew (`lock_seen`).
+    /// `lock`, unless the cursor is held or already asked for (a fresh ask would wait on the
+    /// browser's grant anew).
+    pub(crate) fn ensure_locked(&mut self, cursor: &mut CursorOptions) {
+        if !self.locked && !self.wanted {
+            self.lock(cursor);
+        }
+    }
+
+    /// Takes the cursor (hidden, locked in place): a click on the field does this, and a frame
+    /// shutting back into the fight. What asked is no attack (`just_locked`). In the browser the
+    /// camera holds it only once the browser grants it (`follow_camera`); natively, at once. The
+    /// browser can refuse an ask (the lock just lost to the window leaving, or too soon after its
+    /// own ESC); a fresh click asks again, bevy_winit asking anew on any `CursorOptions` change.
     pub(crate) fn lock(&mut self, cursor: &mut CursorOptions) {
-        self.locked = true;
+        self.locked = !self.grant_needed;
+        self.wanted = self.grant_needed;
         self.just_locked = true;
         self.dragged = 0.0;
-        self.lock_seen = false;
-        cursor.visible = false;
+        // Awaiting a grant the cursor stays shown: a hidden cursor the browser hasn't locked is
+        // hidden for good (`follow_camera` hides it once granted).
+        cursor.visible = self.grant_needed;
         cursor.grab_mode = CursorGrabMode::Locked;
     }
 }
@@ -395,27 +420,26 @@ fn follow_camera(
     let (mut window, mut cursor) = window.into_inner();
     let on_hud = window.physical_cursor_position().is_some_and(|at| hud.iter().any(|(node, place, visible)| visible.get() && node.contains_point(*place, at)));
     mode.just_locked = false;
-    // The browser lets the pointer go on its own: its own ESC (the page never sees the key), or
-    // the window left for another. The mouse is free either way; freed with the page still
-    // focused, it was ESC, pressed here for every reader that takes ESC in turn (the dummy being
-    // placed, then the menu: `MenuKey` runs after this). Judged only once the browser has been
-    // seen holding the pointer: it takes a moment to, and a headless browser never does.
+    // The browser's pointer lock is the truth: the camera holds the cursor only once the browser
+    // has granted it. Until then it's asked (`wanted`), the cursor stays free and the camera
+    // doesn't turn. The browser lets the pointer go on its own too: its own ESC (the page never
+    // sees the key), or the window left for another. Freed with the page still focused, it was
+    // ESC, pressed here for every reader that takes ESC in turn (the dummy being placed, then the
+    // frames: `frames::FrameKeys` runs after this).
     #[cfg(target_family = "wasm")]
-    if mode.locked {
+    if mode.grant_needed && (mode.wanted || mode.locked) {
         let document = web_sys::window().and_then(|w| w.document());
-        if document.as_ref().is_some_and(|document| document.pointer_lock_element().is_some()) {
-            mode.lock_seen = true;
-        } else if mode.lock_seen {
+        let held = document.as_ref().is_some_and(|document| document.pointer_lock_element().is_some());
+        if held && mode.wanted {
+            mode.locked = true;
+            mode.wanted = false;
+            cursor.visible = false;
+        } else if !held && mode.locked {
             mode.unlock(&mut cursor);
             if document.is_some_and(|document| document.has_focus().unwrap_or(false)) {
                 keys.press(KeyCode::Escape);
                 keys.release(KeyCode::Escape);
             }
-        } else if mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]) && !on_hud {
-            // Asked, not yet granted: a fresh click asks again — the browser can refuse an ask
-            // (the lock just lost to the window leaving, or too soon after its own ESC), and
-            // bevy_winit asks anew on any `CursorOptions` change, never from its cache.
-            cursor.set_changed();
         }
     }
     // While Tab holds the scoreboard up, a right click lets the cursor go, and it stays free past

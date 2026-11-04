@@ -80,16 +80,17 @@ impl Party {
         self.ask(RoomRequest::Create { name: "Waves".into(), mode: Mode::Waves, map: MapId::Crossing, password: None });
         self.until(Duration::from_secs(5), "in the room", |p| p.room().is_some());
         let room = self.room().unwrap();
-        assert_eq!((room.mode, room.map), (Mode::Waves, MapId::Wilds), "the waves are on the wilds, whatever map was asked for");
+        assert_eq!((room.mode, room.map), (Mode::Waves, Mode::Waves.maps()[0]), "a map that isn't one of the waves' gives way to their first");
         self.ask(RoomRequest::Start);
         self.until(Duration::from_secs(10), "in the arena with gold", |p| p.satchel().is_some_and(|s| s.gold > 0));
     }
 
-    /// Our fighter, by the merchant.
+    /// Our fighter, by the merchant, on the side they face (their counter's behind them).
     fn to_the_shop(&mut self) {
-        let shop = MapId::Wilds.map().shop.unwrap();
+        let map = self.room().unwrap().map.map();
+        let spot = map.shop.unwrap() + map.shop_faces * 1.5;
         for _ in 0..5 {
-            place(&mut self.server, 1, shop + Vec2::new(0.0, -1.5));
+            place(&mut self.server, 1, spot);
             self.update();
         }
     }
@@ -261,9 +262,10 @@ fn coop_picks_the_fallen_up() {
     }
 }
 
-/// A Jav's javelin goes through a line of monsters, hitting each; and the hit knocks them back.
+/// A Jav's javelin ends in the first monster it hits (the one behind goes untouched), and the
+/// hit knocks it back; with an Impaler bought, it runs on through the line, hitting both.
 #[test]
-fn javelins_pierce_monsters_and_knock_them_back() {
+fn javelins_stick_in_the_first_monster_until_an_impaler_sends_them_through() {
     let mut p = Party::new(5865, "javelinist", false);
     p.ask(RoomRequest::QuickJoin("Waves 3".into()));
     p.until(Duration::from_secs(10), "in the run", |p| p.satchel().is_some_and(|s| s.gold > 0));
@@ -272,13 +274,18 @@ fn javelins_pierce_monsters_and_knock_them_back() {
         let world = p.server.world_mut();
         world.query::<(&Team, &Health)>().iter(world).filter(|(t, h)| t.0 == ZOMBIES && h.alive()).count() >= 2
     });
-    // Out in the open east of the camp, two monsters in a row ahead of us, held still.
+    // Out in the open east of the camp, two monsters in a row ahead of us, held still, the
+    // rest of the wave held far off, out of the javelin's way.
     let me = Vec2::new(10.5, 0.5);
     let world = p.server.world_mut();
     let monsters: Vec<Entity> = world.query::<(Entity, &Team, &Health)>().iter(world).filter(|(_, t, h)| t.0 == ZOMBIES && h.alive()).map(|(e, ..)| e).take(2).collect();
     let spots = [me + Vec2::new(3.0, 0.0), me + Vec2::new(5.0, 0.0)];
     let hold = |p: &mut Party| {
         let world = p.server.world_mut();
+        let others: Vec<Entity> = world.query::<(Entity, &Team, &Health)>().iter(world).filter(|(e, t, h)| t.0 == ZOMBIES && h.alive() && !monsters.contains(e)).map(|(e, ..)| e).collect();
+        for other in others {
+            world.entity_mut(other).get_mut::<Pos>().unwrap().0 = Vec2::new(-52.0, 35.0);
+        }
         for (monster, spot) in monsters.iter().zip(spots) {
             let mut m = world.entity_mut(*monster);
             m.get_mut::<Pos>().unwrap().0 = spot;
@@ -287,23 +294,71 @@ fn javelins_pierce_monsters_and_knock_them_back() {
         }
         place(&mut p.server, 1, me);
     };
+    // Kept on the ground while javelins fly: a pouncer leaping in place would let them pass
+    // under its feet.
+    let pin = |p: &mut Party| {
+        let world = p.server.world_mut();
+        for monster in &monsters {
+            if let Ok(mut m) = world.get_entity_mut(*monster)
+                && let Some(mut motion) = m.get_mut::<Motion>()
+            {
+                *motion = Motion::default();
+            }
+        }
+    };
     for _ in 0..30 {
         hold(&mut p);
         p.update();
     }
     let health = |p: &mut Party| [monsters[0], monsters[1]].map(|m| p.server.world().get::<Health>(m).map_or(0, |h| h.0));
+    // Without the item, the javelin ends in the first: the one right behind it goes untouched.
     let before = health(&mut p);
-    set_input(&mut p.client, PlayerInput { aim: Vec2::X, fire: true, ..default() });
-    p.until(Duration::from_secs(3), "both hit by one javelin", |p| {
-        let now = health(p);
-        now[0] < before[0] && now[1] < before[1]
+    p.until(Duration::from_secs(5), "the first hit", |p| {
+        pin(p);
+        // Fire is a click the server uses up: keep clicking until the throw goes off.
+        set_input(&mut p.client, PlayerInput { aim: Vec2::X, fire: true, ..default() });
+        health(p)[0] < before[0]
     });
-    // The knockback takes a few ticks to slide out.
+    set_input(&mut p.client, PlayerInput::default());
+    // The knockback takes a few ticks to slide out (and any javelin still in the air lands).
     for _ in 0..20 {
+        pin(&mut p);
         p.update();
     }
+    assert_eq!(health(&mut p)[1], before[1], "the second was hit through the first");
     let pushed = p.server.world().get::<Pos>(monsters[0]).unwrap().0;
     assert!(pushed.x > spots[0].x + 0.1, "the first wasn't knocked back: {pushed}");
+    // With an Impaler (the shop trades mid-fight, up close), one javelin runs through both.
+    let shop = p.room().expect("in a room").map.map().shop.expect("the waves map has a shop");
+    for _ in 0..5 {
+        place(&mut p.server, 1, shop + Vec2::new(0.0, -1.5));
+        p.update();
+    }
+    p.ask(RoomRequest::Buy(Item::Impaler));
+    p.until(Duration::from_secs(3), "the Impaler bought", |p| p.satchel().is_some_and(|s| s.level(Item::Impaler) == 1));
+    for _ in 0..30 {
+        hold(&mut p);
+        p.update();
+    }
+    let before = health(&mut p);
+    // Both hit by ONE javelin: each drop's tick is noted, and they must fall together -- two
+    // javelins landing one after the other would be ticks apart.
+    let (mut first_at, mut second_at): (Option<u32>, Option<u32>) = (None, None);
+    p.until(Duration::from_secs(5), "both hit by one javelin", |p| {
+        pin(p);
+        set_input(&mut p.client, PlayerInput { aim: Vec2::X, fire: true, ..default() });
+        let tick = p.server.world().resource::<LocalTimeline>().tick().0;
+        let now = health(p);
+        if first_at.is_none() && now[0] < before[0] {
+            first_at = Some(tick);
+        }
+        if second_at.is_none() && now[1] < before[1] {
+            second_at = Some(tick);
+        }
+        first_at.is_some() && second_at.is_some()
+    });
+    let (a, b) = (first_at.unwrap(), second_at.unwrap());
+    assert!(a.abs_diff(b) <= 1, "the two were hit {} ticks apart: by different javelins, not pierced by one", a.abs_diff(b));
 }
 
 /// A Frost Mage's frostbolt shatters on the monster it hits: the one beside it is hit too.
@@ -318,17 +373,23 @@ fn frostbolts_shatter_over_those_round_their_mark() {
         world.query::<(&Team, &Health)>().iter(world).filter(|(t, h)| t.0 == ZOMBIES && h.alive()).count() >= 2
     });
     // Out in the open east of the camp: one monster straight ahead, one beside it, out of the
-    // bolt's way; both held still.
+    // bolt's way; both held still and on the ground (a pouncer leaping in place would let the
+    // bolt pass under its feet), the rest of the wave held far off, out of the bolt's way.
     let me = Vec2::new(10.5, 0.5);
     let world = p.server.world_mut();
     let monsters: Vec<Entity> = world.query::<(Entity, &Team, &Health)>().iter(world).filter(|(_, t, h)| t.0 == ZOMBIES && h.alive()).map(|(e, ..)| e).take(2).collect();
     let spots = [me + Vec2::new(4.0, 0.0), me + Vec2::new(4.3, 1.3)];
     let hold = |p: &mut Party| {
         let world = p.server.world_mut();
+        let others: Vec<Entity> = world.query::<(Entity, &Team, &Health)>().iter(world).filter(|(e, t, h)| t.0 == ZOMBIES && h.alive() && !monsters.contains(e)).map(|(e, ..)| e).collect();
+        for other in others {
+            world.entity_mut(other).get_mut::<Pos>().unwrap().0 = Vec2::new(-52.0, 35.0);
+        }
         for (monster, spot) in monsters.iter().zip(spots) {
             let mut m = world.entity_mut(*monster);
             m.get_mut::<Pos>().unwrap().0 = spot;
             m.get_mut::<Chilled>().unwrap().rooted = Span { from: 0, until: u32::MAX };
+            *m.get_mut::<Motion>().unwrap() = Motion::default();
         }
         place(&mut p.server, 1, me);
     };
@@ -338,12 +399,57 @@ fn frostbolts_shatter_over_those_round_their_mark() {
     }
     let health = |p: &mut Party| [monsters[0], monsters[1]].map(|m| p.server.world().get::<Health>(m).map_or(0, |h| h.0));
     let before = health(&mut p);
-    set_input(&mut p.client, PlayerInput { aim: Vec2::X, fire: true, ..default() });
-    p.until(Duration::from_secs(3), "both hit by one frostbolt", |p| {
+    p.until(Duration::from_secs(5), "both hit by one frostbolt", |p| {
         hold(p);
+        // Fire is a click the server uses up: keep clicking until a bolt goes off.
+        set_input(&mut p.client, PlayerInput { aim: Vec2::X, fire: true, ..default() });
         let now = health(p);
         now[0] < before[0] && now[1] < before[1]
     });
+}
+
+/// Practice records a take of our play and a bot plays it back: walk a stretch while recording,
+/// stop, and the placed bot retraces it from where the take began, looping back there when it
+/// runs out.
+#[test]
+fn a_recorded_take_plays_back_as_a_looping_bot() {
+    let _ = std::fs::remove_file("recordings/practice-bot.ron");
+    let mut p = Party::new(5855, "javelinist", false);
+    p.ask(RoomRequest::Practice(MapId::Crossing));
+    p.until(Duration::from_secs(10), "practicing", |p| p.room().is_some_and(|r| r.practice) && sees(&mut p.client, 1).is_some());
+    let start = open_near(MapId::Crossing, Vec2::ZERO);
+    for _ in 0..5 {
+        place(&mut p.server, 1, start);
+        p.update();
+    }
+    p.ask(RoomRequest::Record(true));
+    // The request and the walk travel separately: let the recording begin before the walk does.
+    for _ in 0..50 {
+        p.update();
+    }
+    set_input(&mut p.client, PlayerInput { walk: Vec2::X, ..default() });
+    p.until(Duration::from_secs(5), "walked while recording", |p| player::<Pos>(&mut p.server, 1).is_some_and(|pos| pos.0.x > start.x + 1.5));
+    p.ask(RoomRequest::Record(false));
+    set_input(&mut p.client, PlayerInput::default());
+    p.until(Duration::from_secs(3), "the take saved", |_| std::path::Path::new("recordings/practice-bot.ron").exists());
+    // Out of the way, so the bot walks its stretch alone.
+    let away = open_near(MapId::Crossing, start + Vec2::new(0.0, 6.0));
+    for _ in 0..5 {
+        place(&mut p.server, 1, away);
+        p.update();
+    }
+    p.ask(RoomRequest::PlaceBot);
+    let bot = |p: &mut Party| {
+        let world = p.server.world_mut();
+        world
+            .query_filtered::<(&PlayerId, &Pos), Without<Shopkeeper>>()
+            .iter(world)
+            .find(|(id, _)| matches!(id.0, PeerId::Local(_)))
+            .map(|(_, pos)| pos.0)
+    };
+    p.until(Duration::from_secs(3), "the bot up where the take began", |p| bot(p).is_some_and(|at| at.distance(start) < 0.75));
+    p.until(Duration::from_secs(8), "the bot retraced the walk", |p| bot(p).is_some_and(|at| at.x > start.x + 1.2));
+    p.until(Duration::from_secs(10), "the take looped back to its start", |p| bot(p).is_some_and(|at| at.distance(start) < 0.75));
 }
 
 /// Open ground near `p` on `map`.
@@ -663,7 +769,7 @@ fn acolytes_blink_away_when_closed_in_on() {
             return true;
         }
         last = Some(now);
-        let map = MapId::Wilds.map();
+        let map = p.room().unwrap().map.map();
         let beside = [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y].map(|d| now + d * 1.5).into_iter().find(|s| map.walkable_at(*s)).unwrap_or(now);
         place(&mut p.server, 1, beside);
         if let Some(mut health) = p.server.world_mut().query::<(&PlayerId, &mut Health)>().iter_mut(p.server.world_mut()).find(|(id, _)| id.0 == peer(1)).map(|(_, h)| h) {
@@ -735,8 +841,8 @@ fn leaving_practice_leaves_nothing_behind() {
 fn a_fury_stone_quickens_attacks_only() {
     let mut p = Party::new(5884, "revenant", false);
     p.ask(RoomRequest::QuickJoin("Waves".into()));
-    p.until(Duration::from_secs(10), "in the run", |p| player::<Health>(&mut p.server, 1).is_some());
-    let stone = MapId::Wilds.map().pickups.iter().find(|(_, kind)| *kind == PickupKind::Fury).map(|(at, _)| *at).expect("a fury stone in the wilds");
+    p.until(Duration::from_secs(10), "in the run", |p| p.room().is_some() && player::<Health>(&mut p.server, 1).is_some());
+    let stone = p.room().unwrap().map.map().pickups.iter().find(|(_, kind)| *kind == PickupKind::Fury).map(|(at, _)| *at).expect("a fury stone on the waves' map");
     p.until(Duration::from_secs(3), "the rush", |p| {
         place(&mut p.server, 1, stone);
         player::<Fury>(&mut p.server, 1).is_some_and(|f| f.0.strength > 0.0)
@@ -835,7 +941,7 @@ fn a_run_left_under_way_makes_the_leaderboards() {
     p.until(Duration::from_secs(5), "on the leaderboards", |p| !boards(p).is_empty());
     let board = boards(&p);
     assert_eq!(board.len(), 1);
-    assert_eq!((board[0].wave, board[0].party.len(), board[0].map), (1, 1, MapId::Wilds));
+    assert_eq!((board[0].wave, board[0].party.len(), board[0].map), (1, 1, Mode::Waves.maps()[0]));
     assert_eq!(board[0].party[0].1, class_id("revenant"));
     assert_eq!(board[0].version, arena_shared::config::GAME_VERSION);
 

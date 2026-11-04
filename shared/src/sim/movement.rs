@@ -237,15 +237,17 @@ impl Rift {
         Some(Rift { owner, origin: swing.lane_from(pos), feet, dir, from, range, width, until: swing.tick + rift.ticks, haste: rift.haste, burn: rift.burn, leech: rift.leech })
     }
 
-    /// Is a body at `at`, its feet `feet` high, in it at `tick`: touching it across the ground,
+    /// Is a body at `at`, its feet `feet` high, `size` big (`ClassDef::hit_size`), in it at
+    /// `tick`: touching it across the ground,
     /// and standing on what it's torn in there (within a step of it), not up over it (a jump, a
     /// roof) or down under it?
-    pub fn holds(&self, map: &Map, at: Vec2, feet: f32, tick: u32) -> bool {
+    pub fn holds(&self, map: &Map, (at, feet, size): (Vec2, f32, f32), tick: u32) -> bool {
         let to = at - self.origin;
+        let body = PLAYER_RADIUS * size;
         let (along, across) = (to.dot(self.dir), to.perp_dot(self.dir).abs());
         tick < self.until
-            && (self.from - PLAYER_RADIUS..=self.range + PLAYER_RADIUS).contains(&along)
-            && across <= self.width / 2.0 + PLAYER_RADIUS
+            && (self.from - body..=self.range + body).contains(&along)
+            && across <= self.width / 2.0 + body
             && (feet - struck_surface(map, self.origin, at, self.feet)).abs() <= STEP_UP
     }
 }
