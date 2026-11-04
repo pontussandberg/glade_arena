@@ -165,8 +165,7 @@ fn players_spawn_apart() {
         "A first saw itself at {first_seen}, not at a spawn point"
     );
     h.until(Duration::from_secs(15), "both players spawned", |h| {
-        let mut q = h.server.world_mut().query_filtered::<(), With<PlayerId>>();
-        q.iter(h.server.world()).count() == 2
+        player::<Pos>(&mut h.server, A).is_some() && player::<Pos>(&mut h.server, B).is_some()
     });
     let (a, _) = server_player(&mut h.server, A);
     let (b, _) = server_player(&mut h.server, B);
