@@ -80,16 +80,17 @@ impl Party {
         self.ask(RoomRequest::Create { name: "Waves".into(), mode: Mode::Waves, map: MapId::Crossing, password: None });
         self.until(Duration::from_secs(5), "in the room", |p| p.room().is_some());
         let room = self.room().unwrap();
-        assert_eq!((room.mode, room.map), (Mode::Waves, MapId::Wilds), "the waves are on the wilds, whatever map was asked for");
+        assert_eq!((room.mode, room.map), (Mode::Waves, Mode::Waves.maps()[0]), "a map that isn't one of the waves' gives way to their first");
         self.ask(RoomRequest::Start);
         self.until(Duration::from_secs(10), "in the arena with gold", |p| p.satchel().is_some_and(|s| s.gold > 0));
     }
 
-    /// Our fighter, by the merchant.
+    /// Our fighter, by the merchant, on the side they face (their counter's behind them).
     fn to_the_shop(&mut self) {
-        let shop = MapId::Wilds.map().shop.unwrap();
+        let map = self.room().unwrap().map.map();
+        let spot = map.shop.unwrap() + map.shop_faces * 1.5;
         for _ in 0..5 {
-            place(&mut self.server, 1, shop + Vec2::new(0.0, -1.5));
+            place(&mut self.server, 1, spot);
             self.update();
         }
     }
@@ -768,7 +769,7 @@ fn acolytes_blink_away_when_closed_in_on() {
             return true;
         }
         last = Some(now);
-        let map = MapId::Wilds.map();
+        let map = p.room().unwrap().map.map();
         let beside = [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y].map(|d| now + d * 1.5).into_iter().find(|s| map.walkable_at(*s)).unwrap_or(now);
         place(&mut p.server, 1, beside);
         if let Some(mut health) = p.server.world_mut().query::<(&PlayerId, &mut Health)>().iter_mut(p.server.world_mut()).find(|(id, _)| id.0 == peer(1)).map(|(_, h)| h) {
@@ -840,8 +841,8 @@ fn leaving_practice_leaves_nothing_behind() {
 fn a_fury_stone_quickens_attacks_only() {
     let mut p = Party::new(5884, "revenant", false);
     p.ask(RoomRequest::QuickJoin("Waves".into()));
-    p.until(Duration::from_secs(10), "in the run", |p| player::<Health>(&mut p.server, 1).is_some());
-    let stone = MapId::Wilds.map().pickups.iter().find(|(_, kind)| *kind == PickupKind::Fury).map(|(at, _)| *at).expect("a fury stone in the wilds");
+    p.until(Duration::from_secs(10), "in the run", |p| p.room().is_some() && player::<Health>(&mut p.server, 1).is_some());
+    let stone = p.room().unwrap().map.map().pickups.iter().find(|(_, kind)| *kind == PickupKind::Fury).map(|(at, _)| *at).expect("a fury stone on the waves' map");
     p.until(Duration::from_secs(3), "the rush", |p| {
         place(&mut p.server, 1, stone);
         player::<Fury>(&mut p.server, 1).is_some_and(|f| f.0.strength > 0.0)
@@ -940,7 +941,7 @@ fn a_run_left_under_way_makes_the_leaderboards() {
     p.until(Duration::from_secs(5), "on the leaderboards", |p| !boards(p).is_empty());
     let board = boards(&p);
     assert_eq!(board.len(), 1);
-    assert_eq!((board[0].wave, board[0].party.len(), board[0].map), (1, 1, MapId::Wilds));
+    assert_eq!((board[0].wave, board[0].party.len(), board[0].map), (1, 1, Mode::Waves.maps()[0]));
     assert_eq!(board[0].party[0].1, class_id("revenant"));
     assert_eq!(board[0].version, arena_shared::config::GAME_VERSION);
 

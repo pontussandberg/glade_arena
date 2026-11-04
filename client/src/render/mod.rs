@@ -60,6 +60,7 @@ impl Plugin for RenderPlugin {
             crate::practice::PracticePlugin,
         ));
         app.add_plugins((
+            crate::frames::FramesPlugin,
             crate::plain::PlainPlugin,
             crate::waygates::WaygatesPlugin,
             crate::scoreboard::ScoreboardPlugin,
