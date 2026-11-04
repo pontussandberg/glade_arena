@@ -482,8 +482,8 @@ const INTERACT_AIM: f32 = 0.9;
 /// The merchant is at hand while we're by them and aiming their way; then the hint under the
 /// crosshair shows, and F opens the shop (or shuts it). The cursor follows the frame
 /// (`frames::sync_cursor`). The press is spent, or it would also ready us up (`ready_up`, ordered
-/// after this). Walking off shuts the shop, and a click on the field shuts it too (the camera
-/// takes the cursor); ESC shuts it as well (`frames::route_keys`).
+/// after this). Walking off shuts the shop; so do a click on the field (`frames::sync_cursor`) and
+/// ESC (`frames::route_keys`).
 #[allow(clippy::too_many_arguments)]
 fn open_shop(
     room: Res<CurrentRoom>,
@@ -499,19 +499,18 @@ fn open_shop(
     let (near, facing) = both.map_or((false, false), |(me, merchant)| {
         (me.distance(merchant.0) <= SHOP_RADIUS, (merchant.0 - me.0).normalize_or_zero().dot(mode.forward()) >= INTERACT_AIM)
     });
-    // Under the menu, F is the menu's to be ignored: it can't open the shop over it.
-    let hand = near && facing && !open.is(Frame::Menu);
-    // A click on the field takes the cursor back for the fight, and shuts the shop with it.
-    let mut now = open.is(Frame::Shop) && near && !mode.locked;
+    let hand = near && facing;
+    let mut now = open.is(Frame::Shop) && near;
     if hand && keys.just_pressed(KeyCode::KeyF) && !typing.is_some_and(|t| t.0) {
         keys.clear_just_pressed(KeyCode::KeyF);
         now = !now;
     }
-    // Opening the shop replaces the map (or whatever else is open): one frame at a time.
-    if now {
-        open.open(Frame::Shop);
-    } else {
-        open.close(Frame::Shop);
+    if now != open.is(Frame::Shop) {
+        if now {
+            open.open(Frame::Shop);
+        } else {
+            open.close(Frame::Shop);
+        }
     }
     let display = if hand && !now { Display::Flex } else { Display::None };
     let mut hint = hint.into_inner();

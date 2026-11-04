@@ -6,8 +6,6 @@
 
 use super::*;
 
-use bevy::window::CursorOptions;
-
 use crate::action_bar::centered;
 use crate::camera::CameraMode;
 
@@ -57,7 +55,7 @@ pub(super) struct ClickBackHint;
 pub(super) fn spawn_click_hint(commands: &mut Commands) {
     // The swell scales the screen-filling node, which turns about its middle: where the words are.
     commands.spawn((ClickBackHint, centered(), Visibility::Hidden, GlobalZIndex(5), UiTransform::default())).with_child((
-        ui_text("Left click anywhere", 15.0, palette::GOLD),
+        ui_text("Click to continue", 15.0, palette::GOLD),
         TextShadow { offset: Vec2::splat(1.0), color: palette::ui::BACKDROP },
     ));
 }
@@ -66,18 +64,18 @@ pub(super) fn spawn_click_hint(commands: &mut Commands) {
 const HINT_SWELL: f32 = 0.05;
 const HINT_BREATH: f32 = 4.0;
 
-/// Shown in the arena, in gold, while the cursor is shown and free (`CursorOptions`: neither the
-/// camera's nor hidden for a right-drag turn) with nothing open for it — no menu, no shop —
-/// however it came free (Tab and a right click, the window left and come back to): a left click
-/// takes the camera back (`camera::follow_camera`). It breathes a little, to be seen.
+/// Shown in the arena, in gold, whenever no frame needs the cursor and the camera doesn't hold it
+/// (`frames::click_hint_shown`): however it came free (Tab and a right click, the window left and
+/// come back to, the browser refusing the lock). A left click takes the camera back
+/// (`camera::follow_camera`). It breathes a little, to be seen.
 pub(super) fn show_click_hint(
     time: Res<Time>,
     screen: Res<State<crate::rooms::Screen>>,
-    cursor: Single<&CursorOptions>,
     frame: Res<crate::frames::OpenFrame>,
+    mode: Res<crate::camera::CameraMode>,
     hint: Single<(&mut Visibility, &mut UiTransform), With<ClickBackHint>>,
 ) {
-    let show = *screen.get() == crate::rooms::Screen::InGame && cursor.visible && !frame.any();
+    let show = *screen.get() == crate::rooms::Screen::InGame && crate::frames::click_hint_shown(*frame, mode.locked);
     let (mut visibility, mut swelling) = hint.into_inner();
     visibility.set_if_neq(shown(show));
     if !show {

@@ -61,8 +61,6 @@ pub(crate) struct MinimapView {
     corner: Vec2,
     /// How big it shows it, in screen pixels.
     size: Vec2,
-    /// The whole map, big (M).
-    full: bool,
 }
 
 impl MinimapView {
@@ -302,7 +300,6 @@ fn draw_map(current: Res<CurrentMap>, mut images: ResMut<Assets<Image>>, mut ima
 /// (M, again to close it) the whole map big in the middle of the screen. The node is the picture
 /// and its frame (a node's size takes its border in), so the picture is drawn at exactly the
 /// view's size, as dots, marks and clicks count on; the picture shows just the tiles in view.
-#[allow(clippy::too_many_arguments)]
 fn frame_minimap(
     frame: Res<OpenFrame>,
     current: Res<CurrentMap>,
@@ -318,7 +315,7 @@ fn frame_minimap(
     let screen = Vec2::new(window.width(), window.height());
     let wanted = if full {
         let scale = (screen * FULL_ROOM / tiles).min_element();
-        MinimapView { scale, corner: Vec2::ZERO, size: (tiles * scale).round(), full }
+        MinimapView { scale, corner: Vec2::ZERO, size: (tiles * scale).round() }
     } else {
         let fit = (ROOM / tiles).min_element();
         let (size, scale) = ((tiles * fit).round(), fit * ZOOM);
@@ -327,7 +324,7 @@ fn frame_minimap(
         let middle = me.single().map_or(tiles / 2.0, |pos| Vec2::new(pos.0.x + half.x, half.y - pos.0.y));
         // On whole screen pixels, so the picture and the dots on it step together.
         let corner = ((middle - shown / 2.0).clamp(Vec2::ZERO, (tiles - shown).max(Vec2::ZERO)) * scale).round() / scale;
-        MinimapView { scale, corner, size, full }
+        MinimapView { scale, corner, size }
     };
     view.set_if_neq(wanted);
     let (mut node, mut image) = minimap.into_inner();
